@@ -26,7 +26,7 @@ def black_hole(job, *exc_info):
 def get_queue(name='low'):
     global __QUEUE
     if __QUEUE is None:
-        __QUEUE = {n: Queue(n, connection=conn) for n in listen}
+        __QUEUE = {n: Queue(n, connection=conn, default_timeout=6000) for n in listen}
     return __QUEUE[name]
 
 
