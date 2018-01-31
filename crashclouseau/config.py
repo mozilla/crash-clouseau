@@ -72,3 +72,7 @@ def get_num_lines():
 
 def get_database():
     return _get_local().get('database', '')
+
+
+def get_redis():
+    return _get_local().get('redis', '')

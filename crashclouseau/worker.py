@@ -6,10 +6,11 @@ import os
 import redis
 from rq import Worker, Queue, Connection, suspension
 from .logger import logger
+from . import config
 
 
 listen = ['high', 'default', 'low']
-redis_url = os.getenv('REDISTOGO_URL', 'redis://localhost:6379')
+redis_url = os.getenv('REDISTOGO_URL', config.get_redis())
 conn = redis.from_url(redis_url)
 __QUEUE = None
 
