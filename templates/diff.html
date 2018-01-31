@@ -1,0 +1,29 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/clouseau.ico">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Annotate/Diff for {{ changeset }} &mdash; {{ filename }}</title>
+  </head>
+  <style>
+    html, body, div, iframe {
+    height: 100%;
+    }
+  </style>
+  <body>
+    <div style="display: table; width: 100%">
+      <div style="display: table-row;">
+        <div style="display: table-cell; width: 50%;">
+          <iframe src="{{ annotate_url }}" width="100%" scrolling="yes"></iframe>
+        </div>
+        <div style="display: table-cell; width: 50%;">
+          <iframe src="{{ diff_url }}" width="100%" scrolling="yes"></iframe>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

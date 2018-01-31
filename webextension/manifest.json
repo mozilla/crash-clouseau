@@ -1,0 +1,25 @@
+{
+    "name": "Clouseau",
+    "description": "This webextension inserts table with data under crash signatures to check if the patches had an effect on crash numbers.",
+    "version": "0.1.0",
+    "manifest_version": 2,
+    "applications": {
+        "gecko": {
+            "id": "clouseau@calixteman"
+        }
+    },
+    "icons": {
+        "96": "icons/clouseau.png"
+    },
+    "homepage_url": "https://github.com/mozilla/crashclouseau",
+    "content_scripts": [
+        {
+            "matches": ["*://crash-stats.mozilla.com/report/index/*"],
+            "js": ["content.js"],
+            "run_at": "document_end"
+        }
+    ],
+    "permissions": [
+        "https://localhost/*"
+    ]
+}

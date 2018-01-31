@@ -1,0 +1,76 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/clouseau.ico">
+    <link rel="stylesheet" href="/clouseau.css">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Reports</title>
+    <script type="text/javascript" src="/clouseau.js"></script>
+    <script type="text/javascript">
+      const BUILDIDS = {
+      {% for prod, bids in products.items() -%}
+      "{{ prod }}": [{% for bid in bids %}"{{ bid }}",{% endfor -%}],
+      {% endfor -%}};
+    </script>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <a class="nav" href="https://github.com/mozilla/crashclouseau">
+          <img src="/GitHub-Mark-32px.png"/>
+        </a>
+      </nav>
+    </header>
+    <p>
+      Product:&nbsp;
+      <select id="product" onchange="javascript:update_buildids();">
+        {% for p in products.keys() -%}
+        {% if p == selected_product -%}
+        <option value="{{ p }}" selected>{{ p }}</option>
+        {% else -%}
+        <option value="{{ p }}">{{ p }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      Buildid:&nbsp;
+      <select id="buildid">
+        {% for bid in products[selected_product] -%}
+        {% if bid == selected_bid -%}
+        <option value="{{ bid }}" selected>{{ bid }}</option>
+        {% else -%}
+        <option value="{{ bid }}">{{ bid }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      Score:&nbsp;
+      <select id="score">
+        {% for score in scores -%}
+        {% if score == selected_score -%}
+        <option value="{{ score }}" selected>{{ score }}</option>
+        {% else -%}
+        <option value="{{ score }}">{{ score }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      <button onclick="javascript:update_reports();">Go !</button>
+    </p>
+    <ul>
+      {% for sgn, info in signatures -%}
+      <li>
+        signature &ldquo;{{ sgn }}&rdquo;&nbsp;({{ info['number'] }} crash{%if info['number'] != 1 %}es{% endif %}):
+        <ul>
+          {% for uuid, score in info['uuids'] -%}
+          <li>
+            <a href="crashstack.html?uuid={{ uuid }}">{{ uuid }}</a>&nbsp;<span style="background-color:{{ colors[score] }};">score: {{ score }}</span>
+          </li>
+          {% endfor -%}
+        </ul>
+      </li>
+      {% endfor -%}
+    </ul>
+  </body>
+</html>

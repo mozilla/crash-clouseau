@@ -1,0 +1,140 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
+
+import html
+from libmozdata.hgmozilla import Mercurial
+import re
+import requests
+from . import buildhub, models, utils
+
+
+# must match 'at android.os.Parcel.readException(Parcel.java:1552)'
+JAVA_PAT1 = re.compile(r'^at\ ([^\(]+)\(([^:]+):([0-9]*)\)$')
+# must match $123 in MyClass$123 or MyClass$Inner
+JAVA_PAT2 = re.compile(r'\$.*')
+JAVA_PAT3 = re.compile(r'\([^:]+:[0-9]*\)$')
+GITHUB_URL = 'https://api.github.com/repos/mozilla/gecko-dev'
+
+
+def parse_path(path):
+    path = path.split('.')
+    method = path[-1]
+    # we remove the method and the class name
+    path = path[:-2]
+    # remove inner class stuff \$.*
+    path = map(lambda x: JAVA_PAT2.sub('', x), path)
+    path = '/'.join(path)
+
+    return path, method
+
+
+def inspect_java_stacktrace(st, node):
+    if not st:
+        return [], set()
+
+    lines = map(lambda x: x.strip(), st.split('\n'))
+    lines = filter(lambda x: x.startswith('at '), lines)
+    stack = []
+    files = set()
+    for n, line in enumerate(lines):
+        m = JAVA_PAT1.match(line)
+        d = {'original': line,
+             'filename': '',
+             'module': '',
+             'changesets': [],
+             'function': '',
+             'node': '',
+             'line': 0,
+             'internal': False,
+             'stackpos': n}
+        stack.append(d)
+        if m:
+            path, filename, linenumber = m.groups()
+            if path.startswith('org.mozilla.'):
+                d['internal'] = True
+                d['node'] = node
+                d['line'] = int(linenumber)
+                base_path, d['function'] = parse_path(path)
+                filename = base_path + '/' + filename
+                filename = models.File.get_full_path(filename)
+                d['filename'] = filename
+                files.add(filename)
+
+    return stack, files
+
+
+def reformat_java_stacktrace(st, channel, buildid):
+    if not st:
+        return ''
+
+    node = models.Build.get_changeset(utils.get_build_date(buildid),
+                                      channel, 'FennecAndroid')
+    if not node:
+        # we don't have the node in our database so ask to buildhub
+        node = buildhub.get_from(buildid, channel, 'fennec')
+        if not node:
+            return html.escape(st)
+
+    res = ''
+    repo_url = Mercurial.get_repo_url(channel)
+    lines = list(st.split('\n'))
+    N = len(lines)
+    for i in range(N):
+        line = lines[i]
+        m = JAVA_PAT1.match(line.strip())
+        line = html.escape(line)
+        added = False
+        if m:
+            path, filename, linenumber = m.groups()
+            if path.startswith('org.mozilla.'):
+                base_path, _ = parse_path(path)
+                repo_filename = base_path + '/' + filename
+                repo_filename = models.File.get_full_path(repo_filename)
+                r = '(<a href=\"{}/annotate/{}/{}#l{}\">{}:{}</a>)'
+                r = r.format(repo_url, node, repo_filename,
+                             linenumber, filename, linenumber)
+                res += JAVA_PAT3.sub(r, line)
+                added = True
+        if not added:
+            res += line
+        if i < N - 1:
+            res += '\n'
+
+    return res
+
+
+def get_sha(path, filename):
+    url = '{}/contents/{}'.format(GITHUB_URL, path)
+    r = requests.get(url)
+    if r.status_code == 200:
+        for data in r.json():
+            if data['name'] == filename:
+                return data['sha']
+    raise Exception('Cannot get GitHub sha for {}/{}'.format(path,
+                                                             filename))
+
+
+def get_java_files(root, sha):
+    url = '{}/git/trees/{}?recursive=1'.format(GITHUB_URL, sha)
+    res = []
+    r = requests.get(url)
+    if r.status_code == 200:
+        for data in r.json()['tree']:
+            path = data['path']
+            if path.endswith('.java'):
+                res.append(root + '/' + path)
+    else:
+        raise Exception('Cannot get GitHub tree for sha {}'.format(sha))
+    return res
+
+
+def populate_java_files():
+    # We need to have all the java files to be able to build urls from java crash stack
+    # We get them in using the GitHub API (since I didn't find out any good solution in using Mercurial one)
+
+    # first we get the sha of directory mobile/android
+    sha = get_sha('mobile', 'android')
+    # get the java files in the dir corresponding to the sha
+    files = get_java_files('mobile/android', sha)
+    models.File.populate(files)

@@ -1,0 +1,96 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/clouseau.ico">
+    <link rel="stylesheet" href="/clouseau.css">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
+    <script type="text/javascript" src="/clouseau.js"></script>
+    <script type="text/javascript">
+      const NODE = "{{ uuid_info['node'] }}";
+      const UUID = "{{ uuid_info['uuid'] }}";
+    </script>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <a class="nav" href="https://github.com/mozilla/crashclouseau">
+          <img src="/GitHub-Mark-32px.png"/>
+        </a>
+      </nav>
+    </header>
+    <menu type="context" id="changeset-popup-menu">
+      <menuitem onclick="javascript: openChangeset();">Open the changeset</menuitem>
+      <menuitem onclick="javascript: openDiff();">Open the diff for the file</menuitem>
+      <menuitem onclick="javascript: openFileDiff();">Open file|diff</menuitem>
+      <menuitem onclick="javascript: openAnnotateDiff();">Open annotate|diff</menuitem>
+      <menuitem onclick="javascript: reportBug();">Report a bug</menuitem>
+    </menu>
+    <menu type="context" id="td-popup-menu">
+      <menuitem onclick="javascript: openChangesetInTabs();">Open the changesets</menuitem>
+      <menuitem onclick="javascript: openDiffInTabs();">Open the diffs for the file</menuitem>
+      <menuitem onclick="javascript: openFileDiffInTabs();">Open files|diffs</menuitem>
+      <menuitem onclick="javascript: openAnnotateDiffInTabs();">Open annotates|diffs</menuitem>
+    </menu>
+    <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.com/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
+    <p>The crash signature is &ldquo;{{ uuid_info['signature'] }}&rdquo;.</p>
+    {% if stack -%}
+    <table>
+      <thead>
+        <tr>
+          <th style="width:2%;">Frame</th>
+          <th>Signature</th>
+          <th style="width:25%;">Source</th>
+          <th style="width:23%;">Changesets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pos, info in enumerate(stack['frames']) -%}
+        {% if info['line'] != -1 -%}
+        <tr>
+          <td>{{ pos }}</td>
+          <td>{{ info['function']|e }}</td>
+          <td>
+            {% if info['url'] -%}
+            <a href="{{ info['url'] }}"><span id="filename-{{ pos }}">{{ info['filename']|e }}</span>:<span id="line-{{ pos }}">{{ info['line'] }}</span></a>
+            {% else %}
+            {{ info['original']|e }}{% if info['line'] %}:{{ info['line'] }}{% endif %}
+            {% endif %}
+          </td>
+          <td contextmenu="td-popup-menu">
+            {% for chgset, i in sort_chgsets(info) -%}
+            <div style="display:table;width:100%;">
+              <div style="display:table-row;">
+                <div class="cell" style="width:20%">
+                  <a href="{{ repo_url }}/rev?node={{ chgset }}"
+                     contextmenu="changeset-popup-menu"
+                     id="cset-{{ chgset }}-{{ pos }}">{{ chgset }}</a>
+                </div>
+                <div style="background-color:{{ colors[i['score']] }};width:15%;"
+                     class="cell">
+                  <span>{{ i['score'] }}</span>
+                </div>
+                <div class="cell" style="width:20%">
+                  <span>{{ i['pushdate'].strftime('%Y-%m-%d') }}</span>
+                </div>
+                <div class="cell" style="width:20%">
+                  <span>{% if i['bugid'] > 0 %}<a href="https://bugzil.la/{{ i['bugid'] }}">{{ i['bugid'] }}</a>{% endif %}</span>
+                </div>
+                <div class="cell" style="width:25%">
+                  <span>backout: {{ i['backedout'] }}</span>
+                </div>
+              </div>
+            </div>
+            {% endfor -%}
+          </td>
+        </tr>
+        {% endif -%}
+        {% endfor -%}
+    </table>
+    {% endif -%}
+  </body>
+</html>

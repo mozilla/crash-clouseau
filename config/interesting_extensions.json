@@ -1,0 +1,30 @@
+{
+    "C":
+    [
+        "c",
+        "h",
+        "H"
+    ],
+    "C++":
+    [
+        "cpp",
+        "cc",
+        "cxx",
+        "hh",
+        "hpp",
+        "hxx"
+    ],
+    "Java":
+    [
+        "java"
+    ],
+    "Rust":
+    [
+        "rs"
+    ],
+    "Objective C":
+    [
+        "mm",
+        "m"
+    ]
+}

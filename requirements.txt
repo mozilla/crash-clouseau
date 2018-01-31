@@ -1,0 +1,16 @@
+python-dateutil>=2.5.2
+libmozdata>=0.1.39
+jinja2>=2.8
+flask>=0.11.1
+flask_sqlalchemy>=2.1
+flask_cors>=3.0.3
+sqlalchemy>=1.1.5
+redis>=2.10.6
+rq>=0.9.1
+gunicorn>=19.6.0
+psycopg2>=2.6.2
+apscheduler>=3.3.1
+pyparsing>=2.2.0
+cycler >= 0.10.0
+parsepatch>=0.1.1
+requests>=2.18.4

@@ -1,0 +1,19 @@
+{
+    "products":
+    [
+        "Firefox",
+        "FennecAndroid"
+    ],
+    "channels":
+    [
+        "nightly"
+    ],
+    "facets_limit": 10000,
+    "backward_lookup_ndays": 3,
+    "max_ndays": 30,
+    "score":
+    {
+        "max": 10,
+        "number_of_lines": 5
+    }
+}
