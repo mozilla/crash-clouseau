@@ -44,3 +44,11 @@ table td {
 .nav {
     float:right;
 }
+
+.github {
+    background: url("/GitHub-Mark-120px-plus.png");
+    background-repeat: no-repeat;
+    background-size: 40px 40px;
+    width: 40px;
+    height: 40px;
+}

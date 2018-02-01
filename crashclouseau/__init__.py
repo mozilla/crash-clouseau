@@ -61,9 +61,9 @@ def favicon():
     return send_from_directory('../static', 'clouseau.ico')
 
 
-@app.route('/GitHub-Mark-32px.png')
-def github_icon():
-    return send_from_directory('../static', 'GitHub-Mark-32px.png')
+@app.route('/<image>.png')
+def image(image):
+    return send_from_directory('../static', image + '.png')
 
 
 @app.route('/clouseau.js')
