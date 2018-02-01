@@ -2,11 +2,14 @@
     "products":
     [
         "Firefox",
-        "FennecAndroid"
+        "FennecAndroid",
+        "Thunderbird"
     ],
     "channels":
     [
-        "nightly"
+        "nightly",
+        "beta",
+        "release"
     ],
     "facets_limit": 10000,
     "backward_lookup_ndays": 3,

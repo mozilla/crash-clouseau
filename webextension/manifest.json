@@ -20,6 +20,6 @@
         }
     ],
     "permissions": [
-        "https://localhost/*"
+        "https://crash-clouseau.herokuapp.com/*"
     ]
 }

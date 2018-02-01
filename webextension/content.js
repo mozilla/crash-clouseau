@@ -5,8 +5,8 @@
 "use strict";
 
 async function fetchStack(channel, buildid, stack) {
-    const clouseau = "https://localhost:5001";
-    //const clouseau = "https://crash-clouseau.herokuapp.com";
+    //const clouseau = "https://localhost:5001";
+    const clouseau = "https://crash-clouseau.herokuapp.com";
     const url = clouseau + "/api/javast";
     const data = JSON.stringify({"channel": channel, "buildid": buildid, "stack": stack});
     const response = await fetch(url, {
