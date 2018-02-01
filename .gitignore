@@ -1,0 +1,9 @@
+*~
+*.pyc
+*.pyo
+mozdata.ini
+test.py
+server.crt
+server.csr
+server.key
+local.json
