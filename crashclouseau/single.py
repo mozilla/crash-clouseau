@@ -10,7 +10,6 @@ from . import config, inspector, pushlog
 def filelog(filenames, buildid, channel, ndays):
     if filenames:
         res = Changeset.find(filenames, buildid, channel, ndays)
-        pprint(res)
         if res is None:
             # the buildid modulo n days is not in the pushlog
             mindate = buildid - relativedelta(days=ndays)
