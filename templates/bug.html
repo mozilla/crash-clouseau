@@ -20,7 +20,7 @@
       </nav>
     </header>
     <p>
-      <a href="{{ url }}">Create a new bug</a> and ni on <a href="mailto:{{ needinfo }}">{{ needinfo }}</a>.
+      <a href="{{ url }}">Create a new bug</a>{% if needinfo %} and ni on <a href="mailto:{{ needinfo }}">{{ needinfo }}</a>{% endif %}.
     </p>
   </body>
 </html>
