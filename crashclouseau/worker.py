@@ -6,7 +6,7 @@ import os
 import redis
 from rq import Worker, Queue, Connection, suspension
 from .logger import logger
-from . import config
+from . import config, update
 
 
 listen = ['high', 'default', 'low']
@@ -40,5 +40,9 @@ def resume():
 
 if __name__ == '__main__':
     with Connection(conn):
+        # the worker can be killed for any reasons
+        # it can be killed during the update process
+        update.finish()
+
         worker = Worker(map(Queue, listen), exception_handlers=[black_hole])
         worker.work()
