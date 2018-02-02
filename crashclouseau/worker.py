@@ -6,7 +6,7 @@ import os
 import redis
 from rq import Worker, Queue, Connection, suspension
 from .logger import logger
-from . import config, update
+from . import config
 
 
 listen = ['high', 'default', 'low']

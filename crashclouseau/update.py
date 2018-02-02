@@ -136,7 +136,7 @@ def put_crashes(date=None, channel='nightly'):
                     proto_sgn = proto['proto']
                     UUID.add(uuid, sgnid, proto_sgn,
                              bidid, commit=False)
-                    models.commit()
+            models.commit()
 
     for bid, channel, prod in errors:
         logger.info('No buildid in db for {}/{}/{}'.format(bid, prod, channel))
