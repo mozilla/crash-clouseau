@@ -207,15 +207,6 @@ class Changeset(db.Model):
                                                   'added_lines': [],
                                                   'deleted_lines': [],
                                                   'touched_lines': []})
-
-        """qs = db.session.query(Changeset).join(Node).filter(Node.node.in_(revs))
-        for q in qs:
-            q.analyzed = False
-            q.isnew = False
-            q.added_lines = []
-            q.deleted_lines = []
-            q.touched_lines = []
-            db.session.add(q)"""
         db.session.commit()
 
     @staticmethod
