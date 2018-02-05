@@ -15,40 +15,6 @@ CHANNEL_TYPE = db.Enum(*utils.get_channels(), name='CHANNEL_TYPE')
 PRODUCT_TYPE = db.Enum(*utils.get_products(), name='PRODUCT_TYPE')
 
 
-class Update(db.Model):
-    __tablename__ = 'update'
-
-    id = db.Column(db.Integer, default=0, primary_key=True)
-    started = db.Column(db.Boolean)
-
-    def __init__(self):
-        self.started = True
-
-    @staticmethod
-    def start():
-        q = db.session.query(Update).first()
-        if not q:
-            db.session.add(Update())
-        else:
-            q.started = True
-            db.session.add(q)
-        db.session.commit()
-
-    @staticmethod
-    def finish():
-        q = db.session.query(Update).first()
-        q.started = False
-        db.session.add(q)
-        db.session.commit()
-
-    @staticmethod
-    def isfinished():
-        q = db.session.query(Update).first()
-        if not q:
-            return True
-        return not q.started
-
-
 class LastDate(db.Model):
     __tablename__ = 'lastdate'
 

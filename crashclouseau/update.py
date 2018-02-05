@@ -7,14 +7,10 @@ from dateutil.relativedelta import relativedelta
 from libmozdata import utils as lmdutils
 import pytz
 from .logger import logger
-from .models import LastDate, UUID, CrashStack, Update, Changeset
+from .models import LastDate, UUID, CrashStack, Changeset
 from .pushlog import pushlog
 from . import datacollector as dc
 from . import buildhub, config, inspector, models, utils, worker, patch
-
-
-def finish():
-    Update.finish()
 
 
 def put_filelog(channel='nightly', start_date=None, end_date=None):
@@ -79,8 +75,9 @@ def analyze_one_report():
 
 def analyze_reports():
     queue = worker.get_queue()
-    queue.enqueue_call(func=analyze_one_report,
-                       result_ttl=0)
+    if len(queue) <= 1:
+        queue.enqueue_call(func=analyze_one_report,
+                           result_ttl=0)
 
 
 def analyze_one_patch():
@@ -95,8 +92,8 @@ def analyze_one_patch():
 
 
 def analyze_patches():
-    if Update.isfinished():
-        queue = worker.get_queue()
+    queue = worker.get_queue()
+    if len(queue) <= 1:
         queue.enqueue_call(func=analyze_one_patch,
                            result_ttl=0)
 
@@ -150,12 +147,9 @@ def update(date):
     update_builds(date)
 
     try:
-        Update.start()
         put_crashes(date=date)
     except Exception as e:
         logger.error(e, exc_info=True)
-    finally:
-        Update.finish()
 
     analyze_reports()
     logger.info('Update data: finished.')
@@ -163,7 +157,6 @@ def update(date):
 
 def update_in_queue(date=None):
     queue = worker.get_queue()
-    if Update.isfinished():
-        queue.enqueue_call(func=update,
-                           args=(date, ),
-                           result_ttl=0)
+    queue.enqueue_call(func=update,
+                       args=(date, ),
+                       result_ttl=0)
