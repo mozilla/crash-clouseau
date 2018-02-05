@@ -141,7 +141,7 @@ def get_from(buildid, channel, product):
         else:
             try:
                 data = r.json()
-                node = data['aggregations']['revisions']['buckets'][0]['key'][:12]
+                node = utils.short_rev(data['aggregations']['revisions']['buckets'][0]['key'])
             except Exception:
                 return ''
             break

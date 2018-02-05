@@ -33,7 +33,7 @@ def collect(data, file_filter):
             files = [f for f in chgset['files'] if file_filter(f)]
             desc = chgset['desc']
             res.append({'date': pushdate,
-                        'node': chgset['node'][:12],
+                        'node': utils.short_rev(chgset['node']),
                         'backedout': is_backed_out(desc),
                         'files': files,
                         'merge': len(chgset['parents']) > 1,
