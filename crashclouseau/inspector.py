@@ -77,6 +77,8 @@ def get_path_node(uri):
         if m:
             name = m.group(1)
             node = m.group(2)
+            if len(node) > 12:
+                node = node[:12]
     return name, node
 
 
