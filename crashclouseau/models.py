@@ -172,7 +172,7 @@ class Changeset(db.Model):
                                                   'isnew': False,
                                                   'added_lines': [],
                                                   'deleted_lines': [],
-                                                  'touched_lines': []})
+                                                  'touched_lines': []}, synchronize_session='fetch')
         db.session.commit()
 
     @staticmethod
@@ -458,32 +458,29 @@ class UUID(db.Model):
 
     @staticmethod
     def reset(uuids):
-        qs = db.session.query(UUID).filter(UUID.uuid.in_(uuids))
-        res = []
-        for q in qs:
-            q.analyzed = False
-            q.useless = False
-            q.stackhash = ''
-            q.jstackhash = ''
-            res.append(q.id)
-            db.session.add(q)
+        qs = db.session.query(UUID.id).filter(UUID.uuid.in_(uuids))
+        qs.update({'analyzed': False,
+                   'useless': False,
+                   'stackhash': '',
+                   'jstackhash': ''}, synchronize_session='fetch')
+
+        res = [q.id for q in qs]
         db.session.commit()
+
         return res
 
     @staticmethod
-    def set_max_score(uuidid, score):
-        q = db.session.query(UUID).filter(UUID.id == uuidid).first()
-        if q:
-            q.max_score = score
-            db.session.add(q)
+    def set_max_score(uuidid, score, commit=True):
+        q = db.session.query(UUID).filter(UUID.id == uuidid)
+        q.update({'max_score': score})
+        if commit:
             db.session.commit()
 
     @staticmethod
-    def set_error(uuid):
-        q = db.session.query(UUID).filter(UUID.uuid == uuid).first()
-        if q:
-            q.error = True
-            db.session.add(q)
+    def set_error(uuid, commit=True):
+        q = db.session.query(UUID).filter(UUID.uuid == uuid)
+        q.update({'error': True})
+        if commit:
             db.session.commit()
 
     @staticmethod
@@ -495,7 +492,10 @@ class UUID(db.Model):
                                           UUID.buildid == buildid).first()
         ret = not bool(q)
         if ret:
-            ins = pg.insert(UUID).values(uuid=uuid, signatureid=signatureid, protohash=protohash, buildid=buildid)
+            ins = pg.insert(UUID).values(uuid=uuid,
+                                         signatureid=signatureid,
+                                         protohash=protohash,
+                                         buildid=buildid)
             upd = ins.on_conflict_do_update(index_elements=['uuid'],
                                             set_=dict(signatureid=signatureid,
                                                       protohash=protohash,
@@ -507,23 +507,20 @@ class UUID(db.Model):
         return ret
 
     @staticmethod
-    def add_stack_hash(uuid, sh, jsh):
-        if sh or jsh:
-            q = db.session.query(UUID).filter(UUID.uuid == uuid).first()
-            if sh:
-                q.stackhash = sh
-            if jsh:
-                q.jstackhash = jsh
-            db.session.add(q)
+    def add_stack_hash(uuid, sh, jsh, commit=True):
+        q = db.session.query(UUID).filter(UUID.uuid == uuid)
+        if sh:
+            q.update({'stackhash': sh})
+        elif jsh:
+            q.update({'jstackhash': jsh})
+        if commit:
             db.session.commit()
 
     @staticmethod
     def set_analyzed(uuid, useless, commit=True):
-        q = db.session.query(UUID).filter(UUID.uuid == uuid).first()
-        if q:
-            q.useless = useless
-            q.analyzed = True
-            db.session.add(q)
+        q = db.session.query(UUID).filter(UUID.uuid == uuid)
+        q.update({'useless': useless,
+                  'analyzed': True})
         if commit:
             db.session.commit()
 
