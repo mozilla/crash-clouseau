@@ -6,6 +6,7 @@ import html
 from libmozdata.hgmozilla import Mercurial
 import re
 import requests
+import time
 from . import buildhub, models, utils
 
 
@@ -106,29 +107,35 @@ def reformat_java_stacktrace(st, channel, buildid,
     return res
 
 
-def get_sha(path, filename):
+def get_sha(path, filename, sleep=0.1, retry=10):
     url = '{}/contents/{}'.format(GITHUB_URL, path)
-    r = requests.get(url)
-    if r.status_code == 200:
-        for data in r.json():
-            if data['name'] == filename:
-                return data['sha']
-    raise Exception('Cannot get GitHub sha for {}/{}'.format(path,
-                                                             filename))
+    for _ in range(retry):
+        r = requests.get(url)
+        if r.status_code == 200:
+            for data in r.json():
+                if data['name'] == filename:
+                    return data['sha']
+            raise Exception('Cannot get GitHub sha for {}/{}'.format(path,
+                                                                     filename))
+        else:
+            time.sleep(sleep)
+    raise Exception('Too many attempts in java.get_sha (retry={})'.format(retry))
 
 
-def get_java_files(root, sha):
+def get_java_files(root, sha, sleep=0.1, retry=10):
     url = '{}/git/trees/{}?recursive=1'.format(GITHUB_URL, sha)
-    res = []
-    r = requests.get(url)
-    if r.status_code == 200:
-        for data in r.json()['tree']:
-            path = data['path']
-            if path.endswith('.java'):
-                res.append(root + '/' + path)
-    else:
-        raise Exception('Cannot get GitHub tree for sha {}'.format(sha))
-    return res
+    for _ in range(retry):
+        r = requests.get(url)
+        if r.status_code == 200:
+            res = []
+            for data in r.json()['tree']:
+                path = data['path']
+                if path.endswith('.java'):
+                    res.append(root + '/' + path)
+            return res
+        else:
+            time.sleep(sleep)
+    raise Exception('Too many attempts in java.get_java_files (retry={})'.format(retry))
 
 
 def get_all_java_files():
