@@ -146,8 +146,10 @@ def is_buildids_same_day(a, b):
 
 
 def get_buildid(date):
-    date = date.astimezone(pytz.utc)
-    return date.strftime('%Y%m%d%H%M%S')
+    if isinstance(date, datetime):
+        date = date.astimezone(pytz.utc)
+        return date.strftime('%Y%m%d%H%M%S')
+    return date
 
 
 def hash(s):

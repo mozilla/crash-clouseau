@@ -102,9 +102,10 @@ def update_builds(date, channel='nightly'):
     logger.info('Update builds: started.')
     if not date:
         _, date = LastDate.get(channel)
-        date -= relativedelta(days=1)
+        date -= relativedelta(days=config.get_ndays())
     data = buildhub.get(date)
-    models.Build.put_data(data)
+    if data:
+        models.Build.put_data(data)
     logger.info('Update builds: finished.')
 
 

@@ -74,7 +74,7 @@ def reformat_java_stacktrace(st, channel, buildid,
                          channel, 'FennecAndroid')
     if not node:
         # we don't have the node in our database so ask to buildhub
-        node = buildhub.get_from(buildid, channel, 'fennec')
+        node = buildhub.get_rev_from(buildid, channel, 'fennec')
         if not node:
             return html.escape(st)
 
