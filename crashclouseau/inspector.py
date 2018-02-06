@@ -4,7 +4,7 @@
 
 from libmozdata import socorro
 import re
-from . import models, utils, java
+from . import java, tools, utils
 from .logger import logger
 
 
@@ -32,7 +32,7 @@ def get_crash_by_uuid(uuid, ndays, filelog):
     bid = utils.get_build_date(buildid)
     channel = data['release_channel']
     interesting_chgsets = set()
-    chgset = models.Build.get_changeset(bid, channel, data['product'])
+    chgset = tools.get_changeset(bid, channel, data['product'])
     res = get_crash_info(data, bid, channel, ndays,
                          chgset, filelog, interesting_chgsets)
     return res, channel, interesting_chgsets

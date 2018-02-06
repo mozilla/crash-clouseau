@@ -7,7 +7,7 @@ from libmozdata.hgmozilla import Mercurial
 import re
 import requests
 import time
-from . import buildhub, models, utils
+from . import models, tools
 
 
 # must match 'at android.os.Parcel.readException(Parcel.java:1552)'
@@ -67,17 +67,13 @@ def inspect_java_stacktrace(st, node, get_full_path=models.File.get_full_path):
 
 def reformat_java_stacktrace(st, channel, buildid,
                              get_full_path=models.File.get_full_path,
-                             get_changeset=models.Build.get_changeset):
+                             get_changeset=tools.get_changeset):
     if not st:
         return ''
 
-    node = get_changeset(utils.get_build_date(buildid),
-                         channel, 'FennecAndroid')
+    node = get_changeset(buildid, channel, 'FennecAndroid')
     if not node:
-        # we don't have the node in our database so ask to buildhub
-        node = buildhub.get_rev_from(buildid, channel, 'fennec')
-        if not node:
-            return html.escape(st)
+        return html.escape(st)
 
     res = ''
     repo_url = Mercurial.get_repo_url(channel)
@@ -138,7 +134,7 @@ def get_java_files(root, sha, sleep=0.1, retry=10):
     raise Exception('Too many attempts in java.get_java_files (retry={})'.format(retry))
 
 
-def get_all_java_files():
+def get_all_java_files(sleep=0.1, retry=10):
     # first we get the sha of directory mobile/android
     sha = get_sha('mobile', 'android')
 

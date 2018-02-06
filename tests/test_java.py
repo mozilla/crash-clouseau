@@ -8,7 +8,7 @@ from os import listdir
 from os.path import join
 import re
 import unittest
-from crashclouseau import java
+from crashclouseau import buildhub, java
 
 
 class JavaTest(unittest.TestCase):
@@ -32,7 +32,7 @@ class JavaTest(unittest.TestCase):
                 return f
 
     def test(self):
-        java_files = java.get_all_java_files()
+        java_files = java.get_all_java_files(sleep=0.5, retry=10)
         for f in self.get_files('./tests/java'):
             data = self.readfile(f)
             stack, files = java.inspect_java_stacktrace(data['stack'],
@@ -47,5 +47,5 @@ class JavaTest(unittest.TestCase):
                                                         data['buildid'],
                                                         get_full_path=partial(JavaTest.get_full_path,
                                                                               java_files),
-                                                        get_changeset=lambda x, y, z: None)
+                                                        get_changeset=buildhub.get_rev_from)
             self.assertEqual(reformatted, data['reformatted'])

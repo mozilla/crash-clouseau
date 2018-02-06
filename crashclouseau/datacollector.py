@@ -2,12 +2,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from collections import defaultdict
 import copy
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import functools
 from libmozdata import socorro, utils as lmdutils
 from libmozdata.connection import Connection, Query
+import re
 from . import config, utils
 from .logger import logger
 
@@ -219,3 +221,44 @@ def get_uuids(signatures, channel='nightly'):
     socorro.SuperSearch(queries=queries).wait()
 
     logger.info('Get uuids for FennecAndroid-{}: finished.'.format(channel))
+
+
+def get_changeset(buildid, channel, product):
+    buildid = utils.get_buildid(buildid)
+    logger.info('Get changeset for {}-{}-{}.'.format(buildid,
+                                                     product,
+                                                     channel))
+
+    def handler(json, data):
+        pat = re.compile(r'^.*:([0-9a-f]+)$')
+        if not json['facets']['build_id']:
+            return
+        for facets in json['facets']['build_id']:
+            for tf in facets['facets']['topmost_filenames']:
+                m = pat.match(tf['term'])
+                if m:
+                    chgset = m.group(1)
+                    count = tf['count']
+                    data[chgset] += count
+
+    params = {'product': product,
+              'release_channel': channel,
+              'build_id': buildid,
+              'topmost_filenames': '@\"hg:hg.mozilla.org/\".*:[0-9a-f]+',
+              '_aggs.build_id': 'topmost_filenames',
+              '_results_number': 0,
+              '_facets': 'product',
+              '_facets_size': 100}
+
+    data = defaultdict(lambda: 0)
+    socorro.SuperSearch(params=params,
+                        handler=handler,
+                        handlerdata=data).wait()
+    chgset = None
+    if data:
+        chgset, _ = max(data.items(), key=lambda p: p[1])
+        chgset = utils.short_rev(chgset)
+
+    logger.info('Get changeset: finished.')
+
+    return chgset
