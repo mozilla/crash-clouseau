@@ -3,13 +3,14 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from dateutil.relativedelta import relativedelta
-from .models import Changeset
-from . import config, inspector, pushlog
+from . import config, inspector, models, pushlog
 
 
 def filelog(filenames, buildid, channel, ndays):
     if filenames:
-        res = Changeset.find(filenames, buildid, channel, ndays)
+        res = None
+        if models.Node.has_channel(channel):
+            res = models.Changeset.find(filenames, buildid, channel, ndays)
         if res is None:
             # the buildid modulo n days is not in the pushlog
             mindate = buildid - relativedelta(days=ndays)

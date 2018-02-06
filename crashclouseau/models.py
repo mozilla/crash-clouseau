@@ -45,7 +45,9 @@ class LastDate(db.Model):
     def get(channel):
         d = db.session.query(LastDate).filter(LastDate.channel == channel)
         d = d.first()
-        return d.mindate.astimezone(pytz.utc), d.maxdate.astimezone(pytz.utc)
+        if d:
+            return d.mindate.astimezone(pytz.utc), d.maxdate.astimezone(pytz.utc)
+        return None, None
 
 
 class File(db.Model):
@@ -147,6 +149,11 @@ class Node(db.Model):
             for q in qs:
                 res[q.node] = q.id
         return res
+
+    @staticmethod
+    def has_channel(channel):
+        q = db.session.query(Node.channel).filter(Node.channel == channel).first()
+        return bool(q)
 
 
 class Changeset(db.Model):
@@ -260,10 +267,14 @@ class Changeset(db.Model):
             return None
 
         md, Md = LastDate.get(channel)
+        if md is None:
+            # not a valid channel
+            return None
+
         if mindate < md or maxdate > Md:
             return None
 
-        chgs = db.session.query(Changeset,
+        chgs = db.session.query(Changeset.id,
                                 File.name,
                                 Node.node).join(Node).join(File)
         chgs = chgs.filter(File.name.in_(filenames),
