@@ -222,6 +222,8 @@ def get_two_last(buildid, channel, product):
 
 
 async def get_enclosing_builds_helper(pushdate, channel, product):
+    # TODO: we must handle the case where the timezone of buildid was not utc
+    # check with jlorenzo when the changed has been made
     buildid = utils.get_buildid(pushdate)
     product = PRODS.get(product, product)
     lt_data = {
