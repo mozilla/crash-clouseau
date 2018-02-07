@@ -1,3 +1,39 @@
+
+.nav {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.nav li {
+    float: left;
+}
+
+.github {
+    background: url("/GitHub-Mark-120px-plus.png");
+    background-repeat: no-repeat;
+    background-size: 3em 3em;
+    width: 3em;
+    height: 3em;
+    float: right;
+}
+
+@font-face {
+  font-family: "Zilla Slab Highlight";
+  src: url("ZillaSlabHighlight-Bold.woff2") format("woff2");
+  font-weight: bold;
+}
+
+.brand {
+  font-family: "Zilla Slab Highlight";
+  font-weight: bold;
+  font-size: 3em;
+  color: unset;
+  font-style: normal;
+  float:left;
+}
+
 body {
     font-family: Arial,Helvetica,sans-serif;
     font-size: 12px;
@@ -39,16 +75,4 @@ table td {
 
 .changeset {
     width: 100%;
-}
-
-.nav {
-    float:right;
-}
-
-.github {
-    background: url("/GitHub-Mark-120px-plus.png");
-    background-repeat: no-repeat;
-    background-size: 3em 3em;
-    width: 3em;
-    height: 3em;
 }

@@ -32,22 +32,11 @@ def diff_html():
     return html.diff()
 
 
-@app.route('/report.html')
-def report_html():
-    from crashclouseau import html
-    return html.report()
-
-
 @app.route('/')
 @app.route('/reports.html')
 def reports_html():
     from crashclouseau import html
     return html.reports()
-
-
-@app.route('/search.html')
-def search_html():
-    return send_from_directory('../templates', 'search.html')
 
 
 @app.route('/bug.html')
@@ -64,6 +53,10 @@ def favicon():
 @app.route('/<image>.png')
 def image(image):
     return send_from_directory('../static', image + '.png')
+
+@app.route('/ZillaSlabHighlight-Bold.woff2')
+def zilla():
+    return send_from_directory('../static', 'ZillaSlabHighlight-Bold.woff2')
 
 
 @app.route('/clouseau.js')
