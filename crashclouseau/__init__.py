@@ -54,6 +54,7 @@ def favicon():
 def image(image):
     return send_from_directory('../static', image + '.png')
 
+
 @app.route('/ZillaSlabHighlight-Bold.woff2')
 def zilla():
     return send_from_directory('../static', 'ZillaSlabHighlight-Bold.woff2')
