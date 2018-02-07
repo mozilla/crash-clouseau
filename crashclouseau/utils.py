@@ -149,6 +149,7 @@ def get_buildid(date):
     if isinstance(date, datetime):
         date = date.astimezone(pytz.utc)
         return date.strftime('%Y%m%d%H%M%S')
+
     return date
 
 

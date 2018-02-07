@@ -2,6 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import asyncio
+from copy import deepcopy
+from functools import partial
 import json
 import requests
 import time
@@ -15,6 +18,11 @@ PRODS = {'Firefox': 'firefox',
          'Thunderbird': 'thunderbird'}
 RPRODS = {v: k for k, v in PRODS.items()}
 
+# regexp matching the correct version formats for elastic search query
+VERSION_PATS = {'nightly': '[0-9]+\".0a1\"',
+                'beta': '[0-9]+\".0b\"[0-9]+',
+                'release': '[0-9]+\.[0-9]+(\.[0-9]+)?'}
+
 
 def make_request(params, sleep, retry, callback):
     params = json.dumps(params)
@@ -26,7 +34,7 @@ def make_request(params, sleep, retry, callback):
         else:
             try:
                 return callback(r.json())
-            except Exception as e:
+            except BaseException as e:
                 logger.error(e, exc_info=True)
                 return None
 
@@ -184,7 +192,8 @@ def get_two_last(buildid, channel, product):
                 'filter': [
                     {'term': {'target.channel': channel}},
                     {'term': {'source.product': product}},
-                    {'range': {'build.id': {'lte': buildid}}}
+                    {'range': {'build.id': {'lte': buildid}}},
+                    {'regexp': {'target.version': VERSION_PATS.get(channel, '*')}}
                 ]
             }
         },
@@ -193,12 +202,15 @@ def get_two_last(buildid, channel, product):
     def get_info(data):
         bids = []
         for i in data['aggregations']['buildids']['buckets']:
-            buildid = i['key']
+            bid = i['key']
             revision = utils.short_rev(i['revisions']['buckets'][0]['key'])
-            version = utils.get_major(i['versions']['buckets'][0]['key'])
-            bids.append({'buildid': buildid,
+            version = i['versions']['buckets'][0]['key']
+            bids.append({'buildid': bid,
                          'revision': revision,
                          'version': version})
+
+        if bids[0]['buildid'] != buildid:
+            return None
 
         x = bids[0]
         bids[0] = bids[1]
@@ -207,3 +219,77 @@ def get_two_last(buildid, channel, product):
         return bids
 
     return make_request(data, 0.1, 100, get_info)
+
+
+async def get_enclosing_builds_helper(pushdate, channel, product):
+    buildid = utils.get_buildid(pushdate)
+    product = PRODS.get(product, product)
+    lt_data = {
+        'aggs': {
+            'buildids': {
+                'terms': {
+                    'field': 'build.id',
+                    'size': 1,
+                    'order': {
+                        '_term': 'desc'
+                    }
+                },
+                'aggs': {
+                    'revisions': {
+                        'terms': {
+                            'field': 'source.revision',
+                            'size': 1
+                        }
+                    },
+                    'versions': {
+                        'terms': {
+                            'field': 'target.version',
+                            'size': 1
+                        }
+                    }
+                }
+            }
+        },
+        'query': {
+            'bool': {
+                'filter': [
+                    {'term': {'target.channel': channel}},
+                    {'term': {'source.product': product}},
+                    {'range': {'build.id': {'lt': buildid}}},
+                    {'regexp': {'target.version': VERSION_PATS.get(channel, '*')}}
+                ]
+            }
+        },
+        'size': 0}
+
+    gte_data = deepcopy(lt_data)
+    gte_data['aggs']['buildids']['terms']['order']['_term'] = 'asc'
+    gte_data['query']['bool']['filter'][2]['range']['build.id'] = {'gte': buildid}
+    data = [lt_data, gte_data]
+
+    def get_info(data):
+        data = data['aggregations']['buildids']['buckets']
+        if len(data) == 0:
+            return None
+        data = data[0]
+        bid = data['key']
+        revision = utils.short_rev(data['revisions']['buckets'][0]['key'])
+        version = data['versions']['buckets'][0]['key']
+        return {'buildid': bid,
+                'revision': revision,
+                'version': version}
+
+    loop = asyncio.get_event_loop()
+    fs = []
+    for d in data:
+        fs.append(loop.run_in_executor(None, partial(make_request, d, 0.1, 100, get_info)))
+    res = []
+    for f in fs:
+        res.append(await f)
+
+    return res
+
+
+def get_enclosing_builds(pushdate, channel, product):
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(get_enclosing_builds_helper(pushdate, channel, product))

@@ -39,7 +39,16 @@ class BuildhubTest(unittest.TestCase):
         res = buildhub.get_two_last('20180201100053', 'nightly', 'FennecAndroid')
         self.assertEqual(res[0], {'buildid': '20180131100700',
                                   'revision': '7b46ef2ae141',
-                                  'version': 60})
+                                  'version': '60.0a1'})
         self.assertEqual(res[1], {'buildid': '20180201100053',
                                   'revision': '17ade9f88b6e',
-                                  'version': 60})
+                                  'version': '60.0a1'})
+
+    def test_get_enclosing_builds(self):
+        res = buildhub.get_enclosing_builds('20180206095500', 'nightly', 'Firefox')
+        self.assertEqual(res, [{'buildid': '20180205220102',
+                                'revision': '0d806b3230fe',
+                                'version': '60.0a1'},
+                               {'buildid': '20180206100151',
+                                'revision': 'f1a4b64f19b0',
+                                'version': '60.0a1'}])
