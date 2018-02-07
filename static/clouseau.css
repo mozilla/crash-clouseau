@@ -69,6 +69,10 @@ table tr:nth-child(2n+1) {
     background-color: #edecec;
 }
 
+.signatures tr td:nth-child(2) {
+  text-align: center;
+}
+
 table td {
     word-wrap: break-word;
 }

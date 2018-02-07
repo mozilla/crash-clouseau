@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/clouseau.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=2">
+    <link rel="stylesheet" href="/clouseau.css?v=3">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Reports</title>
     <script type="text/javascript" src="/clouseau.js"></script>
@@ -63,19 +63,36 @@
       </select>
       <button onclick="javascript:update_reports();">Go !</button>
     </p>
-    <ul>
-      {% for sgn, info in signatures -%}
-      <li>
-        signature &ldquo;{{ sgn }}&rdquo;&nbsp;({{ info['number'] }} crash{%if info['number'] != 1 %}es{% endif %}):
-        <ul>
-          {% for uuid, score in info['uuids'] -%}
-          <li>
-            <a href="crashstack.html?uuid={{ uuid }}">{{ uuid }}</a>&nbsp;<span style="background-color:{{ colors[score] }};">score: {{ score }}</span>
-          </li>
-          {% endfor -%}
-        </ul>
-      </li>
-      {% endfor -%}
-    </ul>
+
+    <table class="signatures">
+      <thead>
+        <tr>
+          <th>Signature</th>
+          <th style="text-align:center;width:8%;">Crashes number</th>
+          <th style="width:20%;">Stacks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sgn, info in signatures -%}
+        <tr>
+          <td>{{ sgn|e }}</td>
+          <td>{{ info['number'] }}</td>
+          <td>
+            <div style="display:table;width:100%;">
+              {% for uuid, score in info['uuids'] -%}
+              <div style="display:table-row;">
+                <div class="cell" style="float:left;width:80%">
+                  <a href="crashstack.html?uuid={{ uuid }}">{{ uuid }}</a>
+                </div>
+                <div class="cell" style="float:right;width:20%">
+                  <span style="background-color:{{ colors[score] }};">score: {{ score }}</span>
+                </div>
+              </div>
+              {% endfor -%}
+            </div>
+          </td>
+        </tr>
+        {% endfor -%}
+    </table>
   </body>
 </html>
