@@ -69,7 +69,8 @@
         <tr>
           <th>Signature</th>
           <th style="text-align:center;width:8%;">Crashes number</th>
-          <th style="width:20%;">Stacks</th>
+          <th style="text-align:center;width:8%;">Installs number</th>
+        <th style="width:20%;">Stacks</th>
         </tr>
       </thead>
       <tbody>
@@ -77,6 +78,7 @@
         <tr>
           <td><a href="{{ info['url'] }}"{{ sgn|e }}>{{ sgn|e }}<a/></td>
           <td>{{ info['number'] }}</td>
+          <td>{{ info['installs'] }}</td>
           <td>
             <div style="display:table;width:100%;">
               {% for uuid, score in info['uuids'] -%}

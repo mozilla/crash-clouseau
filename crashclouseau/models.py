@@ -413,17 +413,23 @@ class Stats(db.Model):
     signatureid = db.Column(db.Integer, db.ForeignKey('signatures.id', ondelete='CASCADE'), primary_key=True)
     buildid = db.Column(db.Integer, db.ForeignKey('builds.id', ondelete='CASCADE'), primary_key=True)
     number = db.Column(db.Integer, default=0)
+    installs = db.Column(db.Integer, default=-1)
 
-    def __init__(self, signatureid, buildid, number):
+    def __init__(self, signatureid, buildid, number, installs):
         self.signatureid = signatureid
         self.buildid = buildid
         self.number = number
+        self.installs = installs
 
     @staticmethod
-    def add(signatureid, buildid, number, commit=True):
-        ins = pg.insert(Stats).values(signatureid=signatureid, buildid=buildid, number=number)
+    def add(signatureid, buildid, number, installs, commit=True):
+        ins = pg.insert(Stats).values(signatureid=signatureid,
+                                      buildid=buildid,
+                                      number=number,
+                                      installs=installs)
         upd = ins.on_conflict_do_update(index_elements=['signatureid', 'buildid'],
-                                        set_=dict(number=number))
+                                        set_=dict(number=number,
+                                                  installs=installs))
         db.session.execute(upd)
         if commit:
             db.session.commit()
@@ -596,7 +602,8 @@ class UUID(db.Model):
             uuids = db.session.query(UUID.uuid,
                                      UUID.max_score,
                                      Signature.signature,
-                                     Stats.number)
+                                     Stats.number,
+                                     Stats.installs)
             uuids = uuids.join(Signature).join(CrashStack).join(Build)
             uuids = uuids.join(Stats,
                                db.and_(Signature.id == Stats.signatureid,
@@ -610,7 +617,8 @@ class UUID(db.Model):
             uuids = db.session.query(UUID.uuid,
                                      UUID.max_score,
                                      Signature.signature,
-                                     Stats.number)
+                                     Stats.number,
+                                     Stats.installs)
             uuids = uuids.join(Signature).join(CrashStack).join(Build)
             uuids = uuids.join(Stats,
                                db.and_(Signature.id == Stats.signatureid,
@@ -629,6 +637,7 @@ class UUID(db.Model):
             else:
                 _res[uuid.signature] = {'uuids': [t],
                                         'number': uuid.number,
+                                        'installs': uuid.installs,
                                         'url': utils.make_url_for_signature(uuid.signature,
                                                                             buildid,
                                                                             sbid,

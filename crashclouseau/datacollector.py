@@ -86,7 +86,8 @@ def get_new_signatures(products, date='today', channel='nightly'):
             if bids:
                 sgn = facets['term']
                 data[sgn] = {'bids': bids,
-                             'protos': {b: [] for b in bids}}
+                             'protos': {b: [] for b in bids},
+                             'installs': {b: 0 for b in bids}}
 
     base_params = {'product': '',
                    'release_channel': channel,
@@ -128,7 +129,7 @@ def get_proto(products, signatures, channel='nightly'):
                                                                   channel))
 
     def handler(json, data):
-        if json['errors'] or not json['facets']['proto_signature']:
+        if not json['facets']['proto_signature']:
             return
         bid = json['facets']['build_id'][0]['term']
         bid = utils.get_build_date(bid)
@@ -141,12 +142,17 @@ def get_proto(products, signatures, channel='nightly'):
             data[sgn]['protos'][bid].append({'proto': proto,
                                              'count': count,
                                              'uuid': uuid})
+        for facets in json['facets']['signature']:
+            sgn = facets['term']
+            count = facets['facets']['cardinality_install_time']['value']
+            data[sgn]['installs'][bid] += count
 
     base_params = {'product': '',
                    'release_channel': channel,
                    'build_id': '',
                    'signature': '',
                    '_aggs.proto_signature': ['uuid', 'signature'],
+                   '_aggs.signature': '_cardinality.install_time',
                    '_results_number': 0,
                    '_facets': 'build_id',
                    '_facets_size': limit}
@@ -169,6 +175,7 @@ def get_proto(products, signatures, channel='nightly'):
                                      params=params,
                                      handler=handler,
                                      handlerdata=sgns_prod))
+
     socorro.SuperSearch(queries=queries).wait()
 
     logger.info('Get proto-signatures for {}-{}: finished.'.format(products,

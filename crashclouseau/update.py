@@ -128,7 +128,7 @@ def put_crashes(date=None, channel='nightly'):
                     continue
                 if sgnid is None:
                     sgnid = models.Signature.get_id(sgn)
-                models.Stats.add(sgnid, bidid, j['bids'][bid])
+                models.Stats.add(sgnid, bidid, j['bids'][bid], j['installs'][bid])
                 for proto in protos:
                     uuid = proto['uuid']
                     proto_sgn = proto['proto']
