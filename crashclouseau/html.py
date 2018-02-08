@@ -17,7 +17,6 @@ def crashstack():
                                stack=stack,
                                colors=utils.get_colors(),
                                enumerate=enumerate,
-                               sort_chgsets=utils.sort_chgsets,
                                repo_url=repo_url)
     abort(404)
 
