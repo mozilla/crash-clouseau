@@ -590,6 +590,7 @@ class UUID(db.Model):
 
     @staticmethod
     def get_uuids_from_buildid(buildid, product, channel, score):
+        sbid = buildid
         buildid = utils.get_build_date(buildid)
         if score == -1:
             uuids = db.session.query(UUID.uuid,
@@ -627,7 +628,12 @@ class UUID(db.Model):
                 _res[uuid.signature]['uuids'].append(t)
             else:
                 _res[uuid.signature] = {'uuids': [t],
-                                        'number': uuid.number}
+                                        'number': uuid.number,
+                                        'url': utils.make_url_for_signature(uuid.signature,
+                                                                            buildid,
+                                                                            sbid,
+                                                                            channel,
+                                                                            product)}
         res = sorted(_res.items(), key=lambda p: p[1]['number'], reverse=True)
         return res
 

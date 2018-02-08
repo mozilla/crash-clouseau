@@ -6,6 +6,7 @@ from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime
 import hashlib
+from libmozdata import socorro
 import pytz
 import six
 from . import config
@@ -189,3 +190,30 @@ def get_sgns_by_bids(signatures):
         for bid in info['bids'].keys():
             sgn_by_bid[bid].append(sgn)
     return sgn_by_bid
+
+
+def get_params_for_link(**query):
+    params = {'_facets': ['url',
+                          'user_comments',
+                          'install_time',
+                          'version',
+                          'address',
+                          'moz_crash_reason',
+                          'reason',
+                          'build_id',
+                          'platform_pretty_version',
+                          'signature',
+                          'useragent_locale']}
+    params.update(query)
+    return params
+
+
+def make_url_for_signature(sgn, date, buildid, channel, product):
+    params = get_params_for_link(signature='=' + sgn,
+                                 release_channel=channel,
+                                 product=product,
+                                 build_id=buildid,
+                                 date='>=' + str(date))
+    url = socorro.SuperSearch.get_link(params)
+    url += '#crash-reports'
+    return url

@@ -75,7 +75,7 @@
       <tbody>
         {% for sgn, info in signatures -%}
         <tr>
-          <td>{{ sgn|e }}</td>
+          <td><a href="{{ info['url'] }}"{{ sgn|e }}>{{ sgn|e }}<a/></td>
           <td>{{ info['number'] }}</td>
           <td>
             <div style="display:table;width:100%;">

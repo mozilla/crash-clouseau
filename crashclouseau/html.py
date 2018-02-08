@@ -45,6 +45,7 @@ def reports():
                                                     prod,
                                                     channel,
                                                     score)
+
     scores = ['---'] + list(map(str, range(11)))
     return render_template('reports.html',
                            products=products,
