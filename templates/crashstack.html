@@ -67,7 +67,7 @@
             {% endif %}
           </td>
           <td contextmenu="td-popup-menu">
-            {% for chgset, i in sort_chgsets(info) -%}
+            {% for chgset, i in info['changesets'].items() -%}
             <div style="display:table;width:100%;">
               <div style="display:table-row;">
                 <div class="cell" style="width:20%">

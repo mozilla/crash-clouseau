@@ -85,15 +85,6 @@ def get_line_score(line, lines):
     return score(line, lines[i - 1])
 
 
-def sort_chgsets(info):
-    return sorted(info['changesets'].items(),
-                  key=lambda p: (p[1]['pushdate'],
-                                 p[1]['score'],
-                                 p[1]['backedout'],
-                                 p[0]),
-                  reverse=True)
-
-
 def get_file_url(repo_url, filename, node, line, original):
     if filename and node:
         s = '{}/annotate/{}/{}#l{}'

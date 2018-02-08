@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
@@ -802,9 +802,10 @@ class CrashStack(db.Model):
                                    Node.backedout,
                                    Node.pushdate,
                                    Node.bug,
+                                   Node.id,
                                    Score.score).join(Score).join(Changeset).join(Node)
         iframes = iframes.filter(CrashStack.uuidid == uuidid,
-                                 CrashStack.java.is_(is_java)).order_by(CrashStack.stackpos)
+                                 CrashStack.java.is_(is_java)).order_by(CrashStack.stackpos, Node.id.desc())
         frames = db.session.query(CrashStack).filter(CrashStack.uuidid == uuidid,
                                                      CrashStack.java.is_(is_java)).order_by(CrashStack.stackpos)
         stack = []
@@ -818,14 +819,14 @@ class CrashStack(db.Model):
             stack.append({'stackpos': frame.stackpos,
                           'filename': filename,
                           'function': frame.function,
-                          'changesets': {},
+                          'changesets': OrderedDict(),
                           'line': frame.line,
                           'node': frame.node,
                           'original': frame.original,
                           'internal': frame.internal,
                           'url': url})
 
-        for stackpos, node, bout, pdate, bugid, score, in iframes:
+        for stackpos, node, bout, pdate, bugid, nodeid, score, in iframes:
             stack[stackpos]['changesets'][node] = {'score': score,
                                                    'backedout': bout,
                                                    'pushdate': pdate,
