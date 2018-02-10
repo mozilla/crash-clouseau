@@ -9,8 +9,8 @@
     <link rel="stylesheet" href="/clouseau.css?v=4">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Reports</title>
-    <script type="text/javascript" src="/clouseau.js"></script>
-    <script type="text/javascript">
+    <script src="/clouseau.js"></script>
+    <script>
       const BUILDIDS = {
       {% for prod, bids in products.items() -%}
       "{{ prod }}": [{% for bid in bids %}"{{ bid }}",{% endfor -%}],
@@ -25,7 +25,7 @@
             <a href="https://www.mozilla.org/" class="brand">mozilla</a>
           </li>
           <li style="float:right;">
-            <a href="https://github.com/mozilla/crash-clouseau"><div class="github"></div></a>
+            <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
           </li>
         </ul>
       </nav>
@@ -76,7 +76,7 @@
       <tbody>
         {% for sgn, info in signatures -%}
         <tr>
-          <td><a href="{{ info['url'] }}"{{ sgn|e }}>{{ sgn|e }}<a/></td>
+          <td><a href="{{ info['url'] }}">{{ sgn|e }}<a/></td>
           <td>{{ info['number'] }}</td>
           <td>{{ info['installs'] }}</td>
           <td>

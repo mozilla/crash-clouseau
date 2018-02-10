@@ -9,8 +9,8 @@
     <link rel="stylesheet" href="/clouseau.css?v=4">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
-    <script type="text/javascript" src="/clouseau.js"></script>
-    <script type="text/javascript">
+    <script src="/clouseau.js"></script>
+    <script>
       const NODE = "{{ uuid_info['node'] }}";
       const UUID = "{{ uuid_info['uuid'] }}";
     </script>
@@ -23,7 +23,7 @@
             <a href="https://www.mozilla.org/" class="brand">mozilla</a>
           </li>
           <li style="float:right;">
-            <a href="https://github.com/mozilla/crash-clouseau"><div class="github"></div></a>
+            <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
           </li>
         </ul>
       </nav>
@@ -58,9 +58,9 @@
           <td>
             {% if info['url'] -%}
             <a href="{{ info['url'] }}"><span id="filename-{{ pos }}">{{ info['filename']|e }}</span>:<span id="line-{{ pos }}">{{ info['line'] }}</span></a>
-            {% else %}
-            {{ info['original']|e }}{% if info['line'] %}:{{ info['line'] }}{% endif %}
-            {% endif %}
+            {% else -%}
+            {{ info['original']|e }}{% if info['line'] -%}:{{ info['line'] }}{% endif -%}
+            {% endif -%}
           </td>
           <td>
             {% for chgset, i in info['changesets'].items() -%}
@@ -69,7 +69,7 @@
                 <div class="cell" style="width:25%">
                   <span>
                     <a href="{{ repo_url }}/rev?node={{ chgset }}">{{ chgset }}</a>
-                    <a onclick="javascript: showChangesetMenu(event);"><div id="cset-{{ chgset }}-{{ pos }}" class="glass"></div></a>
+                    <a onclick="javascript: showChangesetMenu(event);"><span id="cset-{{ chgset }}-{{ pos }}" class="glass"></span></a>
                   </span>
                 </div>
                 <div style="background-color:{{ colors[i['score']] }};width:15%;"
