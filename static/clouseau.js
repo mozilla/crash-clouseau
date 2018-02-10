@@ -8,96 +8,8 @@
 
 const repoUrl = "https://hg.mozilla.org/mozilla-central";
 const channel = "nightly";
-
-let contextmenuTarget = null;
-
-document.addEventListener("contextmenu", function(e) {
-    contextmenuTarget = e.target;
-});
-
-function openChangeset(a) {
-    const chgset = (a ? a.innerText : document.activeElement.innerText);
-    const url = repoUrl + "/rev?node=" + chgset;
-    window.open(url, "_blank");
-}
-
-function getFileInfo(a) {
-    const pos = a.id.split("-").pop();
-    const changeset = a.innerText;
-    const filename = document.getElementById("filename-" + pos).innerText;
-    const line = document.getElementById("line-" + pos).innerText;
-    return {'filename': filename,
-            'line': line,
-            'changeset': changeset};
-}
-
-function openDiff(a) {
-    const fi = getFileInfo(a ? a : document.activeElement);
-    const url = repoUrl + "/diff/" + fi.changeset + "/" + fi.filename;
-    window.open(url, "_blank");
-}
-
-function openAnnotateDiff(a, style="annotate") {
-    const fi = getFileInfo(a ? a : document.activeElement);
-    const url = "/diff.html"
-              + "?filename=" + fi.filename
-              + "&line=" + fi.line
-              + "&node=" + NODE
-              + "&changeset=" + fi.changeset
-              + "&channel=" + channel
-              + "&style=" + style;
-    window.open(url, "_blank");
-}
-
-function openFileDiff(a) {
-    openAnnotateDiff(a, "file");
-}
-
-function search() {
-    const e = document.getElementById("score");
-    const score = e.options[e.selectedIndex].value;
-    location.href = "report.html?score=" + score;
-}
-
-function getChangesets(callback) {
-    const e = contextmenuTarget.offsetParent;
-    if (e.nodeName == "TD") {
-        const links = Array.prototype.slice.call(e.getElementsByTagName("a"));
-        links.forEach(a => {
-            callback(a);
-        });
-    }
-}
-
-function openChangesetInTabs() {
-    getChangesets(openChangeset);
-}
-
-function openDiffInTabs() {
-    getChangesets(openDiff);
-}
-
-function openAnnotateDiffInTabs() {
-    getChangesets(openAnnotateDiff);
-}
-
-function openFileDiffInTabs() {
-    getChangesets(openFileDiff);
-}
-
-function getParams() {
-    const params = ["buildid", "product", "score"].map(function(i) {
-        const e = document.getElementById(i);
-        return e.options[e.selectedIndex].value;
-    });
-    return params;
-}
-
-function setHref(date, channel, product) {
-    location.href = "?date=" + date
-                  + "&channel=" + channel
-                  + "&product=" + product;
-}
+let loaded = false;
+let currentTarget = null;
 
 function update_reports() {
     const params = getParams();
@@ -122,4 +34,71 @@ function reportBug() {
     const changeset = a.innerText;
     location.href = "bug.html?changeset=" + changeset
                   + "&uuid=" + UUID;
+}
+
+function getOffset(el) {
+    const rect = el.getBoundingClientRect(),
+          scrollLeft = window.pageXOffset || document.documentElement.scrollLeft,
+          scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    return { top: rect.top + scrollTop + rect.height + 2, left: rect.left + scrollLeft }
+}
+
+function load(menu) {
+    ["openChangeset", "openDiff", "openFileDiff", "openAnnotateDiff", "reportBug"].map(function(i) {
+        document.getElementById(i).addEventListener("click", function (event) {
+            menu.classList.remove("show");
+            window.open(event.target.myurl, "_blank");
+        }, false);
+    });
+    menu.addEventListener("mouseenter", function () {
+        window.clearTimeout(menu.timer);
+    });
+    menu.addEventListener("mouseleave", function () {
+        window.clearTimeout(menu.timer);
+        menu.classList.remove("show");
+    });
+}
+
+function showChangesetMenu(e) {
+    const menu = document.getElementById("changeset-menu");
+    const target = e.target;
+    if (!loaded) {
+        load(menu);
+        loaded = true;
+    }
+    if ((target === currentTarget) && menu.classList.contains("show")) {
+        currentTarget = null;
+        menu.classList.remove("show");
+        return false;
+    }
+    
+    currentTarget = target;
+    const info = target.id.split("-");
+    const changeset = info[1];
+    const pos = info[2];
+    const filename = document.getElementById("filename-" + pos).innerText;
+    const line = document.getElementById("line-" + pos).innerText;
+
+    document.getElementById("openChangeset").myurl = repoUrl + "/rev?node=" + changeset;
+    document.getElementById("openDiff").myurl = repoUrl + "/diff/" + changeset + "/" + filename;
+    const diffUrl = "/diff.html?filename=" + filename
+                  + "&line=" + line
+                  + "&node=" + NODE
+                  + "&changeset=" + changeset
+                  + "&channel=" + channel
+                  + "&style=";
+    document.getElementById("openFileDiff").myurl = diffUrl + "file";
+    document.getElementById("openAnnotateDiff").myurl = diffUrl + "annotate";
+    document.getElementById("reportBug").myurl = "bug.html?changeset=" + changeset + "&uuid=" + UUID;
+
+    const offset = getOffset(target);
+    menu.style.left = offset.left + "px";
+    menu.style.top = offset.top + "px";
+    
+    menu.timer = window.setTimeout(function () {
+        menu.classList.remove("show");
+    }, 3000);
+    menu.classList.add("show");
+
+    return false;
 }

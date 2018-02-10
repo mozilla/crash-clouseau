@@ -1,4 +1,3 @@
-
 .nav {
     list-style-type: none;
     margin: 0;
@@ -20,18 +19,18 @@
 }
 
 @font-face {
-  font-family: "Zilla Slab Highlight";
-  src: url("ZillaSlabHighlight-Bold.woff2") format("woff2");
-  font-weight: bold;
+    font-family: "Zilla Slab Highlight";
+    src: url("ZillaSlabHighlight-Bold.woff2") format("woff2");
+    font-weight: bold;
 }
 
 .brand {
-  font-family: "Zilla Slab Highlight";
-  font-weight: bold;
-  font-size: 3em;
-  color: unset;
-  font-style: normal;
-  float:left;
+    font-family: "Zilla Slab Highlight";
+    font-weight: bold;
+    font-size: 3em;
+    color: unset;
+    font-style: normal;
+    float:left;
 }
 
 body {
@@ -48,7 +47,7 @@ table {
     margin-top: 5px;
     text-align: left;
     line-height: 1.7;
-	width: 100%;
+    width: 100%;
     table-layout:fixed;
 }
 
@@ -70,11 +69,11 @@ table tr:nth-child(2n+1) {
 }
 
 .signatures tr td:nth-child(2) {
-  text-align: center;
+    text-align: center;
 }
 
 .signatures tr td:nth-child(3) {
-  text-align: center;
+    text-align: center;
 }
 
 table td {
@@ -83,4 +82,54 @@ table td {
 
 .changeset {
     width: 100%;
+}
+
+#changeset-menu {
+    display: none;
+    position: absolute;
+    z-index: 1;
+}
+
+#changeset-menu ul {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+    line-height: 2em;
+    text-align: left;
+}
+
+#changeset-menu a {
+    display: block;
+    padding: 0.5em;
+    background: #ddd;
+    color: black;
+    width: 15em;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+#changeset-menu a:hover {
+    background: #aaa;
+    color: #ddd;
+}
+
+#changeset-menu li {
+    border-bottom: 1px solid #aaa;
+}
+
+#changeset-menu.show {
+    display: block;
+}
+
+.glass {
+    display: inline-block;
+    background: url("/glass.png");
+    background-repeat: no-repeat;
+    background-size: 1em 1em;
+    width: 1em;
+    height: 1em;
+}
+
+.glass:hover {
+    cursor: pointer;
 }

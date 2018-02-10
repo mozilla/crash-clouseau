@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/clouseau.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=3">
+    <link rel="stylesheet" href="/clouseau.css?v=4">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script type="text/javascript" src="/clouseau.js"></script>
@@ -28,19 +28,15 @@
         </ul>
       </nav>
     </header>
-    <menu type="context" id="changeset-popup-menu">
-      <menuitem onclick="javascript: openChangeset();">Open the changeset</menuitem>
-      <menuitem onclick="javascript: openDiff();">Open the diff for the file</menuitem>
-      <menuitem onclick="javascript: openFileDiff();">Open file|diff</menuitem>
-      <menuitem onclick="javascript: openAnnotateDiff();">Open annotate|diff</menuitem>
-      <menuitem onclick="javascript: reportBug();">Report a bug</menuitem>
-    </menu>
-    <menu type="context" id="td-popup-menu">
-      <menuitem onclick="javascript: openChangesetInTabs();">Open the changesets</menuitem>
-      <menuitem onclick="javascript: openDiffInTabs();">Open the diffs for the file</menuitem>
-      <menuitem onclick="javascript: openFileDiffInTabs();">Open files|diffs</menuitem>
-      <menuitem onclick="javascript: openAnnotateDiffInTabs();">Open annotates|diffs</menuitem>
-    </menu>
+    <div id="changeset-menu">
+      <ul>
+        <li><a id="openChangeset">Open the changeset</a></li>
+        <li><a id="openDiff">Open the diff for the file</a></li>
+        <li><a id="openFileDiff">Open file|diff</a></li>
+        <li><a id="openAnnotateDiff">Open annotate|diff</a></li>
+        <li><a id="reportBug">Report a bug</a></li>
+      </ul>
+    </div>
     <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.com/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
     <p>The crash signature is &ldquo;{{ uuid_info['signature'] }}&rdquo;.</p>
     {% if stack -%}
@@ -66,14 +62,15 @@
             {{ info['original']|e }}{% if info['line'] %}:{{ info['line'] }}{% endif %}
             {% endif %}
           </td>
-          <td contextmenu="td-popup-menu">
+          <td>
             {% for chgset, i in info['changesets'].items() -%}
             <div style="display:table;width:100%;">
               <div style="display:table-row;">
-                <div class="cell" style="width:20%">
-                  <a href="{{ repo_url }}/rev?node={{ chgset }}"
-                     contextmenu="changeset-popup-menu"
-                     id="cset-{{ chgset }}-{{ pos }}">{{ chgset }}</a>
+                <div class="cell" style="width:25%">
+                  <span>
+                    <a href="{{ repo_url }}/rev?node={{ chgset }}">{{ chgset }}</a>
+                    <a onclick="javascript: showChangesetMenu(event);"><div id="cset-{{ chgset }}-{{ pos }}" class="glass"></div></a>
+                  </span>
                 </div>
                 <div style="background-color:{{ colors[i['score']] }};width:15%;"
                      class="cell">
