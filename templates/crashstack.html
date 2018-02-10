@@ -38,7 +38,7 @@
       </ul>
     </div>
     <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.com/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
-    <p>The crash signature is &ldquo;{{ uuid_info['signature'] }}&rdquo;.</p>
+    <p>The crash signature is <a href="{{ sgn_url }}">{{ uuid_info['signature'] }}</a>.</p>
     {% if stack -%}
     <table>
       <thead>

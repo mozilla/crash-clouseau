@@ -12,12 +12,18 @@ def crashstack():
     stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
     if uuid_info:
         repo_url = Mercurial.get_repo_url(uuid_info['channel'])
+        sgn_url = utils.make_url_for_signature(uuid_info['signature'],
+                                               uuid_info['buildid'],
+                                               utils.get_buildid(uuid_info['buildid']),
+                                               uuid_info['channel'],
+                                               uuid_info['product'])
         return render_template('crashstack.html',
                                uuid_info=uuid_info,
                                stack=stack,
                                colors=utils.get_colors(),
                                enumerate=enumerate,
-                               repo_url=repo_url)
+                               repo_url=repo_url,
+                               sgn_url=sgn_url)
     abort(404)
 
 

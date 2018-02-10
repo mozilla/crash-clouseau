@@ -579,6 +579,7 @@ class UUID(db.Model):
                              UUID.jstackhash,
                              Signature.signature,
                              Build.buildid,
+                             Build.product,
                              Build.channel,
                              Node.node).join(Build).join(Node).join(Signature)
         r = r.filter(UUID.uuid == uuid,
@@ -590,6 +591,7 @@ class UUID(db.Model):
                     'signature': r.signature,
                     'buildid': r.buildid.astimezone(pytz.utc),
                     'channel': r.channel,
+                    'product': r.product,
                     'java': bool(r.jstackhash),
                     'node': r.node}
         return {}
