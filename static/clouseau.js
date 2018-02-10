@@ -11,6 +11,15 @@ const channel = "nightly";
 let loaded = false;
 let currentTarget = null;
 
+
+function getParams() {
+    const params = ["buildid", "product", "score"].map(function(i) {
+        const e = document.getElementById(i);
+        return e.options[e.selectedIndex].value;
+    });
+    return params;
+}
+
 function update_reports() {
     const params = getParams();
     location.href = "reports.html?product=" + params[1]
