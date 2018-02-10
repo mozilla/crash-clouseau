@@ -68,6 +68,10 @@ table tr:nth-child(2n+1) {
     background-color: #edecec;
 }
 
+table tr:hover {
+    background-color: #adacac;
+}
+
 .signatures tr td:nth-child(2) {
     text-align: center;
 }
