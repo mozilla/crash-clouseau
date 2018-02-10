@@ -53,6 +53,7 @@ def get_new_signatures(products, date='today', channel='nightly'):
                             few_days_ago.day)
     search_buildid = ['>=' + utils.get_buildid(few_days_ago),
                       '<=' + utils.get_buildid(today)]
+    search_date = '>=' + lmdutils.get_date_str(few_days_ago)
 
     bids = get_buildids(search_buildid, products, channel)
     base = {}
@@ -91,6 +92,7 @@ def get_new_signatures(products, date='today', channel='nightly'):
 
     base_params = {'product': '',
                    'release_channel': channel,
+                   'date': search_date,
                    'build_id': '',
                    '_aggs.signature': 'build_id',
                    '_results_number': 0,
@@ -114,16 +116,16 @@ def get_new_signatures(products, date='today', channel='nightly'):
 
     logger.info('Get crash numbers for {}-{}: finished.'.format(products,
                                                                 channel))
-    get_proto(products, data, channel=channel)
+    get_proto(products, data, search_date, channel=channel)
 
     if 'FennecAndroid' in products:
         # Java crashes don't have any proto-signature...
-        get_uuids(data['FennecAndroid'], channel=channel)
+        get_uuids(data['FennecAndroid'], search_date, channel=channel)
 
     return data
 
 
-def get_proto(products, signatures, channel='nightly'):
+def get_proto(products, signatures, search_date, channel='nightly'):
     limit = config.get_limit_facets()
     logger.info('Get proto-signatures for {}-{}: started.'.format(products,
                                                                   channel))
@@ -149,6 +151,7 @@ def get_proto(products, signatures, channel='nightly'):
 
     base_params = {'product': '',
                    'release_channel': channel,
+                   'date': search_date,
                    'build_id': '',
                    'signature': '',
                    '_aggs.proto_signature': ['uuid', 'signature'],
@@ -182,7 +185,7 @@ def get_proto(products, signatures, channel='nightly'):
                                                                    channel))
 
 
-def get_uuids(signatures, channel='nightly'):
+def get_uuids(signatures, search_date, channel='nightly'):
     limit = config.get_limit_facets()
     logger.info('Get uuids for FennecAndroid-{}: started.'.format(channel))
 
@@ -204,6 +207,7 @@ def get_uuids(signatures, channel='nightly'):
 
     base_params = {'product': 'FennecAndroid',
                    'release_channel': channel,
+                   'date': search_date,
                    'build_id': '',
                    'signature': '',
                    '_aggs.signature': 'uuid',
@@ -231,6 +235,7 @@ def get_uuids(signatures, channel='nightly'):
 
 
 def get_changeset(buildid, channel, product):
+    search_date = '>=' + lmdutils.get_date_str(buildid)
     buildid = utils.get_buildid(buildid)
     logger.info('Get changeset for {}-{}-{}.'.format(buildid,
                                                      product,
@@ -251,6 +256,7 @@ def get_changeset(buildid, channel, product):
     params = {'product': product,
               'release_channel': channel,
               'build_id': buildid,
+              'date': search_date,
               'topmost_filenames': '@\"hg:hg.mozilla.org/\".*:[0-9a-f]+',
               '_aggs.build_id': 'topmost_filenames',
               '_results_number': 0,
