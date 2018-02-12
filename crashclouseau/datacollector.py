@@ -14,7 +14,7 @@ from . import config, utils
 from .logger import logger
 
 
-def get_buildids(search_buildid, products, channel='nightly'):
+def get_buildids(search_buildid, search_date, products, channel='nightly'):
 
     def handler(json, data):
         if json['errors'] or not json['facets']['build_id']:
@@ -28,6 +28,7 @@ def get_buildids(search_buildid, products, channel='nightly'):
     params = {'product': products,
               'release_channel': channel,
               'build_id': search_buildid,
+              'date': search_date,
               '_aggs.build_id': 'product',
               '_facets': 'release_channel',
               '_results_number': 0,
@@ -55,7 +56,7 @@ def get_new_signatures(products, date='today', channel='nightly'):
                       '<=' + utils.get_buildid(today)]
     search_date = '>=' + lmdutils.get_date_str(few_days_ago)
 
-    bids = get_buildids(search_buildid, products, channel)
+    bids = get_buildids(search_buildid, search_date, products, channel)
     base = {}
     for p, v in bids.items():
         base[p] = base_p = {}
@@ -102,15 +103,17 @@ def get_new_signatures(products, date='today', channel='nightly'):
     data = {}
     queries = []
     for prod in products:
-        params = copy.deepcopy(base_params)
-        params['product'] = prod
-        params['build_id'] = bids[prod]
         data[prod] = data_prod = {}
-        hdler = functools.partial(handler, base[prod])
-        queries.append(Query(socorro.SuperSearch.URL,
-                             params=params,
-                             handler=hdler,
-                             handlerdata=data_prod))
+        for bid in bids[prod]:
+            params = copy.deepcopy(base_params)
+            params['product'] = prod
+            params['build_id'] = bid
+            print(bid)
+            hdler = functools.partial(handler, base[prod])
+            queries.append(Query(socorro.SuperSearch.URL,
+                                 params=params,
+                                 handler=hdler,
+                                 handlerdata=data_prod))
 
     socorro.SuperSearch(queries=queries).wait()
 
