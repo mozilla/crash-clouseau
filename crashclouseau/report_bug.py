@@ -42,7 +42,7 @@ def get_stats(data, buildid):
         facets = i['facets']
         it = len(facets['install_time'])
         if it == 100:
-            it = facets['cardinality_install_time']
+            it = facets['cardinality_install_time']['value']
         res[i['term']] = {'count': count,
                           'installs': it}
 
