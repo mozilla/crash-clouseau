@@ -108,7 +108,6 @@ def get_new_signatures(products, date='today', channel='nightly'):
             params = copy.deepcopy(base_params)
             params['product'] = prod
             params['build_id'] = bid
-            print(bid)
             hdler = functools.partial(handler, base[prod])
             queries.append(Query(socorro.SuperSearch.URL,
                                  params=params,
