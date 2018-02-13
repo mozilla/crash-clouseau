@@ -9,7 +9,7 @@ import libmozdata.config
 from libmozdata.hgmozilla import Mercurial
 import requests
 from urllib.parse import parse_qs, urlencode, urlparse
-from . import models
+from . import buginfo, models
 
 
 def get_bz_query(data):
@@ -82,6 +82,8 @@ def finalize_comment(bzquery, first, stats, info, changeset, bugid):
 async def get_info_helper(uuid, changeset):
     info = models.UUID.get_info(uuid)
     bugid = models.Node.get_bugid(changeset, info['channel'])
+    sgn = info['signature']
+    bzw, bugsdata = buginfo.get_bugs(sgn, wait=False)
 
     cs = 'https://crash-stats.mozilla.com/report/index/' + uuid
     bz = 'https://bugzilla.mozilla.org/rest/bug'
@@ -116,9 +118,10 @@ async def get_info_helper(uuid, changeset):
     ni = improve(bzquery, bzdata, bugid)
     url = finalize_comment(bzquery, first, stats, info, changeset, bugid)
 
-    return url, ni
+    bzw.wait()
+
+    return url, ni, sgn, bugsdata
 
 
 def get_info(uuid, changeset):
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(get_info_helper(uuid, changeset))
+    return asyncio.get_event_loop().run_until_complete(get_info_helper(uuid, changeset))

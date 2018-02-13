@@ -91,9 +91,12 @@ def bug():
     changeset = request.args.get('changeset', '')
 
     if uuid and changeset:
-        url, ni = report_bug.get_info(uuid, changeset)
+        url, ni, signature, bugdata = report_bug.get_info(uuid, changeset)
+        bugdata = sorted(bugdata.items())
         return render_template('bug.html',
                                uuid=uuid,
                                url=url,
-                               needinfo=ni)
+                               needinfo=ni,
+                               bugdata=bugdata,
+                               signature=signature)
     abort(404)

@@ -3,7 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from flask import request, jsonify
-from . import java
+from . import buginfo, java
 
 
 def javast():
@@ -12,4 +12,10 @@ def javast():
     buildid = data['buildid']
     stack = data['stack']
     data['stack'] = java.reformat_java_stacktrace(stack, channel, buildid)
+    return jsonify(data)
+
+
+def bugs():
+    sgn = request.args.get('signature', '')
+    data = buginfo.get_bugs(sgn)
     return jsonify(data)

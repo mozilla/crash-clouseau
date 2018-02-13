@@ -137,3 +137,11 @@ table td {
 .glass:hover {
     cursor: pointer;
 }
+
+s.red {
+    color:red;
+}
+
+.listbugs {
+    margin: 0 0 0.5em 0;
+}

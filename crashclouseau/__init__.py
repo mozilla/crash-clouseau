@@ -75,3 +75,10 @@ def stop_css():
 def api_javast():
     from crashclouseau import api
     return api.javast()
+
+
+@app.route('/api/bugs', methods=['GET'])
+@cross_origin()
+def api_bugs():
+    from crashclouseau import api
+    return api.bugs()

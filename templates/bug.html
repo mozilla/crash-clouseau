@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/clouseau.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=4">
+    <link rel="stylesheet" href="/clouseau.css?v=1">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Report a bug &mdash; {{ uuid }}</title>
     <script src="/clouseau.js"></script>
@@ -24,6 +24,17 @@
         </ul>
       </nav>
     </header>
+      {% if bugdata -%}
+    <p>Here are the list of bugs for the signature &ldquo;{{ signature }}&rdquo;:
+      <ul>
+        {% for bugid, info in bugdata -%}
+        <li class="listbugs">
+          <a href="https://bugzil.la/{{ bugid }}">{% if info and info['status'] == 'RESOLVED' -%}<s class="red">{{ bugid }}</s>{% else -%}{{ bugid }}{% endif -%}</a>{% if info -%}{% if info['dupe_of'] -%}&nbsp;(duplicate of <a href="https://bugzil.la/{{ info['dupe_of'] }}">{{ info['dupe_of'] }}</a>){% endif -%}&nbsp;&mdash;&nbsp;{{ info['summary'] }}{% endif -%}
+        </li>
+        {% endfor -%}
+      </ul>
+    </p>
+    {% endif -%}
     <p>
       <a href="{{ url }}">Create a new bug</a>{% if needinfo %} and ni on <a href="mailto:{{ needinfo }}">{{ needinfo }}</a>{% endif %}.
     </p>
