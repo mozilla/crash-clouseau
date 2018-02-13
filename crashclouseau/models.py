@@ -645,7 +645,7 @@ class UUID(db.Model):
                                                                             sbid,
                                                                             channel,
                                                                             product)}
-        res = sorted(_res.items(), key=lambda p: p[1]['number'], reverse=True)
+        res = sorted(_res.items(), key=lambda p: (-p[1]['number'], -p[1]['installs'], p[0].lower()))
         return res
 
     @staticmethod
