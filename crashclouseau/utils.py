@@ -208,3 +208,18 @@ def make_url_for_signature(sgn, date, buildid, channel, product):
     url = socorro.SuperSearch.get_link(params)
     url += '#crash-reports'
     return url
+
+
+def get_signatures(signatures):
+    res = set()
+    for s in signatures:
+        if '[@' in s:
+            sgns = map(lambda x: x.strip(), s.split('[@'))
+            sgns = filter(None, sgns)
+            sgns = map(lambda x: x[:-1].strip(), sgns)
+        else:
+            sgns = map(lambda x: x.strip(), s.split('\n'))
+            sgns = filter(None, sgns)
+        res |= set(sgns)
+
+    return res
