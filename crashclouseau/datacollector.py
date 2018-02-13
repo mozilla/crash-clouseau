@@ -14,7 +14,7 @@ from . import config, utils
 from .logger import logger
 
 
-def get_buildids(search_buildid, products, channel='nightly'):
+def get_buildids(search_buildid, search_date, products, channel='nightly'):
 
     def handler(json, data):
         if json['errors'] or not json['facets']['build_id']:
@@ -27,6 +27,7 @@ def get_buildids(search_buildid, products, channel='nightly'):
 
     params = {'product': products,
               'release_channel': channel,
+              'date': search_date,
               'build_id': search_buildid,
               '_aggs.build_id': 'product',
               '_facets': 'release_channel',
@@ -55,7 +56,7 @@ def get_new_signatures(products, date='today', channel='nightly'):
                       '<=' + utils.get_buildid(today)]
     search_date = '>=' + lmdutils.get_date_str(few_days_ago)
 
-    bids = get_buildids(search_buildid, products, channel)
+    bids = get_buildids(search_buildid, search_date, products, channel)
     base = {}
     for p, v in bids.items():
         base[p] = base_p = {}
@@ -74,21 +75,18 @@ def get_new_signatures(products, date='today', channel='nightly'):
         if json['errors'] or not json['facets']['signature']:
             raise Exception('Error in json data from SuperSearch')
         for facets in json['facets']['signature']:
-            bids = facets['facets']['build_id']
-            numbers = copy.deepcopy(base)
-            for bid in bids:
-                count = bid['count']
-                bid = bid['term']
-                bid = utils.get_build_date(bid)
-                day = datetime(bid.year, bid.month, bid.day)
-                numbers[day]['count'] += count
-                numbers[day]['bids'][bid] = count
-            bids = utils.get_new_crashing_bids(numbers, ndays)
-            if bids:
-                sgn = facets['term']
-                data[sgn] = {'bids': bids,
-                             'protos': {b: [] for b in bids},
-                             'installs': {b: 0 for b in bids}}
+            sgn = facets['term']
+            bid_info = facets['facets']['build_id'][0]
+            count = bid_info['count']
+            bid = bid_info['term']
+            bid = utils.get_build_date(bid)
+            day = datetime(bid.year, bid.month, bid.day)
+            if sgn in data:
+                numbers = data[sgn]
+            else:
+                data[sgn] = numbers = copy.deepcopy(base)
+            numbers[day]['count'] += count
+            numbers[day]['bids'][bid] = count
 
     base_params = {'product': '',
                    'release_channel': channel,
@@ -102,17 +100,33 @@ def get_new_signatures(products, date='today', channel='nightly'):
     data = {}
     queries = []
     for prod in products:
-        params = copy.deepcopy(base_params)
-        params['product'] = prod
-        params['build_id'] = bids[prod]
         data[prod] = data_prod = {}
         hdler = functools.partial(handler, base[prod])
-        queries.append(Query(socorro.SuperSearch.URL,
-                             params=params,
-                             handler=hdler,
-                             handlerdata=data_prod))
+        for bid in bids[prod]:
+            params = copy.deepcopy(base_params)
+            params['product'] = prod
+            params['build_id'] = bid
+            queries.append(Query(socorro.SuperSearch.URL,
+                                 params=params,
+                                 handler=hdler,
+                                 handlerdata=data_prod))
 
     socorro.SuperSearch(queries=queries).wait()
+
+    for prod in products:
+        data_prod = data[prod]
+        torm = []
+        for sgn, numbers in data_prod.items():
+            bids = utils.get_new_crashing_bids(numbers, ndays)
+            if bids:
+                data_prod[sgn] = {'bids': bids,
+                                  'protos': {b: [] for b in bids},
+                                  'installs': {b: 0 for b in bids}}
+            else:
+                data_prod[sgn] = None
+                torm.append(sgn)
+        for sgn in torm:
+            del data_prod[sgn]
 
     logger.info('Get crash numbers for {}-{}: finished.'.format(products,
                                                                 channel))
