@@ -2,9 +2,10 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from flask import request, render_template, abort
+from flask import request, render_template, abort, redirect
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, report_bug
+from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
 
 def crashstack():
@@ -44,8 +45,9 @@ def reports():
     score = utils.get_correct_score(score)
     channel = 'nightly'
     products = models.UUID.get_buildids_from_channel(channel)
+    buildids = products[prod]
     if not buildid:
-        buildid = products[prod][0]
+        buildid = buildids[0]
     signatures = models.UUID.get_uuids_from_buildid(buildid,
                                                     prod,
                                                     channel,
@@ -59,7 +61,7 @@ def reports():
                            scores=scores,
                            selected_score=score,
                            signatures=signatures,
-                           colors=utils.get_colors(),)
+                           colors=utils.get_colors())
 
 
 def diff():
@@ -99,4 +101,23 @@ def bug():
                                needinfo=ni,
                                bugdata=bugdata,
                                signature=signature)
+    abort(404)
+
+
+def pushlog():
+    url = ''
+    buildid = request.args.get('buildid', '')
+    if buildid:
+        channel = request.args.get('channel', 'nightly')
+        product = request.args.get('product', 'Firefox')
+        url = pushlog_for_buildid_url(buildid, channel, product)
+    else:
+        rev = request.args.get('rev', '')
+        if rev:
+            channel = request.args.get('channel', 'nightly')
+            product = request.args.get('product', 'Firefox')
+            url = pushlog_for_rev_url(rev, channel, product)
+    if url:
+        return redirect(url)
+
     abort(404)

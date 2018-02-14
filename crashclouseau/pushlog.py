@@ -7,7 +7,7 @@ from libmozdata.hgmozilla import Mercurial, Revision
 from libmozdata import utils as lmdutils
 import re
 import requests
-from . import buildhub, utils
+from . import buildhub, models, utils
 
 
 BACKOUT_PAT = re.compile(r'^(?:(?:back(?:ed|ing|s)?(?:[ _]*out[_]?))|(?:revert(?:ing|s)?)) (?:(?:cset|changeset|revision|rev|of)s?)?', re.I | re.DOTALL)
@@ -87,7 +87,9 @@ def pushlog_for_buildid(buildid, channel, product,
 
 
 def pushlog_for_buildid_url(buildid, channel, product):
-    data = buildhub.get_two_last(buildid, channel, product)
+    data = models.Build.get_two_last(utils.get_build_date(buildid), channel, product)
+    if len(data) != 2:
+        data = buildhub.get_two_last(buildid, channel, product)
     if data:
         startrev = data[0]['revision']
         endrev = data[1]['revision']

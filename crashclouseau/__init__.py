@@ -45,6 +45,12 @@ def bug_html():
     return html.bug()
 
 
+@app.route('/pushlog.html')
+def pushlog_html():
+    from crashclouseau import html
+    return html.pushlog()
+
+
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory('../static', 'clouseau.ico')

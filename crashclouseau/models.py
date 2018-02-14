@@ -375,6 +375,20 @@ class Build(db.Model):
         db.session.commit()
 
     @staticmethod
+    def get_two_last(buildid, channel, product):
+        qs = db.session.query(Build.buildid, Node.node).filter(Build.buildid <= buildid,
+                                                               Build.product == product,
+                                                               Build.channel == channel)
+        qs = qs.join(Node).order_by(Build.buildid.desc()).limit(2)
+        res = [{'buildid': utils.get_buildid(q.buildid),
+                'revision': q.node} for q in qs]
+        x = res[0]
+        res[0] = res[1]
+        res[1] = x
+
+        return res
+
+    @staticmethod
     def get_id(bid, channel, product):
         q = db.session.query(Build.id).filter(Build.buildid == bid,
                                               Build.product == product,

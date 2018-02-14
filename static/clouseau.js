@@ -111,3 +111,11 @@ function showChangesetMenu(e) {
 
     return false;
 }
+
+function openPushlog() {
+    const params = getParams();
+    const url = "/pushlog.html?buildid=" + params[0]
+              + "&product=" + params[1]
+              + "&channel=" + "nightly";
+    window.open(url, "_blank");
+}
