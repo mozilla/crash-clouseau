@@ -370,6 +370,11 @@ class Build(db.Model):
         db.session.commit()
 
     @staticmethod
+    def put_build(buildid, nodeid, product, channel, version):
+        db.session.add(Build(buildid, product, channel, version, nodeid))
+        db.session.commit()
+
+    @staticmethod
     def get_id(bid, channel, product):
         q = db.session.query(Build.id).filter(Build.buildid == bid,
                                               Build.product == product,

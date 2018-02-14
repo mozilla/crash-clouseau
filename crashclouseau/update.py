@@ -13,6 +13,12 @@ from . import datacollector as dc
 from . import buildhub, config, inspector, models, utils, worker, patch
 
 
+def put_build(buildid, node, product, channel, version):
+    buildid = utils.get_build_date(buildid)
+    nodeid = models.Node.get_id(node, channel)
+    models.Build.put_build(buildid, nodeid, product, channel, version)
+
+
 def put_filelog(channel='nightly', start_date=None, end_date=None):
     if not end_date:
         end_date = pytz.utc.localize(datetime.utcnow())
