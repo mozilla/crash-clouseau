@@ -151,6 +151,14 @@ class Node(db.Model):
         return res
 
     @staticmethod
+    def get_id(rev, channel):
+        if rev:
+            qs = db.session.query(Node.id).filter(Node.node == rev,
+                                                  Node.channel == channel)
+            return qs.first()
+        return None
+
+    @staticmethod
     def has_channel(channel):
         q = db.session.query(Node.channel).filter(Node.channel == channel).first()
         return bool(q)
