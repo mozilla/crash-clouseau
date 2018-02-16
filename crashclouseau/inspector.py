@@ -52,13 +52,18 @@ def get_crash_info(data, uuid, buildid, channel, ndays,
     else:
         frames, files = inspect_stacktrace(data, chgset)
         if frames:
+            prev = files
             files = filelog(files, buildid, channel, ndays)
             if amend(frames, files, interesting_chgsets):
                 res['nonjava'] = {'frames': frames,
                                   'hash': get_simplified_hash(frames)}
             else:
-                logger.info('UUID {} - hash {} - amend is False.'.format(uuid,
-                                                                         get_simplified_hash(frames)))
+                logger.info('UUID {} - hash {} - Files 1 {} - Files 2 {}'.format(uuid,
+                                                                                 get_simplified_hash(frames),
+                                                                                 files,
+                                                                                 prev,
+                                                                                 files))
+
     return res
 
 
