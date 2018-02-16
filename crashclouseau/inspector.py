@@ -60,7 +60,6 @@ def get_crash_info(data, uuid, buildid, channel, ndays,
             else:
                 logger.info('UUID {} - hash {} - Files 1 {} - Files 2 {}'.format(uuid,
                                                                                  get_simplified_hash(frames),
-                                                                                 files,
                                                                                  prev,
                                                                                  files))
 
