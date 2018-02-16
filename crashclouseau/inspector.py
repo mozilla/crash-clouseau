@@ -21,7 +21,7 @@ def get_crash(uuid, buildid, channel, ndays,
               chgset, filelog, interesting_chgsets):
     logger.info('Get {} for analyzis'.format(uuid))
     data = get_crash_data(uuid)
-    return get_crash_info(data, buildid, channel, ndays,
+    return get_crash_info(data, uuid, buildid, channel, ndays,
                           chgset, filelog, interesting_chgsets)
 
 
@@ -33,12 +33,12 @@ def get_crash_by_uuid(uuid, ndays, filelog):
     channel = data['release_channel']
     interesting_chgsets = set()
     chgset = tools.get_changeset(bid, channel, data['product'])
-    res = get_crash_info(data, bid, channel, ndays,
+    res = get_crash_info(data, uuid, bid, channel, ndays,
                          chgset, filelog, interesting_chgsets)
     return res, channel, interesting_chgsets
 
 
-def get_crash_info(data, buildid, channel, ndays,
+def get_crash_info(data, uuid, buildid, channel, ndays,
                    chgset, filelog, interesting_chgsets):
     res = {}
     java_st = data.get('java_stack_trace')
@@ -56,7 +56,9 @@ def get_crash_info(data, buildid, channel, ndays,
             if amend(frames, files, interesting_chgsets):
                 res['nonjava'] = {'frames': frames,
                                   'hash': get_simplified_hash(frames)}
-
+            else:
+                logger.info('UUID {} - hash {} - amend is False.'.format(uuid,
+                                                                         get_simplified_hash(frames)))
     return res
 
 
