@@ -274,14 +274,6 @@ class Changeset(db.Model):
         if not filenames:
             return None
 
-        md, Md = LastDate.get(channel)
-        if md is None:
-            # not a valid channel
-            return None
-
-        if mindate < md or maxdate > Md:
-            return None
-
         chgs = db.session.query(Changeset.id,
                                 File.name,
                                 Node.node).join(Node).join(File)
