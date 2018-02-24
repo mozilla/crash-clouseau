@@ -36,7 +36,8 @@ def create(date=None, extra={}, hgauthors={}):
     logger.info('Create data for {}: started.'.format(date))
     for chan in config.get_channels():
         update.put_filelog(chan, start_date=start_date, end_date=date)
-        update.update_builds(start_date + relativedelta(days=1), chan)
+        for prod in config.get_products():
+            update.update_builds(start_date + relativedelta(days=1), chan, prod)
 
     if isinstance(extra, six.string_types):
         extra = json.loads(extra)
