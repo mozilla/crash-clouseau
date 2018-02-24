@@ -6,6 +6,7 @@ from flask import request, render_template, abort, redirect
 import json
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, report_bug
+from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
 
@@ -42,24 +43,28 @@ def report():
 
 
 def reports():
-    prod = request.args.get('product', 'Firefox')
-    channel = request.args.get('channel', 'nightly')
-    buildid = request.args.get('buildid', '')
-    products = models.UUID.get_buildids()
-    if not buildid:
-        buildid = products[prod][channel][0][0]
-    signatures = models.UUID.get_uuids_from_buildid(buildid,
-                                                    prod,
-                                                    channel)
+    try:
+        prod = request.args.get('product', 'Firefox')
+        channel = request.args.get('channel', 'nightly')
+        buildid = request.args.get('buildid', '')
+        products = models.UUID.get_buildids()
+        if not buildid:
+            buildid = products[prod][channel][0][0]
+        signatures = models.UUID.get_uuids_from_buildid(buildid,
+                                                        prod,
+                                                        channel)
 
-    return render_template('reports.html',
-                           buildids=json.dumps(products),
-                           products=products,
-                           selected_product=prod,
-                           selected_channel=channel,
-                           selected_bid=buildid,
-                           signatures=signatures,
-                           colors=utils.get_colors())
+        return render_template('reports.html',
+                               buildids=json.dumps(products),
+                               products=products,
+                               selected_product=prod,
+                               selected_channel=channel,
+                               selected_bid=buildid,
+                               signatures=signatures,
+                               colors=utils.get_colors())
+    except Exception:
+        logger.error('Invalid URL: {}'.format(request.url), exc_info=True)
+        abort(404)
 
 
 def diff():

@@ -11,7 +11,7 @@ sched = BlockingScheduler()
 
 @sched.scheduled_job('interval', minutes=20)
 def timed_job():
-    update.update_in_queue()
+    update.update_all()
 
 
 sched.start()
