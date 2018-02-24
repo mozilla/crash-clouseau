@@ -7,6 +7,7 @@ from copy import deepcopy
 from functools import partial
 import json
 import requests
+import six
 import time
 from . import utils
 from .logger import logger
@@ -25,6 +26,7 @@ VERSION_PATS = {'nightly': '[0-9]+\".0a1\"',
 
 
 def make_request(params, sleep, retry, callback):
+    """Query Buildhub"""
     params = json.dumps(params)
 
     for _ in range(retry):
@@ -43,7 +45,10 @@ def make_request(params, sleep, retry, callback):
     return None
 
 
-def get(min_buildid, max_buildid=None, chans=['nightly'], prods=['firefox', 'fennec', 'thunderbird']):
+def get(min_buildid, channel, prods=['firefox', 'fennec', 'thunderbird'], max_buildid=None):
+    """Get all builds info for buildids >= min_build"""
+    if isinstance(prods, six.string_types):
+        prods = [prods]
     prods = [PRODS.get(x, x) for x in prods]
     r = {}
     if min_buildid:
@@ -62,7 +67,7 @@ def get(min_buildid, max_buildid=None, chans=['nightly'], prods=['firefox', 'fen
                     'channels': {
                         'terms': {
                             'field': 'target.channel',
-                            'size': len(chans)
+                            'size': 1
                         },
                         'aggs': {
                             'buildids': {
@@ -93,9 +98,10 @@ def get(min_buildid, max_buildid=None, chans=['nightly'], prods=['firefox', 'fen
         'query': {
             'bool': {
                 'filter': [
-                    {'terms': {'target.channel': chans}},
+                    {'term': {'target.channel': channel}},
                     {'terms': {'source.product': prods}},
-                    {'range': {'build.id': r}}
+                    {'range': {'build.id': r}},
+                    {'regexp': {'target.version': VERSION_PATS.get(channel, '*')}}
                 ]
             }
         },
@@ -123,13 +129,14 @@ def get(min_buildid, max_buildid=None, chans=['nightly'], prods=['firefox', 'fen
                     rev = buildid['revisions']['buckets'][0]['key']
                     version = buildid['versions']['buckets'][0]['key']
                     res_pc[bid] = {'revision': utils.short_rev(rev),
-                                   'version': utils.get_major(version)}
+                                   'version': version}
         return res
 
     return make_request(data, 1, 100, get_info)
 
 
 def get_rev_from(buildid, channel, product):
+    """Get the revision for a given build"""
     buildid = utils.get_buildid(buildid)
     product = PRODS.get(product, product)
     data = {
@@ -159,6 +166,7 @@ def get_rev_from(buildid, channel, product):
 
 
 def get_two_last(buildid, channel, product):
+    """Get the two last build (including the one from buildid)"""
     buildid = utils.get_buildid(buildid)
     product = PRODS.get(product, product)
     data = {
@@ -293,5 +301,6 @@ async def get_enclosing_builds_helper(pushdate, channel, product):
 
 
 def get_enclosing_builds(pushdate, channel, product):
+    """Get the build before and the one after the given pushdate"""
     loop = asyncio.get_event_loop()
     return loop.run_until_complete(get_enclosing_builds_helper(pushdate, channel, product))

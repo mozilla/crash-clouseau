@@ -2,8 +2,7 @@
     "products":
     [
         "Firefox",
-        "FennecAndroid",
-        "Thunderbird"
+        "FennecAndroid"
     ],
     "channels":
     [
@@ -18,5 +17,38 @@
     {
         "max": 10,
         "number_of_lines": 5
+    },
+    "thresholds":
+    {
+        "installs":
+        {
+            "Firefox":
+            {
+                "nightly": 1,
+                "beta": 6,
+                "release": 50
+            },
+            "FennecAndroid":
+            {
+                "nightly": 1,
+                "beta": 6,
+                "release": 50
+            }
+        },
+        "protos":
+        {
+            "Firefox":
+            {
+                "nightly": 50,
+                "beta": 20,
+                "release": 20
+            },
+            "FennecAndroid":
+            {
+                "nightly": 50,
+                "beta": 20,
+                "release": 20
+            }
+        }
     }
 }

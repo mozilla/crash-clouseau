@@ -6,14 +6,12 @@
 
 "use strict";
 
-const repoUrl = "https://hg.mozilla.org/mozilla-central";
-const channel = "nightly";
 let loaded = false;
 let currentTarget = null;
 
 
 function getParams() {
-    const params = ["buildid", "product", "score"].map(function(i) {
+    const params = ["buildid", "product", "channel"].map(function(i) {
         const e = document.getElementById(i);
         return e.options[e.selectedIndex].value;
     });
@@ -23,19 +21,46 @@ function getParams() {
 function update_reports() {
     const params = getParams();
     location.href = "reports.html?product=" + params[1]
-                  + "&buildid=" + params[0]
-                  + "&score=" + params[2];
+                  + "&channel=" + params[2]
+                  + "&buildid=" + params[0];
 }
 
-function update_buildids() {
+function update_channels(product, prevChannel, channels) {
+    const newChannels = BUILDIDS[product];
+    channels.innerHTML = "";
+    for (let c in newChannels) {
+        channels.options.add(new Option(c, c));
+        if (c === prevChannel) {
+            channels.value = c;
+        }
+    }
+}
+
+function update_buildids(product, channel, bids) {
+    const newBids = BUILDIDS[product][channel];
+    if (newBids) {
+        bids.innerHTML = "";
+        newBids.forEach(x => {
+            const buildid = x[0];
+            const version = x[1];
+            bids.options.add(new Option(buildid + " (" + version + ")", buildid));
+        });
+    }
+}
+
+function update_selects(type) {
     const bids = document.getElementById("buildid");
     const products = document.getElementById("product");
+    const channels = document.getElementById("channel");
     const prod = products.options[products.selectedIndex].value;
-    const newBids = BUILDIDS[prod];
-    bids.innerHTML = "";
-    newBids.forEach(bid => {
-        bids.options.add(new Option(bid, bid));
-    });
+    let chan = channels.options[channels.selectedIndex].value;
+    
+    if (type === 'product') {
+        update_channels(prod, chan, channels);
+        chan = channels.options[channels.selectedIndex].value;
+    }
+
+    update_buildids(prod, chan, bids);
 }
 
 function reportBug() {
@@ -88,13 +113,13 @@ function showChangesetMenu(e) {
     const filename = document.getElementById("filename-" + pos).innerText;
     const line = document.getElementById("line-" + pos).innerText;
 
-    document.getElementById("openChangeset").myurl = repoUrl + "/rev?node=" + changeset;
-    document.getElementById("openDiff").myurl = repoUrl + "/diff/" + changeset + "/" + filename;
+    document.getElementById("openChangeset").myurl = REPOURL + "/rev?node=" + changeset;
+    document.getElementById("openDiff").myurl = REPOURL + "/diff/" + changeset + "/" + filename;
     const diffUrl = "/diff.html?filename=" + filename
                   + "&line=" + line
                   + "&node=" + NODE
                   + "&changeset=" + changeset
-                  + "&channel=" + channel
+                  + "&channel=" + CHANNEL
                   + "&style=";
     document.getElementById("openFileDiff").myurl = diffUrl + "file";
     document.getElementById("openAnnotateDiff").myurl = diffUrl + "annotate";
@@ -116,6 +141,6 @@ function openPushlog() {
     const params = getParams();
     const url = "/pushlog.html?buildid=" + params[0]
               + "&product=" + params[1]
-              + "&channel=" + "nightly";
+              + "&channel=" + params[2];
     window.open(url, "_blank");
 }

@@ -3,6 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from flask import request, render_template, abort, redirect
+import json
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, report_bug
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
@@ -12,11 +13,12 @@ def crashstack():
     uuid = request.args.get('uuid', '')
     stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
     if uuid_info:
-        repo_url = Mercurial.get_repo_url(uuid_info['channel'])
+        channel = uuid_info['channel']
+        repo_url = Mercurial.get_repo_url(channel)
         sgn_url = utils.make_url_for_signature(uuid_info['signature'],
                                                uuid_info['buildid'],
                                                utils.get_buildid(uuid_info['buildid']),
-                                               uuid_info['channel'],
+                                               channel,
                                                uuid_info['product'])
         return render_template('crashstack.html',
                                uuid_info=uuid_info,
@@ -24,6 +26,7 @@ def crashstack():
                                colors=utils.get_colors(),
                                enumerate=enumerate,
                                repo_url=repo_url,
+                               channel=channel,
                                sgn_url=sgn_url)
     abort(404)
 
@@ -40,26 +43,21 @@ def report():
 
 def reports():
     prod = request.args.get('product', 'Firefox')
+    channel = request.args.get('channel', 'nightly')
     buildid = request.args.get('buildid', '')
-    score = request.args.get('score', '---')
-    score = utils.get_correct_score(score)
-    channel = 'nightly'
-    products = models.UUID.get_buildids_from_channel(channel)
-    buildids = products[prod]
+    products = models.UUID.get_buildids()
     if not buildid:
-        buildid = buildids[0]
+        buildid = products[prod][channel][0][0]
     signatures = models.UUID.get_uuids_from_buildid(buildid,
                                                     prod,
-                                                    channel,
-                                                    score)
+                                                    channel)
 
-    scores = ['---'] + list(map(str, range(11)))
     return render_template('reports.html',
+                           buildids=json.dumps(products),
                            products=products,
                            selected_product=prod,
+                           selected_channel=channel,
                            selected_bid=buildid,
-                           scores=scores,
-                           selected_score=score,
                            signatures=signatures,
                            colors=utils.get_colors())
 

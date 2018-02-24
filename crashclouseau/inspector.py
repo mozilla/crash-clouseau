@@ -13,19 +13,22 @@ HG_PAT = re.compile('hg:hg.mozilla.org[^:]*:([^:]*):([a-z0-9]+)')
 
 
 def get_crash_data(uuid):
+    """Get the crash data from Socorro"""
     data = socorro.ProcessedCrash.get_processed(uuid)
     return data[uuid]
 
 
-def get_crash(uuid, buildid, channel, ndays,
+def get_crash(uuid, buildid, channel, mindate,
               chgset, filelog, interesting_chgsets):
+    """Get the a crash with its uuid"""
     logger.info('Get {} for analyzis'.format(uuid))
     data = get_crash_data(uuid)
-    return get_crash_info(data, uuid, buildid, channel, ndays,
+    return get_crash_info(data, uuid, buildid, channel, mindate,
                           chgset, filelog, interesting_chgsets)
 
 
-def get_crash_by_uuid(uuid, ndays, filelog):
+def get_crash_by_uuid(uuid, mindate, filelog):
+    """Get the a crash with its uuid"""
     logger.info('Get {} for analyzis'.format(uuid))
     data = get_crash_data(uuid)
     buildid = data['build']
@@ -33,27 +36,27 @@ def get_crash_by_uuid(uuid, ndays, filelog):
     channel = data['release_channel']
     interesting_chgsets = set()
     chgset = tools.get_changeset(bid, channel, data['product'])
-    res = get_crash_info(data, uuid, bid, channel, ndays,
+    res = get_crash_info(data, uuid, bid, channel, mindate,
                          chgset, filelog, interesting_chgsets)
     return res, channel, interesting_chgsets
 
 
-def get_crash_info(data, uuid, buildid, channel, ndays,
+def get_crash_info(data, uuid, buildid, channel, mindate,
                    chgset, filelog, interesting_chgsets):
+    """Inspect the crash stack (Java's one too if present)"""
     res = {}
     java_st = data.get('java_stack_trace')
     jframes, files = java.inspect_java_stacktrace(java_st, chgset)
 
     if jframes:
-        files = filelog(files, buildid, channel, ndays)
+        files = filelog(files, mindate, buildid, channel)
         if amend(jframes, files, interesting_chgsets):
             res['java'] = {'frames': jframes,
                            'hash': get_simplified_hash(jframes)}
     else:
         frames, files = inspect_stacktrace(data, chgset)
         if frames:
-            prev = files
-            files = filelog(files, buildid, channel, ndays)
+            files = filelog(files, mindate, buildid, channel)
             if amend(frames, files, interesting_chgsets):
                 res['nonjava'] = {'frames': frames,
                                   'hash': get_simplified_hash(frames)}
@@ -67,6 +70,7 @@ def get_crash_info(data, uuid, buildid, channel, ndays,
 
 
 def get_simplified_hash(frames):
+    """Get a hash from the frames we have in the crash stack"""
     res = ''
     for frame in frames:
         if frame['line'] != -1:
@@ -77,6 +81,7 @@ def get_simplified_hash(frames):
 
 
 def get_path_node(uri):
+    """Get the file path and the hg node"""
     name = node = ''
     if uri:
         m = HG_PAT.match(uri)
@@ -87,6 +92,9 @@ def get_path_node(uri):
 
 
 def inspect_stacktrace(data, build_node):
+    """Inspect the stack from the data and the check that the hg node
+       from the build is the same that the one we have in stack data
+       (the nodes could be different when the crash was occuring during an update)"""
     res = []
     files = set()
     dump = data['json_dump']
@@ -117,6 +125,7 @@ def inspect_stacktrace(data, build_node):
 
 
 def amend(frames, files, interesting_chgsets):
+    """Amend frame info"""
     interesting = False
     if files:
         for frame in frames:

@@ -7,79 +7,90 @@ from dateutil.relativedelta import relativedelta
 from libmozdata import utils as lmdutils
 import pytz
 from .logger import logger
-from .models import LastDate, UUID, CrashStack, Changeset
 from .pushlog import pushlog
 from . import datacollector as dc
 from . import buildhub, config, inspector, models, utils, worker, patch
 
 
-def put_build(buildid, node, product, channel, version):
+def put_build(buildid, product, channel, version, node=None):
+    """Put a build in the database"""
     buildid = utils.get_build_date(buildid)
+    if not node:
+        node = dc.get_changeset(buildid, channel, product)
     nodeid = models.Node.get_id(node, channel)
     models.Build.put_build(buildid, nodeid, product, channel, version)
 
 
-def put_filelog(channel='nightly', start_date=None, end_date=None):
+def put_filelog(channel, start_date=None, end_date=None):
+    """Get and put the filelog in the database"""
     if not end_date:
         end_date = pytz.utc.localize(datetime.utcnow())
     if not start_date:
-        _, start_date = LastDate.get(channel)
+        _, start_date = models.LastDate.get(channel)
 
-    logger.info('Get pushlog data: started')
+    logger.info('Get pushlog data for {}: started'.format(channel))
     data = pushlog(start_date, end_date, channel=channel)
     logger.info('Get pushlog data: retrieved')
-    min_date, _ = Changeset.add(data, end_date, channel)
-    logger.info('Get pushlog data: added in db')
+    min_date, _ = models.Changeset.add(data, end_date, channel)
+    logger.info('Get pushlog data: finished.')
     return end_date
 
 
-def put_report(uuid, buildid, channel, chgset):
-    ndays = config.get_ndays()
+def put_report(uuid, buildid, channel, product, chgset):
+    """Put a report in the database"""
+    if channel == 'nightly':
+        mindate = buildid - relativedelta(days=config.get_ndays())
+    else:
+        mindate = models.Build.get_pushdate_before(buildid, channel, product)
+        mindate += relativedelta(seconds=1)
+
     interesting_chgsets = set()
     res = inspector.get_crash(uuid, buildid,
-                              channel, ndays,
-                              chgset, Changeset.find,
+                              channel, mindate,
+                              chgset, models.Changeset.find,
                               interesting_chgsets)
 
     useless = True
-    chgsets = Changeset.to_analyze(chgsets=interesting_chgsets, channel=channel)
+    chgsets = models.Changeset.to_analyze(chgsets=interesting_chgsets, channel=channel)
     for nodeid, node in chgsets:
         data = patch.parse(node, channel=channel)
-        Changeset.add_analyzis(data, nodeid, channel)
+        models.Changeset.add_analyzis(data, nodeid, channel)
 
     frames = res.get('nonjava')
     sh = jsh = ''
     if frames:
         sh = frames['hash']
-        if not UUID.is_stackhash_existing(sh, False):
-            CrashStack.put_frames(uuid, frames, False, commit=True)
+        if not models.UUID.is_stackhash_existing(sh, buildid, channel, product, False):
+            models.CrashStack.put_frames(uuid, frames, False, commit=True)
             useless = False
 
     jframes = res.get('java')
     if jframes:
         jsh = jframes['hash']
-        if not UUID.is_stackhash_existing(jsh, True):
-            CrashStack.put_frames(uuid, jframes, True, commit=True)
+        if not models.UUID.is_stackhash_existing(jsh, buildid, channel, product, True):
+            models.CrashStack.put_frames(uuid, jframes, True, commit=True)
             useless = False
 
-    UUID.add_stack_hash(uuid, sh, jsh)
-    UUID.set_analyzed(uuid, useless)
+    models.UUID.add_stack_hash(uuid, sh, jsh)
+    models.UUID.set_analyzed(uuid, useless)
 
 
 def analyze_one_report():
-    a = UUID.to_analyze()
+    """Get a non-analyzed UUID in the database and analyze it"""
+    a = models.UUID.to_analyze()
     if a:
         try:
             put_report(*a)
         except Exception as e:
             logger.error(e, exc_info=True)
-            UUID.set_error(a[0])
+            models.UUID.set_error(a[0])
         analyze_reports()
     else:
         analyze_patches()
 
 
 def analyze_reports():
+    """Analyze all the non-analyzed reports available in the database"""
     queue = worker.get_queue()
     if len(queue) <= 1:
         queue.enqueue_call(func=analyze_one_report,
@@ -87,83 +98,99 @@ def analyze_reports():
 
 
 def analyze_one_patch():
+    """Get a non-analyzed patch in the database and analyze it"""
     nodeid, node, channel = models.Changeset.to_analyze()
     if node:
         try:
             data = patch.parse(node, channel=channel)
-            Changeset.add_analyzis(data, nodeid, channel)
+            models.Changeset.add_analyzis(data, nodeid, channel)
         except Exception as e:
             logger.error(e, exc_info=True)
         analyze_patches()
 
 
 def analyze_patches():
+    """Analyze all the non-analyzed patches available in the database"""
     queue = worker.get_queue()
     if len(queue) <= 1:
         queue.enqueue_call(func=analyze_one_patch,
                            result_ttl=0)
 
 
-def update_builds(date, channel='nightly'):
-    logger.info('Update builds: started.')
+def update_builds(date, channel, product):
+    """Update the builds"""
+    logger.info('Update builds for {}/{}: started.'.format(channel,
+                                                           product))
     if not date:
-        _, date = LastDate.get(channel)
+        _, date = models.LastDate.get(channel)
         date -= relativedelta(days=config.get_ndays())
-    data = buildhub.get(date)
+    data = buildhub.get(date, channel, prods=product)
     if data:
         models.Build.put_data(data)
     logger.info('Update builds: finished.')
 
 
-def put_crashes(date=None, channel='nightly'):
+def put_crashes(date, channel, product):
+    """Get and put crashes data in the database"""
     if not date:
         date = pytz.utc.localize(datetime.utcnow())
-    products = utils.get_products()
-    data = dc.get_new_signatures(products,
-                                 date=date,
-                                 channel=channel)
+    data = dc.get_new_signatures(product,
+                                 channel,
+                                 date)
 
     errors = set()
-    for prod, i in data.items():
-        for sgn, j in i.items():
-            sgnid = None
-            for bid, protos in j['protos'].items():
-                bidid = models.Build.get_id(bid, channel, prod)
-                if bidid is None:
-                    errors.add((bid, channel, prod))
-                    continue
-                if sgnid is None:
-                    sgnid = models.Signature.get_id(sgn)
-                models.Stats.add(sgnid, bidid, j['bids'][bid], j['installs'][bid])
-                for proto in protos:
-                    uuid = proto['uuid']
-                    proto_sgn = proto['proto']
-                    UUID.add(uuid, sgnid, proto_sgn,
-                             bidid, commit=False)
-            models.commit()
+    for sgn, i in data.items():
+        sgnid = None
+        for bid, protos in i['protos'].items():
+            bidid = models.Build.get_id(bid, channel, product)
+            if bidid is None:
+                errors.add(bid)
+                continue
+            if sgnid is None:
+                sgnid = models.Signature.get_id(sgn)
+            models.Stats.add(sgnid, bidid, i['bids'][bid], i['installs'][bid])
+            for proto in protos:
+                uuid = proto['uuid']
+                proto_sgn = proto['proto']
+                models.UUID.add(uuid, sgnid, proto_sgn,
+                                bidid, commit=False)
+        models.commit()
 
-    for bid, channel, prod in errors:
-        logger.info('No buildid in db for {}/{}/{}'.format(bid, prod, channel))
+    for bid in errors:
+        logger.info('No buildid in db for {}/{}/{}'.format(bid, product, channel))
 
 
-def update(date):
+def update(date, channel, product, analyze=True):
+    """Update all the data for a given date/channel/product"""
     logger.info('Update data: started.')
-    put_filelog()
+    put_filelog(channel)
     if date:
         date = lmdutils.get_date_ymd(date)
-    update_builds(date)
+    update_builds(date, channel, product)
 
     try:
-        put_crashes(date=date)
+        put_crashes(date, channel, product)
     except Exception as e:
         logger.error(e, exc_info=True)
 
-    analyze_reports()
+    if analyze:
+        analyze_reports()
+
     logger.info('Update data: finished.')
 
 
-def update_in_queue(date=None):
+def update_in_queue(channel, product, date=None):
+    """Update in the queue"""
     queue = worker.get_queue()
     queue.enqueue_call(func=update,
-                       args=(date, ),
+                       args=(date, channel, product),
                        result_ttl=0)
+
+
+def update_all(products=config.get_products(),
+               channels=config.get_channels(),
+               date=None):
+    """Update all"""
+    for product in products:
+        for channel in channels:
+            update_in_queue(channel, product)

@@ -4,13 +4,16 @@
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import json
 from libmozdata import utils as lmdutils
 import pytz
+import six
 from . import config, java, models, update
 from .logger import logger
 
 
-def create(date=None):
+def create(date=None, extra={}, hgauthors={}):
+    """Clear the current database (if one), create a new one and add everything we need"""
     models.clear()
     if not models.create():
         return
@@ -27,11 +30,20 @@ def create(date=None):
         return
     logger.info('Populate with java files: finished.')
 
+    models.HGAuthor.put(hgauthors)
+
     start_date = date - relativedelta(days=config.get_ndays_of_data())
     logger.info('Create data for {}: started.'.format(date))
-    update.put_filelog(start_date=start_date, end_date=date)
-    start_date += relativedelta(days=1)
-    update.update_builds(start_date)
+    for chan in config.get_channels():
+        update.put_filelog(chan, start_date=start_date, end_date=date)
+        update.update_builds(start_date + relativedelta(days=1), chan)
+
+    if isinstance(extra, six.string_types):
+        extra = json.loads(extra)
+
+    for build in extra.get('builds', []):
+        update.put_build(*build)
+
     logger.info('Create data for {}: finished.'.format(date))
 
-    update.update_in_queue()
+    update.update_all()

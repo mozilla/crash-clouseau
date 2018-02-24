@@ -20,7 +20,7 @@
 
 @font-face {
     font-family: "Zilla Slab Highlight";
-    src: url("ZillaSlabHighlight-Bold.woff2") format("woff2");
+    src: url("/ZillaSlabHighlight-Bold.woff2") format("woff2");
     font-weight: bold;
 }
 

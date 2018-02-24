@@ -76,3 +76,7 @@ def get_database():
 
 def get_redis():
     return _get_local().get('redis', '')
+
+
+def get_threshold(typ, product, channel):
+    return _get_global().get('thresholds', {}).get(typ, {}).get(product, {}).get(channel, 1)

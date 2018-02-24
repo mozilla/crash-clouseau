@@ -12,15 +12,13 @@ import six
 from . import config
 
 
-def get_products():
-    return config.get_products()
-
-
-def get_channels():
-    return config.get_channels()
+def get_search_channel(channel):
+    """Get the search channel(s) for Socorro queries"""
+    return ['beta', 'aurora'] if channel == 'beta' else channel
 
 
 def get_extension(filename):
+    """Get file extension"""
     i = filename.rfind('.')
     if i != -1:
         return filename[i + 1:]
@@ -28,10 +26,12 @@ def get_extension(filename):
 
 
 def get_major(v):
+    """Get major version from version"""
     return int(v.split('.')[0])
 
 
 def get_colors():
+    """Get gradient of colors for score"""
     N = config.get_max_score()
     h = (236 - 48) / N
     r = [int(48 + n * h) for n in range(0, N + 1)]
@@ -42,24 +42,14 @@ def get_colors():
 
 
 def short_rev(rev):
+    """Shorten a revision to 12 characters if needed"""
     if len(rev) > 12:
         return rev[:12]
     return rev
 
 
-def get_correct_score(score):
-    try:
-        score = int(score)
-        if score < 0:
-            score = -1
-        elif score > config.get_max_score():
-            score = config.get_max_score()
-    except Exception:
-        score = -1
-    return score
-
-
 def score(x, a):
+    """Compute the score for a line and the closest touched line in the patch"""
     # a <= x - 5 ==> 0.9
     # x - 5(n + 1) < a <= x - 5n ==> 0.9 - 0.1n
     # x - a - 5 < 5n <= x - a ==> n = floor((x - a) / 5)
@@ -69,13 +59,13 @@ def score(x, a):
 
 
 def get_line_score(line, lines):
+    """Get the score for a line in a set of lines"""
     if not lines:
         return 0
     i = bisect_left(lines, line)
     if i == 0:
-        if line == lines[0]:
-            return config.get_max_score()
-        return 0
+        return config.get_max_score() if line == lines[0] else 0
+
     if i == len(lines):
         return score(line, lines[i - 1])
 
@@ -86,6 +76,7 @@ def get_line_score(line, lines):
 
 
 def get_file_url(repo_url, filename, node, line, original):
+    """Get url for a file appearing in a stack trace"""
     if filename and node:
         s = '{}/annotate/{}/{}#l{}'
         return s.format(repo_url, node, filename, line), filename
@@ -107,10 +98,12 @@ def get_file_url(repo_url, filename, node, line, original):
 
 
 def is_interesting_file(filename):
+    """Check if the file extension is one of the extensions we have in the configuration file (global.json)"""
     return get_extension(filename) in config.get_extensions()
 
 
 def get_build_date(bid):
+    """Get a date (UTC) from a buildid"""
     if isinstance(bid, six.string_types):
         Y = int(bid[0:4])
         m = int(bid[4:6])
@@ -133,11 +126,8 @@ def get_build_date(bid):
     return dutc
 
 
-def is_buildids_same_day(a, b):
-    return a // 1000000 == b // 1000000
-
-
 def get_buildid(date):
+    """Get a buildid from a date"""
     if isinstance(date, datetime):
         date = date.astimezone(pytz.utc)
         return date.strftime('%Y%m%d%H%M%S')
@@ -146,14 +136,17 @@ def get_buildid(date):
 
 
 def hash(s):
+    """Compute a hash for a string"""
     return hashlib.sha224(s.encode('utf-8')).hexdigest()
 
 
 def compare_numbers(n, before):
+    """Check if the n is non-null and if all the numbers before are null"""
     return n and all(x == 0 for x in before)
 
 
 def get_spike_indices(numbers, ndays):
+    """Get the spikes indices from the numbers (list)"""
     # we've something like [0, 0, 0, 2, 0, 0, 0, 3, 1, 0, 0, 9] and ndays=3
     # and we want to get [3, 7]
     for i in range(ndays, len(numbers)):
@@ -161,21 +154,28 @@ def get_spike_indices(numbers, ndays):
             yield i
 
 
-def get_new_crashing_bids(numbers, ndays):
+def get_new_crashing_bids(numbers, ndays, threshold):
+    """Get the crashing buildids (according to the numbers)
+       and keep it if the number of installs is less than threshold"""
     data = [(k, v['count']) for k, v in numbers.items()]
     data = sorted(data)
     nums = [n for _, n in data]
     res = {}
+    big = False
     for i in get_spike_indices(nums, ndays):
-        bids = numbers[data[i][0]]['bids']
+        day, count = data[i]
+        if count >= 500:
+            big = True
+        bids = numbers[day]['bids']
         for bid, n in sorted(bids.items()):
-            if n:
+            if n and numbers[day]['installs'][bid] >= threshold:
                 res[bid] = n
                 break
-    return res
+    return res, big
 
 
 def get_sgns_by_bids(signatures):
+    """Get signatures by buildid from the data"""
     sgn_by_bid = defaultdict(lambda: list())
     for sgn, info in signatures.items():
         for bid in info['bids'].keys():
@@ -184,6 +184,7 @@ def get_sgns_by_bids(signatures):
 
 
 def get_params_for_link(**query):
+    """Get the params to use to generate Socorro's urls"""
     params = {'_facets': ['url',
                           'user_comments',
                           'install_time',
@@ -200,6 +201,7 @@ def get_params_for_link(**query):
 
 
 def make_url_for_signature(sgn, date, buildid, channel, product):
+    """Build a Socorro's url for a given signature"""
     params = get_params_for_link(signature='=' + sgn,
                                  release_channel=channel,
                                  product=product,
@@ -211,6 +213,7 @@ def make_url_for_signature(sgn, date, buildid, channel, product):
 
 
 def get_signatures(signatures):
+    """Get the signatures available in the Bugzilla crash field"""
     res = set()
     for s in signatures:
         if '[@' in s:

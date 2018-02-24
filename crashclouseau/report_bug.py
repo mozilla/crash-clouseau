@@ -3,16 +3,17 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import asyncio
-from functools import partial
+import functools
 from jinja2 import Environment, FileSystemLoader
 import libmozdata.config
 from libmozdata.hgmozilla import Mercurial
 import requests
 from urllib.parse import parse_qs, urlencode, urlparse
-from . import buginfo, models
+from . import buginfo, models, utils
 
 
 def get_bz_query(data):
+    """Get the Bugzilla query insidde the Socorro web page"""
     needle = 'href=\"https://bugzilla.mozilla.org/enter_bug.cgi?comment='
     i = data.index(needle)
     if i != -1:
@@ -25,6 +26,7 @@ def get_bz_query(data):
 
 
 def improve(query, bzdata, bugid):
+    """Improve the Bugzilla query we found with other useful info"""
     if 'bugs' in bzdata and len(bzdata['bugs']) == 1:
         bzdata = bzdata['bugs'][0]
         query['product'] = bzdata['product']
@@ -36,6 +38,7 @@ def improve(query, bzdata, bugid):
 
 
 def get_stats(data, buildid):
+    """Get crash stats from Socorro to put in the bug report"""
     res = {}
     for i in data['facets']['build_id']:
         count = i['count']
@@ -59,16 +62,22 @@ def get_stats(data, buildid):
 
 
 def finalize_comment(bzquery, first, stats, info, changeset, bugid):
+    """Finalize the comment to put in the bug report"""
     comment = bzquery['comment'][0]
     env = Environment(loader=FileSystemLoader('templates'))
     template = env.get_template('bug.txt')
-    url = Mercurial.get_repo_url(info['channel'])
+    channel = info['channel']
+    url = Mercurial.get_repo_url(channel)
     url = '{}/rev?node={}'.format(url, changeset)
+    if channel == 'nightly':
+        version = 'nightly {}'.format(utils.get_major(info['version']))
+    else:
+        version = info['version']
+
     comment = template.render(socorro_comment=comment,
                               count=stats['count'],
                               installs=stats['installs'],
-                              channel=info['channel'],
-                              version=info['version'],
+                              version=version,
                               buildid=info['buildid'],
                               bugid=bugid,
                               changeset_url=url,
@@ -104,10 +113,10 @@ async def get_info_helper(uuid, changeset):
                 '_facets_size': 100}
 
     loop = asyncio.get_event_loop()
-    f1 = loop.run_in_executor(None, partial(requests.get, cs))
+    f1 = loop.run_in_executor(None, functools.partial(requests.get, cs))
     if bugid:
-        f2 = loop.run_in_executor(None, partial(requests.get, bz, headers=bzh, params=bzq))
-    f3 = loop.run_in_executor(None, partial(requests.get, cs_api, params=cs_api_q))
+        f2 = loop.run_in_executor(None, functools.partial(requests.get, bz, headers=bzh, params=bzq))
+    f3 = loop.run_in_executor(None, functools.partial(requests.get, cs_api, params=cs_api_q))
     r1 = await f1
     if bugid:
         r2 = await f2
@@ -124,4 +133,5 @@ async def get_info_helper(uuid, changeset):
 
 
 def get_info(uuid, changeset):
+    """Get the info (comment and Bugzilla stuff) to put in the bug report"""
     return asyncio.get_event_loop().run_until_complete(get_info_helper(uuid, changeset))

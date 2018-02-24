@@ -11,8 +11,8 @@ import pytz
 from . import app, config, db, utils
 
 
-CHANNEL_TYPE = db.Enum(*utils.get_channels(), name='CHANNEL_TYPE')
-PRODUCT_TYPE = db.Enum(*utils.get_products(), name='PRODUCT_TYPE')
+CHANNEL_TYPE = db.Enum(*config.get_channels(), name='CHANNEL_TYPE')
+PRODUCT_TYPE = db.Enum(*config.get_products(), name='PRODUCT_TYPE')
 
 
 class LastDate(db.Model):
@@ -112,6 +112,7 @@ class Node(db.Model):
     backedout = db.Column(db.Boolean)
     merge = db.Column(db.Boolean)
     bug = db.Column(db.Integer)
+    hgauthor = db.Column(db.Integer, db.ForeignKey('hgauthors.id', ondelete='CASCADE'))
 
     def __init__(self, channel, info):
         self.channel = channel
@@ -120,6 +121,7 @@ class Node(db.Model):
         self.backedout = info['backedout']
         self.merge = info['merge']
         self.bug = info['bug']
+        self.hgauthor = HGAuthor.get_id(info['author'])
 
     @staticmethod
     def get_min_date(channel):
@@ -270,7 +272,7 @@ class Changeset(db.Model):
             db.session.commit()
 
     @staticmethod
-    def get(filenames, mindate, maxdate, channel):
+    def find(filenames, mindate, maxdate, channel):
         if not filenames:
             return None
 
@@ -287,11 +289,6 @@ class Changeset(db.Model):
                 res[fname] = []
             res[fname].append(node)
         return res
-
-    @staticmethod
-    def find(filenames, buildid, channel, ndays):
-        mindate = buildid - relativedelta(days=ndays)
-        return Changeset.get(filenames, mindate, buildid, channel)
 
     @staticmethod
     def get_scores(filename, line, chgsets, csid):
@@ -324,7 +321,7 @@ class Build(db.Model):
     buildid = db.Column(db.DateTime(timezone=True))
     product = db.Column(PRODUCT_TYPE)
     channel = db.Column(CHANNEL_TYPE)
-    version = db.Column(db.Integer)
+    version = db.Column(db.String(10))
     nodeid = db.Column(db.Integer, db.ForeignKey('nodes.id', ondelete='CASCADE'))
     __table_args__ = (db.UniqueConstraint('buildid', 'product', 'channel', name='uix_builds'), )
 
@@ -368,17 +365,56 @@ class Build(db.Model):
 
     @staticmethod
     def get_two_last(buildid, channel, product):
-        qs = db.session.query(Build.buildid, Node.node).filter(Build.buildid <= buildid,
-                                                               Build.product == product,
-                                                               Build.channel == channel)
+        qs = db.session.query(Build.buildid,
+                              Build.version,
+                              Node.node).filter(Build.buildid <= buildid,
+                                                Build.product == product,
+                                                Build.channel == channel)
         qs = qs.join(Node).order_by(Build.buildid.desc()).limit(2)
         res = [{'buildid': utils.get_buildid(q.buildid),
-                'revision': q.node} for q in qs]
-        x = res[0]
-        res[0] = res[1]
-        res[1] = x
+                'revision': q.node,
+                'version': q.version} for q in qs]
+        if len(res) == 2:
+            x = res[0]
+            res[0] = res[1]
+            res[1] = x
 
         return res
+
+    @staticmethod
+    def get_last_versions(date, channel, product, n=0):
+        qs = db.session.query(Build.buildid,
+                              Build.version,
+                              Node.node).filter(Build.buildid <= date,
+                                                Build.product == product,
+                                                Build.channel == channel)
+        qs = qs.join(Node).order_by(Build.buildid.desc())
+        if n >= 1:
+            qs = qs.limit(n)
+
+        res = []
+        major = 0
+        for q in qs:
+            if major == 0:
+                major = utils.get_major(q.version)
+            elif major != utils.get_major(q.version):
+                break
+            res.append({'buildid': utils.get_buildid(q.buildid),
+                        'revision': q.node,
+                        'version': q.version})
+
+        if len(res) >= 2:
+            return res
+
+        return []
+
+    @staticmethod
+    def get_pushdate_before(buildid, channel, product):
+        qs = db.session.query(Build.buildid, Node.pushdate).join(Node)
+        qs = qs.filter(Build.buildid < buildid,
+                       Build.product == product,
+                       Build.channel == channel).order_by(Build.buildid.desc()).first()
+        return qs.pushdate
 
     @staticmethod
     def get_id(bid, channel, product):
@@ -405,6 +441,52 @@ class Build(db.Model):
         if q:
             return q[1]
         return None
+
+
+class HGAuthor(db.Model):
+    __tablename__ = 'hgauthors'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    email = db.Column(db.String(254))
+    real = db.Column(db.String(128))
+    nick = db.Column(db.String(64))
+    bucketid = db.Column(db.Integer, default=-1)
+    __table_args__ = (db.UniqueConstraint('email', 'real', 'nick', name='uix_hgauthors'), )
+
+    def __init__(self, *args):
+        self.email = args[0]
+        self.real = args[1]
+        self.nick = args[2]
+
+    @staticmethod
+    def get_id(info):
+        if not info:
+            return 0
+
+        info = info[0]
+        email, real, nick = info
+        sel = db.select([db.literal(email),
+                         db.literal(real),
+                         db.literal(nick)]).where(~db.exists([HGAuthor.email,
+                                                              HGAuthor.real,
+                                                              HGAuthor.nick]).where(db.and_(HGAuthor.email == email,
+                                                                                            HGAuthor.real == real,
+                                                                                            HGAuthor.nick == nick)))
+        ins = db.insert(HGAuthor).from_select([HGAuthor.email, HGAuthor.real, HGAuthor.nick], sel).returning(HGAuthor.id).cte('inserted')
+        rs = db.session.query(HGAuthor.id).filter(HGAuthor.email == email,
+                                                  HGAuthor.real == real,
+                                                  HGAuthor.nick == nick).union_all(db.session.query('id').select_from(ins))
+        id = rs.first()[0]
+        db.session.commit()
+        return id
+
+    @staticmethod
+    def put(data):
+        db.session.add(HGAuthor('', '', ''))
+        if data:
+            for info in sorted(data):
+                db.session.add(HGAuthor(*info))
+        db.session.commit()
 
 
 class Signature(db.Model):
@@ -468,6 +550,7 @@ class UUID(db.Model):
     useless = db.Column(db.Boolean, default=False)
     max_score = db.Column(db.Integer, default=0)
     error = db.Column(db.Boolean, default=False)
+    created = db.Column(db.DateTime(timezone=True), nullable=False, server_default=db.func.now())
 
     def __init__(self, uuid, signatureid,
                  protohash, buildid):
@@ -565,6 +648,7 @@ class UUID(db.Model):
         uuid = db.session.query(UUID.uuid,
                                 Build.buildid,
                                 Build.channel,
+                                Build.product,
                                 Node.node).join(Build).join(Node)
         uuid = uuid.filter(UUID.analyzed.is_(False)).first()
         return uuid
@@ -616,40 +700,24 @@ class UUID(db.Model):
         return {}
 
     @staticmethod
-    def get_uuids_from_buildid(buildid, product, channel, score):
+    def get_uuids_from_buildid(buildid, product, channel):
         sbid = buildid
         buildid = utils.get_build_date(buildid)
-        if score == -1:
-            uuids = db.session.query(UUID.uuid,
-                                     UUID.max_score,
-                                     Signature.signature,
-                                     Stats.number,
-                                     Stats.installs)
-            uuids = uuids.join(Signature).join(CrashStack).join(Build)
-            uuids = uuids.join(Stats,
-                               db.and_(Signature.id == Stats.signatureid,
-                                       Build.id == Stats.buildid))
-            uuids = uuids.filter(Build.buildid == buildid,
-                                 Build.product == product,
-                                 Build.channel == channel,
-                                 UUID.useless.is_(False),
-                                 UUID.analyzed.is_(True)).distinct(UUID.id).order_by(UUID.id)
-        else:
-            uuids = db.session.query(UUID.uuid,
-                                     UUID.max_score,
-                                     Signature.signature,
-                                     Stats.number,
-                                     Stats.installs)
-            uuids = uuids.join(Signature).join(CrashStack).join(Build)
-            uuids = uuids.join(Stats,
-                               db.and_(Signature.id == Stats.signatureid,
-                                       Build.id == Stats.buildid))
-            uuids = uuids.filter(Build.buildid == buildid,
-                                 Build.product == product,
-                                 Build.channel == channel,
-                                 UUID.useless.is_(False),
-                                 UUID.analyzed.is_(True),
-                                 UUID.max_score == score).distinct(UUID.id)
+        uuids = db.session.query(UUID.uuid,
+                                 UUID.max_score,
+                                 Signature.signature,
+                                 Stats.number,
+                                 Stats.installs)
+        uuids = uuids.join(Signature).join(CrashStack).join(Build)
+        uuids = uuids.join(Stats,
+                           db.and_(Signature.id == Stats.signatureid,
+                                   Build.id == Stats.buildid))
+        uuids = uuids.filter(Build.buildid == buildid,
+                             Build.product == product,
+                             Build.channel == channel,
+                             UUID.useless.is_(False),
+                             UUID.analyzed.is_(True)).distinct(UUID.id).order_by(UUID.id)
+
         _res = {}
         for uuid in uuids:
             t = (uuid.uuid, uuid.max_score)
@@ -680,11 +748,17 @@ class UUID(db.Model):
         return db.session.query(UUID.id).filter(UUID.uuid == uuid).first()[0]
 
     @staticmethod
-    def is_stackhash_existing(stackhash, java):
+    def is_stackhash_existing(stackhash, buildid, channel, product, java):
         if java:
-            r = db.session.query(UUID.id).filter(UUID.jstackhash == stackhash).first()
+            r = db.session.query(UUID.id).join(Build).filter(UUID.jstackhash == stackhash,
+                                                             Build.buildid == buildid,
+                                                             Build.channel == channel,
+                                                             Build.product == product).first()
         else:
-            r = db.session.query(UUID.id).filter(UUID.stackhash == stackhash).first()
+            r = db.session.query(UUID.id).join(Build).filter(UUID.stackhash == stackhash,
+                                                             Build.buildid == buildid,
+                                                             Build.channel == channel,
+                                                             Build.product == product).first()
         return r is not None
 
     @staticmethod
@@ -698,19 +772,27 @@ class UUID(db.Model):
         return res
 
     @staticmethod
-    def get_buildids_from_channel(channel):
-        bids = db.session.query(UUID.id, Build.product, Build.buildid).join(Build)
-        bids = bids.filter(Build.channel == channel,
-                           UUID.useless.is_(False),
+    def get_buildids():
+        bids = db.session.query(UUID.id,
+                                Build.product,
+                                Build.channel,
+                                Build.buildid,
+                                Build.version).join(Build)
+        bids = bids.filter(UUID.useless.is_(False),
                            UUID.analyzed.is_(True)).distinct(Build.product,
+                                                             Build.channel,
                                                              Build.buildid).order_by(Build.buildid.desc())
         res = {}
         for bid in bids:
             b = utils.get_buildid(bid.buildid)
             if bid.product in res:
-                res[bid.product].append(b)
+                r = res[bid.product]
+                if bid.channel in r:
+                    r[bid.channel].append([b, bid.version])
+                else:
+                    r[bid.channel] = [[b, bid.version]]
             else:
-                res[bid.product] = [b]
+                res[bid.product] = {bid.channel: [[b, bid.version]]}
         return res
 
 

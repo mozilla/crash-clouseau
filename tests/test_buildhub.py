@@ -9,7 +9,7 @@ from crashclouseau import buildhub, utils
 class BuildhubTest(unittest.TestCase):
 
     def test_get(self):
-        res = buildhub.get('20180201000000', max_buildid='20180201110000')
+        res = buildhub.get('20180201000000', 'nightly', max_buildid='20180201110000')
         self.assertEqual(set(res.keys()), {'FennecAndroid', 'Firefox', 'Thunderbird'})
         for v in res.values():
             self.assertIn('nightly', v)
@@ -19,13 +19,13 @@ class BuildhubTest(unittest.TestCase):
 
         self.assertEqual(res['FennecAndroid']['nightly'][utils.get_build_date('20180201100053')],
                          {'revision': '17ade9f88b6e',
-                          'version': 60})
+                          'version': '60.0a1'})
         self.assertEqual(res['Firefox']['nightly'][utils.get_build_date('20180201100326')],
                          {'revision': '17ade9f88b6e',
-                          'version': 60})
+                          'version': '60.0a1'})
         self.assertEqual(res['Thunderbird']['nightly'][utils.get_build_date('20180201030201')],
                          {'revision': '4ec396880934',
-                          'version': 60})
+                          'version': '60.0a1'})
 
     def test_get_rev_from(self):
         rev = buildhub.get_rev_from('20180201100053', 'nightly', 'FennecAndroid')

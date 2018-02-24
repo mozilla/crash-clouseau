@@ -31,3 +31,4 @@ def filelog(filenames, buildid, channel, ndays):
 
 def get(uuid, ndays=config.get_ndays()):
     res, channel, chgsets = inspector.get_crash_by_uuid(uuid, ndays, filelog)
+    return res, channel, chgsets

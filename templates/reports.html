@@ -11,10 +11,7 @@
     <title>Reports</title>
     <script src="/clouseau.js"></script>
     <script>
-      const BUILDIDS = {
-      {% for prod, bids in products.items() -%}
-      "{{ prod }}": [{% for bid in bids %}"{{ bid }}",{% endfor -%}],
-      {% endfor -%}};
+      const BUILDIDS = {{ buildids|safe }};
     </script>
   </head>
   <body>
@@ -32,7 +29,7 @@
     </header>
     <p>
       Product:&nbsp;
-      <select id="product" onchange="javascript:update_buildids();">
+      <select id="product" onchange="javascript:update_selects('product');">
         {% for p in products.keys() -%}
         {% if p == selected_product -%}
         <option value="{{ p }}" selected>{{ p }}</option>
@@ -41,23 +38,23 @@
         {% endif -%}
         {% endfor -%}
       </select>
-      Buildid:&nbsp;
-      <select id="buildid">
-        {% for bid in products[selected_product] -%}
-        {% if bid == selected_bid -%}
-        <option value="{{ bid }}" selected>{{ bid }}</option>
+      Channel:&nbsp;
+      <select id="channel" onchange="javascript:update_selects('channel');">
+        {% for c in products[selected_product].keys() -%}
+        {% if c == selected_channel -%}
+        <option value="{{ c }}" selected>{{ c }}</option>
         {% else -%}
-        <option value="{{ bid }}">{{ bid }}</option>
+        <option value="{{ c }}">{{ c }}</option>
         {% endif -%}
         {% endfor -%}
       </select>
-      Score:&nbsp;
-      <select id="score">
-        {% for score in scores -%}
-        {% if score == selected_score -%}
-        <option value="{{ score }}" selected>{{ score }}</option>
+      Buildid:&nbsp;
+      <select id="buildid">
+        {% for bid, version in products[selected_product][selected_channel] -%}
+        {% if bid == selected_bid -%}
+        <option value="{{ bid }}" selected>{{ bid }} ({{ version }})</option>
         {% else -%}
-        <option value="{{ score }}">{{ score }}</option>
+        <option value="{{ bid }}">{{ bid }} ({{ version }})</option>
         {% endif -%}
         {% endfor -%}
       </select>
