@@ -30,6 +30,7 @@ def get_builds(product, channel, date):
         bids = get_buildids_from_socorro(search_buildid, search_date, product)
     else:
         bids = []
+        search_date = ''
         min_date = None
         data = models.Build.get_last_versions(date, channel, product, n=3)
         if data:
@@ -40,8 +41,6 @@ def get_builds(product, channel, date):
                 min_date = first_date
             if min_date:
                 search_date = '>=' + lmdutils.get_date_str(min_date)
-            else:
-                search_date = ''
 
     return bids, search_date
 
