@@ -37,6 +37,7 @@ def make_request(params, sleep, retry, callback):
             try:
                 return callback(r.json())
             except BaseException as e:
+                logger.error('Buildhub query failed with parameters: {}.'.format(params))
                 logger.error(e, exc_info=True)
                 return None
 
