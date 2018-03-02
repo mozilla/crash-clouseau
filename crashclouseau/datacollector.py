@@ -80,6 +80,9 @@ def get_new_signatures(product, channel, date):
 
     limit = config.get_limit_facets()
     bids, search_date = get_builds(product, channel, date)
+    if not bids:
+        logger.warning('No buildids for {}-{}.'.format(product, channel))
+        return {}
 
     base = {}
     for bid in bids:
