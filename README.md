@@ -8,6 +8,8 @@
 
 https://crash-clouseau.herokuapp.com/reports.html
 
+Results on Firefox code are tracked in a meta bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1396527
+
 ## Setup
 
 Install the prerequisites via `pip`:
