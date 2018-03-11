@@ -461,7 +461,7 @@ class HGAuthor(db.Model):
     @staticmethod
     def get_id(info):
         if not info:
-            return 0
+            return 1
 
         info = info[0]
         email, real, nick = info
