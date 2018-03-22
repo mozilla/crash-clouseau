@@ -9,6 +9,7 @@ from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
 import pytz
 from . import app, config, db, utils
+from .logger import logger
 
 
 CHANNEL_TYPE = db.Enum(*config.get_channels(), name='CHANNEL_TYPE')
@@ -884,9 +885,15 @@ class CrashStack(db.Model):
                                               frame['line'],
                                               csets,
                                               cs.id)
-                Score.set(scores)
-                scores = max(s for _, _, s in scores)
-                max_score = max(max_score, scores)
+                if scores:
+                    Score.set(scores)
+                    scores = max(s for _, _, s in scores)
+                    max_score = max(max_score, scores)
+                else:
+                    logger.warning('No scores for {} at line {} and changesets {} (uuid {})'.format(frame['filename'],
+                                                                                                    frame['line'],
+                                                                                                    csets,
+                                                                                                    uuid))
 
         UUID.set_max_score(uuidid, max_score)
 
