@@ -808,13 +808,13 @@ class UUID(db.Model):
         return res
 
     @staticmethod
-    def get_buildids():
+    def get_buildids(no_score=False):
         bids = db.session.query(UUID.id,
                                 Build.product,
                                 Build.channel,
                                 Build.buildid,
                                 Build.version).join(Build)
-        bids = bids.filter(UUID.useless.is_(False),
+        bids = bids.filter(UUID.useless.is_(no_score),
                            UUID.analyzed.is_(True)).distinct(Build.product,
                                                              Build.channel,
                                                              Build.buildid).order_by(Build.buildid.desc())

@@ -62,7 +62,7 @@ def reports_no_score():
         prod = request.args.get('product', 'Firefox')
         channel = request.args.get('channel', 'nightly')
         buildid = request.args.get('buildid', '')
-        products = models.UUID.get_buildids()
+        products = models.UUID.get_buildids(no_score=True)
         if not buildid:
             buildid = products[prod][channel][0][0]
         signatures = models.UUID.get_uuids_from_buildid_no_score(buildid,

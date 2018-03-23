@@ -18,9 +18,9 @@ function getParams() {
     return params;
 }
 
-function update_reports() {
+function update_reports(noscore) {
     const params = getParams();
-    location.href = "reports.html?product=" + params[1]
+    location.href = "reports" + (no_score ? "_no_score" : "") + ".html?product=" + params[1]
                   + "&channel=" + params[2]
                   + "&buildid=" + params[0];
 }
