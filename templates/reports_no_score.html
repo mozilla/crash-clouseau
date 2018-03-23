@@ -1,0 +1,95 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/clouseau.ico">
+    <link rel="stylesheet" href="/clouseau.css?v=1">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Reports</title>
+    <script src="/clouseau.js"></script>
+    <script>
+      const BUILDIDS = {{ buildids|safe }};
+    </script>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <ul class="nav">
+          <li>
+            <a href="https://www.mozilla.org/" class="brand">mozilla</a>
+          </li>
+          <li style="float:right;">
+            <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
+          </li>
+        </ul>
+      </nav>
+    </header>
+    <p>
+      Product:&nbsp;
+      <select id="product" onchange="javascript:update_selects('product');">
+        {% for p in products.keys() -%}
+        {% if p == selected_product -%}
+        <option value="{{ p }}" selected>{{ p }}</option>
+        {% else -%}
+        <option value="{{ p }}">{{ p }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      Channel:&nbsp;
+      <select id="channel" onchange="javascript:update_selects('channel');">
+        {% for c in products[selected_product].keys() -%}
+        {% if c == selected_channel -%}
+        <option value="{{ c }}" selected>{{ c }}</option>
+        {% else -%}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      Buildid:&nbsp;
+      <select id="buildid">
+        {% for bid, version in products[selected_product][selected_channel] -%}
+        {% if bid == selected_bid -%}
+        <option value="{{ bid }}" selected>{{ bid }} ({{ version }})</option>
+        {% else -%}
+        <option value="{{ bid }}">{{ bid }} ({{ version }})</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      <button onclick="javascript:update_reports();">Go !</button>
+      <button onclick="javascript:openPushlog();">Pushlog</button>
+    </p>
+
+    <table class="signatures">
+      <thead>
+        <tr>
+          <th>Signature</th>
+          <th style="text-align:center;width:8%;">Crashes number</th>
+          <th style="text-align:center;width:8%;">Installs number</th>
+        <th style="width:20%;">Stacks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sgn, info in signatures -%}
+        <tr>
+          <td><a href="{{ info['url'] }}">{{ sgn|e }}</a></td>
+          <td>{{ info['number'] }}</td>
+          <td>{{ info['installs'] }}</td>
+          <td>
+            <div style="display:table;width:100%;">
+              {% for uuid in info['uuids'] -%}
+              <div style="display:table-row;">
+                <div class="cell" style="float:left;width:80%">
+                  <a href="https://crash-stats.mozilla.com/report/index/{{ uuid }}">{{ uuid }}</a>
+                </div>
+              </div>
+              {% endfor -%}
+            </div>
+          </td>
+        </tr>
+        {% endfor -%}
+    </table>
+  </body>
+</html>

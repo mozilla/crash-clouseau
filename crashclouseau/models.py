@@ -738,6 +738,40 @@ class UUID(db.Model):
         return res
 
     @staticmethod
+    def get_uuids_from_buildid_no_score(buildid, product, channel):
+        sbid = buildid
+        buildid = utils.get_build_date(buildid)
+        uuids = db.session.query(UUID.uuid,
+                                 Signature.signature,
+                                 Stats.number,
+                                 Stats.installs)
+        uuids = uuids.join(Signature).join(Build)
+        uuids = uuids.join(Stats,
+                           db.and_(Signature.id == Stats.signatureid,
+                                   Build.id == Stats.buildid))
+        uuids = uuids.filter(Build.buildid == buildid,
+                             Build.product == product,
+                             Build.channel == channel,
+                             UUID.useless.is_(True),
+                             UUID.analyzed.is_(True)).distinct(UUID.id).order_by(UUID.id)
+
+        _res = {}
+        for uuid in uuids:
+            if uuid.signature in _res:
+                _res[uuid.signature]['uuids'].append(uuid.uuid)
+            else:
+                _res[uuid.signature] = {'uuids': [uuid.uuid],
+                                        'number': uuid.number,
+                                        'installs': uuid.installs,
+                                        'url': utils.make_url_for_signature(uuid.signature,
+                                                                            buildid,
+                                                                            sbid,
+                                                                            channel,
+                                                                            product)}
+        res = sorted(_res.items(), key=lambda p: (-p[1]['number'], -p[1]['installs'], p[0].lower()))
+        return res
+
+    @staticmethod
     def clean(date, channel):
         date = datetime(date.year, date.month, date.day)
         date += relativedelta(days=config.get_ndays())

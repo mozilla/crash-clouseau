@@ -32,16 +32,6 @@ def crashstack():
     abort(404)
 
 
-def report():
-    score = request.args.get('score', '')
-    uuids = []
-    if score:
-        uuids = models.Score.get_by_score(score)
-
-    return render_template('report.html',
-                           uuids=uuids)
-
-
 def reports():
     try:
         prod = request.args.get('product', 'Firefox')
@@ -62,6 +52,30 @@ def reports():
                                selected_bid=buildid,
                                signatures=signatures,
                                colors=utils.get_colors())
+    except Exception:
+        logger.error('Invalid URL: {}'.format(request.url), exc_info=True)
+        abort(404)
+
+
+def reports_no_score():
+    try:
+        prod = request.args.get('product', 'Firefox')
+        channel = request.args.get('channel', 'nightly')
+        buildid = request.args.get('buildid', '')
+        products = models.UUID.get_buildids()
+        if not buildid:
+            buildid = products[prod][channel][0][0]
+        signatures = models.UUID.get_uuids_from_buildid_no_score(buildid,
+                                                                 prod,
+                                                                 channel)
+
+        return render_template('reports_no_score.html',
+                               buildids=json.dumps(products),
+                               products=products,
+                               selected_product=prod,
+                               selected_channel=channel,
+                               selected_bid=buildid,
+                               signatures=signatures)
     except Exception:
         logger.error('Invalid URL: {}'.format(request.url), exc_info=True)
         abort(404)

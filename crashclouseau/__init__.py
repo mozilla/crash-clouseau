@@ -39,6 +39,12 @@ def reports_html():
     return html.reports()
 
 
+@app.route('/reports_no_score.html')
+def reports_no_scorehtml():
+    from crashclouseau import html
+    return html.reports_no_score()
+
+
 @app.route('/bug.html')
 def bug_html():
     from crashclouseau import html
