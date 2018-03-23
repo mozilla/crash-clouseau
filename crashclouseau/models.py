@@ -283,7 +283,8 @@ class Changeset(db.Model):
         chgs = chgs.filter(File.name.in_(filenames),
                            mindate <= Node.pushdate,
                            Node.pushdate <= maxdate,
-                           Node.channel == channel)
+                           Node.channel == channel,
+                           Node.merge.is_(False))
         res = {}
         for _, fname, node in chgs:
             if fname not in res:
