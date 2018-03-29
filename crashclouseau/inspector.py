@@ -54,6 +54,8 @@ def get_crash_info(data, uuid, buildid, channel, mindate,
             res['java'] = {'frames': jframes,
                            'hash': get_simplified_hash(jframes)}
     else:
+        if 'json_dump' not in data:
+            return None
         frames, files = inspect_stacktrace(data, chgset)
         if frames:
             files = filelog(files, mindate, buildid, channel)

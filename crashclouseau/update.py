@@ -49,6 +49,9 @@ def put_report(uuid, buildid, channel, product, chgset):
                               channel, mindate,
                               chgset, models.Changeset.find,
                               interesting_chgsets)
+    if res is None:
+        # 'json_dump' is not in crash data
+        return
 
     useless = True
     chgsets = models.Changeset.to_analyze(chgsets=interesting_chgsets, channel=channel)
