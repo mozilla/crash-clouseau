@@ -116,7 +116,7 @@ def get_new_signatures(product, channel, date):
                 data[sgn] = numbers = copy.deepcopy(base)
             numbers[day]['count'] += count
             numbers[day]['bids'][bid] = count
-            numbers[day]['installs'][bid] = installs
+            numbers[day]['installs'][bid] = 1 if installs == 0 else installs
         del json
 
     params = {'product': product,
