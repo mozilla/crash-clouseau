@@ -130,6 +130,11 @@ class Node(db.Model):
         return m.astimezone(pytz.utc)
 
     @staticmethod
+    def get_max_date(channel):
+        m = db.session.query(db.func.max(Node.pushdate)).filter(Node.channel == channel).first()[0]
+        return m.astimezone(pytz.utc)
+
+    @staticmethod
     def get_bugid(node, channel):
         m = db.session.query(Node.bug).filter(Node.channel == channel,
                                               Node.node == node).first()[0]
