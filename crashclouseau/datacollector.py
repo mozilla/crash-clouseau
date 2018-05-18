@@ -220,7 +220,7 @@ def get_proto_small(product, signatures, search_date, channel):
         params['build_id'] = utils.get_buildid(bid)
         queries = []
         hdler = functools.partial(handler, bid, threshold)
-        for sgns in Connection.chunks(all_signatures, 10):
+        for sgns in Connection.chunks(all_signatures, 5):
             params = copy.deepcopy(params)
             params['signature'] = ['=' + s for s in sgns]
             queries.append(Query(socorro.SuperSearch.URL,

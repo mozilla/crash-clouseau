@@ -27,8 +27,9 @@ def put_filelog(channel, start_date=None, end_date=None):
         end_date = pytz.utc.localize(datetime.utcnow())
     if not start_date:
         start_date = models.Node.get_max_date(channel)
+        start_date += relativedelta(seconds=1)
 
-    logger.info('Get pushlog data for {}: started'.format(channel))
+    logger.info('Get pushlog data for {} ({} to {}): started'.format(channel, start_date, end_date))
     data = pushlog(start_date, end_date, channel=channel)
     logger.info('Get pushlog data: retrieved')
     min_date, _ = models.Changeset.add(data, end_date, channel)
