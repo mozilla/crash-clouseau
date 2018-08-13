@@ -29,7 +29,7 @@
       <ul>
         {% for bugid, info in bugdata -%}
         <li class="listbugs">
-          <a href="https://bugzil.la/{{ bugid }}">{% if info and info['status'] == 'RESOLVED' -%}<s class="red">{{ bugid }}</s>{% else -%}{{ bugid }}{% endif -%}</a>{% if info -%}{% if info['dupe_of'] -%}&nbsp;(duplicate of <a href="https://bugzil.la/{{ info['dupe_of'] }}">{{ info['dupe_of'] }}</a>){% endif -%}&nbsp;&mdash;&nbsp;{{ info['summary'] }}{% endif -%}
+          <a href="https://bugzilla.mozilla.org/{{ bugid }}">{% if info and info['status'] == 'RESOLVED' -%}<s class="red">{{ bugid }}</s>{% else -%}{{ bugid }}{% endif -%}</a>{% if info -%}{% if info['dupe_of'] -%}&nbsp;(duplicate of <a href="https://bugzilla.mozilla.org/{{ info['dupe_of'] }}">{{ info['dupe_of'] }}</a>){% endif -%}&nbsp;&mdash;&nbsp;{{ info['summary'] }}{% endif -%}
         </li>
         {% endfor -%}
       </ul>
