@@ -12,13 +12,16 @@ from . import datacollector as dc
 from . import buildhub, config, inspector, models, utils, worker, patch
 
 
-def put_build(buildid, product, channel, version, node=None):
-    """Put a build in the database"""
-    buildid = utils.get_build_date(buildid)
-    if not node:
-        node = dc.get_changeset(buildid, channel, product)
-    nodeid = models.Node.get_id(node, channel)
-    models.Build.put_build(buildid, nodeid, product, channel, version)
+def put_build(buildids, product, channel, version, node=None):
+    """Put builds in the database"""
+    if not isinstance(buildids, list):
+        buildids = [buildids]
+    for buildid in buildids:
+        buildid = utils.get_build_date(buildid)
+        if not node:
+            node = dc.get_changeset(buildid, channel, product)
+        nodeid = models.Node.get_id(node, channel)
+        models.Build.put_build(buildid, nodeid, product, channel, version)
 
 
 def put_filelog(channel, start_date=None, end_date=None):
