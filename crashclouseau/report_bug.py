@@ -13,8 +13,8 @@ from . import buginfo, models, utils
 
 
 def get_bz_query(data):
-    """Get the Bugzilla query insidde the Socorro web page"""
-    needle = 'href=\"https://bugzilla.mozilla.org/enter_bug.cgi?comment='
+    """Get the Bugzilla query inside the Socorro web page"""
+    needle = 'href=\"https://bugzilla.mozilla.org/enter_bug.cgi?'
     i = data.index(needle)
     if i != -1:
         j = data.index('\"', i + len(needle))
