@@ -101,7 +101,7 @@ def get_new_signatures(product, channel, date):
         if json['errors']:
             raise Exception('Error in json data from SuperSearch: {}'.format(json['errors']))
         if not json['facets']['signature']:
-            raise Exception('Error in json data from SuperSearch: no signatures.')
+            return
         for facets in json['facets']['signature']:
             installs = facets['facets']['cardinality_install_time']['value']
             sgn = facets['term']
