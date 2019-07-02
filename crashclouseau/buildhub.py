@@ -13,7 +13,7 @@ from . import utils
 from .logger import logger
 
 
-URL = 'https://buildhub.prod.mozaws.net/v1/buckets/build-hub/collections/releases/search'
+URL = 'https://buildhub.moz.tools/api/search'
 PRODS = {'Firefox': 'firefox',
          'FennecAndroid': 'fennec',
          'Thunderbird': 'thunderbird'}
