@@ -27,7 +27,7 @@ def get_bz_query(data):
     for i in findall(needle, data):
         j = data.index('\"', i + len(needle))
         if j != -1:
-            bz_url = data[i + len('href=\"') : j]
+            bz_url = data[i + len('href=\"'): j]
             if 'keywords=crash' in bz_url:
                 query = parse_qs(urlparse(bz_url).query)
                 return query
