@@ -13,16 +13,16 @@ from . import utils
 from .logger import logger
 
 
-URL = 'https://buildhub.prod.mozaws.net/v1/buckets/build-hub/collections/releases/search'
+URL = 'https://buildhub.moz.tools/api/search'
 PRODS = {'Firefox': 'firefox',
          'FennecAndroid': 'fennec',
          'Thunderbird': 'thunderbird'}
 RPRODS = {v: k for k, v in PRODS.items()}
 
 # regexp matching the correct version formats for elastic search query
-VERSION_PATS = {'nightly': '[0-9]+\".0a1\"',
-                'beta': '[0-9]+\".0b\"[0-9]+',
-                'release': '[0-9]+\.[0-9]+(\.[0-9]+)?'}
+VERSION_PATS = {'nightly': r'[0-9]+".0a1"',
+                'beta': r'[0-9]+".0b"[0-9]+',
+                'release': r'[0-9]+\.[0-9]+(\.[0-9]+)?'}
 
 
 def make_request(params, sleep, retry, callback):
