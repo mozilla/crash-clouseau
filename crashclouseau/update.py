@@ -79,9 +79,9 @@ def put_report(uuid, buildid, channel, product, chgset):
     models.UUID.set_analyzed(uuid, useless)
 
 
-def analyze_one_report():
+def analyze_one_report(uuid=None):
     """Get a non-analyzed UUID in the database and analyze it"""
-    a = models.UUID.to_analyze()
+    a = models.UUID.to_analyze(uuid)
     if a:
         try:
             put_report(*a)
