@@ -83,7 +83,7 @@ def get_file_url(repo_url, filename, node, line, original):
     elif original:
         start = 's3:gecko-generated-sources:'
         if original.startswith(start):
-            s = 'https://crash-stats.mozilla.com/sources/highlight/?url='
+            s = 'https://crash-stats.mozilla.org/sources/highlight/?url='
             s += 'https://gecko-generated-sources.s3.amazonaws.com/'
             s += original[len(start):-1]
             s += '#L-' + str(line)

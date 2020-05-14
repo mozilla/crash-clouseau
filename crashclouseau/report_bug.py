@@ -103,11 +103,11 @@ async def get_info_helper(uuid, changeset):
     sgn = info['signature']
     bzw, bugsdata = buginfo.get_bugs(sgn, wait=False)
 
-    cs = 'https://crash-stats.mozilla.com/report/index/' + uuid
+    cs = 'https://crash-stats.mozilla.org/report/index/' + uuid
     bz = 'https://bugzilla.mozilla.org/rest/bug'
     bzh = {'X-Bugzilla-API-Key': libmozdata.config.get('Bugzilla', 'token', '')}
     bzq = {'id': bugid, 'include_fields': ['product', 'component', 'assigned_to']}
-    cs_api = 'https://crash-stats.mozilla.com/api/SuperSearch/'
+    cs_api = 'https://crash-stats.mozilla.org/api/SuperSearch/'
     cs_api_q = {
         'signature': '=' + info['signature'],
         'build_id': '>=' + info['buildid'],

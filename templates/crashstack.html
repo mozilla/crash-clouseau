@@ -39,7 +39,7 @@
         <li><a id="reportBug">Report a bug</a></li>
       </ul>
     </div>
-    <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.com/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
+    <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.org/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
     <p>The crash signature is <a href="{{ sgn_url }}">{{ uuid_info['signature']|e }}</a>.</p>
     <p>You can see <a href="https://crash-stop.herokuapp.com/sumup.html?s={{ uuid_info['signature']|e }}">crash numbers</a> for this signature.</p>
     {% if stack -%}
