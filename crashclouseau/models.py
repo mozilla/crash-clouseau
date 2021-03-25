@@ -74,7 +74,7 @@ class File(db.Model):
         rs = (
             db.session.query(File.id)
             .filter(File.name == name)
-            .union_all(db.session.query("id").select_from(ins))
+            .union_all(db.session.query(File.id).select_from(ins))
         )
         id = rs.first()[0]
         db.session.commit()
@@ -579,7 +579,7 @@ class HGAuthor(db.Model):
             .filter(
                 HGAuthor.email == email, HGAuthor.real == real, HGAuthor.nick == nick
             )
-            .union_all(db.session.query("id").select_from(ins))
+            .union_all(db.session.query(HGAuthor.id).select_from(ins))
         )
         id = rs.first()[0]
         db.session.commit()
@@ -617,7 +617,7 @@ class Signature(db.Model):
         rs = (
             db.session.query(Signature.id)
             .filter(Signature.signature == signature)
-            .union_all(db.session.query("id").select_from(ins))
+            .union_all(db.session.query(Signature.id).select_from(ins))
         )
         id = rs.first()[0]
         db.session.commit()
