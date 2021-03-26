@@ -28,6 +28,11 @@ def get_bz_query(data):
         j = data.index('\"', i + len(needle))
         if j != -1:
             bz_url = data[i + len('href=\"'): j]
+            bz_url = bz_url.replace("&amp;", "&");
+            bz_url = bz_url.replace("&lt;", "<");
+            bz_url = bz_url.replace("&gt;", ">");
+            bz_url = bz_url.replace("&quot;", "\"");
+            bz_url = bz_url.replace("&apos;", "\'");
             if 'keywords=crash' in bz_url:
                 query = parse_qs(urlparse(bz_url).query)
                 return query
