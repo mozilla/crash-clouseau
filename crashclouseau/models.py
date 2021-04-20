@@ -869,7 +869,7 @@ class UUID(db.Model):
         uuids = db.session.query(
             UUID.uuid, UUID.max_score, Signature.signature, Stats.number, Stats.installs
         ).select_from(UUID)
-        uuids = uuids.join(Signature).join(CrashStack).join(Build)
+        uuids = uuids.join(Signature).join(Build)
         uuids = uuids.join(
             Stats, db.and_(Signature.id == Stats.signatureid, Build.id == Stats.buildid)
         )
