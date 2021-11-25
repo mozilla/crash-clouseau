@@ -29,6 +29,10 @@ Run tests:
 coverage run --source=crashclouseau -m unittest discover tests/
 ```
 
+## UI Documentation
+
+See [HOWTO](/HOWTO.md).
+
 ## Bugs
 
 https://github.com/mozilla/crash-clouseau/issues/new
