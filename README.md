@@ -37,6 +37,10 @@ See [HOWTO](/HOWTO.md).
 
 https://github.com/mozilla/crash-clouseau/issues/new
 
+## Number of bugs reported with the tool
+
+https://bugzilla.mozilla.org/rest/bug?count_only=1&blocks=1396527
+
 ## Contact
 
 Email: release-mgmt@mozilla.com or calixte@mozilla.com
