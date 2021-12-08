@@ -22,18 +22,18 @@ def create(date=None, extra={}, hgauthors={}):
     else:
         date = lmdutils.get_date_ymd(date)
 
-    logger.info('Populate with java files: started.')
+    logger.info("Populate with java files: started.")
     try:
         java.populate_java_files()
     except Exception as e:
         logger.error(e, exc_info=True)
         return
-    logger.info('Populate with java files: finished.')
+    logger.info("Populate with java files: finished.")
 
     models.HGAuthor.put(hgauthors)
 
     start_date = date - relativedelta(days=config.get_ndays_of_data())
-    logger.info('Create data for {}: started.'.format(date))
+    logger.info("Create data for {}: started.".format(date))
     for chan in config.get_channels():
         update.put_filelog(chan, start_date=start_date, end_date=date)
         for prod in config.get_products():
@@ -42,9 +42,9 @@ def create(date=None, extra={}, hgauthors={}):
     if isinstance(extra, six.string_types):
         extra = json.loads(extra)
 
-    for build in extra.get('builds', []):
+    for build in extra.get("builds", []):
         update.put_build(*build)
 
-    logger.info('Create data for {}: finished.'.format(date))
+    logger.info("Create data for {}: finished.".format(date))
 
     update.update_all()

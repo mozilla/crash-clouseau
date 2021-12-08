@@ -7,6 +7,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
+from sqlalchemy import inspect
 import pytz
 from . import app, config, db, utils
 from .logger import logger
@@ -74,9 +75,16 @@ class File(db.Model):
         rs = (
             db.session.query(File.id)
             .filter(File.name == name)
-            .union_all(db.session.query(File.id).select_from(ins))
+            .union_all(
+                db.session.query(File.id).select_from(ins).filter(File.id == ins.c.id)
+            )
         )
-        id = rs.first()[0]
+
+        first = rs.first()
+        if first is None:
+            first = rs.first()
+
+        id = first[0]
         db.session.commit()
         return id
 
@@ -579,9 +587,18 @@ class HGAuthor(db.Model):
             .filter(
                 HGAuthor.email == email, HGAuthor.real == real, HGAuthor.nick == nick
             )
-            .union_all(db.session.query(HGAuthor.id).select_from(ins))
+            .union_all(
+                db.session.query(HGAuthor.id)
+                .select_from(ins)
+                .filter(Signature.id == ins.c.id)
+            )
         )
-        id = rs.first()[0]
+
+        first = rs.first()
+        if first is None:
+            first = rs.first()
+
+        id = first[0]
         db.session.commit()
         return id
 
@@ -617,9 +634,18 @@ class Signature(db.Model):
         rs = (
             db.session.query(Signature.id)
             .filter(Signature.signature == signature)
-            .union_all(db.session.query(Signature.id).select_from(ins))
+            .union_all(
+                db.session.query(Signature.id)
+                .select_from(ins)
+                .filter(Signature.id == ins.c.id)
+            )
         )
-        id = rs.first()[0]
+
+        first = rs.first()
+        if first is None:
+            first = rs.first()
+
+        id = first[0]
         db.session.commit()
         return id
 
@@ -1225,7 +1251,7 @@ def commit():
 
 def create():
     engine = db.get_engine(app)
-    if not engine.dialect.has_table(engine, "lastdate"):
+    if not inspect(engine).has_table(engine, "lastdate"):
         db.create_all()
         db.session.commit()
         return True

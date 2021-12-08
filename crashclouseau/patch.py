@@ -8,15 +8,15 @@ from .logger import logger
 from . import utils
 
 
-def parse(chgset, channel='nightly', chunk_size=1000000):
+def parse(chgset, channel="nightly", chunk_size=1000000):
     url = RawRevision.get_url(channel)
-    logger.info('Get patch for revision {}'.format(chgset))
+    logger.info("Get patch for revision {}".format(chgset))
     try:
-        res = Patch.parse_changeset(url, chgset,
-                                    file_filter=utils.is_interesting_file,
-                                    skip_comments=True)
+        res = Patch.parse_changeset(
+            url, chgset, file_filter=utils.is_interesting_file, skip_comments=True
+        )
         return res
     except Exception as e:
-        msg = 'Error in parsing patch with revision {}'
+        msg = "Error in parsing patch with revision {}"
         logger.error(msg.format(chgset))
         raise e

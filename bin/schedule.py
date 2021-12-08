@@ -9,7 +9,7 @@ from crashclouseau import update
 sched = BlockingScheduler()
 
 
-@sched.scheduled_job('interval', minutes=20)
+@sched.scheduled_job("interval", minutes=20)
 def timed_job():
     update.update_all()
 

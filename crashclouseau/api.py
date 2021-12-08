@@ -8,14 +8,14 @@ from . import buginfo, java
 
 def javast():
     data = request.get_json()
-    channel = data['channel']
-    buildid = data['buildid']
-    stack = data['stack']
-    data['stack'] = java.reformat_java_stacktrace(stack, channel, buildid)
+    channel = data["channel"]
+    buildid = data["buildid"]
+    stack = data["stack"]
+    data["stack"] = java.reformat_java_stacktrace(stack, channel, buildid)
     return jsonify(data)
 
 
 def bugs():
-    sgn = request.args.get('signature', '')
+    sgn = request.args.get("signature", "")
     data = buginfo.get_bugs(sgn)
     return jsonify(data)

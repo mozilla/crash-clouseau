@@ -9,8 +9,8 @@ from .logger import logger
 from . import config
 
 
-listen = ['high', 'default', 'low']
-redis_url = os.getenv('REDISTOGO_URL', config.get_redis())
+listen = ["high", "default", "low"]
+redis_url = os.getenv("REDISTOGO_URL", config.get_redis())
 conn = redis.from_url(redis_url)
 __QUEUE = None
 
@@ -18,12 +18,12 @@ __QUEUE = None
 def black_hole(job, *exc_info):
     args = job.args
     func = job.func_name
-    logger.error(('Job for call {}{} failed').format(func, args))
+    logger.error(("Job for call {}{} failed").format(func, args))
     job.cancel()
     return False
 
 
-def get_queue(name='low'):
+def get_queue(name="low"):
     global __QUEUE
     if __QUEUE is None:
         __QUEUE = {n: Queue(n, connection=conn, default_timeout=6000) for n in listen}
@@ -38,7 +38,7 @@ def resume():
     suspension.resume(conn)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     with Connection(conn):
         worker = Worker(map(Queue, listen), exception_handlers=[black_hole])
         worker.work()

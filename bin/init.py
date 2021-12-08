@@ -4,13 +4,16 @@
 
 from crashclouseau import models, update, create
 
-
 while True:
     try:
-        #models.clear()
-        #create.create()
+        # print("models.clear")
+        # models.clear()
+        # print("create.create")
+        # create.create()
         break
-    except:  # NOQA
+    except:
         pass
+        # raise
 
-#update.update_all()
+print("update")
+update.update_all()

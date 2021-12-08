@@ -10,91 +10,99 @@ import os
 from . import config
 
 
-app = Flask(__name__, template_folder='../templates')
+app = Flask(__name__, template_folder="../templates")
 
-uri = os.getenv('DATABASE_URL', config.get_database())
+uri = os.getenv("DATABASE_URL", config.get_database())
 # Workaround for Heroku
-if uri.startswith('postgres://'):
-    uri = uri.replace('postgres://', 'postgresql://', 1)
-app.config['SQLALCHEMY_DATABASE_URI'] = uri
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+if uri.startswith("postgres://"):
+    uri = uri.replace("postgres://", "postgresql://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = uri
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 cors = CORS(app)
-app.config['CORS_HEADERS'] = 'Content-Type'
+app.config["CORS_HEADERS"] = "Content-Type"
 log = logging.getLogger(__name__)
 
 
-@app.route('/crashstack.html')
+@app.route("/crashstack.html")
 def crashstack_html():
     from crashclouseau import html
+
     return html.crashstack()
 
 
-@app.route('/diff.html')
+@app.route("/diff.html")
 def diff_html():
     from crashclouseau import html
+
     return html.diff()
 
 
-@app.route('/')
-@app.route('/reports.html')
+@app.route("/")
+@app.route("/reports.html")
 def reports_html():
     from crashclouseau import html
+
     return html.reports()
 
 
-@app.route('/reports_no_score.html')
+@app.route("/reports_no_score.html")
 def reports_no_scorehtml():
     from crashclouseau import html
+
     return html.reports_no_score()
 
 
-@app.route('/bug.html')
+@app.route("/bug.html")
 def bug_html():
     from crashclouseau import html
+
     return html.bug()
 
 
-@app.route('/pushlog.html')
+@app.route("/pushlog.html")
 def pushlog_html():
     from crashclouseau import html
+
     return html.pushlog()
 
 
-@app.route('/favicon.ico')
+@app.route("/favicon.ico")
 def favicon():
-    return send_from_directory('../static', 'clouseau.ico')
+    return send_from_directory("../static", "clouseau.ico")
 
 
-@app.route('/<image>.png')
+@app.route("/<image>.png")
 def image(image):
-    return send_from_directory('../static', image + '.png')
+    return send_from_directory("../static", image + ".png")
 
 
-@app.route('/ZillaSlabHighlight-Bold.woff2')
+@app.route("/ZillaSlabHighlight-Bold.woff2")
 def zilla():
-    return send_from_directory('../static', 'ZillaSlabHighlight-Bold.woff2')
+    return send_from_directory("../static", "ZillaSlabHighlight-Bold.woff2")
 
 
-@app.route('/clouseau.js')
+@app.route("/clouseau.js")
 def stop_js():
-    return send_from_directory('../static', 'clouseau.js')
+    return send_from_directory("../static", "clouseau.js")
 
 
-@app.route('/clouseau.css')
+@app.route("/clouseau.css")
 def stop_css():
-    return send_from_directory('../static', 'clouseau.css')
+    return send_from_directory("../static", "clouseau.css")
 
 
-@app.route('/api/javast', methods=['POST'])
+@app.route("/api/javast", methods=["POST"])
 @cross_origin()
 def api_javast():
     from crashclouseau import api
+
     return api.javast()
 
 
-@app.route('/api/bugs', methods=['GET'])
+@app.route("/api/bugs", methods=["GET"])
 @cross_origin()
 def api_bugs():
     from crashclouseau import api
+
     return api.bugs()

@@ -10,54 +10,127 @@ from validate_email import validate_email
 
 
 PATS = [
-    (re.compile(r'^([\w\t ’\'\.\-]+)\[?<+([^@>]+@[^>]+)>?$', re.UNICODE), [2, 1, 0]),  # foo bar <...@...>
-    (re.compile(r'^\"([\w\t ’\'\.\-]+)\"[\t ]*\[?<+([^@>]+@[^>]+)>?$', re.UNICODE), [2, 1, 0]),  # "foo bar" <...@...>
-    (re.compile(r'^<([^@>]+@[^>]+)>?$', re.UNICODE), [1, 0, 0]),  # <...@...>
-    (re.compile(r'^([\w\t ’\'\.\-]+)[\[\(]:?([^\)\]]+)[\]\)][\"\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$', re.UNICODE), [3, 1, 2]),  # foo bar (:toto) <...@...>
-    (re.compile(r'^([\w\t ’\'\.\-]+)\(([^@\)>]+@[^\)>]+)[\)>]?$', re.UNICODE), [2, 1, 0]),  # foo bar (...@...)
-    (re.compile(r'^([^@\t ]+@[^\t ]+)$', re.UNICODE), [1, 0, 0]),  # ...@...
-    (re.compile(r'^([\w\t ’\'\.\-]+)<([\w\t \.\+\-]+)>$', re.UNICODE), [0, 1, 2]),  # foo bar <toto>
-    (re.compile(r'^<([\w\t ’\'\.\+]+)>$', re.UNICODE), [0, 0, 1]),  # <toto>
-    (re.compile(r'^<([\w\t ’\'\.\+]+)>[\t ]*([^@\t ]+@[^\t ]+)$', re.UNICODE), [2, 1, 0]),  # <toto> ...@...
-    (re.compile(r'^([\w\t ’\'\.\-]+)$', re.UNICODE), [0, 1, 0]),  # foo bar
-    (re.compile(r'^((?:[\w’\'\.\-]+[\t ]+)+)([^@\t >]+@[^\t >]+)>?$', re.UNICODE), [2, 1, 0]),  # foo bar toto@titi
-    (re.compile(r'^([\w\t ’\'\.\-]+)[\[\(]:?([^\)]+)[\]\)]$', re.UNICODE), [0, 1, 2]),  # foo bar (:toto)
-    (re.compile(r'^([\w\t ’\'\.\-]+):([\w_]+)$', re.UNICODE), [0, 1, 2]),  # foo bar :toto
-    (re.compile(r'^([\w\t ’\'\.\-]+):([^\t ]+)[\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$', re.UNICODE), [3, 1, 2]),  # foo bar :toto <...@...>
-    (re.compile(r'^([^\t @]+@[^\t ]+)[\t ]*<([^@>]+@[^>]+)>?$', re.UNICODE), [2, 0, 0]),  # ...@... <...@...>
-    (re.compile(r'^([^\t @]+@[^\t ]+)[\t ]*<([\w\t \.\+]+)>?$', re.UNICODE), [1, 0, 2]),  # ...@... <toto>
-    (re.compile(r'^[\[\(]:?([^\)]+)[\]\)][\"\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$', re.UNICODE), [2, 0, 1]),  # (:toto) <...@...>
-    (re.compile(r'^([\w\t ’\'\.\-\\]+)<([^@>]+@[^>]+)>?$', re.UNICODE), [2, 1, 0]),  # foo \"bar\" <...@...>
-    (re.compile(r'^([\w’\'\.\-\+]+)[\t ]*<([^@>]+@[^>]+)>?$', re.UNICODE), [2, 1, 0]),  # foo-bar.toto <...@...>
-    (re.compile(r'^([\w\t ’\'\.\-]+)\[?<+([^@>]+@[^>]+)>[\t ]*[\w\t \(\)]+$', re.UNICODE), [2, 1, 0]),  # foo bar <...@...> (tutu)
-    (re.compile(r'^([\w\t ’\'\.\-]+)[\[\(]:?([^\)\]]+)[\]\)][\t ]*[\[\(]:?([^\)\]]+)[\]\)][\t ]*[\"\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$', re.UNICODE), [4, 1, 2]),  # foo bar (:toto) (:titi) <...@...>
+    (
+        re.compile(r"^([\w\t ’\'\.\-]+)\[?<+([^@>]+@[^>]+)>?$", re.UNICODE),
+        [2, 1, 0],
+    ),  # foo bar <...@...>
+    (
+        re.compile(r"^\"([\w\t ’\'\.\-]+)\"[\t ]*\[?<+([^@>]+@[^>]+)>?$", re.UNICODE),
+        [2, 1, 0],
+    ),  # "foo bar" <...@...>
+    (re.compile(r"^<([^@>]+@[^>]+)>?$", re.UNICODE), [1, 0, 0]),  # <...@...>
+    (
+        re.compile(
+            r"^([\w\t ’\'\.\-]+)[\[\(]:?([^\)\]]+)[\]\)][\"\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$",
+            re.UNICODE,
+        ),
+        [3, 1, 2],
+    ),  # foo bar (:toto) <...@...>
+    (
+        re.compile(r"^([\w\t ’\'\.\-]+)\(([^@\)>]+@[^\)>]+)[\)>]?$", re.UNICODE),
+        [2, 1, 0],
+    ),  # foo bar (...@...)
+    (re.compile(r"^([^@\t ]+@[^\t ]+)$", re.UNICODE), [1, 0, 0]),  # ...@...
+    (
+        re.compile(r"^([\w\t ’\'\.\-]+)<([\w\t \.\+\-]+)>$", re.UNICODE),
+        [0, 1, 2],
+    ),  # foo bar <toto>
+    (re.compile(r"^<([\w\t ’\'\.\+]+)>$", re.UNICODE), [0, 0, 1]),  # <toto>
+    (
+        re.compile(r"^<([\w\t ’\'\.\+]+)>[\t ]*([^@\t ]+@[^\t ]+)$", re.UNICODE),
+        [2, 1, 0],
+    ),  # <toto> ...@...
+    (re.compile(r"^([\w\t ’\'\.\-]+)$", re.UNICODE), [0, 1, 0]),  # foo bar
+    (
+        re.compile(r"^((?:[\w’\'\.\-]+[\t ]+)+)([^@\t >]+@[^\t >]+)>?$", re.UNICODE),
+        [2, 1, 0],
+    ),  # foo bar toto@titi
+    (
+        re.compile(r"^([\w\t ’\'\.\-]+)[\[\(]:?([^\)]+)[\]\)]$", re.UNICODE),
+        [0, 1, 2],
+    ),  # foo bar (:toto)
+    (
+        re.compile(r"^([\w\t ’\'\.\-]+):([\w_]+)$", re.UNICODE),
+        [0, 1, 2],
+    ),  # foo bar :toto
+    (
+        re.compile(
+            r"^([\w\t ’\'\.\-]+):([^\t ]+)[\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$", re.UNICODE
+        ),
+        [3, 1, 2],
+    ),  # foo bar :toto <...@...>
+    (
+        re.compile(r"^([^\t @]+@[^\t ]+)[\t ]*<([^@>]+@[^>]+)>?$", re.UNICODE),
+        [2, 0, 0],
+    ),  # ...@... <...@...>
+    (
+        re.compile(r"^([^\t @]+@[^\t ]+)[\t ]*<([\w\t \.\+]+)>?$", re.UNICODE),
+        [1, 0, 2],
+    ),  # ...@... <toto>
+    (
+        re.compile(
+            r"^[\[\(]:?([^\)]+)[\]\)][\"\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$", re.UNICODE
+        ),
+        [2, 0, 1],
+    ),  # (:toto) <...@...>
+    (
+        re.compile(r"^([\w\t ’\'\.\-\\]+)<([^@>]+@[^>]+)>?$", re.UNICODE),
+        [2, 1, 0],
+    ),  # foo \"bar\" <...@...>
+    (
+        re.compile(r"^([\w’\'\.\-\+]+)[\t ]*<([^@>]+@[^>]+)>?$", re.UNICODE),
+        [2, 1, 0],
+    ),  # foo-bar.toto <...@...>
+    (
+        re.compile(
+            r"^([\w\t ’\'\.\-]+)\[?<+([^@>]+@[^>]+)>[\t ]*[\w\t \(\)]+$", re.UNICODE
+        ),
+        [2, 1, 0],
+    ),  # foo bar <...@...> (tutu)
+    (
+        re.compile(
+            r"^([\w\t ’\'\.\-]+)[\[\(]:?([^\)\]]+)[\]\)][\t ]*[\[\(]:?([^\)\]]+)[\]\)][\t ]*[\"\t ]*[\(<]([^@>]+@[^>]+)[\)>]?$",
+            re.UNICODE,
+        ),
+        [4, 1, 2],
+    ),  # foo bar (:toto) (:titi) <...@...>
 ]
 
-SPLIT_PAT = re.compile(r',|;|(?: \+ )|(?: and )|/|&')
-NON_LETTER = re.compile(r'[^a-zA-Z]')
-SPECIAL_PAT_1 = re.compile(r'^(\w+)[\t ]*,[\t ]*(\w+)[\t ]*<([^@]+@[^>]+)>?$', re.UNICODE)
-SPECIAL_PAT_2 = re.compile(r'[\t ]*,[\t ]*')
-SPECIAL_PAT_3 = (re.compile(r'^([\w\t ’\'\.\-]+)<([^@]+@[^>]+)>.*$', re.UNICODE), [2, 1, 0])
-SPECIAL_PAT_4 = re.compile(r'^\"?([\w’\'\.\-\+]+)[\t ]*[\(\"]([^\)\"]+)[\)\"][\t ]*([\w’\'\"\.\-\+]+)\"?[\t ]*<([^@>]+@[^>]+)>?$', re.UNICODE)  # foo (bar) toto <...@...>
-SPECIAL_PAT_5 = re.compile(r'^([^>]+)[\t ]*<+([^@>]+@[^>]+)>?$', re.UNICODE)  # ... <...@...>
-BUG_PAT = re.compile(r'bug[0-9]+', re.I)
-ENCODINGS = ['iso-8859-1', 'iso-8859-2']
+SPLIT_PAT = re.compile(r",|;|(?: \+ )|(?: and )|/|&")
+NON_LETTER = re.compile(r"[^a-zA-Z]")
+SPECIAL_PAT_1 = re.compile(
+    r"^(\w+)[\t ]*,[\t ]*(\w+)[\t ]*<([^@]+@[^>]+)>?$", re.UNICODE
+)
+SPECIAL_PAT_2 = re.compile(r"[\t ]*,[\t ]*")
+SPECIAL_PAT_3 = (
+    re.compile(r"^([\w\t ’\'\.\-]+)<([^@]+@[^>]+)>.*$", re.UNICODE),
+    [2, 1, 0],
+)
+SPECIAL_PAT_4 = re.compile(
+    r"^\"?([\w’\'\.\-\+]+)[\t ]*[\(\"]([^\)\"]+)[\)\"][\t ]*([\w’\'\"\.\-\+]+)\"?[\t ]*<([^@>]+@[^>]+)>?$",
+    re.UNICODE,
+)  # foo (bar) toto <...@...>
+SPECIAL_PAT_5 = re.compile(
+    r"^([^>]+)[\t ]*<+([^@>]+@[^>]+)>?$", re.UNICODE
+)  # ... <...@...>
+BUG_PAT = re.compile(r"bug[0-9]+", re.I)
+ENCODINGS = ["iso-8859-1", "iso-8859-2"]
 
 
 def clean_author(author):
     """Remove typos we can have in a author field"""
-    if author.startswith('\"') and author.endswith('\"'):
+    if author.startswith('"') and author.endswith('"'):
         author = author[1:-1]
-    if author.endswith('.'):
+    if author.endswith("."):
         author = author[:-1]
-    if author.endswith('>>'):
+    if author.endswith(">>"):
         author = author[:-1]
-    if author.startswith('='):
+    if author.startswith("="):
         author = author[1:]
     author = author.strip()
-    author = author.replace('%40', '@')
-    author = author.replace('%gmail', '@gmail')
-    author = unicodedata.normalize('NFC', author)
+    author = author.replace("%40", "@")
+    author = author.replace("%gmail", "@gmail")
+    author = unicodedata.normalize("NFC", author)
 
     return author
 
@@ -66,7 +139,7 @@ def check_pat(pat, positions, author):
     """Check a pattern and return a triple (email, real, nick) according to positions"""
     m = pat.match(author)
     if m:
-        return tuple(m.group(p).strip() if p != 0 else '' for p in positions)
+        return tuple(m.group(p).strip() if p != 0 else "" for p in positions)
     return None
 
 
@@ -88,7 +161,7 @@ def check_common(author):
 def check_multiple(author):
     """Check for multiple authors we can have in one author field"""
     authors = SPLIT_PAT.split(author)
-    if len(authors) >= 2 and all('@' in a for a in authors):
+    if len(authors) >= 2 and all("@" in a for a in authors):
         res = []
         fail = []
         for author in authors:
@@ -107,21 +180,21 @@ def check_multiple(author):
 
 def to_ascii_form(s):
     """Remove accent and non-acii chars"""
-    return unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('utf-8')
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("utf-8")
 
 
 def rm_non_letter(s):
     """Remove non-letter chars"""
-    return NON_LETTER.sub('', s)
+    return NON_LETTER.sub("", s)
 
 
 def rm_accents(s):
     """Remove accent and punctuation chars"""
-    r = ''
-    for c in unicodedata.normalize('NFD', s):
+    r = ""
+    for c in unicodedata.normalize("NFD", s):
         cat = unicodedata.category(c)[0]
         # if cat is not Mark, Punctuation
-        if cat not in {'M', 'P'}:
+        if cat not in {"M", "P"}:
             r += c
     return r
 
@@ -131,16 +204,16 @@ def cmp_name_email(name, email_name):
     name = to_ascii_form(name.lower())
     email = rm_non_letter(email_name.lower())
 
-    if ' ' in name:
-        toks = list(map(rm_non_letter, name.split(' ')))
-        if ''.join(toks) == email:
+    if " " in name:
+        toks = list(map(rm_non_letter, name.split(" ")))
+        if "".join(toks) == email:
             return True
         for tok in toks:
             if len(tok) >= 5 and tok in email:
                 return True
         if len(toks) == 2:
             toks = toks[::-1]
-            if ''.join(toks) == email:
+            if "".join(toks) == email:
                 return True
             if toks[0][0] + toks[1] == email:
                 return True
@@ -157,21 +230,21 @@ def special1(author):
     if m:
         foo, bar, email = m.group(1).lower(), m.group(2).lower(), m.group(3).lower()
         if foo in email:
-            return (email, foo + ' ' + bar, '')
+            return (email, foo + " " + bar, "")
     return None
 
 
 def special2(author):
     # we've something like toto foo, titi bar <toto@...>
-    toks = author.split(' <')
+    toks = author.split(" <")
     if len(toks) == 2:
-        email = toks[1][:-1] if toks[1].endswith('>') else toks[1]
-        if '@' in email:
-            before_at = email.split('@')[0]
+        email = toks[1][:-1] if toks[1].endswith(">") else toks[1]
+        if "@" in email:
+            before_at = email.split("@")[0]
             authors = SPECIAL_PAT_2.split(toks[0])
             for a in authors:
                 if cmp_name_email(a, before_at):
-                    return (email, a, '')
+                    return (email, a, "")
     return None
 
 
@@ -187,32 +260,34 @@ def special3(author):
 def special4(author):
     m = SPECIAL_PAT_4.match(author)
     if m:
-        return (m.group(4), m.group(1) + ' ' + m.group(3), m.group(2))
+        return (m.group(4), m.group(1) + " " + m.group(3), m.group(2))
     return None
 
 
 def special5(author):
     m = SPECIAL_PAT_5.match(author)
     if m:
-        return (m.group(2), m.group(1), '')
+        return (m.group(2), m.group(1), "")
     return None
 
 
 def post_process(r, author):
     """Post process the triple (email, real, nick) to remove typos or stuff like that"""
     email, real, nick = r
-    email = email.strip(' .,')
+    email = email.strip(" .,")
     real = real.strip()
     nick = nick.strip()
-    if email.startswith('mailto:'):
+    if email.startswith("mailto:"):
         email = email[7:]
-    elif email.startswith('h<'):
+    elif email.startswith("h<"):
         email = email[2:]
-    email = email.replace(',', '.').replace('@.', '@').replace('.@', '@').replace(' ', '')
-    email = BUG_PAT.sub('', email)
+    email = (
+        email.replace(",", ".").replace("@.", "@").replace(".@", "@").replace(" ", "")
+    )
+    email = BUG_PAT.sub("", email)
 
     if email and not validate_email(email):
-        logger.error('Email not valid for: {}'.format(author))
+        logger.error("Email not valid for: {}".format(author))
 
     return (email, real, nick)
 
@@ -225,7 +300,7 @@ def analyze_author_helper(author, first=False):
 
     r, fail = check_multiple(author)
     if fail:
-        logger.error('Failed to parse authors: {}'.format(author))
+        logger.error("Failed to parse authors: {}".format(author))
     if r:
         return r
 
@@ -240,7 +315,7 @@ def analyze_author_helper(author, first=False):
     # maybe we've an encoding issue...
     for enc in ENCODINGS:
         try:
-            a = bytes(author, enc).decode('utf-8')
+            a = bytes(author, enc).decode("utf-8")
             r = analyze_author_helper(a, first=True)
             if r:
                 return r
@@ -252,7 +327,7 @@ def analyze_author_helper(author, first=False):
     if r:
         return r
 
-    logger.error('Failed to parse author: {}'.format(author))
+    logger.error("Failed to parse author: {}".format(author))
 
     return None
 
@@ -277,7 +352,7 @@ def cmp_name_email1(n, e):
     if e and len(n) == 2:
         L = list(filter(None, map(to_ascii_form, n)))
         if len(L) == 2:
-            if e.startswith('.'.join(L)) or e.startswith('.'.join(L[::-1])):
+            if e.startswith(".".join(L)) or e.startswith(".".join(L[::-1])):
                 return True
             if e.startswith(L[0][0] + L[1]) or e.startswith(L[1][0] + L[0]):
                 return True
@@ -301,8 +376,8 @@ def equal_author(a, b):
             # same real name
             return True
 
-        names_a = set(map(lambda s: rm_accents(s.lower()), ra.split(' ')))
-        names_b = set(map(lambda s: rm_accents(s.lower()), rb.split(' ')))
+        names_a = set(map(lambda s: rm_accents(s.lower()), ra.split(" ")))
+        names_b = set(map(lambda s: rm_accents(s.lower()), rb.split(" ")))
         if names_a == names_b:
             return True
 
@@ -333,12 +408,12 @@ def gather(authors):
 def collect_authors(path, data=None):
     """Collect authors from a pushlog"""
     if not data:
-        with open(path, 'r') as In:
+        with open(path, "r") as In:
             data = json.load(In)
 
     toanalyze = set()
     for i in data:
-        author = i['author']
+        author = i["author"]
         if author not in toanalyze:
             toanalyze.add(clean_author(author))
 
@@ -348,16 +423,15 @@ def collect_authors(path, data=None):
 
 def stats(path):
     """Make some stats on authors"""
-    with open(path, 'r') as In:
+    with open(path, "r") as In:
         data = json.load(In)
 
     res = {}
     for i in data:
-        author = i['author']
+        author = i["author"]
         if author not in res:
-            res[author] = {'count': 1,
-                           'author': analyze_author(author)}
+            res[author] = {"count": 1, "author": analyze_author(author)}
         else:
-            res[author]['count'] += 1
+            res[author]["count"] += 1
 
     return res

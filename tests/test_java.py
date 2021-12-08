@@ -12,13 +12,12 @@ from crashclouseau import buildhub, java
 
 
 class JavaTest(unittest.TestCase):
-
     def readfile(self, filename):
-        with open(filename, 'r') as In:
+        with open(filename, "r") as In:
             return json.load(In)
 
     def get_files(self, path):
-        pat = re.compile(r'stack\.[0-9]+\.json')
+        pat = re.compile(r"stack\.[0-9]+\.json")
         for f in listdir(path):
             if pat.match(f):
                 full = join(path, f)
@@ -26,26 +25,28 @@ class JavaTest(unittest.TestCase):
 
     @staticmethod
     def get_full_path(java_files, filename):
-        pat = re.compile(r'.*/' + filename)
+        pat = re.compile(r".*/" + filename)
         for f in java_files:
             if pat.match(f):
                 return f
 
     def test(self):
         java_files = java.get_all_java_files(sleep=0.5, retry=10)
-        for f in self.get_files('./tests/java'):
+        for f in self.get_files("./tests/java"):
             data = self.readfile(f)
-            stack, files = java.inspect_java_stacktrace(data['stack'],
-                                                        'tip',
-                                                        get_full_path=partial(JavaTest.get_full_path,
-                                                                              java_files))
-            self.assertEqual(stack, data['frames'])
-            self.assertEqual(list(sorted(files)), data['files'])
+            stack, files = java.inspect_java_stacktrace(
+                data["stack"],
+                "tip",
+                get_full_path=partial(JavaTest.get_full_path, java_files),
+            )
+            self.assertEqual(stack, data["frames"])
+            self.assertEqual(list(sorted(files)), data["files"])
 
-            reformatted = java.reformat_java_stacktrace(data['stack'],
-                                                        data['channel'],
-                                                        data['buildid'],
-                                                        get_full_path=partial(JavaTest.get_full_path,
-                                                                              java_files),
-                                                        get_changeset=buildhub.get_rev_from)
-            self.assertEqual(reformatted, data['reformatted'])
+            reformatted = java.reformat_java_stacktrace(
+                data["stack"],
+                data["channel"],
+                data["buildid"],
+                get_full_path=partial(JavaTest.get_full_path, java_files),
+                get_changeset=buildhub.get_rev_from,
+            )
+            self.assertEqual(reformatted, data["reformatted"])

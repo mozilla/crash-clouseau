@@ -14,13 +14,13 @@ def filelog(filenames, buildid, channel, ndays):
         if res is None:
             # the buildid modulo n days is not in the pushlog
             mindate = buildid - relativedelta(days=ndays)
-            logs = pushlog.puhslog(mindate, buildid,
-                                   channel=channel,
-                                   file_filter=lambda f: f in filenames)
+            logs = pushlog.puhslog(
+                mindate, buildid, channel=channel, file_filter=lambda f: f in filenames
+            )
             res = {}
             for log in logs:
-                node = log['node']
-                for f in log['files']:
+                node = log["node"]
+                for f in log["files"]:
                     if f in res:
                         res[f].append(node)
                     else:
