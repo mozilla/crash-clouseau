@@ -103,7 +103,7 @@ def inspect_stacktrace(data, build_node):
     files = set()
     dump = data["json_dump"]
     if "threads" in dump:
-        N = data.get("crashing_thread")
+        N = dump["crash_info"].get("crashing_thread")
         if N is not None:
             frames = dump["threads"][N]["frames"]
             for n, frame in enumerate(frames):
