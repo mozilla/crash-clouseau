@@ -6,7 +6,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from crashclouseau import update
 
 
-sched = BlockingScheduler()
+sched = BlockingScheduler(timezone="GMT")
 
 
 @sched.scheduled_job("interval", minutes=20)

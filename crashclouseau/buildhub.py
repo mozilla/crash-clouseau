@@ -14,7 +14,7 @@ from .logger import logger
 
 
 URL = "https://buildhub.moz.tools/api/search"
-PRODS = {"Firefox": "firefox", "Thunderbird": "thunderbird"}
+PRODS = {"Firefox": "firefox", "FennecAndroid": "fennec", "Thunderbird": "thunderbird"}
 RPRODS = {v: k for k, v in PRODS.items()}
 
 # regexp matching the correct version formats for elastic search query
