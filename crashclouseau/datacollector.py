@@ -167,7 +167,7 @@ def get_new_signatures(product, channel, date):
     small_data.update(big_data)
     data = small_data
 
-    if product == "FennecAndroid":
+    if product == "Fennec":
         # Java crashes don't have any proto-signature...
         get_uuids_fennec(data, search_date, channel)
 
@@ -298,8 +298,8 @@ def get_proto_big(product, signatures, search_date, channel):
 
 
 def get_uuids_fennec(signatures, search_date, channel):
-    """Get the uuids for FennecAndroid java crashes"""
-    logger.info("Get uuids for FennecAndroid-{}: started.".format(channel))
+    """Get the uuids for Fennec java crashes"""
+    logger.info("Get uuids for Fennec-{}: started.".format(channel))
 
     def handler(json, data):
         if json["errors"] or not json["facets"]["signature"]:
@@ -316,7 +316,7 @@ def get_uuids_fennec(signatures, search_date, channel):
                 protos.append({"proto": "", "count": count, "uuid": uuid})
 
     base_params = {
-        "product": "FennecAndroid",
+        "product": "Fennec",
         "release_channel": utils.get_search_channel(channel),
         "date": search_date,
         "build_id": "",
@@ -347,7 +347,7 @@ def get_uuids_fennec(signatures, search_date, channel):
             )
     socorro.SuperSearch(queries=queries).wait()
 
-    logger.info("Get uuids for FennecAndroid-{}: finished.".format(channel))
+    logger.info("Get uuids for Fennec-{}: finished.".format(channel))
 
 
 def get_changeset(buildid, channel, product):

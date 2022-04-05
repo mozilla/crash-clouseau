@@ -1,8 +1,7 @@
 {
     "products":
     [
-        "Firefox",
-        "FennecAndroid"
+        "Firefox"
     ],
     "channels":
     [
@@ -27,23 +26,11 @@
                 "nightly": 1,
                 "beta": 6,
                 "release": 50
-            },
-            "FennecAndroid":
-            {
-                "nightly": 1,
-                "beta": 6,
-                "release": 50
             }
         },
         "protos":
         {
             "Firefox":
-            {
-                "nightly": 50,
-                "beta": 20,
-                "release": 20
-            },
-            "FennecAndroid":
             {
                 "nightly": 50,
                 "beta": 20,
