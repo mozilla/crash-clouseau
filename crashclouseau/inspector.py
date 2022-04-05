@@ -102,10 +102,12 @@ def inspect_stacktrace(data, build_node):
     res = []
     files = set()
     dump = data["json_dump"]
+    max_frames = 50
     if "threads" in dump:
         N = dump["crash_info"].get("crashing_thread")
         if N is not None:
             frames = dump["threads"][N]["frames"]
+            frames = frames[0:max_frames]
             for n, frame in enumerate(frames):
                 uri = frame.get("file")
                 filename, node = get_path_node(uri)
