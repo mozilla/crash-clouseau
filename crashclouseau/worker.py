@@ -10,7 +10,7 @@ from . import config
 
 
 listen = ["high", "default", "low"]
-redis_url = os.getenv("REDISTOGO_URL", config.get_redis())
+redis_url = os.getenv("REDIS_TLS_URL", config.get_redis())
 conn = redis.from_url(redis_url)
 __QUEUE = None
 

@@ -9,7 +9,7 @@ RUN openssl req \
 FROM python:slim
 
 ENV DATABASE_URL=postgresql://clouseau:passwd@postgres:5432/clouseau
-ENV REDISTOGO_URL=redis://queue
+ENV REDIS_TLS_URL=redis://queue
 ENV PORT=8081
 ENV PYTHONPATH=.
 ENV PYTHONUNBUFFERED=1
