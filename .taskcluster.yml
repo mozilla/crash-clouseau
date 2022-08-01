@@ -20,7 +20,7 @@ tasks:
           $fromNow: 1 hour
         taskQueueId: proj-misc/tutorial
         metadata:
-          name: crash-clouseau taskcluster definition
+          name: crash-clouseau linting and tests
           description: Taskcluster definition for crash-clouseau
           owner: ${event.sender.login}@users.noreply.github.com
           source: ${event.repository.url}
