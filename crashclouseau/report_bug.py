@@ -27,7 +27,7 @@ def get_bz_query(data):
     for i in findall(needle, data):
         j = data.index('"', i + len(needle))
         if j != -1:
-            bz_url = data[i + len('href="') : j]
+            bz_url = data[i + len('href="'):j]
             bz_url = bz_url.replace("&amp;", "&")
             bz_url = bz_url.replace("&lt;", "<")
             bz_url = bz_url.replace("&gt;", ">")
