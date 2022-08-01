@@ -17,7 +17,7 @@ tasks:
         taskId:
           $eval: as_slugid("test")
         deadline:
-          $fromNow: 1 day
+          $fromNow: 1 hour
         taskQueueId: proj-misc/tutorial
         metadata:
           name: crash-clouseau taskcluster definition
