@@ -27,6 +27,8 @@ tasks:
         payload:
           maxRunTime: 3600
           image: python:3.6
+          env:
+            CODECOV_TOKEN: 2074f917-03ff-4f90-bafd-1fb186e42216
           command:
             - /bin/bash
             - '--login'
