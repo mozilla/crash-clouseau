@@ -1,0 +1,44 @@
+version: 1
+policy:
+  pullRequests: collaborators
+tasks:
+  $let:
+    head_rev:
+      $if: tasks_for == "github-pull-request"
+      then: ${event.pull_request.head.sha}
+      else: ${event.after}
+    repository:
+      $if: tasks_for == "github-pull-request"
+      then: ${event.pull_request.head.repo.html_url}
+      else: ${event.repository.html_url}
+  in:
+    $match:
+      (tasks_for == "github-pull-request" && event["action"] in ["opened","reopened","synchronize"]):
+        taskId:
+          $eval: as_slugid("test")
+        deadline:
+          $fromNow: 1 hour
+        taskQueueId: proj-misc/tutorial
+        metadata:
+          name: crash-clouseau linting and tests
+          description: Taskcluster definition for crash-clouseau
+          owner: ${event.sender.login}@users.noreply.github.com
+          source: ${event.repository.url}
+        payload:
+          maxRunTime: 3600
+          image: python:3.6
+          env:
+            CODECOV_TOKEN: 2074f917-03ff-4f90-bafd-1fb186e42216
+          command:
+            - /bin/bash
+            - '--login'
+            - '-c'
+            - >-
+              git clone ${repository} repo && cd repo && git config
+              advice.detachedHead false && git checkout ${head_rev} &&
+              pip install --upgrade pip &&
+              pip install -r requirements.txt &&
+              pip install -r test-requirements.txt &&
+              flake8 . &&
+              coverage run --source=crashclouseau -m unittest discover tests/ --verbose &&
+              bash <(curl -s https://codecov.io/bash)
