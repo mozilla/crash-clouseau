@@ -13,7 +13,7 @@ from crashclouseau import buildhub, java
 
 class JavaTest(unittest.TestCase):
     # Show the whole diff output when assertion fails
-    self.maxDiff = None
+    maxDiff = None
 
     def readfile(self, filename):
         with open(filename, "r") as In:
