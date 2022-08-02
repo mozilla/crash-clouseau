@@ -71,14 +71,9 @@ def get_simplified_hash(frames):
     res = ""
     for frame in frames:
         if frame["line"] != -1:
-            res += (
-                str(frame["stackpos"])
-                + "\n"
-                + frame["filename"]
-                + "\n"
-                + str(frame["line"])
-                + "\n"
-            )
+            res += str(frame["stackpos"]) + "\n"
+            res += frame["filename"] + "\n"
+            res += str(frame["line"]) + "\n"
     if res != "":
         return utils.hash(res)
     return ""
