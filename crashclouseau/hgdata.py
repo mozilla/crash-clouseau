@@ -73,7 +73,7 @@ def get_log(hgpath, out_path="", last_rev=0, rev="tip", merge=True, files=False)
                 adds,
                 mods,
                 dels,
-            ) = out[i : (i + N)]
+            ) = out[i:(i + N)]
             parents = [p1node, p2node]
             parents = list(filter(lambda p: p != nullid, parents))
             res.append(
@@ -94,7 +94,7 @@ def get_log(hgpath, out_path="", last_rev=0, rev="tip", merge=True, files=False)
     else:
         for i in range(0, len(out) - 1, N):
             node, author, pushdate, date, desc, p1node, p2node, pushid = out[
-                i : (i + N)
+                i:(i + N)
             ]
             parents = [p1node, p2node]
             parents = list(filter(lambda p: p != nullid, parents))

@@ -21,7 +21,7 @@ def get_extension(filename):
     """Get file extension"""
     i = filename.rfind(".")
     if i != -1:
-        return filename[i + 1 :]
+        return filename[i + 1:]
     return ""
 
 
@@ -85,9 +85,9 @@ def get_file_url(repo_url, filename, node, line, original):
         if original.startswith(start):
             s = "https://crash-stats.mozilla.org/sources/highlight/?url="
             s += "https://gecko-generated-sources.s3.amazonaws.com/"
-            s += original[len(start) : -1]
+            s += original[len(start):-1]
             s += "#L-" + str(line)
-            filename = original[original.index("/") + 1 : -1]
+            filename = original[original.index("/") + 1:-1]
             return s, filename
         elif original.startswith("git:github.com/"):
             sp = original.split(":")
@@ -150,7 +150,7 @@ def get_spike_indices(numbers, ndays):
     # we've something like [0, 0, 0, 2, 0, 0, 0, 3, 1, 0, 0, 9] and ndays=3
     # and we want to get [3, 7]
     for i in range(ndays, len(numbers)):
-        if compare_numbers(numbers[i], numbers[(i - ndays) : i]):
+        if compare_numbers(numbers[i], numbers[(i - ndays):i]):
             yield i
 
 
