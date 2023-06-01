@@ -22,6 +22,7 @@ db = SQLAlchemy(app)
 cors = CORS(app)
 app.config["CORS_HEADERS"] = "Content-Type"
 log = logging.getLogger(__name__)
+app.app_context().push()
 
 
 @app.route("/crashstack.html")

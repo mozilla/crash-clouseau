@@ -567,8 +567,8 @@ class HGAuthor(db.Model):
 
         info = info[0]
         email, real, nick = info
-        sel = db.select([db.literal(email), db.literal(real), db.literal(nick)]).where(
-            ~db.exists([HGAuthor.email, HGAuthor.real, HGAuthor.nick]).where(
+        sel = db.select(db.literal(email), db.literal(real), db.literal(nick)).where(
+            ~db.exists().where(
                 db.and_(
                     HGAuthor.email == email,
                     HGAuthor.real == real,
@@ -622,8 +622,8 @@ class Signature(db.Model):
 
     @staticmethod
     def get_id(signature):
-        sel = db.select([db.literal(signature)]).where(
-            ~db.exists([Signature.signature]).where(Signature.signature == signature)
+        sel = db.select(db.literal(signature)).where(
+            ~db.exists().where(Signature.signature == signature)
         )
         ins = (
             db.insert(Signature)
@@ -1250,8 +1250,8 @@ def commit():
 
 
 def create():
-    engine = db.get_engine(app)
-    if not inspect(engine).has_table(engine, "lastdate"):
+    engine = db.engine
+    if not inspect(engine).has_table("lastdate"):
         db.create_all()
         db.session.commit()
         return True
