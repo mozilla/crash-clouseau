@@ -7,14 +7,17 @@ tasks:
       $if: tasks_for == "github-pull-request"
       then: ${event.pull_request.head.sha}
       else: ${event.after}
+
     repository:
       $if: tasks_for == "github-pull-request"
       then: ${event.pull_request.head.repo.html_url}
       else: ${event.repository.html_url}
+
     pullRequestAction:
       $switch:
         'tasks_for[:19] == "github-pull-request"': ${event.action}
         $default: "UNDEFINED"
+
     isPullRequest:
       $eval: 'tasks_for[:19] == "github-pull-request"'
   in:
