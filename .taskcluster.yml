@@ -40,6 +40,8 @@ tasks:
           image: python:3.10
           env:
             CODECOV_TOKEN: 2074f917-03ff-4f90-bafd-1fb186e42216
+            DATABASE_URL: postgres://clouseau2:passwd@localhost:5432/clouseau
+            REDIS_URL: redis://localhost:6379
           command:
             - /bin/bash
             - "-lcx"
