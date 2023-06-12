@@ -9,7 +9,7 @@ from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy import inspect
 import pytz
-from . import app, config, db, utils
+from . import config, db, utils
 from .logger import logger
 
 
