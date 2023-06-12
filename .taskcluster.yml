@@ -39,14 +39,12 @@ tasks:
             CODECOV_TOKEN: 2074f917-03ff-4f90-bafd-1fb186e42216
           command:
             - /bin/bash
-            - '--login'
-            - '-c'
-            - >-
-              git clone ${repository} repo && cd repo && git config
-              advice.detachedHead false && git checkout ${head_rev} &&
-              pip install --upgrade pip &&
-              pip install -r requirements.txt &&
-              pip install -r test-requirements.txt &&
+            - "-lcx"
+            - >
+              git clone ${repository} repo && cd repo &&
+              git -c advice.detachedHead=false checkout ${head_rev} &&
+              pip install --quiet -r requirements.txt &&
+              pip install --quiet -r test-requirements.txt &&
               flake8 . &&
               coverage run --source=crashclouseau -m unittest discover tests/ --verbose &&
               bash <(curl -s https://codecov.io/bash)
