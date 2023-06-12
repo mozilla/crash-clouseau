@@ -34,7 +34,17 @@ class JavaTest(unittest.TestCase):
                 return f
 
     def test(self):
-        java_files = java.get_all_java_files(sleep=0.5, retry=10)
+        java_files = [
+            "mobile/android/base/java/org/mozilla/gecko/GeckoApp.java",
+            "mobile/android/base/java/org/mozilla/gecko/BrowserApp.java",
+            "mobile/android/base/java/org/mozilla/gecko/home/BrowserSearch.java",
+            "mobile/android/base/java/org/mozilla/gecko/home/TwoLinePageRow.java",
+            "mobile/android/base/java/org/mozilla/gecko/home/MultiTypeCursorAdapter.java",
+            "mobile/android/base/java/org/mozilla/gecko/widget/themed/ThemedListView.java",
+            "mobile/android/base/java/org/mozilla/gecko/widget/RecyclerViewClickSupport.java",
+            "mobile/android/base/java/org/mozilla/gecko/activitystream/homepanel/StreamRecyclerAdapter.java",
+        ]
+
         for f in self.get_files("./tests/java"):
             data = self.readfile(f)
             stack, files = java.inspect_java_stacktrace(
