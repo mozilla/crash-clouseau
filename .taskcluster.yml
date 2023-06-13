@@ -13,6 +13,13 @@ tasks:
       then: ${event.pull_request.head.repo.html_url}
       else: ${event.repository.html_url}
 
+    head_branch:
+      $switch:
+        'tasks_for[:19] == "github-pull-request"': ${event.pull_request.head.ref}
+        'tasks_for == "github-push"': ${event.ref}
+        'tasks_for == "github-release"': "${event.release.target_commitish}"
+        'tasks_for in ["action", "cron"]': "${push.branch}"
+
     pullRequestAction:
       $switch:
         'tasks_for[:19] == "github-pull-request"': ${event.action}
