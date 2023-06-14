@@ -5,12 +5,15 @@
 from flask import Flask, send_from_directory
 from flask_cors import CORS, cross_origin
 from flask_sqlalchemy import SQLAlchemy
+from libmozdata.socorro import Socorro
 import logging
 import os
 from . import config
 
 
 app = Flask(__name__, template_folder="../templates")
+
+Socorro.TOKEN = os.getenv("SOCORRO_TOKEN", config.get_socorro())
 
 uri = os.getenv("DATABASE_URL", config.get_database())
 # Workaround for Heroku

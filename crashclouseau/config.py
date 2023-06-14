@@ -78,6 +78,10 @@ def get_redis():
     return _get_local().get("redis", "")
 
 
+def get_socorro():
+    return _get_local().get("socorro", "")
+
+
 def get_threshold(typ, product, channel):
     return (
         _get_global()
