@@ -7,7 +7,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy import inspect
+from sqlalchemy import inspect, func
 import pytz
 from . import config, db, utils
 from .logger import logger
@@ -648,6 +648,81 @@ class Signature(db.Model):
         id = first[0]
         db.session.commit()
         return id
+
+    @staticmethod
+    def get_reports(signatures):
+        reports = (
+            db.session.query(
+                Build.buildid,
+                Build.product,
+                Build.channel,
+                Signature.signature,
+                UUID.id,
+                UUID.uuid,
+                UUID.max_score,
+            )
+            .select_from(Signature)
+            .join(UUID)
+            .join(Build)
+            .filter(
+                Signature.signature.in_(signatures),
+                UUID.useless.is_(False),
+                UUID.analyzed.is_(True),
+            )
+        )
+
+        reports_map = {
+            report.id: {
+                "uuid": report.uuid,
+                "build_id": utils.get_buildid(report.buildid),
+                "product": report.product,
+                "channel": report.channel,
+                "signature": report.signature,
+                "max_score": report.max_score,
+                "changesets": [],
+            }
+            for report in reports
+        }
+
+        changeset_aggregated_columns = (
+            CrashStack.uuidid,
+            Node.node,
+            Node.channel,
+            Node.pushdate,
+            Node.backedout,
+            Node.merge,
+            Node.bug,
+        )
+
+        changesets = (
+            db.session.query(
+                *changeset_aggregated_columns,
+                func.max(Score.score).label("max_score"),
+            )
+            .select_from(CrashStack)
+            .join(Score)
+            .join(Changeset)
+            .join(Node)
+            .filter(
+                CrashStack.uuidid.in_(reports_map.keys()),
+            )
+            .group_by(*changeset_aggregated_columns)
+        )
+
+        for changeset in changesets:
+            reports_map[changeset.uuidid]["changesets"].append(
+                {
+                    "changeset": changeset.node,
+                    "channel": changeset.channel,
+                    "push_date": changeset.pushdate,
+                    "backedout": changeset.backedout,
+                    "merge": changeset.merge,
+                    "bug": changeset.bug,
+                    "max_score": changeset.max_score,
+                }
+            )
+
+        return list(reports_map.values())
 
 
 class Stats(db.Model):
