@@ -684,6 +684,10 @@ class Signature(db.Model):
             for report in reports
         }
 
+        if not reports_map:
+            # No reports found, no need to continue
+            return []
+
         changeset_aggregated_columns = (
             CrashStack.uuidid,
             Node.node,
