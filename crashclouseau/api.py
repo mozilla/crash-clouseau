@@ -25,8 +25,16 @@ def bugs():
 def reports():
     signatures = request.args.getlist("signatures")
     if not signatures:
-        abort(400)
+        abort(400, "No signatures provided")
 
-    reports = models.Signature.get_reports(signatures)
+    product = request.args.get("product")
+    if product and product not in models.PRODUCT_TYPE.enums:
+        abort(400, f"The product must be one of: {models.PRODUCT_TYPE.enums}")
 
-    return jsonify(reports)
+    channel = request.args.get("channel")
+    if channel and channel not in models.CHANNEL_TYPE.enums:
+        abort(400, f"The channel must be one of: {models.CHANNEL_TYPE.enums}")
+
+    res = models.Signature.get_reports(signatures, product, channel)
+
+    return jsonify(res)

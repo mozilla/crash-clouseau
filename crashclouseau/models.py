@@ -650,7 +650,7 @@ class Signature(db.Model):
         return id
 
     @staticmethod
-    def get_reports(signatures):
+    def get_reports(signatures, product=None, channel=None):
         reports = (
             db.session.query(
                 Build.buildid,
@@ -670,6 +670,12 @@ class Signature(db.Model):
                 UUID.analyzed.is_(True),
             )
         )
+
+        if product is not None:
+            reports = reports.filter(Build.product == product)
+
+        if channel is not None:
+            reports = reports.filter(Build.channel == channel)
 
         reports_map = {
             report.id: {
