@@ -725,9 +725,9 @@ class Signature(db.Model):
                     "changeset": changeset.node,
                     "channel": changeset.channel,
                     "push_date": changeset.pushdate,
-                    "backedout": changeset.backedout,
-                    "merge": changeset.merge,
-                    "bug": changeset.bug,
+                    "is_backedout": changeset.backedout,
+                    "is_merge": changeset.merge,
+                    "bug_id": changeset.bug,
                     "max_score": changeset.max_score,
                 }
             )
