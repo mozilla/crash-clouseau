@@ -20,6 +20,6 @@
         }
     ],
     "permissions": [
-        "https://crash-clouseau.herokuapp.com/*"
+        "https://clouseau.moz.tools/*"
     ]
 }

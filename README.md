@@ -6,7 +6,7 @@
 
 ## See it in action
 
-https://crash-clouseau.herokuapp.com/reports.html
+https://clouseau.moz.tools/reports.html
 
 Results on Firefox code are tracked in a meta bug: https://bugzilla.mozilla.org/show_bug.cgi?id=1396527
 
