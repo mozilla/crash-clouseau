@@ -110,3 +110,11 @@ def api_bugs():
     from crashclouseau import api
 
     return api.bugs()
+
+
+@app.route("/api/reports", methods=["GET"])
+@cross_origin()
+def api_reports():
+    from crashclouseau import api
+
+    return api.reports()
