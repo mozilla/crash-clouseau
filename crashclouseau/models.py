@@ -680,7 +680,7 @@ class Signature(db.Model):
         reports_map = {
             report.id: {
                 "uuid": report.uuid,
-                "build_id": utils.get_buildid(report.buildid),
+                "build_id": int(utils.get_buildid(report.buildid)),
                 "product": report.product,
                 "channel": report.channel,
                 "signature": report.signature,
