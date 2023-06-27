@@ -1,4 +1,4 @@
 {{ socorro_comment }}
-There {% if count == 1 %}is 1 crash{% else %}are {{ count }} crashes (from {% if installs == 1 %}1 installation{% else %}{{ installs }} installations{%endif%}){%endif%} in {{ version }} {% if not first %}starting {%endif%}with buildid {{ buildid }}. In analyzing the backtrace, the regression may have been introduced by patch [1] to fix bug {{ bugid }}.
+There {% if count == 1 %}is 1 crash{% else %}are {{ count }} crashes (from {% if installs == 1 %}1 installation{% else %}{{ installs }} installations{%endif%}){%endif%} in {{ version }} {% if not first %}starting {%endif%}with buildid {{ buildid }}. In analyzing the backtrace, the regression may have been introduced by a patch [1] to fix bug {{ bugid }}.
 
 [1] {{ changeset_url }}
