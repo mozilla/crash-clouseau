@@ -40,6 +40,8 @@ def resume():
 
 if __name__ == "__main__":
     worker = Worker(
-        map(Queue, listen), exception_handlers=[black_hole], connection=conn
+        [Queue(name, connection=conn) for name in listen],
+        exception_handlers=[black_hole],
+        connection=conn,
     )
     worker.work()
