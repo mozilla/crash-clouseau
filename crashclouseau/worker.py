@@ -4,7 +4,7 @@
 
 import os
 import redis
-from rq import Worker, Queue, Connection, suspension
+from rq import Worker, Queue, suspension
 from .logger import logger
 from . import config
 
@@ -39,6 +39,7 @@ def resume():
 
 
 if __name__ == "__main__":
-    with Connection(conn):
-        worker = Worker(map(Queue, listen), exception_handlers=[black_hole])
-        worker.work()
+    worker = Worker(
+        map(Queue, listen), exception_handlers=[black_hole], connection=conn
+    )
+    worker.work()
