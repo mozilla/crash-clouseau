@@ -11,7 +11,7 @@ from . import config
 
 listen = ["high", "default", "low"]
 redis_url = os.getenv("REDIS_URL", config.get_redis())
-conn = redis.from_url(redis_url)
+conn = redis.from_url(redis_url, ssl_cert_reqs=None)
 __QUEUE = None
 
 
