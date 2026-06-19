@@ -40,7 +40,7 @@
       </select>
       Channel:&nbsp;
       <select id="channel" onchange="javascript:update_selects('channel');">
-        {% for c in products[selected_product].keys() -%}
+        {% for c in products.get(selected_product, {}).keys() -%}
         {% if c == selected_channel -%}
         <option value="{{ c }}" selected>{{ c }}</option>
         {% else -%}
@@ -50,7 +50,7 @@
       </select>
       Buildid:&nbsp;
       <select id="buildid">
-        {% for bid, version in products[selected_product][selected_channel] -%}
+        {% for bid, version in products.get(selected_product, {}).get(selected_channel, []) -%}
         {% if bid == selected_bid -%}
         <option value="{{ bid }}" selected>{{ bid }} ({{ version }})</option>
         {% else -%}

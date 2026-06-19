@@ -42,9 +42,15 @@ def reports():
         channel = request.args.get("channel", "nightly")
         buildid = request.args.get("buildid", "")
         products = models.UUID.get_buildids()
-        if not buildid:
-            buildid = products[prod][channel][0][0]
-        signatures = models.UUID.get_uuids_from_buildid(buildid, prod, channel)
+        signatures = []
+        if products:
+            if prod not in products:
+                prod = next(iter(products))
+            if channel not in products[prod]:
+                channel = next(iter(products[prod]))
+            if not buildid:
+                buildid = products[prod][channel][0][0]
+            signatures = models.UUID.get_uuids_from_buildid(buildid, prod, channel)
 
         return render_template(
             "reports.html",
@@ -67,9 +73,17 @@ def reports_no_score():
         channel = request.args.get("channel", "nightly")
         buildid = request.args.get("buildid", "")
         products = models.UUID.get_buildids(no_score=True)
-        if not buildid:
-            buildid = products[prod][channel][0][0]
-        signatures = models.UUID.get_uuids_from_buildid_no_score(buildid, prod, channel)
+        signatures = []
+        if products:
+            if prod not in products:
+                prod = next(iter(products))
+            if channel not in products[prod]:
+                channel = next(iter(products[prod]))
+            if not buildid:
+                buildid = products[prod][channel][0][0]
+            signatures = models.UUID.get_uuids_from_buildid_no_score(
+                buildid, prod, channel
+            )
 
         return render_template(
             "reports_no_score.html",
