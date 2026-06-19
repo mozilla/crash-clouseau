@@ -11,7 +11,13 @@ from . import config
 
 listen = ["high", "default", "low"]
 redis_url = os.getenv("REDIS_URL", config.get_redis())
-conn = redis.from_url(redis_url, ssl_cert_reqs=None, ssl_check_hostname=False)
+# The ssl_* kwargs are only valid for SSL connections (rediss://), e.g. the
+# Heroku Redis add-on; passing them to a plain redis:// connection (local
+# Docker) makes redis-py raise, so only set them when the URL is SSL.
+if redis_url.startswith("rediss://"):
+    conn = redis.from_url(redis_url, ssl_cert_reqs=None, ssl_check_hostname=False)
+else:
+    conn = redis.from_url(redis_url)
 __QUEUE = None
 
 
