@@ -65,8 +65,8 @@ class File(db.Model):
 
     @staticmethod
     def get_id(name):
-        sel = db.select([db.literal(name)]).where(
-            ~db.exists([File.name]).where(File.name == name)
+        sel = db.select(db.literal(name)).where(
+            ~db.exists().where(File.name == name)
         )
         ins = (
             db.insert(File)
