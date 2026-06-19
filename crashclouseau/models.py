@@ -563,52 +563,42 @@ class HGAuthor(db.Model):
     @staticmethod
     def get_id(info):
         if not info:
-            return 1
+            return HGAuthor.get_default_id()
 
         info = info[0]
-        email, real, nick = info
-        sel = db.select(db.literal(email), db.literal(real), db.literal(nick)).where(
-            ~db.exists().where(
-                db.and_(
+        return HGAuthor._get_or_create_id(*info)
+
+    @staticmethod
+    def get_default_id():
+        return HGAuthor._get_or_create_id("", "", "")
+
+    @staticmethod
+    def _get_or_create_id(email, real, nick):
+        ins = pg.insert(HGAuthor).values(email=email, real=real, nick=nick)
+        ins = ins.on_conflict_do_nothing(
+            index_elements=["email", "real", "nick"]
+        ).returning(HGAuthor.id)
+        first = db.session.execute(ins).first()
+        if first is None:
+            first = (
+                db.session.query(HGAuthor.id)
+                .filter(
                     HGAuthor.email == email,
                     HGAuthor.real == real,
                     HGAuthor.nick == nick,
                 )
+                .first()
             )
-        )
-        ins = (
-            db.insert(HGAuthor)
-            .from_select([HGAuthor.email, HGAuthor.real, HGAuthor.nick], sel)
-            .returning(HGAuthor.id)
-            .cte("inserted")
-        )
-        rs = (
-            db.session.query(HGAuthor.id)
-            .filter(
-                HGAuthor.email == email, HGAuthor.real == real, HGAuthor.nick == nick
-            )
-            .union_all(
-                db.session.query(HGAuthor.id)
-                .select_from(ins)
-                .filter(Signature.id == ins.c.id)
-            )
-        )
-
-        first = rs.first()
-        if first is None:
-            first = rs.first()
-
         id = first[0]
         db.session.commit()
         return id
 
     @staticmethod
     def put(data):
-        db.session.add(HGAuthor("", "", ""))
+        HGAuthor.get_default_id()
         if data:
             for info in sorted(data):
-                db.session.add(HGAuthor(*info))
-        db.session.commit()
+                HGAuthor._get_or_create_id(*info)
 
 
 class Signature(db.Model):
