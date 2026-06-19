@@ -48,7 +48,9 @@ class LastDate(db.Model):
         d = db.session.query(LastDate).filter(LastDate.channel == channel)
         d = d.first()
         if d:
-            return d.mindate.astimezone(pytz.utc), d.maxdate.astimezone(pytz.utc)
+            mindate = d.mindate.astimezone(pytz.utc) if d.mindate else None
+            maxdate = d.maxdate.astimezone(pytz.utc) if d.maxdate else None
+            return mindate, maxdate
         return None, None
 
 
@@ -150,7 +152,8 @@ class Node(db.Model):
             .filter(Node.channel == channel)
             .first()[0]
         )
-        return m.astimezone(pytz.utc)
+        # m is None when there are no nodes yet (e.g. a fresh database).
+        return m.astimezone(pytz.utc) if m is not None else None
 
     @staticmethod
     def get_max_date(channel):
@@ -159,7 +162,8 @@ class Node(db.Model):
             .filter(Node.channel == channel)
             .first()[0]
         )
-        return m.astimezone(pytz.utc)
+        # m is None when there are no nodes yet (e.g. a fresh database).
+        return m.astimezone(pytz.utc) if m is not None else None
 
     @staticmethod
     def get_bugid(node, channel):
@@ -274,7 +278,7 @@ class Changeset(db.Model):
     @staticmethod
     def add(chgsets, date, channel):
         if not chgsets:
-            return None, None
+            return LastDate.update(Node.get_min_date(channel), date, channel)
 
         nodes = []
         files = set()

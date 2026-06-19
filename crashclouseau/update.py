@@ -27,7 +27,17 @@ def put_filelog(channel, start_date=None, end_date=None):
         end_date = pytz.utc.localize(datetime.utcnow())
     if not start_date:
         start_date = models.Node.get_max_date(channel)
-        start_date += relativedelta(seconds=1)
+        if start_date is None:
+            # Fresh database or no interesting changesets yet: use the last
+            # completed scan when available, otherwise backfill the configured
+            # window.
+            _, start_date = models.LastDate.get(channel)
+            if start_date is None:
+                start_date = end_date - relativedelta(days=config.get_ndays_of_data())
+            else:
+                start_date += relativedelta(seconds=1)
+        else:
+            start_date += relativedelta(seconds=1)
 
     logger.info(
         "Get pushlog data for {} ({} to {}): started".format(
@@ -133,6 +143,8 @@ def update_builds(date, channel, product):
     logger.info("Update builds for {}/{}: started.".format(channel, product))
     if not date:
         _, date = models.LastDate.get(channel)
+        if date is None:
+            date = pytz.utc.localize(datetime.utcnow())
         date -= relativedelta(days=config.get_ndays())
     data = buildhub.get(date, channel, prods=product)
     if data:
