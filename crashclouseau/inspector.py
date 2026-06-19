@@ -4,12 +4,55 @@
 
 from libmozdata import socorro
 import re
+import requests
 from . import java, tools, utils
 from .logger import logger
 
 
 # Mercurial URI
 HG_PAT = re.compile("hg:hg.mozilla.org[^:]*:([^:]*):([a-z0-9]+)")
+# Git URI: Firefox source moved from hg.mozilla.org to
+# github.com/mozilla-firefox/firefox, so crash frames now look like
+# git:github.com/mozilla-firefox/firefox:<path>:<git-hash>
+GIT_PAT = re.compile("git:github.com/[^:]*:([^:]*):([0-9a-f]+)")
+# Lando exposes a git<->hg mapping; we convert the git hashes found in crash
+# frames back to mercurial revs so the rest of the (hg-based) pipeline keeps
+# working unchanged.
+LANDO_GIT2HG = "https://lando.moz.tools/api/git2hg/firefox/{}"
+# Cache git->hg lookups for the lifetime of the worker. We cache misses too:
+# many frames point at vendored, non-Firefox sources (the Rust std lib lives in
+# rust-lang/rust, etc.) whose hashes have no Firefox hg counterpart, and a crash
+# repeats the same hash across all its frames -- without caching we'd hammer
+# lando (and spam the log) once per frame. Transient errors are NOT cached so
+# they can be retried later.
+_GIT2HG_CACHE = {}
+
+
+def git2hg(git_hash):
+    """Convert a git hash to its mercurial counterpart using lando.
+
+    Returns "" when the hash has no Firefox hg counterpart (e.g. frames from
+    vendored sources such as the Rust standard library)."""
+    if git_hash in _GIT2HG_CACHE:
+        return _GIT2HG_CACHE[git_hash]
+    try:
+        r = requests.get(LANDO_GIT2HG.format(git_hash), timeout=30)
+    except Exception as e:
+        # network/transient error: don't cache, let it be retried
+        logger.warning("Cannot reach lando for git hash {}: {}".format(git_hash, e))
+        return ""
+    if r.status_code == 404:
+        # not a Firefox commit (vendored/3rd-party source): cache the miss
+        _GIT2HG_CACHE[git_hash] = ""
+        return ""
+    try:
+        r.raise_for_status()
+        hg_hash = r.json().get("hg_hash", "")
+    except Exception as e:
+        logger.warning("Cannot convert git hash {} to hg: {}".format(git_hash, e))
+        return ""
+    _GIT2HG_CACHE[git_hash] = hg_hash
+    return hg_hash
 
 
 def get_crash_data(uuid):
@@ -87,6 +130,13 @@ def get_path_node(uri):
         if m:
             name = m.group(1)
             node = utils.short_rev(m.group(2))
+        else:
+            m = GIT_PAT.match(uri)
+            if m:
+                name = m.group(1)
+                # convert the git hash back to a mercurial rev so it can be
+                # compared with the (hg) build node and changesets
+                node = utils.short_rev(git2hg(m.group(2)))
     return name, node
 
 
