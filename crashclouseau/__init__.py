@@ -28,6 +28,19 @@ log = logging.getLogger(__name__)
 app.app_context().push()
 
 
+@app.teardown_request
+def _remove_db_session(exc=None):
+    # The module-level app.app_context().push() above gives the worker/clock a
+    # persistent context, but it also means Flask reuses that single app context
+    # for every web request, so Flask-SQLAlchemy's per-context session teardown
+    # never fires. Without this, one failed query (e.g. right after the DB is
+    # rebuilt) leaves the session in an aborted transaction and every later
+    # request fails with PendingRollbackError (surfacing as a 404) until the
+    # dyno is restarted. Resetting the session per request lets the web app
+    # recover on its own.
+    db.session.remove()
+
+
 @app.route("/crashstack.html")
 def crashstack_html():
     from crashclouseau import html
