@@ -1,2 +1,5 @@
 [flake8]
 ignore=E501,E722
+# uv creates the project venv inside the repo; it isn't in flake8's default
+# excludes, so keep it (and other deps) out of linting.
+extend-exclude=.venv

@@ -1,0 +1,37 @@
+[project]
+name = "crash-clouseau"
+version = "0.1.0"
+description = "Tool to help to find patches which are potentially responsible of a crash"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "python-dateutil>=2.9.0",
+    "libmozdata>=0.2.12",
+    "jinja2>=3.1.6",
+    "flask>=3.1.3",
+    "flask_sqlalchemy>=3.1.1",
+    "flask_cors>=6.0.5",
+    "sqlalchemy>=2.0.51",
+    "redis>=8.0.0",
+    "rq>=2.9.1",
+    "gunicorn>=26.0.0",
+    "psycopg2-binary>=2.9.12",
+    "apscheduler>=3.11.2",
+    "pyparsing>=3.3.2",
+    "cycler>=0.12.1",
+    "parsepatch>=0.1.3",
+    "requests>=2.34.2",
+    "validate_email>=1.3",
+    "honcho>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage",
+    "flake8",
+]
+
+[tool.uv]
+# Run from the repo root (PYTHONPATH=.) as before; don't build/install the app
+# itself, only its dependencies. Heroku runs `uv sync --locked --no-default-groups`.
+package = false

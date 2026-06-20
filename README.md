@@ -12,21 +12,15 @@ Results on Firefox code are tracked in a meta bug: https://bugzilla.mozilla.org/
 
 ## Setup
 
-Install the prerequisites via `pip`:
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them with:
 ```sh
-sudo pip install -r requirements.txt
+uv sync
 ```
 
 ## Running tests
 
-Install test prerequisites via `pip`:
 ```sh
-sudo pip install -r test-requirements.txt
-```
-
-Run tests:
-```sh
-coverage run --source=crashclouseau -m unittest discover tests/
+uv run coverage run --source=crashclouseau -m unittest discover tests/
 ```
 
 ## UI Documentation
