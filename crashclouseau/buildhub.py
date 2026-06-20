@@ -239,7 +239,7 @@ async def get_enclosing_builds_helper(pushdate, channel, product):
         version = data["versions"]["buckets"][0]["key"]
         return {"buildid": bid, "revision": revision, "version": version}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fs = []
     for d in data:
         fs.append(
@@ -254,7 +254,6 @@ async def get_enclosing_builds_helper(pushdate, channel, product):
 
 def get_enclosing_builds(pushdate, channel, product):
     """Get the build before and the one after the given pushdate"""
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(
+    return asyncio.run(
         get_enclosing_builds_helper(pushdate, channel, product)
     )

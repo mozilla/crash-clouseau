@@ -24,7 +24,7 @@ def put_build(buildid, product, channel, version, node=None):
 def put_filelog(channel, start_date=None, end_date=None):
     """Get and put the filelog in the database"""
     if not end_date:
-        end_date = pytz.utc.localize(datetime.utcnow())
+        end_date = datetime.now(pytz.utc)
     if not start_date:
         start_date = models.Node.get_max_date(channel)
         if start_date is None:
@@ -144,7 +144,7 @@ def update_builds(date, channel, product):
     if not date:
         _, date = models.LastDate.get(channel)
         if date is None:
-            date = pytz.utc.localize(datetime.utcnow())
+            date = datetime.now(pytz.utc)
         date -= relativedelta(days=config.get_ndays())
     data = buildhub.get(date, channel, prods=product)
     if data:
@@ -155,7 +155,7 @@ def update_builds(date, channel, product):
 def put_crashes(date, channel, product):
     """Get and put crashes data in the database"""
     if not date:
-        date = pytz.utc.localize(datetime.utcnow())
+        date = datetime.now(pytz.utc)
     data = dc.get_new_signatures(product, channel, date)
 
     errors = set()

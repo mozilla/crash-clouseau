@@ -43,7 +43,7 @@ def get_bugs(signature, wait=True):
                 data[bug["id"]] = bug
             del bug["cf_crash_signature"]
 
-    start_date = pytz.utc.localize(datetime.utcnow())
+    start_date = datetime.now(pytz.utc)
     start_date -= relativedelta(hours=2)
     data = {}
     bz = Bugzilla(

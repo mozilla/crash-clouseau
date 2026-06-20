@@ -18,7 +18,7 @@ def create(date=None, extra={}, hgauthors={}):
     if not models.create():
         return
     if not date:
-        date = pytz.utc.localize(datetime.utcnow())
+        date = datetime.now(pytz.utc)
     else:
         date = lmdutils.get_date_ymd(date)
 
