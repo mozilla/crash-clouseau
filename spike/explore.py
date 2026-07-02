@@ -250,6 +250,53 @@ def _parse_proposals(text: str) -> list["Proposal"]:
     return out
 
 
+def _model_call_kwargs(model: str) -> dict:
+    """Per-model request tuning for the proposer call.
+
+    Haiku 4.5 is not in the adaptive-thinking family (no ``thinking``/``effort``);
+    it runs as-is at a small ``max_tokens``. Sonnet 5 / Opus 4.8 / Fable 5 ARE
+    adaptive-thinking models -- give them adaptive thinking (how you'd deploy them
+    for navigation) plus a larger ``max_tokens`` so thinking tokens don't crowd
+    out the JSON proposal (Sonnet 5 runs adaptive-on even when omitted; Opus 4.8
+    omitted == off, so enable it explicitly). ``_propose`` extracts only ``text``
+    blocks, so thinking blocks are skipped and the parse is unaffected.
+    """
+    m = model.lower()
+    if "haiku" in m:
+        return {"max_tokens": 1024}
+    if "opus" in m:
+        # Opus 4.8's default is deliberate/conservative -- it stops proposing
+        # early (no-proposals) unless pushed. The default-Opus baseline already
+        # ran at effort=high (the API default), so we hold effort at high and add
+        # ONLY the persistence directive (see _system_text) to isolate that lever.
+        # (xhigh was tried but made each call minutes-slow for little navigator
+        # benefit -- persistence, not reasoning depth, was the binding constraint.)
+        return {
+            "max_tokens": 8192,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        }
+    if any(t in m for t in ("sonnet", "fable", "mythos")):
+        return {"max_tokens": 8192, "thinking": {"type": "adaptive"}}
+    return {"max_tokens": 1024}
+
+
+# Appended to the explorer system prompt for Opus only: counters its default
+# early-stop ("no-proposals") behavior in this navigator role.
+_PERSIST_SUFFIX = (
+    "\n\nPERSISTENCE (autonomous mode): You run without a human to consult. Keep "
+    "proposing NEW searchfox queries each round until you have genuinely exhausted "
+    "all plausible paths to the culprit. Do NOT return an empty array or stop early "
+    "merely because you have gathered some context -- an unexpanded caller, callee, "
+    "or sibling may be the off-stack regressor. Stop only when further expansion is "
+    "clearly futile."
+)
+
+
+def _system_text(model: str) -> str:
+    return SYSTEM_EXPLORER + (_PERSIST_SUFFIX if "opus" in model.lower() else "")
+
+
 def _propose(client, model, brief, neighborhood, expanded):
     shown = sorted(neighborhood)[:_NEIGHBORHOOD_SHOWN]
     user = (
@@ -262,11 +309,11 @@ def _propose(client, model, brief, neighborhood, expanded):
     )
     resp = client.messages.create(
         model=model,
-        max_tokens=1024,
         system=[
-            {"type": "text", "text": SYSTEM_EXPLORER, "cache_control": {"type": "ephemeral"}}
+            {"type": "text", "text": _system_text(model), "cache_control": {"type": "ephemeral"}}
         ],
         messages=[{"role": "user", "content": user}],
+        **_model_call_kwargs(model),
     )
     text = "".join(
         b.text for b in resp.content if getattr(b, "type", "") == "text"

@@ -36,7 +36,41 @@ fix (`searchfox_cli._run`) was added and a re-run (`results.big2.json`) produced
 2 residual deterministic-500 cases are both **on-stack** (zero metric impact). So
 the numbers are robust, not artifacts.
 
-Not yet run: the cheap-LLM navigator leg (`--mode both`).
+### Navigator tiers — Haiku vs Sonnet vs Opus (LLM leg, `--mode llm`)
+
+Ran the LLM navigator at three tiers on the same 20-case corpus. Off-stack recall
+(the go/no-go subset, n=7) and the stop-reason mix that explains it:
+
+| tier | off-stack recall | persistence (stop reasons, 17 cases) | cost (20 cases) |
+|---|---|---|---|
+| mechanical BFS | 3/7 = 0.43 | brute-force, 100 q | $0 |
+| Haiku 4.5 | 1/7 = 0.14 | `no-proposals`×15 (gives up ~15 q) | $0.43 |
+| **Sonnet 5** | **4/7 = 0.57** | `fixpoint`×16 (explores ~55 q) | $4.09 |
+| Opus 4.8 (default) | 1/7 = 0.14 | `fixpoint`×9, `no-proposals`×8 | $1.83 |
+| Opus 4.8 + persistence | 2/7 = 0.29 | `fixpoint`×12, `no-proposals`×5 | $1.81 |
+| **union (mech ∪ all LLM)** | **5/7 = 0.71** | | |
+
+**The binding factor is exploration persistence, not raw model rank.** Haiku quits
+early (`no-proposals`); Sonnet explores to `fixpoint` and wins (4/7 — alone equals
+the mechanical+Haiku union, incl. a layout case `nsCSSFrameConstructor::GetFloat
+ContainingBlock` neither mechanical nor Haiku reached). Opus 4.8's *default* is
+deliberate/conservative → it early-stops (8 `no-proposals`) and matches Haiku at
+1/7 despite costing more. A persistence directive + effort=high lifted Opus 1/7→2/7
+(early-stops 8→5) but did **not** close the gap to Sonnet — its conservatism partly
+resists the prompt and its frontier selection is weaker here. `xhigh` Opus was
+~minutes/call (≈5 h/run) — impractical for an iterative navigator loop.
+
+**Design takeaways:** (1) **Sonnet 5 is the best navigator tier** (best recall,
+~$0.20/case) and it's not a tuning artifact. (2) Mechanical BFS stays complementary
+(union 5/7 > any single navigator) — breadth catches `ConditionVariableImpl::wait_for`
+(2041703) directed nav missed; the LLM catches layout/HTMLEditor cases BFS's budget
+didn't reach. Production wants **both**. (3) Adapter lesson: the LLM leg must be
+model-aware — adaptive-thinking family (Sonnet/Opus) needs headroom `max_tokens` so
+thinking doesn't truncate the JSON proposal; Haiku 4.5 takes no `thinking`/`effort`.
+
+Artifacts: `results.{both,sonnet-5,opus-4-8,opus-tuned}.json`; comparators
+`spike/head_to_head.py` (mech vs one LLM) and `spike/tiers.py` (N-way + persistence
++ true per-model cost).
 
 ---
 
