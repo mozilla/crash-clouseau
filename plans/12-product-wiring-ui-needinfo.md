@@ -47,7 +47,7 @@ Surface the persisted evidence dossier and verdict for a scored crash in the exi
 | Bugzilla REST bug | REST-API | `https://bugzilla.mozilla.org/rest/bug` (read, for product/component/assigned_to) | existing | Already called by `get_info_helper`; supplies the assignee surfaced as `ni`. No new use. |
 | Socorro report page | REST-API | `https://crash-stats.mozilla.org/report/index/{uuid}` | existing | Linked from panel header (already used in `report_bug` and crashstack page). |
 | Socorro SuperSearch | REST-API | `https://crash-stats.mozilla.org/api/SuperSearch/` | existing | Already called by `get_info_helper` for crash stats. No new use. |
-| anthropic | python-lib | `anthropic` SDK | NEW (NOT used here) | Listed for completeness; this unit renders a *persisted* verdict and makes no live LLM calls. Owned by agent/principal sub-plans. Model ids it will use (for cross-reference): `claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-8`, `claude-fable-5`. |
+| anthropic | python-lib | `anthropic` SDK | NEW (NOT used here) | Listed for completeness; this unit renders a *persisted* verdict and makes no live LLM calls. Owned by agent/principal sub-plans. Model ids it will use (for cross-reference): `claude-haiku-4-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-fable-5`. |
 | searchfox-cli | CLI | `calls-from` / `calls-to` / `calls-between` / `define` (call-graph misses virtual/indirect/fn-ptr/template/macro + cross-language edges; indexes ~tip, not the crash build node) | NEW (NOT invoked here) | This unit only renders the citations (permalinks/symbol-ids) already stored in the dossier; it never shells out to searchfox-cli. |
 
 ## Interfaces

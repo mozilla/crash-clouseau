@@ -23,9 +23,9 @@ to justify a developer needinfo.
 | `03-dossier-schema-contract.md` | Dossier schema & strong-evidence contract | Pydantic dossier/verdict models + citation types + DB-JSON round-trip | M | `pydantic`, strict `output_format` schemas, `SearchfoxCitation`, JSONB envelope |
 | `04-persistence-tables.md` | Persistence: dossier/verdict tables | New SQLAlchemy tables + migration for stored dossier + verdict | S | `dossier`/`verdict` tables, 2 PG enum types, `bin/migrate_dossier.py` |
 | `05-crash-interpreter.md` | Senior #1: Crash Interpreter | Decode processed crash (reason/address/moz_crash/inlines/phc) into a `CrashBrief` | M | Haiku 4.5, libmozdata ProcessedCrash, `agent/schema.py` |
-| `06-callgraph-explorer.md` | Senior #2: Call-graph Explorer | Drive searchfox-cli from frames to build a neighborhood map with citations | L | Haiku 4.5, searchfox-cli, lando git2hg, `parse_citation` fixtures |
+| `06-callgraph-explorer.md` | Senior #2: Call-graph Explorer | Drive searchfox-cli from frames to build a neighborhood map with citations | L | Sonnet 5 (Phase-0 navigator winner), searchfox-cli, lando git2hg, `parse_citation` fixtures |
 | `07-patch-scout.md` | Senior #3: Patch Scout | Map neighborhood functions to candidate patches; tag/score them | M | Haiku 4.5, lando git2hg, `agent.patch_scout` config |
-| `08-dataflow-tracer.md` | Senior #4: Data-flow Tracer | Read function bodies; argue arg freed/mutated/nulled along the path | L | Sonnet 4.6 / Opus 4.8, searchfox-cli `define`, libmozdata RawRevision |
+| `08-dataflow-tracer.md` | Senior #4: Data-flow Tracer | Read function bodies; argue arg freed/mutated/nulled along the path | L | Sonnet 5 / Opus 4.8, searchfox-cli `define`, libmozdata RawRevision |
 | `09-skeptic-verifier.md` | Senior #5: Skeptic / verification pass | Re-verify every dossier edge/citation; flag drift/backout; prune unsupported | M | Haiku 4.5, searchfox-cli re-query, lando git2hg drift |
 | `10-principal-verdict.md` | Principal: Claude verdict + abstain | Deep causal verdict over the distilled dossier; anti-hallucination allow-lists | M | Opus 4.8 (Fable 5 optional), `agent.llm.principal` config, adaptive thinking/effort |
 | `11-orchestration-worker.md` | Orchestration worker & seed seam | Sequence the 6 roles in an RQ job; wire seed → dossier → verdict persistence | M | `agent` RQ queue, `UUID.set_agent_state`, per-role timeout, Procfile change (ops) |
@@ -109,9 +109,10 @@ The complete, de-duplicated list of everything new the rebuild introduces or reu
 
 ### Claude models + tiers
 - `claude-haiku-4-5` — $1/$5 per 1M, 200K ctx — seniors: crash-interpreter (#05),
-  call-graph-explorer (#06), patch-scout (#07), skeptic (#09). No `effort`, no
-  extended thinking — calls stay plain.
-- `claude-sonnet-4-6` — $3/$15 per 1M, 1M ctx — data-flow-tracer (#08) option.
+  patch-scout (#07), skeptic (#09). No `effort`, no extended thinking — calls stay plain.
+- `claude-sonnet-5` — $3/$15 per 1M, 1M ctx — **call-graph-explorer (#06)** default
+  (Phase-0 tier winner: off-stack recall 4/7 vs Haiku 1/7; persistence is the binding
+  factor) and data-flow-tracer (#08) option.
 - `claude-opus-4-8` — $5/$25 per 1M, 1M ctx — default principal (#10); also a
   data-flow-tracer (#08) option. Uses `thinking={"type":"adaptive"}` + `effort`.
 - `claude-fable-5` — $10/$50 per 1M, 1M ctx — optional principal for the hardest

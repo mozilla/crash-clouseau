@@ -26,8 +26,8 @@ Build a single `llm_call(role, messages, schema=...)` abstraction over the `anth
 |---|---|---|---|---|
 | `anthropic` | python-lib | `anthropic` — pin a floor at the exact installed version after `pip install` (current PyPI release is `0.109.2`, 2026-06-15; requires Python ≥3.9). Do NOT pin `>=0.69` — that floor predates `messages.parse` / `output_config.effort` / server-side `fallbacks` and would not provide the APIs this unit calls. | NEW | The official SDK; `client = anthropic.Anthropic()` resolving `ANTHROPIC_API_KEY` from env. Provides `messages.create`, `messages.parse`, `messages.stream`, `messages.batches.*`, typed exceptions. |
 | `pydantic` | python-lib | `pydantic>=2` (v2 required for `messages.parse` / `output_format`) | NEW | Schema models for structured output validation; `response.parsed_output` is a validated instance. |
-| Claude Haiku 4.5 | llm-model | `claude-haiku-4-5` — $1 / $5 per 1M (in/out), 200K ctx | NEW | WORKER ("senior") tier: crash-interpreter, call-graph-explorer, patch-scout, skeptic. Plain calls — NO `effort`, NO extended thinking (both error / unsupported on Haiku). |
-| Claude Sonnet 4.6 | llm-model | `claude-sonnet-4-6` — $3 / $15 per 1M, 1M ctx | NEW | Mid tier; default for `data-flow-tracer` role (config-selectable up to Opus 4.8). Supports adaptive thinking + `effort` (`low`..`max`). Min cacheable prefix 2048 tokens. |
+| Claude Haiku 4.5 | llm-model | `claude-haiku-4-5` — $1 / $5 per 1M (in/out), 200K ctx | NEW | WORKER ("senior") tier: crash-interpreter, patch-scout, skeptic. Plain calls — NO `effort`, NO extended thinking (both error / unsupported on Haiku). |
+| Claude Sonnet 5 | llm-model | `claude-sonnet-5` — $3 / $15 per 1M, 1M ctx | NEW | Mid tier; default for **`call-graph-explorer`** (see Phase-0 finding below) and `data-flow-tracer` (config-selectable up to Opus 4.8). Supports adaptive thinking + `effort` (`low`..`max`). Min cacheable prefix 2048 tokens (verify for Sonnet 5 at implement time). |
 | Claude Opus 4.8 | llm-model | `claude-opus-4-8` — $5 / $25 per 1M, 1M ctx | NEW | Default PRINCIPAL tier (final causal verdict / abstain). Adaptive thinking + `effort` (`low`/`medium`/`high`/`xhigh`/`max`). Min cacheable prefix 4096 tokens. |
 | Claude Fable 5 | llm-model | `claude-fable-5` — $10 / $50 per 1M, 1M ctx | NEW | Optional hardest-case principal/tracer. Thinking always on (omit `thinking`); explicit `{type:"disabled"}` 400s; requires 30-day data retention (ZDR orgs 400 on every request); `refusal` stop reason — default-enable server-side `fallbacks` to `claude-opus-4-8` (beta header `server-side-fallback-2026-06-01`). Min cacheable prefix 2048. |
 | `messages.parse` | REST-API | `POST /v1/messages` via `client.messages.parse(model=..., messages=..., output_format=PydanticModel)` → `response.parsed_output` | NEW | Structured-output path; validates against the Pydantic schema. NOTE: `output_format=` is the correct kwarg for `messages.parse(...)`; only the top-level `output_format` parameter on `messages.create(...)` is deprecated (replaced there by `output_config.format`). Schema must use `additionalProperties:false` + `required`; no `minLength`/`maxLength`/`minimum`/`maximum`/`multipleOf`/recursive (the Python SDK strips unsupported constraints and validates them client-side). |
@@ -89,15 +89,15 @@ Proposed `"llm"` config block (added to `config/global.json`):
   "caching": true,
   "roles": {
     "crash-interpreter": {"model": "claude-haiku-4-5", "max_tokens": 4096},
-    "call-graph-explorer": {"model": "claude-haiku-4-5", "max_tokens": 8192},
+    "call-graph-explorer": {"model": "claude-sonnet-5", "effort": "high", "max_tokens": 8192},
     "patch-scout": {"model": "claude-haiku-4-5", "max_tokens": 4096},
     "skeptic": {"model": "claude-haiku-4-5", "max_tokens": 4096},
-    "data-flow-tracer": {"model": "claude-sonnet-4-6", "effort": "high", "max_tokens": 16000},
+    "data-flow-tracer": {"model": "claude-sonnet-5", "effort": "high", "max_tokens": 16000},
     "principal": {"model": "claude-opus-4-8", "effort": "high", "max_tokens": 16000, "fallbacks": []}
   },
   "pricing": {
     "claude-haiku-4-5": {"in": 1.0, "out": 5.0},
-    "claude-sonnet-4-6": {"in": 3.0, "out": 15.0},
+    "claude-sonnet-5": {"in": 3.0, "out": 15.0},
     "claude-opus-4-8": {"in": 5.0, "out": 25.0},
     "claude-fable-5": {"in": 10.0, "out": 50.0}
   },
@@ -106,6 +106,17 @@ Proposed `"llm"` config block (added to `config/global.json`):
   "retry": {"max_attempts": 5, "max_delay_s": 60}
 }
 ```
+
+> **Phase-0 finding — `call-graph-explorer` defaults to `claude-sonnet-5`, not Haiku.**
+> The spike (`spike/`, memory `clouseau-phase0-findings`) tiered the navigator on a
+> 20-case corpus: off-stack recall was **Sonnet 5 4/7 vs Haiku 1/7 vs Opus-default 1/7**.
+> The binding factor is *exploration persistence*, not raw model rank — Haiku (and
+> default Opus) quit early (`no-proposals`); Sonnet explores to `fixpoint`. Opus did not
+> beat Sonnet even with a persistence directive + effort=high (2/7), and `xhigh` was
+> ~minutes/call. So the navigator seat is Sonnet 5 at effort=high; the other three
+> seniors (crash-interpreter, patch-scout, skeptic) stay Haiku (cheap, no persistence
+> demand). Cost was ~$0.20/case for the Sonnet navigator. Keep the mechanical-BFS
+> neighborhood as a floor/fallback (union of BFS ∪ navigator > either alone).
 
 ## Implementation steps
 
