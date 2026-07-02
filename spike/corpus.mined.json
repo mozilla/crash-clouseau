@@ -1,0 +1,450 @@
+[
+  {
+    "clouseau_bug": 1859974,
+    "regressor_bug": 1838693,
+    "regressor_nodes": [
+      "843c7d19787b",
+      "f214290956c1",
+      "41d7ed93df76",
+      "b8733146f070",
+      "9abfbd2f5892"
+    ],
+    "signature": "nsTBaseHashSet<T>::Remove",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1857437,
+    "regressor_bug": 1854450,
+    "regressor_nodes": [
+      "5cf2f64ab807",
+      "4f834a98dbce",
+      "f5f6c111f7c3"
+    ],
+    "signature": "g_variant_ref",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1856629,
+    "regressor_bug": 1731541,
+    "regressor_nodes": [
+      "5926241957b4",
+      "0fd4431f5279",
+      "71d889de8d97",
+      "7ce2b41bb730",
+      "2f46b4983d1d",
+      "af42a433722a",
+      "eb0b125d3214",
+      "225642ff1de8",
+      "16a3de29e4e6",
+      "c185a38fb335",
+      "2c0444cfb7d6",
+      "2a7646e1a4a5",
+      "b8a405d2e140",
+      "77fce08f9637",
+      "8c9ba927121c"
+    ],
+    "signature": "nsCOMPtr<T>::get | nsCOMPtr<T>::operator nsIContent* | nsIFrame::GetContent",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1782001,
+    "regressor_bug": 1779952,
+    "regressor_nodes": [
+      "7016bef75f07"
+    ],
+    "signature": "core::option::expect_failed | webrender::clip::ClipTreeBuilder::build_clip_set",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1779975,
+    "regressor_bug": 1772050,
+    "regressor_nodes": [
+      "c9acc4829d49"
+    ],
+    "signature": "nsAccessibilityService::GetMarkupMapInfoFor",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1777849,
+    "regressor_bug": 1778431,
+    "regressor_nodes": [
+      "0d8bccc8c20b"
+    ],
+    "signature": "poll_for_event",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1767922,
+    "regressor_bug": 1754004,
+    "regressor_nodes": [
+      "a3f3f9761ada",
+      "df5ce1f6712c",
+      "c7966d91f89e",
+      "1923922be138",
+      "473cad5b22ab",
+      "1ac1908ed3d0",
+      "eb6de0b1ab8e",
+      "5e1fad91e935",
+      "eace8d4756ef",
+      "452fe0a15c99",
+      "cde16b2cdbfb",
+      "2aa9a0a9adbc",
+      "7cf122f6e19f",
+      "a62dab05c6cd",
+      "31b84a1b36f6",
+      "2059c2d0d880",
+      "6d8e51b3e8d7",
+      "0a6cf0817bf5",
+      "82b38c12b298",
+      "e40e810e18fc",
+      "6802a4326963",
+      "35a69828091c",
+      "d95e7ad0eafa",
+      "51bd50b57dd5",
+      "c4f1e86992b6",
+      "234ff9e092c2",
+      "9018dd592230",
+      "a147df47a0e3",
+      "96a39c2ba7a3",
+      "017e1552d549",
+      "63f17a06eba9",
+      "b6dca56b56cc",
+      "10c3683b998b",
+      "0ca1856b5fc9",
+      "000fb99de0cf",
+      "44dfd76472aa",
+      "2374420d9fed",
+      "c6388d682d48",
+      "fe90db9158ac",
+      "e515b7edd1c8",
+      "0f480fc861c0",
+      "e8649de9dd22",
+      "55b4b0c9a504",
+      "cebe8d5dda34",
+      "dfabce587a56",
+      "b08475bbfbd9",
+      "648e3dd4b62f",
+      "09fc506865d7",
+      "d69647a725a1",
+      "36e3802d6993",
+      "611ea76d7a9c",
+      "659581d4159b",
+      "ccb4be659107",
+      "36563e3b1e04",
+      "849b63707d7f",
+      "e1ae48f30d2c",
+      "5c2872ad6912",
+      "d66aacfcf983",
+      "ee7aeb631cd9",
+      "f9abe4fbf501",
+      "e73abb071bb3",
+      "1dfbf61ff5dd",
+      "b7723490f025",
+      "2e56c89cf55d",
+      "fc6c39f56d21",
+      "ecbf5f3c51de",
+      "673ecd5337e1",
+      "ce1bb7d083b9",
+      "2660731a9aea",
+      "c4f201a829c9",
+      "c3d8d84d01b9",
+      "d07a20fa2794",
+      "a546742d3f11",
+      "e54aff74d256",
+      "0b2df3479481",
+      "249922740433",
+      "4578d30460cb",
+      "185b61fd584a",
+      "baa047853223",
+      "08e8e64cf522",
+      "6396c9396eb7",
+      "6efd4589b337",
+      "8de4bb94de16",
+      "4f0ce6d040be",
+      "c1bb4f38919f",
+      "3f4ebef6a4b1"
+    ],
+    "signature": "sftk_ObjectFromHandle",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1767808,
+    "regressor_bug": 1754004,
+    "regressor_nodes": [
+      "a3f3f9761ada",
+      "df5ce1f6712c",
+      "c7966d91f89e",
+      "1923922be138",
+      "473cad5b22ab",
+      "1ac1908ed3d0",
+      "eb6de0b1ab8e",
+      "5e1fad91e935",
+      "eace8d4756ef",
+      "452fe0a15c99",
+      "cde16b2cdbfb",
+      "2aa9a0a9adbc",
+      "7cf122f6e19f",
+      "a62dab05c6cd",
+      "31b84a1b36f6",
+      "2059c2d0d880",
+      "6d8e51b3e8d7",
+      "0a6cf0817bf5",
+      "82b38c12b298",
+      "e40e810e18fc",
+      "6802a4326963",
+      "35a69828091c",
+      "d95e7ad0eafa",
+      "51bd50b57dd5",
+      "c4f1e86992b6",
+      "234ff9e092c2",
+      "9018dd592230",
+      "a147df47a0e3",
+      "96a39c2ba7a3",
+      "017e1552d549",
+      "63f17a06eba9",
+      "b6dca56b56cc",
+      "10c3683b998b",
+      "0ca1856b5fc9",
+      "000fb99de0cf",
+      "44dfd76472aa",
+      "2374420d9fed",
+      "c6388d682d48",
+      "fe90db9158ac",
+      "e515b7edd1c8",
+      "0f480fc861c0",
+      "e8649de9dd22",
+      "55b4b0c9a504",
+      "cebe8d5dda34",
+      "dfabce587a56",
+      "b08475bbfbd9",
+      "648e3dd4b62f",
+      "09fc506865d7",
+      "d69647a725a1",
+      "36e3802d6993",
+      "611ea76d7a9c",
+      "659581d4159b",
+      "ccb4be659107",
+      "36563e3b1e04",
+      "849b63707d7f",
+      "e1ae48f30d2c",
+      "5c2872ad6912",
+      "d66aacfcf983",
+      "ee7aeb631cd9",
+      "f9abe4fbf501",
+      "e73abb071bb3",
+      "1dfbf61ff5dd",
+      "b7723490f025",
+      "2e56c89cf55d",
+      "fc6c39f56d21",
+      "ecbf5f3c51de",
+      "673ecd5337e1",
+      "ce1bb7d083b9",
+      "2660731a9aea",
+      "c4f201a829c9",
+      "c3d8d84d01b9",
+      "d07a20fa2794",
+      "a546742d3f11",
+      "e54aff74d256",
+      "0b2df3479481",
+      "249922740433",
+      "4578d30460cb",
+      "185b61fd584a",
+      "baa047853223",
+      "08e8e64cf522",
+      "6396c9396eb7",
+      "6efd4589b337",
+      "8de4bb94de16",
+      "4f0ce6d040be",
+      "c1bb4f38919f",
+      "3f4ebef6a4b1"
+    ],
+    "signature": "memcpy_repmovs | NS_CopySegmentToBuffer",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1764097,
+    "regressor_bug": 1757186,
+    "regressor_nodes": [
+      "971e1a26ebfe"
+    ],
+    "signature": "mozilla::dom::quota::QuotaManager::Shutdown::<T>::__invoke",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1763093,
+    "regressor_bug": 1758654,
+    "regressor_nodes": [
+      "5885b9403069",
+      "1863bae04260",
+      "0dbe666a3aa6",
+      "60080026a143",
+      "a07bb9e2ffe8",
+      "6b94822f9ed0",
+      "abe87d773698"
+    ],
+    "signature": "OOM | unknown | SwitchToFiber",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1761667,
+    "regressor_bug": 1744043,
+    "regressor_nodes": [
+      "2422c1c90a1e",
+      "17a501a19918",
+      "92a4a071c9bf"
+    ],
+    "signature": "mozilla::detail::MutexImpl::lock | nsZipArchive::GetItem",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1760627,
+    "regressor_bug": 1756951,
+    "regressor_nodes": [
+      "5ab04623c826",
+      "10a616ca8ab2",
+      "9690ef4d9c04"
+    ],
+    "signature": "js::wasm::DebugState::adjustEnterAndLeaveFrameTrapsState",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1760555,
+    "regressor_bug": 1750298,
+    "regressor_nodes": [
+      "4ec8f7211b07"
+    ],
+    "signature": "mozilla::dom::FetchStreamReader::CloseAndRelease",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1760274,
+    "regressor_bug": 1758367,
+    "regressor_nodes": [
+      "88ca4bb1602f"
+    ],
+    "signature": "xpc::NativeGlobal",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  },
+  {
+    "clouseau_bug": 1759137,
+    "regressor_bug": 1750760,
+    "regressor_nodes": [
+      "06b1ee71577a",
+      "bc5fea217ad0",
+      "6ea8585e5d21",
+      "dced8add243a",
+      "36c42098d706",
+      "c403bda32e9d",
+      "def47ebb3e7c",
+      "22abbc3706dd",
+      "0c6b7084cdb5"
+    ],
+    "signature": "av_buffer_ref",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED, UNCURATED: confirm off_stack (regressor function absent from the crash's on-stack frames), add a representative nightly uuid, and set build_window. Drop if regressed_by is empty or the signature is hidden (security bug)."
+  }
+]

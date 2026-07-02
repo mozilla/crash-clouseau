@@ -1,0 +1,24 @@
+[
+  {
+    "clouseau_bug": 1900001,
+    "regressor_bug": 1899500,
+    "regressor_nodes": ["0123456789ab"],
+    "signature": "mozilla::dom::Example::DoWork",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {"start": "20260601", "end": "20260604"},
+    "off_stack": true,
+    "notes": "EXAMPLE ONLY -- not a real case. Copy this file to spike/corpus.json and replace with hand-mined off-stack regressions (start from `python -m spike.mine_corpus`). Keep only cases where the regressor function is absent from the crash's on-stack frame functions (off_stack=true)."
+  },
+  {
+    "clouseau_bug": 1900002,
+    "regressor_bug": 1899777,
+    "regressor_nodes": ["fedcba987654", "abcabcabcabc"],
+    "signature": "OOM | large | mozilla::AnotherExample::Helper",
+    "channel": "nightly",
+    "uuid": "",
+    "build_window": {"start": "20260610", "end": "20260612"},
+    "off_stack": true,
+    "notes": "EXAMPLE ONLY. A regressor bug can land multiple nodes (list them all); the recall target is the union of their changed functions."
+  }
+]

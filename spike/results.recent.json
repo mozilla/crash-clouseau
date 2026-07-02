@@ -1,0 +1,2686 @@
+{
+  "config": {
+    "mode": "mechanical",
+    "model": "claude-haiku-4-5",
+    "budget_queries": 30,
+    "hops": 2,
+    "depth": 2,
+    "repo": "mozilla-central",
+    "resolve": false,
+    "corpus": "spike/corpus.recent.json"
+  },
+  "aggregate": {
+    "n_cases": 8,
+    "n_skipped": 2,
+    "stack_only_recall": 0.625,
+    "n_stack_missed": 3,
+    "mechanical_recall": 0.375,
+    "mechanical_recall_on_stack_misses": 0.0
+  },
+  "cases": [
+    {
+      "clouseau_bug": 2051443,
+      "regressor_bug": 1973591,
+      "regressor_nodes": [
+        "ec8a6a54a047"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "CanvasContext::Configure",
+        "CanvasContext::Unconfigure",
+        "Device::CreateRenderPipelineAsync",
+        "Device::InitSwapChain",
+        "WebGPUParent::SwapChainDrop",
+        "parking_lot::Mutex",
+        "wgpu_client_create_swap_chain",
+        "wgpu_client_receive_server_message",
+        "wgpu_client_request_device",
+        "wgpu_server_pack_work_done"
+      ],
+      "regressor_files": [
+        "dom/webgpu/CanvasContext.cpp",
+        "dom/webgpu/CanvasContext.h",
+        "dom/webgpu/Device.cpp",
+        "dom/webgpu/Device.h",
+        "dom/webgpu/ipc/WebGPUParent.cpp",
+        "gfx/wgpu_bindings/src/client.rs",
+        "gfx/wgpu_bindings/src/lib.rs",
+        "gfx/wgpu_bindings/src/server.rs"
+      ],
+      "uuid": "73506126-8a03-404f-bfe3-105a50260630",
+      "n_frames": 26,
+      "n_seed_funcs": 26,
+      "stack_only_hit": true,
+      "stack_matched": {
+        "WebGPUParent::SwapChainDrop": "mozilla::webgpu::WebGPUParent::SwapChainDrop"
+      },
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 40,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "<mozglue_static::panic_hook as core::ops::function::Fn<(&std::panic::PanicHookInfo,)>>::call",
+              "cmd": "searchfox-cli --calls-from <mozglue_static::panic_hook as core::ops::function::Fn<(&std::panic::PanicHookInfo,)>>::call --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "<mozglue_static::panic_hook as core::ops::function::Fn<(&std::panic::PanicHookInfo,)>>::call",
+              "cmd": "searchfox-cli --calls-to <mozglue_static::panic_hook as core::ops::function::Fn<(&std::panic::PanicHookInfo,)>>::call --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RustMozCrash",
+              "cmd": "searchfox-cli --calls-from RustMozCrash --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 7,
+              "added": 7
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RustMozCrash",
+              "cmd": "searchfox-cli --calls-to RustMozCrash --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "__rustc::rust_begin_unwind",
+              "cmd": "searchfox-cli --calls-from __rustc::rust_begin_unwind --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "__rustc::rust_begin_unwind",
+              "cmd": "searchfox-cli --calls-to __rustc::rust_begin_unwind --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "_pt_root",
+              "cmd": "searchfox-cli --calls-from _pt_root --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 6,
+              "added": 6
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "_pt_root",
+              "cmd": "searchfox-cli --calls-to _pt_root --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 1,
+              "added": 1
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "_pthread_start",
+              "cmd": "searchfox-cli --calls-from _pthread_start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "_pthread_start",
+              "cmd": "searchfox-cli --calls-to _pthread_start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "core::panicking::panic_fmt",
+              "cmd": "searchfox-cli --calls-from core::panicking::panic_fmt --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "core::panicking::panic_fmt",
+              "cmd": "searchfox-cli --calls-to core::panicking::panic_fmt --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "core::result::unwrap_failed",
+              "cmd": "searchfox-cli --calls-from core::result::unwrap_failed --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "core::result::unwrap_failed",
+              "cmd": "searchfox-cli --calls-to core::result::unwrap_failed --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozglue_static::panic_hook",
+              "cmd": "searchfox-cli --calls-from mozglue_static::panic_hook --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozglue_static::panic_hook",
+              "cmd": "searchfox-cli --calls-to mozglue_static::panic_hook --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::gfx::PCanvasManagerParent::OnMessageReceived(IPC::Message const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::gfx::PCanvasManagerParent::OnMessageReceived(IPC::Message const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::gfx::PCanvasManagerParent::OnMessageReceived(IPC::Message const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::gfx::PCanvasManagerParent::OnMessageReceived(IPC::Message const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessageChannel::MessageTask::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessageChannel::MessageTask::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessageChannel::MessageTask::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessageChannel::MessageTask::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessageChannel::RunMessage(mozilla::ipc::ActorLifecycleProxy*, mozilla::ipc::MessageChannel::MessageTask&)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessageChannel::RunMessage(mozilla::ipc::ActorLifecycleProxy*, mozilla::ipc::MessageChannel::MessageTask&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessageChannel::RunMessage(mozilla::ipc::ActorLifecycleProxy*, mozilla::ipc::MessageChannel::MessageTask&)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessageChannel::RunMessage(mozilla::ipc::ActorLifecycleProxy*, mozilla::ipc::MessageChannel::MessageTask&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::webgpu::PWebGPUParent::OnMessageReceived(IPC::Message const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::webgpu::PWebGPUParent::OnMessageReceived(IPC::Message const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::webgpu::PWebGPUParent::OnMessageReceived(IPC::Message const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::webgpu::PWebGPUParent::OnMessageReceived(IPC::Message const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::webgpu::WebGPUParent::RecvMessages(unsigned int, mozilla::ipc::ByteBuf&&, nsTArray<mozilla::ipc::ByteBuf>&&, nsTArray<mozilla::ipc::shared_memory::Handle<(mozilla::ipc::shared_memory::Type)0> >&&)",
+              "cmd": "searchfox-cli --calls-from mozilla::webgpu::WebGPUParent::RecvMessages(unsigned int, mozilla::ipc::ByteBuf&&, nsTArray<mozilla::ipc::ByteBuf>&&, nsTArray<mozilla::ipc::shared_memory::Handle<(mozilla::ipc::shared_memory::Type)0> >&&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::webgpu::WebGPUParent::RecvMessages(unsigned int, mozilla::ipc::ByteBuf&&, nsTArray<mozilla::ipc::ByteBuf>&&, nsTArray<mozilla::ipc::shared_memory::Handle<(mozilla::ipc::shared_memory::Type)0> >&&)",
+              "cmd": "searchfox-cli --calls-to mozilla::webgpu::WebGPUParent::RecvMessages(unsigned int, mozilla::ipc::ByteBuf&&, nsTArray<mozilla::ipc::ByteBuf>&&, nsTArray<mozilla::ipc::shared_memory::Handle<(mozilla::ipc::shared_memory::Type)0> >&&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::webgpu::WebGPUParent::SwapChainDrop(mozilla::layers::RemoteTextureOwnerId const&, unsigned int, unsigned long long)",
+              "cmd": "searchfox-cli --calls-from mozilla::webgpu::WebGPUParent::SwapChainDrop(mozilla::layers::RemoteTextureOwnerId const&, unsigned int, unsigned long long) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::webgpu::WebGPUParent::SwapChainDrop(mozilla::layers::RemoteTextureOwnerId const&, unsigned int, unsigned long long)",
+              "cmd": "searchfox-cli --calls-to mozilla::webgpu::WebGPUParent::SwapChainDrop(mozilla::layers::RemoteTextureOwnerId const&, unsigned int, unsigned long long) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": true,
+          "matched": {
+            "WebGPUParent::SwapChainDrop": "mozilla::webgpu::WebGPUParent::SwapChainDrop"
+          }
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2051274,
+      "regressor_bug": 2018514,
+      "regressor_nodes": [
+        "2683c33deb3d"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "BackgroundFlushCallback",
+        "nsHtml5Module::InitializeStatics",
+        "nsHtml5TreeOpExecutor::ContinueInterruptedParsingAsync",
+        "nsHtml5TreeOpExecutor::RunFlushLoop",
+        "nsHtml5TreeOpExecutor::~nsHtml5TreeOpExecutor"
+      ],
+      "regressor_files": [
+        "parser/html/nsHtml5Module.cpp",
+        "parser/html/nsHtml5TreeOpExecutor.cpp",
+        "parser/html/nsHtml5TreeOpExecutor.h"
+      ],
+      "uuid": "695c7a00-2f75-45d2-ba40-993330260629",
+      "n_frames": 17,
+      "n_seed_funcs": 16,
+      "stack_only_hit": true,
+      "stack_matched": {
+        "BackgroundFlushCallback": "BackgroundFlushCallback"
+      },
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 16,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "BackgroundFlushCallback(mozilla::TimeStamp)",
+              "cmd": "searchfox-cli --calls-from BackgroundFlushCallback(mozilla::TimeStamp) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "BackgroundFlushCallback(mozilla::TimeStamp)",
+              "cmd": "searchfox-cli --calls-to BackgroundFlushCallback(mozilla::TimeStamp) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-from BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-to BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "MessageLoop::RunHandler()",
+              "cmd": "searchfox-cli --calls-from MessageLoop::RunHandler() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "MessageLoop::RunHandler()",
+              "cmd": "searchfox-cli --calls-to MessageLoop::RunHandler() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "NS_ProcessNextEvent(nsIThread*, bool)",
+              "cmd": "searchfox-cli --calls-from NS_ProcessNextEvent(nsIThread*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "NS_ProcessNextEvent(nsIThread*, bool)",
+              "cmd": "searchfox-cli --calls-to NS_ProcessNextEvent(nsIThread*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-from RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-to RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "__scrt_common_main_seh()",
+              "cmd": "searchfox-cli --calls-from __scrt_common_main_seh() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "__scrt_common_main_seh()",
+              "cmd": "searchfox-cli --calls-to __scrt_common_main_seh() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*)",
+              "cmd": "searchfox-cli --calls-from mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*)",
+              "cmd": "searchfox-cli --calls-to mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::IdleTaskRunner::Cancel()",
+              "cmd": "searchfox-cli --calls-from mozilla::IdleTaskRunner::Cancel() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::IdleTaskRunner::Cancel()",
+              "cmd": "searchfox-cli --calls-to mozilla::IdleTaskRunner::Cancel() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::IdleTaskRunner::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::IdleTaskRunner::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::IdleTaskRunner::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::IdleTaskRunner::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::IdleTaskRunnerTask::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::IdleTaskRunnerTask::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::IdleTaskRunnerTask::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::IdleTaskRunnerTask::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessagePumpForChildProcess::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessagePumpForChildProcess::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessagePumpForChildProcess::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessagePumpForChildProcess::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "nsAppShell::Run()",
+              "cmd": "searchfox-cli --calls-from nsAppShell::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "nsAppShell::Run()",
+              "cmd": "searchfox-cli --calls-to nsAppShell::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "nsBaseAppShell::Run()",
+              "cmd": "searchfox-cli --calls-from nsBaseAppShell::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "nsBaseAppShell::Run()",
+              "cmd": "searchfox-cli --calls-to nsBaseAppShell::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": true,
+          "matched": {
+            "BackgroundFlushCallback": "BackgroundFlushCallback"
+          }
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2051098,
+      "regressor_bug": 2049301,
+      "regressor_nodes": [
+        "d312c3c78a64",
+        "6a2fdf596591",
+        "ed3efc31cbad"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "AppleVTDecoder::Decode",
+        "AppleVTDecoder::ProcessDecode",
+        "MediaFormatReader::OnVideoSeekFailed",
+        "MediaFormatReader::SetVideoDecodeThreshold"
+      ],
+      "regressor_files": [
+        "dom/media/MediaFormatReader.cpp",
+        "dom/media/MediaFormatReader.h",
+        "dom/media/platforms/apple/AppleVTDecoder.cpp"
+      ],
+      "uuid": "804c0d18-100c-4773-bb5e-e1b0d0260630",
+      "n_frames": 12,
+      "n_seed_funcs": 12,
+      "stack_only_hit": true,
+      "stack_matched": {
+        "AppleVTDecoder::ProcessDecode": "mozilla::AppleVTDecoder::ProcessDecode",
+        "AppleVTDecoder::Decode": "mozilla::detail::ProxyFunctionRunnable<mozilla::AppleVTDecoder::Decode"
+      },
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 19,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "MessageLoop::Run()",
+              "cmd": "searchfox-cli --calls-from MessageLoop::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "MessageLoop::Run()",
+              "cmd": "searchfox-cli --calls-to MessageLoop::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "_pt_root",
+              "cmd": "searchfox-cli --calls-from _pt_root --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 6,
+              "added": 6
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "_pt_root",
+              "cmd": "searchfox-cli --calls-to _pt_root --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 1,
+              "added": 1
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "_pthread_start",
+              "cmd": "searchfox-cli --calls-from _pthread_start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "_pthread_start",
+              "cmd": "searchfox-cli --calls-to _pthread_start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::AppleVTDecoder::ProcessDecode(mozilla::MediaRawData*)",
+              "cmd": "searchfox-cli --calls-from mozilla::AppleVTDecoder::ProcessDecode(mozilla::MediaRawData*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::AppleVTDecoder::ProcessDecode(mozilla::MediaRawData*)",
+              "cmd": "searchfox-cli --calls-to mozilla::AppleVTDecoder::ProcessDecode(mozilla::MediaRawData*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::TaskQueue::Runner::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::TaskQueue::Runner::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::TaskQueue::Runner::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::TaskQueue::Runner::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::detail::ProxyFunctionRunnable<mozilla::AppleVTDecoder::Decode(mozilla::MediaRawData*)::$_0, mozilla::MozPromise<nsTArray<RefPtr<mozilla::MediaData> >, mozilla::MediaResult, true> >::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::detail::ProxyFunctionRunnable<mozilla::AppleVTDecoder::Decode(mozilla::MediaRawData*)::$_0, mozilla::MozPromise<nsTArray<RefPtr<mozilla::MediaData> >, mozilla::MediaResult, true> >::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::detail::ProxyFunctionRunnable<mozilla::AppleVTDecoder::Decode(mozilla::MediaRawData*)::$_0, mozilla::MozPromise<nsTArray<RefPtr<mozilla::MediaData> >, mozilla::MediaResult, true> >::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::detail::ProxyFunctionRunnable<mozilla::AppleVTDecoder::Decode(mozilla::MediaRawData*)::$_0, mozilla::MozPromise<nsTArray<RefPtr<mozilla::MediaData> >, mozilla::MediaResult, true> >::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "nsThread::ProcessNextEvent(bool, bool*)",
+              "cmd": "searchfox-cli --calls-from nsThread::ProcessNextEvent(bool, bool*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "nsThread::ProcessNextEvent(bool, bool*)",
+              "cmd": "searchfox-cli --calls-to nsThread::ProcessNextEvent(bool, bool*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "nsThread::ThreadFunc(void*)",
+              "cmd": "searchfox-cli --calls-from nsThread::ThreadFunc(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "nsThread::ThreadFunc(void*)",
+              "cmd": "searchfox-cli --calls-to nsThread::ThreadFunc(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "nsThreadPool::Run()",
+              "cmd": "searchfox-cli --calls-from nsThreadPool::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "nsThreadPool::Run()",
+              "cmd": "searchfox-cli --calls-to nsThreadPool::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "pt_SetSocketOption",
+              "cmd": "searchfox-cli --calls-from pt_SetSocketOption --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "pt_SetSocketOption",
+              "cmd": "searchfox-cli --calls-to pt_SetSocketOption --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "thread_start",
+              "cmd": "searchfox-cli --calls-from thread_start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "thread_start",
+              "cmd": "searchfox-cli --calls-to thread_start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 1,
+              "action": "calls-from",
+              "symbol": "_RelativePriority",
+              "cmd": "searchfox-cli --calls-from _RelativePriority --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 1,
+              "action": "calls-to",
+              "symbol": "_RelativePriority",
+              "cmd": "searchfox-cli --calls-to _RelativePriority --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 1,
+              "action": "calls-from",
+              "symbol": "_ZL12pt_TimedWait",
+              "cmd": "searchfox-cli --calls-from _ZL12pt_TimedWait --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 1,
+              "action": "calls-to",
+              "symbol": "_ZL12pt_TimedWait",
+              "cmd": "searchfox-cli --calls-to _ZL12pt_TimedWait --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 1,
+              "action": "calls-from",
+              "symbol": "_ZL15pt_PostNotifies",
+              "cmd": "searchfox-cli --calls-from _ZL15pt_PostNotifies --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 1,
+              "action": "calls-to",
+              "symbol": "_ZL15pt_PostNotifies",
+              "cmd": "searchfox-cli --calls-to _ZL15pt_PostNotifies --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": true,
+          "matched": {
+            "AppleVTDecoder::ProcessDecode": "mozilla::AppleVTDecoder::ProcessDecode",
+            "AppleVTDecoder::Decode": "mozilla::detail::ProxyFunctionRunnable<mozilla::AppleVTDecoder::Decode"
+          }
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2050826,
+      "regressor_bug": 2044578,
+      "regressor_nodes": [
+        "657c8d6c241f",
+        "3841c31b34f3",
+        "adfac6dea1cb"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "WasmGlobalObject::create",
+        "WasmGlobalObject::isMutable",
+        "wasm::AnyRef",
+        "wasm::UnboxFuncRef",
+        "wasm::Val"
+      ],
+      "regressor_files": [
+        "js/public/Id.h",
+        "js/public/Value.h",
+        "js/src/gc/Barrier.h",
+        "js/src/vm/TaggedProto.h",
+        "js/src/wasm/WasmAnyRef.h",
+        "js/src/wasm/WasmJS.cpp",
+        "js/src/wasm/WasmJS.h",
+        "js/src/wasm/WasmValue.cpp",
+        "js/src/wasm/WasmValue.h"
+      ],
+      "uuid": "cdfb9da4-295d-428d-b6b4-5c93b0260627",
+      "n_frames": 12,
+      "n_seed_funcs": 12,
+      "stack_only_hit": false,
+      "stack_matched": {},
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 12,
+          "queries": 24,
+          "stopped": "fixpoint",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-from BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-to BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "HelperThreadTaskHandler::Run()",
+              "cmd": "searchfox-cli --calls-from HelperThreadTaskHandler::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "HelperThreadTaskHandler::Run()",
+              "cmd": "searchfox-cli --calls-to HelperThreadTaskHandler::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-from RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-to RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "_PR_NativeRunThread(void*)",
+              "cmd": "searchfox-cli --calls-from _PR_NativeRunThread(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "_PR_NativeRunThread(void*)",
+              "cmd": "searchfox-cli --calls-to _PR_NativeRunThread(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "js::GCMarker::markCurrentColorInParallel(js::gc::ParallelMarkTask*, JS::SliceBudget&)",
+              "cmd": "searchfox-cli --calls-from js::GCMarker::markCurrentColorInParallel(js::gc::ParallelMarkTask*, JS::SliceBudget&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "js::GCMarker::markCurrentColorInParallel(js::gc::ParallelMarkTask*, JS::SliceBudget&)",
+              "cmd": "searchfox-cli --calls-to js::GCMarker::markCurrentColorInParallel(js::gc::ParallelMarkTask*, JS::SliceBudget&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "js::GCParallelTask::runHelperThreadTask(js::AutoLockHelperThreadState&)",
+              "cmd": "searchfox-cli --calls-from js::GCParallelTask::runHelperThreadTask(js::AutoLockHelperThreadState&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "js::GCParallelTask::runHelperThreadTask(js::AutoLockHelperThreadState&)",
+              "cmd": "searchfox-cli --calls-to js::GCParallelTask::runHelperThreadTask(js::AutoLockHelperThreadState&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "js::GCParallelTask::runTask(JS::GCContext*, js::AutoLockHelperThreadState&)",
+              "cmd": "searchfox-cli --calls-from js::GCParallelTask::runTask(JS::GCContext*, js::AutoLockHelperThreadState&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "js::GCParallelTask::runTask(JS::GCContext*, js::AutoLockHelperThreadState&)",
+              "cmd": "searchfox-cli --calls-to js::GCParallelTask::runTask(JS::GCContext*, js::AutoLockHelperThreadState&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "js::gc::ParallelMarkTask::run(js::AutoLockHelperThreadState&)",
+              "cmd": "searchfox-cli --calls-from js::gc::ParallelMarkTask::run(js::AutoLockHelperThreadState&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "js::gc::ParallelMarkTask::run(js::AutoLockHelperThreadState&)",
+              "cmd": "searchfox-cli --calls-to js::gc::ParallelMarkTask::run(js::AutoLockHelperThreadState&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ThreadFuncPoolThread(void*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ThreadFuncPoolThread(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ThreadFuncPoolThread(void*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ThreadFuncPoolThread(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "patched_BaseThreadInitThunk(int, void*, void*)",
+              "cmd": "searchfox-cli --calls-from patched_BaseThreadInitThunk(int, void*, void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "patched_BaseThreadInitThunk(int, void*, void*)",
+              "cmd": "searchfox-cli --calls-to patched_BaseThreadInitThunk(int, void*, void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "pr_root(void*)",
+              "cmd": "searchfox-cli --calls-from pr_root(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "pr_root(void*)",
+              "cmd": "searchfox-cli --calls-to pr_root(void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "thread_start<unsigned int (__cdecl*)(void *),1>",
+              "cmd": "searchfox-cli --calls-from thread_start<unsigned int (__cdecl*)(void *),1> --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "thread_start<unsigned int (__cdecl*)(void *),1>",
+              "cmd": "searchfox-cli --calls-to thread_start<unsigned int (__cdecl*)(void *),1> --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": false,
+          "matched": {}
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2049109,
+      "regressor_bug": 2047980,
+      "regressor_nodes": [
+        "62751d49c8cd",
+        "ceeaa726f4ea",
+        "dce948931a8e"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "crate::command_buffer",
+        "crate::quad",
+        "crate::svg_filter",
+        "prepare_clip_range",
+        "prepare_clip_task",
+        "prepare_interned_prim_for_render"
+      ],
+      "regressor_files": [
+        "gfx/wr/webrender/res/ps_quad_mask.glsl",
+        "gfx/wr/webrender/src/prepare.rs",
+        "gfx/wr/webrender/src/quad.rs",
+        "gfx/wr/webrender/src/render_target.rs",
+        "gfx/wr/webrender/src/render_task.rs"
+      ],
+      "uuid": "f73fd7c0-9452-4ed9-912c-7cf420260620",
+      "n_frames": 21,
+      "n_seed_funcs": 21,
+      "stack_only_hit": true,
+      "stack_matched": {},
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 21,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-from BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-to BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-from RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-to RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RustMozCrash(char const*, int, char const*)",
+              "cmd": "searchfox-cli --calls-from RustMozCrash(char const*, int, char const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RustMozCrash(char const*, int, char const*)",
+              "cmd": "searchfox-cli --calls-to RustMozCrash(char const*, int, char const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >*)",
+              "cmd": "searchfox-cli --calls-from core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >*)",
+              "cmd": "searchfox-cli --calls-to core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "core::ops::function::FnOnce::call_once<void (*)(ref$<std::panic::PanicHookInfo>),tuple$<ref$<std::panic::PanicHookInfo> > >(void (**)(std::panic::PanicHookInfo*), std::panic::PanicHookInfo*)",
+              "cmd": "searchfox-cli --calls-from core::ops::function::FnOnce::call_once<void (*)(ref$<std::panic::PanicHookInfo>),tuple$<ref$<std::panic::PanicHookInfo> > >(void (**)(std::panic::PanicHookInfo*), std::panic::PanicHookInfo*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "core::ops::function::FnOnce::call_once<void (*)(ref$<std::panic::PanicHookInfo>),tuple$<ref$<std::panic::PanicHookInfo> > >(void (**)(std::panic::PanicHookInfo*), std::panic::PanicHookInfo*)",
+              "cmd": "searchfox-cli --calls-to core::ops::function::FnOnce::call_once<void (*)(ref$<std::panic::PanicHookInfo>),tuple$<ref$<std::panic::PanicHookInfo> > >(void (**)(std::panic::PanicHookInfo*), std::panic::PanicHookInfo*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozglue_static::panic_hook(std::panic::PanicHookInfo*)",
+              "cmd": "searchfox-cli --calls-from mozglue_static::panic_hook(std::panic::PanicHookInfo*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozglue_static::panic_hook(std::panic::PanicHookInfo*)",
+              "cmd": "searchfox-cli --calls-to mozglue_static::panic_hook(std::panic::PanicHookInfo*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "patched_BaseThreadInitThunk(int, void*, void*)",
+              "cmd": "searchfox-cli --calls-from patched_BaseThreadInitThunk(int, void*, void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "patched_BaseThreadInitThunk(int, void*, void*)",
+              "cmd": "searchfox-cli --calls-to patched_BaseThreadInitThunk(int, void*, void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::panicking::begin_panic::closure$0<ref$<str$> >()",
+              "cmd": "searchfox-cli --calls-from std::panicking::begin_panic::closure$0<ref$<str$> >() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::panicking::begin_panic::closure$0<ref$<str$> >()",
+              "cmd": "searchfox-cli --calls-to std::panicking::begin_panic::closure$0<ref$<str$> >() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::panicking::begin_panic<ref$<str$> >()",
+              "cmd": "searchfox-cli --calls-from std::panicking::begin_panic<ref$<str$> >() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::panicking::begin_panic<ref$<str$> >()",
+              "cmd": "searchfox-cli --calls-to std::panicking::begin_panic<ref$<str$> >() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::panicking::panic_with_hook()",
+              "cmd": "searchfox-cli --calls-from std::panicking::panic_with_hook() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::panicking::panic_with_hook()",
+              "cmd": "searchfox-cli --calls-to std::panicking::panic_with_hook() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::sys::backtrace::__rust_begin_short_backtrace<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >(webrender::renderer::init::create_webrender_instance::closure_env$6)",
+              "cmd": "searchfox-cli --calls-from std::sys::backtrace::__rust_begin_short_backtrace<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >(webrender::renderer::init::create_webrender_instance::closure_env$6) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::sys::backtrace::__rust_begin_short_backtrace<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >(webrender::renderer::init::create_webrender_instance::closure_env$6)",
+              "cmd": "searchfox-cli --calls-to std::sys::backtrace::__rust_begin_short_backtrace<webrender::renderer::init::create_webrender_instance::closure_env$6,tuple$<> >(webrender::renderer::init::create_webrender_instance::closure_env$6) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::sys::backtrace::__rust_end_short_backtrace<std::panicking::begin_panic::closure_env$0<ref$<str$> >,never$>()",
+              "cmd": "searchfox-cli --calls-from std::sys::backtrace::__rust_end_short_backtrace<std::panicking::begin_panic::closure_env$0<ref$<str$> >,never$>() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::sys::backtrace::__rust_end_short_backtrace<std::panicking::begin_panic::closure_env$0<ref$<str$> >,never$>()",
+              "cmd": "searchfox-cli --calls-to std::sys::backtrace::__rust_end_short_backtrace<std::panicking::begin_panic::closure_env$0<ref$<str$> >,never$>() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::sys::thread::windows::impl$0::new::thread_start()",
+              "cmd": "searchfox-cli --calls-from std::sys::thread::windows::impl$0::new::thread_start() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::sys::thread::windows::impl$0::new::thread_start()",
+              "cmd": "searchfox-cli --calls-to std::sys::thread::windows::impl$0::new::thread_start() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "webrender::frame_builder::FrameBuilder::build(webrender::scene::BuiltScene*, bool, webrender::resource_cache::ResourceCache*, webrender::render_task_graph::RenderTaskGraphBuilder*, webrender::internal_types::FrameStamp, euclid::point::Point2D<i32,webrender_api::units::DevicePixel>, webrender::scene::SceneProperties*, webrender::render_backend::DataStores*, webrender::render_backend::ScratchBuffer*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, webrender::spatial_tree::SpatialTree*, bool, webrender::profiler::TransactionProfile*, std::collections::hash::map::HashMap<webrender_api::display_item::ExternalScrollId,webrender_api::MinimapData,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>)",
+              "cmd": "searchfox-cli --calls-from webrender::frame_builder::FrameBuilder::build(webrender::scene::BuiltScene*, bool, webrender::resource_cache::ResourceCache*, webrender::render_task_graph::RenderTaskGraphBuilder*, webrender::internal_types::FrameStamp, euclid::point::Point2D<i32,webrender_api::units::DevicePixel>, webrender::scene::SceneProperties*, webrender::render_backend::DataStores*, webrender::render_backend::ScratchBuffer*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, webrender::spatial_tree::SpatialTree*, bool, webrender::profiler::TransactionProfile*, std::collections::hash::map::HashMap<webrender_api::display_item::ExternalScrollId,webrender_api::MinimapData,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "webrender::frame_builder::FrameBuilder::build(webrender::scene::BuiltScene*, bool, webrender::resource_cache::ResourceCache*, webrender::render_task_graph::RenderTaskGraphBuilder*, webrender::internal_types::FrameStamp, euclid::point::Point2D<i32,webrender_api::units::DevicePixel>, webrender::scene::SceneProperties*, webrender::render_backend::DataStores*, webrender::render_backend::ScratchBuffer*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, webrender::spatial_tree::SpatialTree*, bool, webrender::profiler::TransactionProfile*, std::collections::hash::map::HashMap<webrender_api::display_item::ExternalScrollId,webrender_api::MinimapData,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>)",
+              "cmd": "searchfox-cli --calls-to webrender::frame_builder::FrameBuilder::build(webrender::scene::BuiltScene*, bool, webrender::resource_cache::ResourceCache*, webrender::render_task_graph::RenderTaskGraphBuilder*, webrender::internal_types::FrameStamp, euclid::point::Point2D<i32,webrender_api::units::DevicePixel>, webrender::scene::SceneProperties*, webrender::render_backend::DataStores*, webrender::render_backend::ScratchBuffer*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, webrender::spatial_tree::SpatialTree*, bool, webrender::profiler::TransactionProfile*, std::collections::hash::map::HashMap<webrender_api::display_item::ExternalScrollId,webrender_api::MinimapData,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "webrender::render_backend::Document::build_frame(webrender::resource_cache::ResourceCache*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, enum2$<core::option::Option<webrender::renderer::FullFrameStats> >, bool, webrender_api::RenderReasons, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>)",
+              "cmd": "searchfox-cli --calls-from webrender::render_backend::Document::build_frame(webrender::resource_cache::ResourceCache*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, enum2$<core::option::Option<webrender::renderer::FullFrameStats> >, bool, webrender_api::RenderReasons, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "webrender::render_backend::Document::build_frame(webrender::resource_cache::ResourceCache*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, enum2$<core::option::Option<webrender::renderer::FullFrameStats> >, bool, webrender_api::RenderReasons, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>)",
+              "cmd": "searchfox-cli --calls-to webrender::render_backend::Document::build_frame(webrender::resource_cache::ResourceCache*, webrender_api::DebugFlags, std::collections::hash::map::HashMap<webrender::tile_cache::SliceId,alloc::boxed::Box<webrender::tile_cache::TileCacheInstance,alloc::alloc::Global>,core::hash::BuildHasherDefault<rustc_hash::FxHasher>,alloc::alloc::Global>*, enum2$<core::option::Option<webrender::renderer::FullFrameStats> >, bool, webrender_api::RenderReasons, alloc::sync::Arc<webrender::bump_allocator::ChunkPool,alloc::alloc::Global>) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": false,
+          "matched": {}
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2049044,
+      "regressor_bug": 2031575,
+      "regressor_nodes": [
+        "7a61e983a654"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "HTMLEditor::FocusedElementOrDocumentBecomesEditable",
+        "HTMLEditor::FocusedElementOrDocumentBecomesNotEditable",
+        "HTMLEditor::IsAcceptableInputEvent",
+        "HTMLEditor::NotifySelectionChanged",
+        "HTMLEditor::OnBlur",
+        "HTMLEditor::OnFocus"
+      ],
+      "regressor_files": [
+        "editor/libeditor/HTMLEditor.cpp",
+        "widget/tests/mochitest.toml",
+        "widget/tests/test_ime_state_contenteditable_false.html"
+      ],
+      "uuid": "412ecdde-fcd3-4d62-b50c-cc78c0260623",
+      "n_frames": 31,
+      "n_seed_funcs": 30,
+      "stack_only_hit": false,
+      "stack_matched": {},
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 30,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-from BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-to BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "MessageLoop::RunHandler()",
+              "cmd": "searchfox-cli --calls-from MessageLoop::RunHandler() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "MessageLoop::RunHandler()",
+              "cmd": "searchfox-cli --calls-to MessageLoop::RunHandler() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "NS_ProcessNextEvent(nsIThread*, bool)",
+              "cmd": "searchfox-cli --calls-from NS_ProcessNextEvent(nsIThread*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "NS_ProcessNextEvent(nsIThread*, bool)",
+              "cmd": "searchfox-cli --calls-to NS_ProcessNextEvent(nsIThread*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-from RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-to RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "__scrt_common_main_seh()",
+              "cmd": "searchfox-cli --calls-from __scrt_common_main_seh() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "__scrt_common_main_seh()",
+              "cmd": "searchfox-cli --calls-to __scrt_common_main_seh() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*)",
+              "cmd": "searchfox-cli --calls-from mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*)",
+              "cmd": "searchfox-cli --calls-to mozilla::BootstrapImpl::XRE_InitChildProcess(int, char**, XREChildData const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ContentCache::AssertIfInvalid() const",
+              "cmd": "searchfox-cli --calls-from mozilla::ContentCache::AssertIfInvalid() const --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ContentCache::AssertIfInvalid() const",
+              "cmd": "searchfox-cli --calls-to mozilla::ContentCache::AssertIfInvalid() const --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ContentCacheInChild::CacheCaret(nsIWidget*, mozilla::widget::IMENotification const*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ContentCacheInChild::CacheCaret(nsIWidget*, mozilla::widget::IMENotification const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ContentCacheInChild::CacheCaret(nsIWidget*, mozilla::widget::IMENotification const*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ContentCacheInChild::CacheCaret(nsIWidget*, mozilla::widget::IMENotification const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ContentCacheInChild::SetSelection(nsIWidget*, mozilla::widget::IMENotification::SelectionChangeDataBase const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::ContentCacheInChild::SetSelection(nsIWidget*, mozilla::widget::IMENotification::SelectionChangeDataBase const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ContentCacheInChild::SetSelection(nsIWidget*, mozilla::widget::IMENotification::SelectionChangeDataBase const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::ContentCacheInChild::SetSelection(nsIWidget*, mozilla::widget::IMENotification::SelectionChangeDataBase const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::IMEContentObserver::IMENotificationSender::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::IMEContentObserver::IMENotificationSender::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::IMEContentObserver::IMENotificationSender::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::IMEContentObserver::IMENotificationSender::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::IMEStateManager::NotifyIME(mozilla::widget::IMENotification const&, nsIWidget*, mozilla::dom::BrowserParent*)",
+              "cmd": "searchfox-cli --calls-from mozilla::IMEStateManager::NotifyIME(mozilla::widget::IMENotification const&, nsIWidget*, mozilla::dom::BrowserParent*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::IMEStateManager::NotifyIME(mozilla::widget::IMENotification const&, nsIWidget*, mozilla::dom::BrowserParent*)",
+              "cmd": "searchfox-cli --calls-to mozilla::IMEStateManager::NotifyIME(mozilla::widget::IMENotification const&, nsIWidget*, mozilla::dom::BrowserParent*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp)",
+              "cmd": "searchfox-cli --calls-from mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp)",
+              "cmd": "searchfox-cli --calls-to mozilla::RefreshDriverTimer::Tick(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&)",
+              "cmd": "searchfox-cli --calls-from mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&)",
+              "cmd": "searchfox-cli --calls-to mozilla::RefreshDriverTimer::TickRefreshDrivers(mozilla::layers::BaseTransactionId<mozilla::VsyncIdType>, mozilla::TimeStamp, nsTArray<RefPtr<nsRefreshDriver> >&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal(mozilla::detail::BaseAutoLock<mozilla::Mutex &> const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::VsyncRefreshDriverTimer::NotifyVsyncOnMainThread(mozilla::VsyncEvent const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::VsyncRefreshDriverTimer::NotifyVsyncOnMainThread(mozilla::VsyncEvent const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::VsyncRefreshDriverTimer::NotifyVsyncOnMainThread(mozilla::VsyncEvent const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::VsyncRefreshDriverTimer::NotifyVsyncOnMainThread(mozilla::VsyncEvent const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": false,
+          "matched": {}
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2048851,
+      "regressor_bug": 2045635,
+      "regressor_nodes": [
+        "b03ef05776a6",
+        "08c4c75efd4b",
+        "aa0af8853008"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "CheckAllowLoadByTriggeringRemoteType",
+        "nsDocShellLoadState::nsDocShellLoadState"
+      ],
+      "regressor_files": [
+        "docshell/base/nsDocShellLoadState.cpp",
+        "dom/security/nsContentSecurityManager.cpp"
+      ],
+      "uuid": "db5596a5-06d1-4677-a43a-ccf650260621",
+      "n_frames": 19,
+      "n_seed_funcs": 19,
+      "stack_only_hit": false,
+      "stack_matched": {},
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 315,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "IPC::ParamTraitsMozilla<mozilla::NotNull<RefPtr<nsDocShellLoadState> > >::Read(IPC::MessageReader*)",
+              "cmd": "searchfox-cli --calls-from IPC::ParamTraitsMozilla<mozilla::NotNull<RefPtr<nsDocShellLoadState> > >::Read(IPC::MessageReader*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "IPC::ParamTraitsMozilla<mozilla::NotNull<RefPtr<nsDocShellLoadState> > >::Read(IPC::MessageReader*)",
+              "cmd": "searchfox-cli --calls-to IPC::ParamTraitsMozilla<mozilla::NotNull<RefPtr<nsDocShellLoadState> > >::Read(IPC::MessageReader*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "NS_ProcessNextEvent(nsIThread*, bool)",
+              "cmd": "searchfox-cli --calls-from NS_ProcessNextEvent(nsIThread*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "NS_ProcessNextEvent(nsIThread*, bool)",
+              "cmd": "searchfox-cli --calls-to NS_ProcessNextEvent(nsIThread*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&)",
+              "cmd": "searchfox-cli --calls-from XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&)",
+              "cmd": "searchfox-cli --calls-to XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "XREMain::XRE_mainRun()",
+              "cmd": "searchfox-cli --calls-from XREMain::XRE_mainRun() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "XREMain::XRE_mainRun()",
+              "cmd": "searchfox-cli --calls-to XREMain::XRE_mainRun() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "XRE_main(int, char**, mozilla::BootstrapConfig const&)",
+              "cmd": "searchfox-cli --calls-from XRE_main(int, char**, mozilla::BootstrapConfig const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "XRE_main(int, char**, mozilla::BootstrapConfig const&)",
+              "cmd": "searchfox-cli --calls-to XRE_main(int, char**, mozilla::BootstrapConfig const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "__libc_start_call_main",
+              "cmd": "searchfox-cli --calls-from __libc_start_call_main --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "__libc_start_call_main",
+              "cmd": "searchfox-cli --calls-to __libc_start_call_main --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "__libc_start_main_alias_2",
+              "cmd": "searchfox-cli --calls-from __libc_start_main_alias_2 --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "__libc_start_main_alias_2",
+              "cmd": "searchfox-cli --calls-to __libc_start_main_alias_2 --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "_start",
+              "cmd": "searchfox-cli --calls-from _start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "_start",
+              "cmd": "searchfox-cli --calls-to _start --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "main",
+              "cmd": "searchfox-cli --calls-from main --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 292,
+              "added": 292
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "main",
+              "cmd": "searchfox-cli --calls-to main --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 4,
+              "added": 4
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::detail::RunnableFunction<mozilla::TaskController::TaskController()::$_0>::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::detail::RunnableFunction<mozilla::TaskController::TaskController()::$_0>::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::detail::RunnableFunction<mozilla::TaskController::TaskController()::$_0>::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::detail::RunnableFunction<mozilla::TaskController::TaskController()::$_0>::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::dom::PContentParent::OnMessageReceived(IPC::Message const&)",
+              "cmd": "searchfox-cli --calls-from mozilla::dom::PContentParent::OnMessageReceived(IPC::Message const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::dom::PContentParent::OnMessageReceived(IPC::Message const&)",
+              "cmd": "searchfox-cli --calls-to mozilla::dom::PContentParent::OnMessageReceived(IPC::Message const&) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::FatalError(char const*, bool)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::FatalError(char const*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::FatalError(char const*, bool)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::FatalError(char const*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::IProtocol::HandleFatalError(char const*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::IProtocol::HandleFatalError(char const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::IProtocol::HandleFatalError(char const*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::IProtocol::HandleFatalError(char const*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessageChannel::MessageTask::Run()",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessageChannel::MessageTask::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessageChannel::MessageTask::Run()",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessageChannel::MessageTask::Run() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-from mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*)",
+              "cmd": "searchfox-cli --calls-to mozilla::ipc::MessagePump::Run(base::MessagePump::Delegate*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": false,
+          "matched": {}
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2047016,
+      "regressor_bug": 2021722,
+      "regressor_nodes": [
+        "3f87a5c0200a",
+        "e13534a525fb",
+        "2c8a2018a02f"
+      ],
+      "skipped": "no regressor function targets (non-code diff, @@-parse failed, or a wrong/follow-up commit was picked for the regressor bug)",
+      "regressor_funcs": [],
+      "regressor_files": [
+        "dom/media/platforms/ffmpeg/ffmpeg60/include/libavutil/hwcontext_vulkan.h",
+        "dom/media/platforms/ffmpeg/ffmpeg61/include/libavutil/hwcontext_vulkan.h",
+        "dom/media/platforms/ffmpeg/ffmpeg62/include/libavutil/hwcontext_vulkan.h",
+        "dom/media/platforms/ffmpeg/ffmpeg62/include/libavutil/version.h",
+        "third_party/khronos/vulkan-headers/.reuse/dep5",
+        "third_party/khronos/vulkan-headers/LICENSE.md",
+        "third_party/khronos/vulkan-headers/LICENSES/Apache-2.0.txt",
+        "third_party/khronos/vulkan-headers/LICENSES/MIT.txt",
+        "third_party/khronos/vulkan-headers/README.md",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_av1std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_av1std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_av1std_encode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h264std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h264std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h264std_encode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h265std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h265std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h265std_encode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_vp9std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_vp9std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codecs_common.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vk_icd.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vk_layer.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vk_platform.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan.cppm",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_android.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_beta.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_core.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_directfb.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_enums.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_extension_inspection.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_format_traits.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_fuchsia.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_funcs.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_ggp.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_handles.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_hash.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_hpp_macros.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_ios.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_macos.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_metal.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_ohos.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_raii.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_screen.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_shared.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_static_assertions.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_structs.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_to_string.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_vi.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_video.cppm",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_video.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_wayland.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_win32.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_xcb.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_xlib.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_xlib_xrandr.h",
+        "third_party/moz.build"
+      ]
+    },
+    {
+      "clouseau_bug": 2046665,
+      "regressor_bug": 2045230,
+      "regressor_nodes": [
+        "78b87ae8be52",
+        "0c8c2d7a8ddb"
+      ],
+      "skipped": null,
+      "regressor_funcs": [
+        "ComputeBoxValueForOrigin",
+        "ComputeClipForMaskItem",
+        "GetInsideClipRect",
+        "crate::values::specified::length",
+        "nsCSSRendering::GetImageLayerClip",
+        "nsCSSRendering::PaintStyleImageLayerWithSC",
+        "nsDisplayBackgroundColor::CreateWebRenderCommands",
+        "nsDisplayBackgroundColor::GetOpaqueRegion",
+        "nsDisplayBackgroundColor::Paint",
+        "nsDisplayBackgroundColor::PaintWithClip",
+        "nsDisplayBackgroundImage::CanApplyOpacity",
+        "nsDisplayBackgroundImage::CreateWebRenderCommands",
+        "nsDisplayBackgroundImage::GetOpaqueRegion",
+        "nsDisplayBackgroundImage::HitTest",
+        "nsDisplayBackgroundImage::PaintInternal",
+        "nsLayoutUtils::GetFrameTransparency",
+        "nsStyleImageLayers::Layer::Layer",
+        "self::animation",
+        "static_assert"
+      ],
+      "regressor_files": [
+        "layout/base/nsLayoutUtils.cpp",
+        "layout/generic/nsIFrame.cpp",
+        "layout/painting/nsCSSRendering.cpp",
+        "layout/painting/nsDisplayList.cpp",
+        "layout/painting/nsDisplayList.h",
+        "layout/style/ServoBindings.toml",
+        "layout/style/nsStyleConsts.h",
+        "layout/style/nsStyleStruct.cpp",
+        "layout/style/nsStyleStruct.h",
+        "modules/libpref/init/StaticPrefList.yaml",
+        "servo/components/style/properties/gecko.mako.rs",
+        "servo/components/style/properties/longhands.toml",
+        "servo/components/style/values/computed/background.rs",
+        "servo/components/style/values/computed/mod.rs",
+        "servo/components/style/values/specified/background.rs",
+        "servo/components/style/values/specified/mod.rs",
+        "servo/ports/geckolib/cbindgen.toml",
+        "testing/web-platform/meta/css/css-backgrounds/__dir__.ini",
+        "testing/web-platform/meta/css/css-backgrounds/background-clip/clip-border-area-complex.html.ini",
+        "testing/web-platform/meta/css/css-backgrounds/background-clip/clip-border-area-double.html.ini",
+        "testing/web-platform/meta/css/css-backgrounds/parsing/background-clip-computed.html.ini",
+        "testing/web-platform/meta/css/css-backgrounds/parsing/background-clip-valid.html.ini",
+        "testing/web-platform/meta/css/css-backgrounds/parsing/background-computed.html.ini",
+        "testing/web-platform/meta/css/css-backgrounds/parsing/background-shorthand-serialization.html.ini",
+        "testing/web-platform/meta/css/css-backgrounds/parsing/background-valid.html.ini",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-complex-ref.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-complex.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-double-ref.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-double.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-inset-ref.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-inset.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-missing-border-ref.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-missing-border.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-rounded-ref.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-rounded.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-solid-ref.html",
+        "testing/web-platform/tests/css/css-backgrounds/background-clip/clip-border-area-solid.html"
+      ],
+      "uuid": "3738b7b0-234a-487e-82fd-52f2a0260611",
+      "n_frames": 19,
+      "n_seed_funcs": 19,
+      "stack_only_hit": true,
+      "stack_matched": {},
+      "modes": {
+        "mechanical": {
+          "mode": "mechanical",
+          "neighborhood_size": 19,
+          "queries": 30,
+          "stopped": "budget",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cached_input_tokens": 0,
+          "est_cost_usd": 0.0,
+          "steps": [
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-from BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "BaseThreadInitThunk",
+              "cmd": "searchfox-cli --calls-to BaseThreadInitThunk --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-from RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "RtlUserThreadStart",
+              "cmd": "searchfox-cli --calls-to RtlUserThreadStart --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "StaticPrefs_layout_css_background_clip_border_area_enabled()",
+              "cmd": "searchfox-cli --calls-from StaticPrefs_layout_css_background_clip_border_area_enabled() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "StaticPrefs_layout_css_background_clip_border_area_enabled()",
+              "cmd": "searchfox-cli --calls-to StaticPrefs_layout_css_background_clip_border_area_enabled() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >*)",
+              "cmd": "searchfox-cli --calls-from core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >*)",
+              "cmd": "searchfox-cli --calls-to core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >,tuple$<> >(std::thread::lifecycle::spawn_unchecked::closure_env$1<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "cssparser::rules_and_declarations::parse_qualified_rule<style::stylesheets::rule_parser::TopLevelRuleParser,enum2$<style_traits::StyleParseErrorKind> >(cssparser::parser::ParserState*, cssparser::parser::Parser*, style::stylesheets::rule_parser::TopLevelRuleParser*, bool)",
+              "cmd": "searchfox-cli --calls-from cssparser::rules_and_declarations::parse_qualified_rule<style::stylesheets::rule_parser::TopLevelRuleParser,enum2$<style_traits::StyleParseErrorKind> >(cssparser::parser::ParserState*, cssparser::parser::Parser*, style::stylesheets::rule_parser::TopLevelRuleParser*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "cssparser::rules_and_declarations::parse_qualified_rule<style::stylesheets::rule_parser::TopLevelRuleParser,enum2$<style_traits::StyleParseErrorKind> >(cssparser::parser::ParserState*, cssparser::parser::Parser*, style::stylesheets::rule_parser::TopLevelRuleParser*, bool)",
+              "cmd": "searchfox-cli --calls-to cssparser::rules_and_declarations::parse_qualified_rule<style::stylesheets::rule_parser::TopLevelRuleParser,enum2$<style_traits::StyleParseErrorKind> >(cssparser::parser::ParserState*, cssparser::parser::Parser*, style::stylesheets::rule_parser::TopLevelRuleParser*, bool) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "enum2$<style::properties::generated::PropertyDeclaration>::parse_into(style::properties::SourcePropertyDeclaration*, enum2$<style::properties::PropertyId>, style::parser::ParserContext*, cssparser::parser::Parser*)",
+              "cmd": "searchfox-cli --calls-from enum2$<style::properties::generated::PropertyDeclaration>::parse_into(style::properties::SourcePropertyDeclaration*, enum2$<style::properties::PropertyId>, style::parser::ParserContext*, cssparser::parser::Parser*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "enum2$<style::properties::generated::PropertyDeclaration>::parse_into(style::properties::SourcePropertyDeclaration*, enum2$<style::properties::PropertyId>, style::parser::ParserContext*, cssparser::parser::Parser*)",
+              "cmd": "searchfox-cli --calls-to enum2$<style::properties::generated::PropertyDeclaration>::parse_into(style::properties::SourcePropertyDeclaration*, enum2$<style::properties::PropertyId>, style::parser::ParserContext*, cssparser::parser::Parser*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "geckoservo::stylesheet_loader::AsyncStylesheetParser::parse(geckoservo::stylesheet_loader::AsyncStylesheetParser)",
+              "cmd": "searchfox-cli --calls-from geckoservo::stylesheet_loader::AsyncStylesheetParser::parse(geckoservo::stylesheet_loader::AsyncStylesheetParser) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "geckoservo::stylesheet_loader::AsyncStylesheetParser::parse(geckoservo::stylesheet_loader::AsyncStylesheetParser)",
+              "cmd": "searchfox-cli --calls-to geckoservo::stylesheet_loader::AsyncStylesheetParser::parse(geckoservo::stylesheet_loader::AsyncStylesheetParser) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "patched_BaseThreadInitThunk(int, void*, void*)",
+              "cmd": "searchfox-cli --calls-from patched_BaseThreadInitThunk(int, void*, void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "patched_BaseThreadInitThunk(int, void*, void*)",
+              "cmd": "searchfox-cli --calls-to patched_BaseThreadInitThunk(int, void*, void*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "rayon_core::job::impl$6::execute<rayon_core::spawn::spawn_job::closure_env$0<geckoservo::glue::Servo_StyleSheet_FromUTF8BytesAsync::closure_env$0> >(tuple$<>*)",
+              "cmd": "searchfox-cli --calls-from rayon_core::job::impl$6::execute<rayon_core::spawn::spawn_job::closure_env$0<geckoservo::glue::Servo_StyleSheet_FromUTF8BytesAsync::closure_env$0> >(tuple$<>*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "rayon_core::job::impl$6::execute<rayon_core::spawn::spawn_job::closure_env$0<geckoservo::glue::Servo_StyleSheet_FromUTF8BytesAsync::closure_env$0> >(tuple$<>*)",
+              "cmd": "searchfox-cli --calls-to rayon_core::job::impl$6::execute<rayon_core::spawn::spawn_job::closure_env$0<geckoservo::glue::Servo_StyleSheet_FromUTF8BytesAsync::closure_env$0> >(tuple$<>*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "rayon_core::registry::ThreadBuilder::run(rayon_core::registry::ThreadBuilder)",
+              "cmd": "searchfox-cli --calls-from rayon_core::registry::ThreadBuilder::run(rayon_core::registry::ThreadBuilder) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "rayon_core::registry::ThreadBuilder::run(rayon_core::registry::ThreadBuilder)",
+              "cmd": "searchfox-cli --calls-to rayon_core::registry::ThreadBuilder::run(rayon_core::registry::ThreadBuilder) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "rayon_core::registry::WorkerThread::wait_until_cold(rayon_core::latch::CoreLatch*)",
+              "cmd": "searchfox-cli --calls-from rayon_core::registry::WorkerThread::wait_until_cold(rayon_core::latch::CoreLatch*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "rayon_core::registry::WorkerThread::wait_until_cold(rayon_core::latch::CoreLatch*)",
+              "cmd": "searchfox-cli --calls-to rayon_core::registry::WorkerThread::wait_until_cold(rayon_core::latch::CoreLatch*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::sys::backtrace::__rust_begin_short_backtrace<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >(style::global_style_data::thread_spawn::closure_env$0)",
+              "cmd": "searchfox-cli --calls-from std::sys::backtrace::__rust_begin_short_backtrace<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >(style::global_style_data::thread_spawn::closure_env$0) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::sys::backtrace::__rust_begin_short_backtrace<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >(style::global_style_data::thread_spawn::closure_env$0)",
+              "cmd": "searchfox-cli --calls-to std::sys::backtrace::__rust_begin_short_backtrace<style::global_style_data::thread_spawn::closure_env$0,tuple$<> >(style::global_style_data::thread_spawn::closure_env$0) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "std::sys::thread::windows::impl$0::new::thread_start()",
+              "cmd": "searchfox-cli --calls-from std::sys::thread::windows::impl$0::new::thread_start() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "std::sys::thread::windows::impl$0::new::thread_start()",
+              "cmd": "searchfox-cli --calls-to std::sys::thread::windows::impl$0::new::thread_start() --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "style::properties::declaration_block::DeclarationParserState::parse_value(style::parser::ParserContext*, cssparser::cow_rc_str::CowRcStr, cssparser::parser::Parser*, cssparser::parser::ParserState*)",
+              "cmd": "searchfox-cli --calls-from style::properties::declaration_block::DeclarationParserState::parse_value(style::parser::ParserContext*, cssparser::cow_rc_str::CowRcStr, cssparser::parser::Parser*, cssparser::parser::ParserState*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "style::properties::declaration_block::DeclarationParserState::parse_value(style::parser::ParserContext*, cssparser::cow_rc_str::CowRcStr, cssparser::parser::Parser*, cssparser::parser::ParserState*)",
+              "cmd": "searchfox-cli --calls-to style::properties::declaration_block::DeclarationParserState::parse_value(style::parser::ParserContext*, cssparser::cow_rc_str::CowRcStr, cssparser::parser::Parser*, cssparser::parser::ParserState*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-from",
+              "symbol": "style::properties::generated::longhands::background_clip::parse_declared(style::parser::ParserContext*, cssparser::parser::Parser*)",
+              "cmd": "searchfox-cli --calls-from style::properties::generated::longhands::background_clip::parse_declared(style::parser::ParserContext*, cssparser::parser::Parser*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            },
+            {
+              "hop": 0,
+              "action": "calls-to",
+              "symbol": "style::properties::generated::longhands::background_clip::parse_declared(style::parser::ParserContext*, cssparser::parser::Parser*)",
+              "cmd": "searchfox-cli --calls-to style::properties::generated::longhands::background_clip::parse_declared(style::parser::ParserContext*, cssparser::parser::Parser*) --depth 2 -R mozilla-central",
+              "ok": true,
+              "returned": 0,
+              "added": 0
+            }
+          ],
+          "neighborhood_hit": false,
+          "matched": {}
+        }
+      }
+    },
+    {
+      "clouseau_bug": 2046425,
+      "regressor_bug": 2021722,
+      "regressor_nodes": [
+        "3f87a5c0200a",
+        "e13534a525fb",
+        "2c8a2018a02f"
+      ],
+      "skipped": "no regressor function targets (non-code diff, @@-parse failed, or a wrong/follow-up commit was picked for the regressor bug)",
+      "regressor_funcs": [],
+      "regressor_files": [
+        "dom/media/platforms/ffmpeg/ffmpeg60/include/libavutil/hwcontext_vulkan.h",
+        "dom/media/platforms/ffmpeg/ffmpeg61/include/libavutil/hwcontext_vulkan.h",
+        "dom/media/platforms/ffmpeg/ffmpeg62/include/libavutil/hwcontext_vulkan.h",
+        "dom/media/platforms/ffmpeg/ffmpeg62/include/libavutil/version.h",
+        "third_party/khronos/vulkan-headers/.reuse/dep5",
+        "third_party/khronos/vulkan-headers/LICENSE.md",
+        "third_party/khronos/vulkan-headers/LICENSES/Apache-2.0.txt",
+        "third_party/khronos/vulkan-headers/LICENSES/MIT.txt",
+        "third_party/khronos/vulkan-headers/README.md",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_av1std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_av1std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_av1std_encode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h264std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h264std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h264std_encode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h265std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h265std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_h265std_encode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_vp9std.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codec_vp9std_decode.h",
+        "third_party/khronos/vulkan-headers/include/vk_video/vulkan_video_codecs_common.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vk_icd.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vk_layer.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vk_platform.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan.cppm",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_android.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_beta.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_core.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_directfb.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_enums.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_extension_inspection.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_format_traits.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_fuchsia.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_funcs.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_ggp.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_handles.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_hash.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_hpp_macros.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_ios.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_macos.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_metal.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_ohos.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_raii.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_screen.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_shared.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_static_assertions.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_structs.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_to_string.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_vi.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_video.cppm",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_video.hpp",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_wayland.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_win32.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_xcb.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_xlib.h",
+        "third_party/khronos/vulkan-headers/include/vulkan/vulkan_xlib_xrandr.h",
+        "third_party/moz.build"
+      ]
+    }
+  ]
+}

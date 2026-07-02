@@ -1,0 +1,3 @@
+# Throwaway run logs and empty dry-run artifacts (regenerated each run).
+*.log
+corpus.dryrun.json

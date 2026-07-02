@@ -1,0 +1,104 @@
+[
+  {
+    "clouseau_bug": 2050826,
+    "bmo_product": "Core",
+    "regressor_bug": 2044578,
+    "regressor_nodes": [
+      "657c8d6c241f",
+      "3841c31b34f3",
+      "adfac6dea1cb"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "js::GCData<T>::get",
+    "channel": "nightly",
+    "uuid": "cdfb9da4-295d-428d-b6b4-5c93b0260627",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent native (C/C++/Rust) crash-regression; uuid frozen, regressor = this-bug native landing commit. CURATE: verify off_stack."
+  },
+  {
+    "clouseau_bug": 2049109,
+    "bmo_product": "Core",
+    "regressor_bug": 2047980,
+    "regressor_nodes": [
+      "62751d49c8cd",
+      "ceeaa726f4ea",
+      "dce948931a8e"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "webrender::spatial_tree::SpatialTree::get_relative_transform_with_face",
+    "channel": "nightly",
+    "uuid": "f73fd7c0-9452-4ed9-912c-7cf420260620",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent native (C/C++/Rust) crash-regression; uuid frozen, regressor = this-bug native landing commit. CURATE: verify off_stack."
+  },
+  {
+    "clouseau_bug": 2049044,
+    "bmo_product": "Core",
+    "regressor_bug": 2031575,
+    "regressor_nodes": [
+      "7a61e983a654"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "mozilla::ContentCache::AssertIfInvalid",
+    "channel": "nightly",
+    "uuid": "412ecdde-fcd3-4d62-b50c-cc78c0260623",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent native (C/C++/Rust) crash-regression; uuid frozen, regressor = this-bug native landing commit. CURATE: verify off_stack."
+  },
+  {
+    "clouseau_bug": 2048851,
+    "bmo_product": "Core",
+    "regressor_bug": 2045635,
+    "regressor_nodes": [
+      "b03ef05776a6",
+      "08c4c75efd4b",
+      "aa0af8853008"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | mozilla::ipc::IProtocol::FatalError | nsDocShellLoadState::nsDocShellLoadState",
+    "channel": "nightly",
+    "uuid": "db5596a5-06d1-4677-a43a-ccf650260621",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent native (C/C++/Rust) crash-regression; uuid frozen, regressor = this-bug native landing commit. CURATE: verify off_stack."
+  },
+  {
+    "clouseau_bug": 2046665,
+    "bmo_product": "Core",
+    "regressor_bug": 2045230,
+    "regressor_nodes": [
+      "78b87ae8be52",
+      "0c8c2d7a8ddb"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "mozilla::StaticPrefs::layout_css_background_clip_border_area_enabled",
+    "channel": "nightly",
+    "uuid": "3738b7b0-234a-487e-82fd-52f2a0260611",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent native (C/C++/Rust) crash-regression; uuid frozen, regressor = this-bug native landing commit. CURATE: verify off_stack."
+  }
+]

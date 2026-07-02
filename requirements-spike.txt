@@ -1,0 +1,19 @@
+# Phase-0 call-graph spike ONLY -- do NOT merge into the production requirements.txt.
+# Install into a throwaway venv:
+#     python -m venv .venv-spike && . .venv-spike/bin/activate
+#     pip install -r requirements-spike.txt
+#
+# Also required, but not pip-installable:
+#   * searchfox-cli   ->  cargo install searchfox-cli      (needs a Rust toolchain)
+#   * Anthropic API key (for spike/explore.py): add it to ~/.mozdata.ini (your
+#     home dir -- NOT the repo's tracked ./mozdata.ini) as
+#         [Anthropic]
+#         api_key = sk-ant-...
+#     (read via libmozdata.config, like the repo's Bugzilla token); the
+#     ANTHROPIC_API_KEY env var also works as a fallback.
+#
+# libmozdata is the repo's own dep; it is pinned here too so the throwaway venv is
+# self-sufficient (it is not importable in a bare checkout).
+anthropic
+pydantic>=2.7
+libmozdata>=0.2.12

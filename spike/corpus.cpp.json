@@ -1,0 +1,60 @@
+[
+  {
+    "clouseau_bug": 1998303,
+    "regressor_bug": 1994879,
+    "regressor_nodes": [
+      "b910e6d59b04",
+      "1b9371173628"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "mozilla::ipc::MessageChannel::WaitForSyncNotify | mozilla::ipc::MessageChannel::Send | mozilla::ipc::IProtocol::ChannelSend | mozilla::layers::PCompositorBridgeChild::SendWillClose",
+    "channel": "nightly",
+    "uuid": "adca433a-86c8-4429-a47a-6350f0260111",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent C/C++ crash-regression; uuid frozen, regressor = this-bug C/C++ landing commit. CURATE: verify off_stack."
+  },
+  {
+    "clouseau_bug": 1998057,
+    "regressor_bug": 1994879,
+    "regressor_nodes": [
+      "b910e6d59b04",
+      "1b9371173628"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "libc.so.6 | libc.so.6 | libc.so.6 | mozilla::ipc::MessageChannel::WaitForSyncNotify | mozilla::ipc::MessageChannel::Send | mozilla::ipc::IProtocol::ChannelSend | mozilla::layers::PCompositorBridgeChild::SendWillClose",
+    "channel": "nightly",
+    "uuid": "ecb2f24f-b20e-4a8e-b3b4-8e3400260102",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent C/C++ crash-regression; uuid frozen, regressor = this-bug C/C++ landing commit. CURATE: verify off_stack."
+  },
+  {
+    "clouseau_bug": 1991378,
+    "regressor_bug": 1930954,
+    "regressor_nodes": [
+      "5db40ed7fb52",
+      "78c0656ffad5",
+      "1a48ef555569"
+    ],
+    "vcs": "git",
+    "cpp": true,
+    "signature": "google::protobuf::EncodedDescriptorDatabase::Add",
+    "channel": "nightly",
+    "uuid": "9488118a-28b2-41c7-ba73-5fdf50251229",
+    "build_window": {
+      "start": "",
+      "end": ""
+    },
+    "off_stack": null,
+    "notes": "AUTO-MINED recent C/C++ crash-regression; uuid frozen, regressor = this-bug C/C++ landing commit. CURATE: verify off_stack."
+  }
+]
