@@ -90,3 +90,11 @@ def get_threshold(typ, product, channel):
         .get(product, {})
         .get(channel, 1)
     )
+
+
+def get_agent():
+    return _get_global().get("agent", {})
+
+
+def get_searchfox():
+    return get_agent().get("searchfox", {})

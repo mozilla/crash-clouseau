@@ -37,5 +37,18 @@
                 "release": 20
             }
         }
+    },
+    "agent":
+    {
+        "searchfox":
+        {
+            "bin": "searchfox-cli",
+            "default_repo": "mozilla-central",
+            "max_depth": 4,
+            "timeout_secs": 60,
+            "retries": 2,
+            "retry_backoff_secs": 1.5,
+            "cache_enabled": true
+        }
     }
 }
