@@ -27,6 +27,12 @@ def crashstack():
             uuid_info["product"],
         )
         evidence = bugzilla_apply.build_evidence(uuid)
+        # Demangle call-path symbols for display (mangled kept as the hover title).
+        if evidence:
+            cp = (evidence.get("dossier") or {}).get("call_path") or {}
+            for e in cp.get("edges") or []:
+                e["caller_pretty"] = utils.demangle(e.get("caller_symbol", ""))
+                e["callee_pretty"] = utils.demangle(e.get("callee_symbol", ""))
         # Show the panel for strong-evidence verdicts; for ABSTAIN only when the
         # UI is configured to surface them.
         vt = evidence["verdict"] if evidence else None

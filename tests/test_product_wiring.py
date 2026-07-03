@@ -295,6 +295,15 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertNotIn('href="javascript:', html)
         self.assertNotIn("href=\"javascript:alert", html)
 
+    def test_call_path_symbols_demangled(self):
+        ev = _evidence()
+        ev["dossier"]["call_path"]["edges"][0]["caller_symbol"] = "_ZN3Foo3BarEv"
+        ev["dossier"]["call_path"]["edges"][0]["callee_symbol"] = "_Z1fv"
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("Foo::Bar()", html)               # demangled shown
+        self.assertIn("f()", html)
+        self.assertIn('title="_ZN3Foo3BarEv"', html)     # mangled kept as hover title
+
     def test_abstain_hidden_by_default(self):
         rv = self._get(_evidence(verdict="abstain", confidence=20))
         self.assertEqual(rv.status_code, 200)
@@ -688,6 +697,21 @@ class TestDraftEvidence(unittest.TestCase):
                 evidence_summary=None, culprit_author=None, culprit_ni=None,
             )
         self.assertNotIn("evidence-draft", out)
+
+
+class TestDemangle(unittest.TestCase):
+    def test_valid_symbol_demangled(self):
+        from crashclouseau import utils
+        self.assertEqual(utils.demangle("_ZN3Foo3BarEv"), "Foo::Bar()")
+        self.assertEqual(utils.demangle("_Z1fv"), "f()")
+
+    def test_non_symbol_falls_back_unchanged(self):
+        from crashclouseau import utils
+        self.assertEqual(utils.demangle(""), "")
+        self.assertEqual(utils.demangle("A::run"), "A::run")   # already readable
+        # off-by-one corrupted mangled id -> cpp_demangle raises -> unchanged
+        bad = "_ZN2js8GCMarker27markCurrentColorInParallelEv"
+        self.assertEqual(utils.demangle(bad), bad)
 
 
 if __name__ == "__main__":

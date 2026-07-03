@@ -120,7 +120,7 @@
         <ol class="call-path">
           {% for e in cp['edges'] -%}
           <li>
-            <code>{{ e['caller_symbol']|e }}</code> &rarr; <code>{{ e['callee_symbol']|e }}</code>
+            <code title="{{ e['caller_symbol']|e }}">{{ (e.get('caller_pretty') or e['caller_symbol'])|e }}</code> &rarr; <code title="{{ e['callee_symbol']|e }}">{{ (e.get('callee_pretty') or e['callee_symbol'])|e }}</code>
             <span class="via">({{ e['via'] }})</span>
             {% for c in e.get('citations') or [] %} {{ cite(c, node, channel, uuid_info['uuid']) }}{% endfor %}
           </li>

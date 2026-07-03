@@ -9,7 +9,27 @@ import hashlib
 from libmozdata import socorro
 import pytz
 import six
+import cpp_demangle
 from . import config
+
+
+_DEMANGLE_CACHE = {}
+
+
+def demangle(name):
+    """Best-effort C++ symbol demangle (cpp-demangle, in-process, cached).
+
+    Returns the demangled name, or the input unchanged when it is not a well-formed
+    mangled symbol (an already-demangled name, a plain identifier, or an off-by-one
+    corrupted symbol id — cpp_demangle raises ValueError, we fall back)."""
+    if not name:
+        return name
+    if name not in _DEMANGLE_CACHE:
+        try:
+            _DEMANGLE_CACHE[name] = cpp_demangle.demangle(name)
+        except Exception:
+            _DEMANGLE_CACHE[name] = name
+    return _DEMANGLE_CACHE[name]
 
 
 def get_search_channel(channel):
