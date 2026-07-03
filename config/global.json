@@ -86,5 +86,14 @@
             },
             "max_cost_usd_per_crash": 2.0
         }
+    },
+    "eval":
+    {
+        "corpus_dir": "corpus",
+        "max_concurrency": 3,
+        "per_case_timeout_s": 900,
+        "max_cost_usd_per_case": 3.0,
+        "sweep": {},
+        "confidence_thresholds": {}
     }
 }

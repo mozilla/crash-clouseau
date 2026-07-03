@@ -146,3 +146,7 @@ def get_agent_version():
 
 def get_patch_extraction_cfg():
     return get_agent().get("patch_extraction", {})
+
+
+def get_eval():
+    return _get_global().get("eval", {})
