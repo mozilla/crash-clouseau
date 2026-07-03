@@ -1,23 +1,65 @@
 # 11 — Orchestration worker & seed seam
 
+> **SUBSTRATE DECISION (2026-07-02): adopt `mozilla/bugbug` "hackbot" (see #02).** This unit was
+> originally specced to *drive the agent team in order* via a bespoke `llm_call(role, ...)`
+> sequence with a `UsageAccumulator` built here. That is **superseded.** The RQ job no longer
+> sequences roles: it builds the crash **seed**, an `ActionsRecorder`, and calls
+> `asyncio.run(run_crash_triage(...))` (from #02). The **Claude Agent SDK** drives the roles
+> internally — the principal spawns the senior subagents (`crash-interpreter` →
+> `call-graph-explorer` → `patch-scout` → `data-flow-tracer` → `skeptic`) via the built-in
+> **`Task`** tool and folds their results back automatically. This unit owns only the *outside* of
+> that call: enqueue gating, seed building, one `asyncio.run` invocation, persistence, cost-cap
+> enforcement from `ResultMessage.total_cost_usd`, idempotency, timeout, and failure isolation.
+
 ## Objective
-Build the single RQ job that assembles seeds for one crash UUID and drives the full agent team (Crash Interpreter -> Call-graph Explorer -> Patch Scout -> Data-flow Tracer -> Skeptic -> Principal), persisting the resulting dossier and verdict. The seam is enqueued from `update.py:put_report()` only when a report was actually scored (`useless=False`), on a dedicated queue, with hard timeouts and failure isolation so any LLM/searchfox flakiness can never block or roll back ingestion.
+Build the single RQ job that assembles the seed for one crash UUID and runs the hackbot crash-triage
+agent for it, persisting the resulting dossier and verdict. The job builds `build_seed(uuid)` from
+`CrashStack`/`Score`/`Changeset`/`Node`, constructs an `ActionsRecorder`, and calls
+`asyncio.run(run_crash_triage(crash=seed, recorder=..., llm_cfg=..., tools_cfg=...))` (#02) — the
+Claude Agent SDK runs the multi-turn tool-use + subagent loop internally. The job then persists
+`result.model_dump()` (a `CrashTriageResult`) plus `recorder.actions` into the #04 additive tables,
+enforces the per-crash cost cap using `result.total_cost_usd`, and sets the dossier lifecycle status.
+The seam is enqueued from `update.py:put_report()` only when a report was actually scored
+(`useless=False`), on a dedicated queue, with a hard job timeout and failure isolation so any
+LLM/SDK/searchfox flakiness can never block or roll back ingestion.
 
 ## Scope
 **In scope**
-- New module `crashclouseau/agent/orchestrator.py`: the `run_evidence_agent(uuid)` RQ entrypoint that reads seeds, calls each role in order, and persists `Dossier`/`Verdict`.
-- The seed-reader (`build_seed(uuid)`): turns `CrashStack.get_by_uuid` + `Score` + `Changeset`/`Node` rows into the typed seed object the Crash Interpreter and Patch Scout consume.
-- The enqueue hook in `update.py:put_report()` (gated on `useless=False`) and a new dedicated queue `"agent"` in `worker.py`.
-- Failure isolation (try/except around the whole run; mark agent state on the UUID; never re-raise into the ingestion path), per-job timeout, and idempotency (skip if a dossier already exists for the UUID).
-- Persistence DAO calls for the new additive tables (writes only — schema/migration owned elsewhere, see below).
+- New module `crashclouseau/agent/orchestrator.py`: the `run_evidence_agent(uuid)` RQ entrypoint that
+  builds the seed, builds an `ActionsRecorder`, runs the triage agent via
+  `asyncio.run(run_crash_triage(...))`, and persists `Dossier`/`Verdict` + recorded actions.
+- The seed-reader (`build_seed(uuid)`): turns `CrashStack.get_by_uuid` + `Score` + `Changeset`/`Node`
+  rows into the typed `crash` seed object `run_crash_triage` consumes (passed as the `crash=` kwarg).
+- The enqueue hook in `update.py:put_report()` (gated on `useless=False`) and a new dedicated queue
+  `"agent"` in `worker.py`.
+- Failure isolation (try/except around the whole run; mark dossier status on the UUID; never re-raise
+  into the ingestion path), per-job timeout, and idempotency (skip if a dossier already exists for the
+  UUID).
+- Per-crash cost-cap enforcement using `CrashTriageResult.total_cost_usd` (surfaced from the SDK
+  `ResultMessage`) against `agent.llm.max_cost_usd_per_crash`.
+- Persistence DAO calls for the new additive tables (writes only — schema/migration owned by #04).
 
 **Out of scope (owned by other sub-plans)**
-- The `llm_call(role, ...)` abstraction, Pydantic dossier/verdict schemas, prompt caching, Claude SDK wiring — owned by the LLM-abstraction sub-plan.
-- Each role's prompt + logic (Crash Interpreter, Call-graph Explorer, Patch Scout, Data-flow Tracer, Skeptic, Principal) — owned by their respective sub-plans; this unit only sequences them via a stable interface.
-- The `searchfox-cli` Python adapter — owned by the searchfox-adapter sub-plan.
-- The new SQLAlchemy table definitions + migration for `Dossier`/`Verdict` — owned by the persistence/schema sub-plan; this unit calls its DAO methods. (Note: the codebase has no Alembic migrations; new tables are created via `db.Model` subclass + `models.create()`/`db.create_all()`, gated on the `lastdate` table existing — see `models.create()`.)
-- Web UI evidence panel and `report_bug.py` needinfo draft — owned by the UI/bug-filing sub-plan.
-- The Batch-API offline eval re-run harness.
+- `run_crash_triage(...)` itself — the `ClaudeAgentOptions` assembly, `ClaudeSDKClient` drive loop,
+  per-role `AgentDefinition` tiering, the in-process MCP tool servers, and the best-effort
+  trailing-` ```json ` → `CrashTriageResult` parse — owned by **#02**. This unit only *calls* it.
+- The dossier/verdict Pydantic models + every-claim-has-a-citation validation — owned by **#03**
+  (validated inside the roles/handoff, not re-checked here).
+- Each role's prompt + evidence logic (`crash-interpreter`, `call-graph-explorer`, `patch-scout`,
+  `data-flow-tracer`, `skeptic`, principal) — owned by **#05–#10**; they are SDK-native subagents
+  (`AgentDefinition`s registered in #02), NOT callables this unit sequences.
+- The `searchfox-cli` Python adapter (#01) — `@tool`-wrapped and exposed to the SDK inside #02, never
+  invoked by this unit.
+- The new SQLAlchemy `Dossier`/`Verdict` tables + DAO methods (`Dossier.upsert`/`set_status`/
+  `add_usage`/`get_by_uuid`, `Verdict.set`) — owned by **#04**; this unit calls them. (Note: the
+  codebase has no Alembic migrations; new tables are created via `db.Model` subclass +
+  `models.create()`/`db.create_all()`, gated on the `lastdate` table existing — see `models.create()`.)
+- The `actions` MCP server wiring (`actions_server_for(recorder, types=[...])`) that lets the agent
+  *record* a needinfo/comment — owned by **#02**/**#12**; this unit only constructs the `recorder`,
+  passes it in, and persists `recorder.actions` afterward.
+- Web UI evidence panel and `report_bug.py` needinfo draft + the human-confirm apply/replay — owned by
+  **#12** (reads the persisted dossier/verdict + recorded actions).
+- The offline eval re-run harness — **#13**.
 
 ## Externalities
 
@@ -28,93 +70,250 @@ Build the single RQ job that assembles seeds for one crash UUID and drives the f
 | `flask_sqlalchemy` / `sqlalchemy` | python-lib | `sqlalchemy>=2.0.51`, `flask_sqlalchemy>=3.1.1` (in requirements.txt) | existing | `db.session`, models, `models.commit()` |
 | `libmozdata` | python-lib | `>=0.2.12` (in requirements.txt) | existing | Indirectly via `inspector.get_crash_data` (Socorro `ProcessedCrash`) and `hgmozilla.Mercurial.get_repo_url` used inside `CrashStack.get_by_uuid` (imported in models.py as `Mercurial`) |
 | `python-dateutil` | python-lib | `>=2.9.0` (in requirements.txt) | existing | `relativedelta` already used in `update.py` |
-| `anthropic` | python-lib | NEW (add to requirements.txt; no version pin exists yet) | NEW | Pulled in transitively via the `llm_call` abstraction; orchestrator does not import it directly |
-| `pydantic` | python-lib | NEW (add to requirements.txt; ships as a dep of `anthropic` but pin it explicitly) | NEW | Dossier/Verdict/seed types the orchestrator passes between roles; orchestrator imports the model classes only |
-| `crashclouseau.worker` | internal-module | `get_queue(name)`, module-level `listen=[...]`, `conn`, `black_hole` | existing (modify) | Add `"agent"` to `listen`; reuse `get_queue("agent")` and the `black_hole` exception handler. NOTE: `get_queue` memoizes the queue dict in `__QUEUE` keyed off `listen`, so `"agent"` must be present in `listen` *before the first* `get_queue()` call (it is, since `listen` is module-level). The `__main__` `Worker(...)` and `get_queue` use *different* timeout settings (`get_queue` builds queues with `default_timeout=6000`; `__main__` Worker queues use no explicit default) — per-job `job_timeout` overrides both. |
+| `asyncio` | python-lib | stdlib (Python 3.14) | existing | The RQ job body is a sync function that calls `asyncio.run(run_crash_triage(...))` (fresh event loop per forked job). |
+| `crashclouseau.agent.triage` | internal-module | `run_crash_triage(*, crash, tools_cfg, llm_cfg, recorder=None, extra=None) -> CrashTriageResult` | NEW (#02) | The one crash-triage agent coroutine; **imported lazily inside `run_evidence_agent`** so the enqueue path and the web dyno never pull `claude-agent-sdk`/spawn the bundled CLI at import time. |
+| `crashclouseau.agent.result` | internal-module | `CrashTriageResult(HackbotAgentResult)` — `.model_dump()`, `.total_cost_usd`, `.num_turns` (+ usage if surfaced) | NEW (#02) | Typed hand-off persisted here; `total_cost_usd` drives the cost cap. |
+| `hackbot_runtime` | vendored-lib | `ActionsRecorder` (from #02's vendored copy under `crashclouseau/vendor/`) | NEW (#02) | This unit constructs `ActionsRecorder()`, passes it to `run_crash_triage`, and persists `recorder.actions` (`[{type, params, reasoning[, attachments]}]`). **Do NOT use `hackbot_runtime.run`/`run_async` as the job body** — they `raise SystemExit` + call `asyncio.run` internally and are unusable as an RQ entry. |
+| `claude-agent-sdk` | python-lib | `claude-agent-sdk>=0.2` (bundles the Claude Code CLI; #02) | NEW (#02) | Pulled in transitively through `run_crash_triage`; **this unit never imports it directly.** The SDK spawns the bundled CLI subprocess inside `run_crash_triage` — the `"agent"` dyno must permit subprocess spawn (see Risks). |
+| `pydantic` | python-lib | `pydantic>=2` (added by #01/#03) | existing (by then) | `CrashTriageResult` type this unit receives + `.model_dump()`s; orchestrator imports the model class only. |
+| `crashclouseau.worker` | internal-module | `get_queue(name)`, module-level `listen=[...]`, `conn`, `black_hole` | existing (modify) | Add `"agent"` to `listen`; reuse `get_queue("agent")` and the `black_hole` exception handler. NOTE: `get_queue` memoizes the queue dict in `__QUEUE` keyed off `listen`, so `"agent"` must be present in `listen` *before the first* `get_queue()` call (it is, since `listen` is module-level). `get_queue` builds queues with `default_timeout=6000`; the `__main__` `Worker(...)` queues use no explicit default — per-job `job_timeout` overrides both. |
 | `crashclouseau.update` | internal-module | `put_report()` (L54-98); enqueue after `models.UUID.set_analyzed(uuid, useless)` at L98 | existing (modify) | Hook point: enqueue `run_evidence_agent` when `useless=False`. `put_report` already imports `worker` at module top (L12), so reuse it; lazy-import the `agent` package to avoid a cycle. |
-| `crashclouseau.models` | internal-module | `CrashStack.get_by_uuid(uuid)` (L1263), `UUID.get_info(uuid)` (L790), `UUID.set_analyzed` (L883), `Score` class, `Changeset`, `Node`, `commit()` (L1327) | existing | Seed reads |
-| `crashclouseau.models` (new methods) | internal-module | `Dossier.put(...)`, `Verdict.put(...)`, `Dossier.exists(uuidid)`, `UUID.set_agent_state(uuid, state)` | NEW (defined by persistence sub-plan; called here) | Persist dossier+verdict; idempotency; agent run-state |
-| `crashclouseau.inspector` | internal-module | `get_crash_data(uuid)` (L58) -> `socorro.ProcessedCrash.get_processed(uuid)[uuid]` | existing | Crash Interpreter input. Currently-discarded processed-crash fields available to pass through: `reason`, `crash_info.address`, `moz_crash_reason`, per-frame `inlines`/`trust`, `phc_alloc_stack`/`phc_free_stack`/`phc_kind`, `async_shutdown_timeout`, non-crashing `threads` — orchestrator passes raw data through verbatim |
-| `crashclouseau.config` | internal-module | `_get_global()`; new `get_agent_*()` accessors | existing (modify) | New `"agent"` block in `config/global.json` |
+| `crashclouseau.models` | internal-module | `CrashStack.get_by_uuid(uuid)` (L1263), `UUID.get_info(uuid)` (L790), `UUID.set_analyzed` (L883), `UUID.max_score`, `Score`, `Changeset`, `Node`, `commit()` (L1327) | existing | Seed reads |
+| `crashclouseau.models` (#04 DAO) | internal-module | `Dossier.upsert(uuid, payload, status, worker_models, seed_score, tokens, cost)`, `Dossier.set_status(uuid, status)`, `Dossier.add_usage(...)`, `Dossier.get_by_uuid(uuid)`, `Verdict.set(uuid, verdict, confidence, principal_model, rationale, evidence, effort, dossierid=None)`; enums `AGENT_STATUS_TYPE` (`pending`/`running`/`done`/`error`), `VERDICT_TYPE` (`culprit`/`unrelated`/`abstain`/`error`) | NEW (#04; called here) | Persist dossier+verdict; idempotency via `get_by_uuid`; lifecycle via `Dossier.status` (there is **no** `UUID.set_agent_state` — the run-state lives on the `dossiers.status` column). |
+| `crashclouseau.inspector` | internal-module | `get_crash_data(uuid)` (L58) -> `socorro.ProcessedCrash.get_processed(uuid)[uuid]` | existing | Raw processed crash folded into the seed. Currently-discarded fields available to pass through: `reason`, `crash_info.address`, `moz_crash_reason`, per-frame `inlines`/`trust`, `phc_alloc_stack`/`phc_free_stack`/`phc_kind`, `async_shutdown_timeout`, non-crashing `threads` — orchestrator passes raw data through verbatim to the seed. |
+| `crashclouseau.config` | internal-module | existing `get_agent()`/`get_searchfox()` (#01) + `get_llm()`/`get_llm_role()` (#02); new `get_agent_*()` orchestration accessors | existing (modify) | Read the orchestration keys of the `"agent"` block; read `agent.llm` (incl. `max_cost_usd_per_crash`) via #02's `get_llm()`. |
 | `crashclouseau.logger` | internal-module | `logger` | existing | Structured logging per run |
-| `crashclouseau.agent.roles.*` | internal-module | `crash_interpreter(...)`, `callgraph_explorer(...)`, `patch_scout(...)`, `dataflow_tracer(...)`, `skeptic(...)`, `principal(...)` | NEW (other sub-plans) | The six role callables sequenced here |
-| `searchfox-cli` | CLI | `searchfox-cli --calls-from <SYM>`, `--calls-to <SYM>`, `--calls-between <SOURCE,TARGET>`, `--define <SYM>`, `--symbol`, `--depth N` (default 1); repo selector `-R/--repo` with `mozilla-central` (default) / `mozilla-beta` / `mozilla-release` / `mozilla-esr*` / `comm-central` | NEW (external) | Invoked only inside role modules via the adapter, NOT by the orchestrator. (Operations are FLAGS, not subcommands. Repo values are `mozilla-beta`/`mozilla-release`, NOT `beta`/`release`; there is no `autoland` tree in searchfox.) |
-| Claude Haiku 4.5 | llm-model | `claude-haiku-4-5` ($1/$5 per 1M, 200K ctx) | NEW | Senior roles (interpreter, patch scout, skeptic) — invoked inside role modules. Haiku 4.5 does NOT support the `effort` param (400) and has no extended thinking — these senior calls must be plain. Min cacheable prefix 4096 tokens. |
-| Claude Sonnet 5 | llm-model | `claude-sonnet-5` ($3/$15 per 1M, 1M ctx) | NEW | Call-graph explorer (Phase-0 navigator default, effort=high) + data-flow tracer (mid tier option) — inside role modules. Supports adaptive thinking + `effort` (incl. `max`). Min cacheable prefix 2048 tokens. |
-| Claude Opus 4.8 | llm-model | `claude-opus-4-8` ($5/$25 per 1M, 1M ctx) | NEW | Principal default; data-flow tracer high-effort option — inside role module. Adaptive thinking only (`budget_tokens`/sampling params 400); `effort` low..max/xhigh. Min cacheable prefix 4096 tokens. |
-| Claude Fable 5 | llm-model | `claude-fable-5` ($10/$50 per 1M, 1M ctx) | NEW | Optional principal for hardest cases — inside role module. Thinking always on (omit `thinking` / adaptive only; explicit `disabled` 400); safety classifiers may return `stop_reason:"refusal"`; requires 30-day data retention (not ZDR). Min cacheable prefix 2048 tokens. |
-| Socorro ProcessedCrash | REST-API | via `libmozdata.socorro.ProcessedCrash.get_processed(uuid)` (inside `inspector.get_crash_data`) | existing | Crash brief source |
+| `searchfox-cli` | CLI | `--calls-from` / `--calls-to` / `--calls-between` / `--define` / `--symbol` / `--depth`; repo `-R mozilla-central`(default)`\|mozilla-beta\|mozilla-release\|mozilla-esr*\|comm-central` | NEW (external) | Invoked only inside #02's `@tool`-wrapped searchfox client (an in-process MCP server the SDK calls), **not** by this unit. (Flags, not subcommands; `mozilla-beta`/`mozilla-release`, no `autoland`.) |
+| Claude Haiku 4.5 | llm-model | `claude-haiku-4-5` ($1/$5 per 1M, 200K ctx) | NEW | Senior tier (crash-interpreter, patch-scout, skeptic) — set per-role in #02 via `AgentDefinition(model="haiku")`; recorded in `Dossier.worker_models`. Not called here. |
+| Claude Sonnet 5 | llm-model | `claude-sonnet-5` ($3/$15 per 1M, 1M ctx) | NEW | Navigator (`call-graph-explorer`, Phase-0 default, effort=high) + data-flow-tracer — #02. Not called here. |
+| Claude Opus 4.8 | llm-model | `claude-opus-4-8` ($5/$25 per 1M, 1M ctx) | NEW | Principal default; recorded in `Verdict.principal_model`. Not called here. |
+| Claude Fable 5 | llm-model | `claude-fable-5` ($10/$50 per 1M, 1M ctx) | NEW | Optional hardest-case principal — #02. Not called here. |
+| Socorro ProcessedCrash | REST-API | via `libmozdata.socorro.ProcessedCrash.get_processed(uuid)` (inside `inspector.get_crash_data`) | existing | Raw crash folded into the seed |
 | lando git2hg | REST-API | `https://lando.moz.tools/api/git2hg/firefox/{hash}` (inside `inspector.get_path_node`) | existing | Already used during ingest; not re-called by this unit |
-| `config/global.json` `"agent"` block | config | keys: `enabled`, `queue` (`"agent"`), `job_timeout` (s), `per_role_timeout` (s), `skip_if_existing`, `max_seed_frames`, `agent_version` | NEW | Drives the seam (queue choice, timeouts, kill-switch, idempotency key) |
+| `config/global.json` `"agent"` block | config | orchestration keys: `enabled`, `queue` (`"agent"`), `job_timeout` (s), `skip_if_existing`, `max_seed_frames`, `agent_version`; the `agent.llm` sub-block (models/effort/max_turns/pricing/`max_cost_usd_per_crash`) is owned by #02 | existing (extend) | Drives the seam (queue choice, whole-run timeout, kill-switch, idempotency key, cost cap). The `"agent"` block already exists (created by #01/#02); this unit **adds** the orchestration keys. |
 
 ## Deliverables
 
-- **`crashclouseau/agent/__init__.py`** — NEW package marker; re-exports `enqueue_agent` and `run_evidence_agent`.
+- **`crashclouseau/agent/__init__.py`** — MODIFY (the package already exists from #02): additionally
+  re-export `enqueue_agent` and `run_evidence_agent`. The `enqueue_agent` re-export must NOT transitively
+  import `triage`/`claude-agent-sdk` (keep the `run_crash_triage` import lazy — inside
+  `run_evidence_agent`), so `update.py`'s enqueue path stays SDK-free.
 - **`crashclouseau/agent/orchestrator.py`** — NEW:
-  - `build_seed(uuid) -> Seed | None` — reads `CrashStack.get_by_uuid(uuid)` (returns `(res, uuid_info)`; both are `{}` when the UUID is unknown) and `UUID.get_info(uuid)` (buildid/product/channel/version/signature). Each frame in `res["frames"]` carries `stackpos`/`filename`/`function`/`line`/`node`/`original`/`internal`/`url` and a `changesets` OrderedDict mapping node -> `{score, backedout, pushdate, bugid}`. Returns `None` if `res` is empty, `res["frames"]` is empty, or no frame has any `changesets` (nothing scored to reason about).
-  - `run_evidence_agent(uuid)` — the RQ entrypoint. Idempotency guard, build seed, fetch raw crash via `inspector.get_crash_data(uuid)`, sequence the six roles, persist, set agent state. All wrapped so it never raises out.
-  - `enqueue_agent(uuid)` — thin helper: `worker.get_queue(config.get_agent_queue()).enqueue_call(func=run_evidence_agent, args=(uuid,), result_ttl=0, job_timeout=config.get_agent_job_timeout())`, no-op when `not config.get_agent_enabled()`.
-- **`crashclouseau/update.py`** — MODIFY `put_report()`: after `models.UUID.set_analyzed(uuid, useless)` (L98), add `if not useless:` then lazy-import `from . import agent` and call `agent.enqueue_agent(uuid)`, wrapped in its own try/except so an enqueue failure cannot break ingestion (log only).
-- **`crashclouseau/worker.py`** — MODIFY: add `"agent"` to the module-level `listen` list so the dedicated worker dyno processes it; `get_queue("agent")` then works (the dict comprehension over `listen` covers it).
-- **`crashclouseau/config.py`** — MODIFY: add `get_agent_enabled()`, `get_agent_queue()`, `get_agent_job_timeout()`, `get_agent_per_role_timeout()`, `get_agent_skip_if_existing()`, `get_agent_max_seed_frames()`, `get_agent_version()` reading the `"agent"` block of `_get_global()`.
-- **`config/global.json`** — MODIFY: add the `"agent"` block.
-- **`tests/test_orchestrator.py`** — NEW: seed-builder, idempotency, failure-isolation, and enqueue-gating tests with role callables mocked.
+  - `build_seed(uuid) -> Seed | None` — reads `CrashStack.get_by_uuid(uuid)` (returns `(res, uuid_info)`;
+    both `{}` when the UUID is unknown) + `UUID.get_info(uuid)` (buildid/product/channel/version/
+    signature) + `inspector.get_crash_data(uuid)` (raw processed crash, passed through verbatim). Each
+    frame in `res["frames"]` carries `stackpos`/`filename`/`function`/`line`/`node`/`original`/
+    `internal`/`url` and a `changesets` OrderedDict mapping node -> `{score, backedout, pushdate,
+    bugid}`. Returns `None` (logged) if `res` is empty, `res["frames"]` is empty, or no frame has any
+    `changesets` (nothing scored to reason about). Trim to `get_agent_max_seed_frames()`. The returned
+    object is the `crash=` payload for `run_crash_triage`.
+  - `run_evidence_agent(uuid)` — the RQ entrypoint. Idempotency guard, build seed, construct an
+    `ActionsRecorder`, resolve `llm_cfg`/`tools_cfg` from config, run
+    `asyncio.run(run_crash_triage(crash=seed, tools_cfg=..., llm_cfg=..., recorder=recorder))`, enforce
+    the cost cap, persist `Dossier`/`Verdict` + `recorder.actions`, set dossier status. All wrapped so
+    it never raises out.
+  - `enqueue_agent(uuid)` — thin helper: `worker.get_queue(config.get_agent_queue()).enqueue_call(
+    func=run_evidence_agent, args=(uuid,), result_ttl=0, job_timeout=config.get_agent_job_timeout())`,
+    no-op when `not config.get_agent_enabled()`.
+- **`crashclouseau/update.py`** — MODIFY `put_report()`: after `models.UUID.set_analyzed(uuid, useless)`
+  (L98), add `if not useless:` then lazy-import `from . import agent` and call
+  `agent.enqueue_agent(uuid)`, wrapped in its own try/except so an enqueue failure cannot break
+  ingestion (log only).
+- **`crashclouseau/worker.py`** — MODIFY: add `"agent"` to the module-level `listen` list so the
+  dedicated worker dyno processes it; `get_queue("agent")` then works (the dict comprehension over
+  `listen` covers it).
+- **`crashclouseau/config.py`** — MODIFY: add `get_agent_enabled()`, `get_agent_queue()`,
+  `get_agent_job_timeout()`, `get_agent_skip_if_existing()`, `get_agent_max_seed_frames()`,
+  `get_agent_version()` reading the `"agent"` block of `_get_global()` (via the existing `get_agent()`
+  helper). The per-crash cost cap is read from `agent.llm` via #02's `get_llm()` — no new getter needed
+  (fallback constant if the key is absent).
+- **`config/global.json`** — MODIFY: add the orchestration keys to the existing `"agent"` block
+  (`enabled`, `queue:"agent"`, `job_timeout`, `skip_if_existing`, `max_seed_frames`, `agent_version`).
+  The `agent.llm` sub-block (incl. `max_cost_usd_per_crash`) is added by #02.
+- **`tests/test_orchestrator.py`** — NEW: seed-builder, idempotency, failure-isolation, enqueue-gating,
+  cost-cap, and recorded-actions tests with **`run_crash_triage` mocked** (no live SDK call, no CLI).
 
 ## Interfaces
 
 **Inputs consumed**
 - `uuid` (str) — the job argument.
-- From `CrashStack.get_by_uuid(uuid)`: `(res, uuid_info)`. `res` is `{"frames": [...]}` (and `res, uuid_info` are both `{}` for an unknown UUID). Each frame has `stackpos`, `filename`, `function`, `line`, `node`, `original`, `internal`, `url`, and `changesets` (OrderedDict node -> `{score, backedout, pushdate, bugid}`). The `changesets` entries ARE the heuristic seeds; `bugid` lives inside each changeset entry, not at frame top level.
-- From `UUID.get_info(uuid)`: `buildid` (formatted via `utils.get_buildid`), `product`, `channel`, `version`, `signature`.
-- From `inspector.get_crash_data(uuid)`: raw processed crash (for the discarded fields listed in Externalities) — passed verbatim to the Crash Interpreter role; this unit does not parse them.
+- From `CrashStack.get_by_uuid(uuid)`: `(res, uuid_info)`. `res` is `{"frames": [...]}` (both `{}` for an
+  unknown UUID). Each frame has `stackpos`, `filename`, `function`, `line`, `node`, `original`,
+  `internal`, `url`, and `changesets` (OrderedDict node -> `{score, backedout, pushdate, bugid}`). The
+  `changesets` entries ARE the heuristic seeds; `bugid` lives inside each changeset entry, not at frame
+  top level.
+- From `UUID.get_info(uuid)`: `buildid` (formatted via `utils.get_buildid`), `product`, `channel`,
+  `version`, `signature`; and `UUID.max_score` (the demoted heuristic seed strength → `Dossier.seed_score`).
+- From `inspector.get_crash_data(uuid)`: raw processed crash (for the discarded fields listed in
+  Externalities) — folded into the seed verbatim; this unit does not parse them.
 
-**Dossier fields this unit reads/writes**
-- *Reads:* none from a prior dossier (it creates the first one). It reads the seed object only.
-- *Writes (via the persistence DAO):* the assembled `Dossier` (crash brief + candidate hunks + traced call path with per-hop source + data-flow hypothesis + skeptic notes) and `Verdict` (`verdict`, `confidence`, `culprit_node`, `culprit_bug`, citations), plus `UUID.set_agent_state(uuid, ...)` (`pending`/`done`/`error`/`abstain`/`skipped`). The orchestrator assigns `custom_id`/correlation = `uuid` so the run is keyable for the offline eval.
+**Agent call (the seam — assembled in #02, invoked here)**
+- `result = asyncio.run(run_crash_triage(crash=seed, tools_cfg=config.get_agent(), llm_cfg=config.get_llm(),
+  recorder=recorder))` → a `CrashTriageResult`. The SDK drives the multi-turn tool-use + subagent loop
+  inside this single coroutine; **there is no per-role call and no `UsageAccumulator` here** — cost/turns
+  come back on `result.total_cost_usd`/`result.num_turns` (surfaced from the terminal `ResultMessage`).
+- `recorder = hackbot_runtime.ActionsRecorder()` — constructed here, passed in; #02 exposes it to the
+  agent as the `actions` MCP server. After the run, `recorder.actions` holds the *recorded* (never
+  executed) Bugzilla actions — needinfo is `bugzilla.update_bug` with
+  `changes={'flags':[{'name':'needinfo','status':'?','requestee':...}]}`; there is no dedicated needinfo
+  action. #12 renders these behind a human-confirm UI and replays them via libmozdata.
+- For read-only crash triage the searchfox/crash tools need **no local Firefox checkout**, so this unit
+  does not build a `HackbotContext`; searchfox tree/repo selection rides in `tools_cfg` (the `agent`
+  block). If a future tool needs `source_repo`, thread it via `tools_cfg`/`extra` (or a minimal
+  `HackbotContext`) rather than env.
 
-**Sequencing contract (stable, role bodies owned elsewhere)**
-1. `crash_interpreter(seed, raw_crash) -> CrashBrief`
-2. `callgraph_explorer(crash_brief, seed) -> ExpandedFrames` (adds off-stack candidates)
-3. `patch_scout(expanded_frames, seed) -> CandidatePatches`
-4. `dataflow_tracer(crash_brief, candidate_patches) -> DataflowHypotheses` (per (patch, frame))
-5. `skeptic(dossier_draft) -> SkepticNotes` (drops uncited claims before principal)
-6. `principal(validated_dossier) -> Verdict` (strong-evidence or calibrated abstain)
+**Dossier/verdict fields this unit reads/writes**
+- *Reads:* none from a prior dossier (it creates the first one, subject to idempotency). It reads the
+  seed object + `UUID.max_score` only.
+- *Writes (via the #04 DAO):*
+  - `Dossier.upsert(uuid, payload=result.model_dump() + {"actions": recorder.actions}, status="done",
+    worker_models=<senior ids from llm_cfg.roles>, seed_score=UUID.max_score, tokens=<from result.usage
+    if surfaced else 0>, cost=result.total_cost_usd)`.
+  - `Verdict.set(uuid, verdict=<mapped from result: strong-evidence→"culprit"/"unrelated", else
+    "abstain">, confidence=..., principal_model=<llm_cfg.principal.model>, rationale=result.summary,
+    evidence=<citations from result>, effort=<llm_cfg.principal.effort>, dossierid=...)`.
+  - `Dossier.set_status(uuid, ...)` transitions: `"running"` at start → `"done"` on success →
+    `"error"` on failure. The status lives on the `dossiers.status` column (`AGENT_STATUS_TYPE`), not on
+    `UUID`. A `build_seed`-`None` UUID persists no dossier (logged and skipped — nothing scored).
+- The orchestrator keys the row by `uuid` (correlation id for the offline eval, #13).
 
-**Depends on:** LLM-abstraction sub-plan (Pydantic types + `llm_call`), persistence/schema sub-plan (`Dossier`/`Verdict` tables + DAO), searchfox-adapter sub-plan, all six role sub-plans.
-**Feeds:** UI evidence-panel sub-plan and `report_bug.py` needinfo-draft sub-plan (read the persisted dossier/verdict), and the offline eval harness (keyed by `uuid`).
+**Delegation contract (the SDK drives the roles internally — role bodies + order owned by #02/#05–#10)**
+- The principal session (options assembled in #02) spawns the senior subagents via the built-in `Task`
+  tool and folds each child's final text back automatically. Intended flow: `crash-interpreter` →
+  `call-graph-explorer` (adds off-stack candidates) → `patch-scout` → `data-flow-tracer` → `skeptic`
+  (drops uncited claims) → principal (strong-evidence or calibrated abstain).
+- **This unit does not call any role, does not see intermediate handoffs, and does not enforce the
+  order** — it consumes only the terminal `CrashTriageResult`. The role tiering (Phase-0: navigator =
+  `sonnet`, other seniors = `haiku`, principal = `opus`) is per-role `AgentDefinition(model=...)` in #02,
+  config-driven via `agent.llm`.
+
+**Depends on:** #02 (`run_crash_triage` + `CrashTriageResult` + tools + roles + tiering), #04
+(`Dossier`/`Verdict` tables + DAO), #03 (dossier/verdict field shape, validated inside the roles), #01
+(searchfox client, `@tool`-wrapped in #02).
+**Feeds:** #12 UI evidence-panel + `report_bug.py` needinfo-draft (read the persisted dossier/verdict +
+`recorder.actions`), and the offline eval harness #13 (keyed by `uuid`).
 
 ## Implementation steps
-1. Add the `"agent"` block to `config/global.json` (`enabled:true`, `queue:"agent"`, `job_timeout`, `per_role_timeout`, `skip_if_existing:true`, `max_seed_frames`, `agent_version`) and the matching accessors in `config.py`.
-2. Add `"agent"` to module-level `listen` in `worker.py`; confirm `get_queue("agent")` works (the dict comprehension already covers all `listen` names) and add `agent` to the Procfile worker invocation in a follow-up (note for ops, out of strict scope).
-3. Create `crashclouseau/agent/__init__.py` re-exporting `enqueue_agent` and `run_evidence_agent`.
-4. Implement `build_seed(uuid)` in `orchestrator.py`: call `CrashStack.get_by_uuid` + `UUID.get_info`; guard the empty-dict return, then return `None` and log a warning if `res.get("frames")` is empty or no frame has any `changesets` (nothing to reason about). Trim to `get_agent_max_seed_frames()`.
+1. Add the orchestration keys to the existing `"agent"` block in `config/global.json` (`enabled:true`,
+   `queue:"agent"`, `job_timeout`, `skip_if_existing:true`, `max_seed_frames`, `agent_version`) and the
+   matching accessors in `config.py`. (The `agent.llm` sub-block, incl. `max_cost_usd_per_crash`, is
+   added by #02.)
+2. Add `"agent"` to module-level `listen` in `worker.py`; confirm `get_queue("agent")` works (the dict
+   comprehension already covers all `listen` names) and add `agent` to the Procfile worker invocation in
+   a follow-up (note for ops, out of strict scope). The `"agent"` dyno must allow the SDK to spawn the
+   bundled Claude Code CLI subprocess (see Risks).
+3. Extend `crashclouseau/agent/__init__.py` to re-export `enqueue_agent` and `run_evidence_agent`
+   (keeping the `run_crash_triage` import lazy inside the entrypoint — the enqueue path must not pull the
+   SDK).
+4. Implement `build_seed(uuid)` in `orchestrator.py`: call `CrashStack.get_by_uuid` + `UUID.get_info` +
+   `inspector.get_crash_data`; guard the empty-dict return; return `None` and log a warning if
+   `res.get("frames")` is empty or no frame has any `changesets` (nothing to reason about). Trim to
+   `get_agent_max_seed_frames()`. Return the `crash` seed object.
 5. Implement `run_evidence_agent(uuid)`:
-   a. `if config.get_agent_skip_if_existing() and models.Dossier.exists(uuidid_or_uuid)`: log + return (idempotency for re-runs/at-least-once delivery).
-   b. `models.UUID.set_agent_state(uuid, "pending")`.
-   c. `seed = build_seed(uuid)`; if `None`, set state `"skipped"` and return.
-   d. `raw = inspector.get_crash_data(uuid)`.
-   e. Call roles 1->6 in order, passing the per-role timeout from config into the role callables.
-   f. `models.Dossier.put(...)`, `models.Verdict.put(...)`, `models.commit()`, `set_agent_state(uuid, verdict.state)`.
-6. Wrap the whole body of `run_evidence_agent` in `try/except Exception`: log with `exc_info=True`, `models.UUID.set_agent_state(uuid, "error")` (best-effort, its own try/except), and `return` — never re-raise (RQ's `black_hole` exception handler is a backstop, but the agent path must not depend on it for ingestion safety).
-7. Implement `enqueue_agent(uuid)` honoring `get_agent_enabled()` and using `get_queue(get_agent_queue())` with `result_ttl=0` and `job_timeout=get_agent_job_timeout()`.
-8. Modify `put_report()`: after `set_analyzed(uuid, useless)` (L98), `if not useless:` lazy-import `from . import agent` and call `agent.enqueue_agent(uuid)`. Wrap in try/except so an enqueue failure can't break ingestion (log only). (`worker` is already imported at the top of `update.py`; the lazy import is for the `agent` package only.)
-9. Tests: mock all six role callables and `inspector.get_crash_data`; assert (a) `enqueue_agent` is not called when `useless=True`, (b) a raised role exception leaves UUID state `"error"` and does not propagate, (c) second run is skipped when a dossier exists, (d) `build_seed` returns `None` for an unscored/unknown UUID.
+   a. `if config.get_agent_skip_if_existing() and models.Dossier.get_by_uuid(uuid)`: log + return
+      (idempotency for re-runs / at-least-once delivery). (Open question — version-aware skip; see Risks.)
+   b. `seed = build_seed(uuid)`; if `None`, log + return (no dossier persisted — nothing scored).
+   c. `models.Dossier.upsert(uuid, payload={}, status="running", seed_score=UUID.max_score...)` (or
+      `set_status(uuid, "running")` after creating the row) to mark the run in-flight.
+   d. `recorder = hackbot_runtime.ActionsRecorder()`.
+   e. `from .triage import run_crash_triage` (lazy) → `result = asyncio.run(run_crash_triage(
+      crash=seed, tools_cfg=config.get_agent(), llm_cfg=config.get_llm(), recorder=recorder))`.
+   f. Enforce the cost cap: if `result.total_cost_usd` exceeds
+      `config.get_llm().get("max_cost_usd_per_crash", <fallback>)`, log a warning and mark the dossier
+      over-budget (a flag in the payload / a distinct log line for ops + eval). The run is a single
+      atomic SDK session, so this is a **reactive** check — see Risks for the proactive lever.
+   g. Persist: `models.Dossier.upsert(uuid, payload={**result.model_dump(), "actions":
+      recorder.actions}, status="done", worker_models=..., seed_score=..., tokens=..., cost=
+      result.total_cost_usd)`, then `models.Verdict.set(...)`, then `models.commit()`.
+6. Wrap the whole body of `run_evidence_agent` in `try/except Exception`: log with `exc_info=True`,
+   `models.Dossier.set_status(uuid, "error")` (best-effort, its own try/except), and `return` — never
+   re-raise (RQ's `black_hole` exception handler is a backstop, but the agent path must not depend on it
+   for ingestion safety). Write no partial `Verdict` on failure.
+7. Implement `enqueue_agent(uuid)` honoring `get_agent_enabled()` and using
+   `get_queue(get_agent_queue())` with `result_ttl=0` and `job_timeout=get_agent_job_timeout()`.
+8. Modify `put_report()`: after `set_analyzed(uuid, useless)` (L98), `if not useless:` lazy-import
+   `from . import agent` and call `agent.enqueue_agent(uuid)`. Wrap in try/except so an enqueue failure
+   can't break ingestion (log only). (`worker` is already imported at the top of `update.py`; the lazy
+   import is for the `agent` package only.)
+9. Tests: mock `agent.triage.run_crash_triage` (return a fake `CrashTriageResult`) and
+   `inspector.get_crash_data`; assert (a) `enqueue_agent` is not called when `useless=True`, (b) a
+   `run_crash_triage` exception (or an `asyncio.run` failure) leaves dossier status `"error"`, writes no
+   verdict, and does not propagate, (c) a second run is skipped when a dossier exists, (d) `build_seed`
+   returns `None` for an unscored/unknown UUID, (e) `result.total_cost_usd` over the cap is logged/flagged
+   but the row still persists, (f) `recorder.actions` are stored in the persisted dossier payload.
 
 ## Risks & open questions
-- **Import cycle:** `update.py` already imports `worker` at module top; importing the `agent` package at module top could cycle (`agent` -> `orchestrator` -> `models`/`inspector`/`worker`). Mitigation: lazy import `from . import agent` inside `put_report`.
-- **At-least-once delivery / re-enqueue on dyno restart:** RQ may re-run a job; idempotency via `Dossier.exists` is the guard. Open question: do we key on `uuidid` alone or on `(uuidid, agent_version)` so a re-run after a prompt change re-analyzes? The `"agent"` block carries an `agent_version` config key for this; the persistence sub-plan must decide whether `Dossier.exists` is version-aware.
-- **Queue starvation vs. ingestion:** the agent is slow (LLM + searchfox); putting it on its own `"agent"` queue (own dyno) keeps `high/default/low` free. Open question: should the agent dyno be optional (scale-to-zero) and the queue simply back up when disabled? `get_agent_enabled()` plus not scaling the worker covers the kill-switch.
-- **Timeout granularity:** `job_timeout` (whole run, enforced by RQ) vs `per_role_timeout` — the latter must be enforced inside role callables/adapter (subprocess + SDK request `timeout`), not by RQ; confirm the LLM/searchfox sub-plans honor it. (The Anthropic SDK `timeout` default is 10 min; large `max_tokens` non-streaming requests raise unless streamed — role modules must stream long outputs.)
-- **Seed completeness:** `get_by_uuid` joins `Score` (`.join(Score)`), so the `changesets` map on each frame only contains scored changesets. Off-stack culprits are added later by the Call-graph Explorer, so a frame with empty `changesets` still yields a usable seed as long as at least one stack frame scored — consistent with the `useless=False` gate (a report is only `useless=False` if `CrashStack.put_frames` stored frames).
-- **Heroku build node drift / searchfox revision:** searchfox indexes ~tip of the selected tree, not the crash build node; the orchestrator passes `node`/`channel` through so roles can flag drift, but cannot fix it here. NOTE: searchfox call graphs miss virtual/indirect/function-pointer/template/macro and cross-language (JS<->C++<->Rust) edges — the searchfox README does not document these limits, so this is captured here as a known constraint for the role sub-plans, not a CLI-advertised guarantee.
-- **DB retention window:** `Node`/`UUID` rows are hard-deleted after ~30 days (`max_ndays`); a re-enqueued agent job for an aged-out UUID must tolerate `get_by_uuid`/`get_info` returning empty and abstain cleanly (covered by the `build_seed -> None -> "skipped"` path).
+- **The SDK spawns the Claude Code CLI as a subprocess (inside `run_crash_triage`).** The `"agent"` dyno
+  must allow subprocess spawn and have the ~74MB wheel's bundled CLI on `PATH` in the venv (no Node
+  needed for read-only triage). This is verified in #02; this unit's only obligation is to run the
+  coroutine via `asyncio.run(...)` in the forked RQ job (a fresh event loop per job — no nested-loop
+  hazard). **Never** use `hackbot_runtime.run`/`run_async` as the job body (they `raise SystemExit` and
+  call `asyncio.run` themselves).
+- **Import cycle / import-time cost:** `update.py` already imports `worker` at module top; importing the
+  `agent` package at module top could cycle (`agent` -> `orchestrator` -> `models`/`inspector`/`worker`)
+  and would drag `claude-agent-sdk` into the web dyno. Mitigation: lazy `from . import agent` inside
+  `put_report`, and keep `from .triage import run_crash_triage` lazy inside `run_evidence_agent`.
+- **Cost cap is post-hoc, not mid-run.** With hackbot the whole triage is one atomic SDK session; there
+  is no per-role checkpoint at which to abort on cumulative spend (the old `UsageAccumulator`-between-roles
+  design is gone). Enforcement is therefore two-sided: **proactive** — thread `max_turns` (and `effort`)
+  from `agent.llm` into `run_crash_triage` (the only in-loop levers the SDK exposes; assembled in #02) —
+  and **reactive** — compare `result.total_cost_usd` against `max_cost_usd_per_crash` after the run, log +
+  flag over-budget, and (optionally) gate re-runs / downgrade the principal tier on subsequent runs. No
+  mid-run kill from this unit.
+- **Timeout granularity:** the whole-run `job_timeout` (enforced by RQ, kills a wedged job) must exceed
+  the expected SDK session wall-clock — the multi-turn subagent loop with a `sonnet` navigator at
+  `effort=high` can run minutes. There is **no `per_role_timeout`** anymore (no per-role calls); the
+  in-loop bound is `max_turns` + the SDK request timeout (owned by #02). Set `job_timeout` generously
+  above `max_turns`-worth of turns, and keep it on the dedicated `"agent"` queue so a long run never
+  starves ingestion.
+- **Structured output is best-effort (#02).** If the principal omits/malforms its final ` ```json `
+  block, `CrashTriageResult`'s typed fields come back `None`/empty; this unit must persist that as an
+  **abstain** verdict (map empty result → `Verdict(verdict="abstain", ...)`) and never crash on missing
+  fields. The every-claim-has-a-citation rule (#03) is enforced upstream in the roles; this unit trusts
+  the returned handoff.
+- **At-least-once delivery / re-enqueue on dyno restart:** RQ may re-run a job; idempotency via
+  `Dossier.get_by_uuid` is the guard. Open question: key on `uuid` alone or `(uuid, agent_version)`/
+  `schema_version` so a re-run after a prompt/tier change re-analyzes? The `"agent"` block carries
+  `agent_version`; #04 must decide whether the skip check is version-aware.
+- **Queue starvation vs. ingestion:** the agent is slow (SDK subprocess + searchfox); its own `"agent"`
+  queue (own dyno) keeps `high/default/low` free. `get_agent_enabled()` plus not scaling the worker is
+  the kill-switch (queue simply backs up / no-ops at enqueue when disabled).
+- **Seed completeness:** `get_by_uuid` joins `Score`, so a frame's `changesets` map only contains scored
+  changesets. Off-stack culprits are added later *inside* the SDK by the `call-graph-explorer` subagent,
+  so a frame with empty `changesets` still yields a usable seed as long as at least one stack frame
+  scored — consistent with the `useless=False` gate.
+- **Build node drift / searchfox limits:** searchfox indexes ~tip of the selected tree, not the crash
+  build node, and its call graph misses virtual/indirect/fn-pointer/template/macro and cross-language
+  (JS↔C++↔Rust) edges. The seed carries `node`/`channel` so the SDK roles can flag drift; this unit
+  cannot fix it (a known constraint for #06, not a CLI guarantee).
+- **DB retention window:** `Node`/`UUID` rows are hard-deleted after ~30 days (`Node.clean` cascade,
+  #04); a re-enqueued job for an aged-out UUID must tolerate `get_by_uuid`/`get_info` returning empty and
+  skip cleanly (covered by the `build_seed -> None -> return` path). Dossier/verdict rows are purged
+  transitively by the same `uuids` FK cascade — no clean() edit here.
 
 ## Acceptance criteria
-- Ingesting a scored Nightly report (`useless=False`) enqueues exactly one `run_evidence_agent` job on the `"agent"` queue; an unscored/`useless=True` report enqueues none. Verify via `len(worker.get_queue("agent"))` and a unit test on `put_report`.
-- `build_seed(uuid)` for a real scored UUID returns a seed whose frames mirror `CrashStack.get_by_uuid` (same `stackpos`/`function`/`line`/`node` and the per-node `score` inside `changesets`); returns `None` for an unscored or unknown UUID.
-- With all six roles mocked, `run_evidence_agent(uuid)` persists one `Dossier` + one `Verdict` and sets `UUID` agent state `"done"`/`"abstain"`; `models.Dossier.exists` is true afterward.
-- A role raising any exception leaves agent state `"error"`, writes no partial verdict, logs with traceback, and `run_evidence_agent` returns normally (no exception escapes) — proving ingestion isolation.
-- Running the same UUID twice with `skip_if_existing:true` performs the LLM work only once.
-- `config.get_agent_enabled() == False` makes `enqueue_agent` a no-op (kill-switch) without touching ingestion.
+- Ingesting a scored Nightly report (`useless=False`) enqueues exactly one `run_evidence_agent` job on
+  the `"agent"` queue; an unscored/`useless=True` report enqueues none. Verify via
+  `len(worker.get_queue("agent"))` and a unit test on `put_report`.
+- `build_seed(uuid)` for a real scored UUID returns a seed whose frames mirror
+  `CrashStack.get_by_uuid` (same `stackpos`/`function`/`line`/`node` and the per-node `score` inside
+  `changesets`) and carries the raw processed-crash pass-through; returns `None` for an unscored or
+  unknown UUID.
+- With `run_crash_triage` mocked to return a `CrashTriageResult`, `run_evidence_agent(uuid)` calls it via
+  `asyncio.run` **exactly once** (never `run_async`), persists one `Dossier` + one `Verdict`, stores
+  `recorder.actions` in the dossier payload, sets dossier status `"done"`, and `models.Dossier.get_by_uuid`
+  is true afterward.
+- `run_crash_triage` (or `asyncio.run`) raising any exception leaves dossier status `"error"`, writes no
+  `Verdict`, logs with traceback, and `run_evidence_agent` returns normally (no exception escapes) —
+  proving ingestion isolation.
+- Running the same UUID twice with `skip_if_existing:true` invokes `run_crash_triage` only once.
+- `config.get_agent_enabled() == False` makes `enqueue_agent` a no-op (kill-switch) without touching
+  ingestion.
+- A `CrashTriageResult` with `total_cost_usd > max_cost_usd_per_crash` is logged/flagged over-budget, yet
+  the dossier + verdict still persist (reactive cost cap; no mid-run abort).
+- An empty/all-`None` `CrashTriageResult` (missing final JSON block) persists as an `abstain` verdict
+  without raising.
 
-Relevant paths: `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/update.py` (hook at L98, `worker` imported L12), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/worker.py` (`listen` L12, `get_queue` L32-36, `black_hole` L24-29), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/models.py` (`CrashStack.get_by_uuid` L1263, `UUID.get_info` L790, `UUID.set_analyzed` L883, `commit` L1327, `create` L1331), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/inspector.py` (`get_crash_data` L58, `get_crash` L64), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/config.py`, `/home/calixte/dev/mozilla/crash-clouseau/config/global.json`, new `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/agent/orchestrator.py`.
+Relevant paths: `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/update.py` (hook at L98, `worker` imported L12), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/worker.py` (`listen` L12, `get_queue` L32-36, `black_hole` L24-29), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/models.py` (`CrashStack.get_by_uuid` L1263, `UUID.get_info` L790, `UUID.set_analyzed` L883, `UUID.max_score`, `commit` L1327, `create` L1331; new `Dossier`/`Verdict` DAO from #04), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/inspector.py` (`get_crash_data` L58, `get_crash` L64), `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/config.py`, `/home/calixte/dev/mozilla/crash-clouseau/config/global.json`, new `/home/calixte/dev/mozilla/crash-clouseau/crashclouseau/agent/orchestrator.py`, `crashclouseau/agent/triage.py` + `crashclouseau/agent/result.py` (from #02).
+</content>
+</invoke>

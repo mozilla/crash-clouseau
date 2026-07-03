@@ -3,6 +3,8 @@
 ## Objective
 Provide a thin, well-typed Python wrapper around the external `searchfox-cli` binary that every call-graph-using role (Call-graph Explorer, Patch Scout, Data-flow Tracer, Skeptic) invokes via one stable seam. It builds and runs the tool's `--calls-from` / `--calls-to` / `--define` / `-q` (search) **flag-style** commands (and `--calls-between` **if and only if** step 1 confirms the flag exists) against a selected repo, parses the tool's LLM-friendly markdown into typed Pydantic results, and captures the permalink + symbol-id for every node/edge so downstream claims are citable and verifiable. It owns subprocess invocation, timeouts, retries, repo selection, and structured error handling — and nothing about LLMs or dossier assembly.
 
+> **Substrate note (see #02):** this client stays substrate-neutral and is otherwise unchanged; the agent substrate unit (#02) additionally `@tool`-wraps it (`agent_tools` `@tool` + `build_sdk_server`) as an in-process MCP server so the Claude Agent SDK roles can call the call-graph over `mcp__searchfox__*` tool ids. That wrapping lives in #02, not here.
+
 > **CLI shape (verified against github.com/padenot/searchfox-cli):** the tool uses **flags, not positional subcommands** — e.g. `searchfox-cli --calls-from 'mozilla::Foo::Bar' --depth 2 -R mozilla-central`. The builders must emit this flag form, not `searchfox-cli calls-from <symbol>`.
 
 ## Scope
@@ -15,7 +17,7 @@ Provide a thin, well-typed Python wrapper around the external `searchfox-cli` bi
 - A small standalone CLI entry point for the Phase-0 spike and for manual debugging.
 
 **Out of scope (owned by other sub-plans)**
-- Any LLM call, prompt, model selection, or `llm_call(role, …)` abstraction (LLM-abstraction sub-plan).
+- Any LLM call, prompt, model selection, or the agent substrate (`AgentDefinition` / `run_crash_triage`, #02).
 - Dossier Pydantic schema, citation validation at the hand-off, and the dossier table (dossier-contract sub-plan).
 - Role logic — which symbols to expand, neighborhood pruning, off-stack candidate selection (Call-graph Explorer sub-plan); diff fetch/parse (Patch Scout sub-plan); reading bodies for data flow (Data-flow Tracer sub-plan).
 - Crash JSON decoding (Crash Interpreter sub-plan) and RQ wiring/enqueue from `update.py` (worker-integration sub-plan).

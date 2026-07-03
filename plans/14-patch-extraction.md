@@ -36,7 +36,7 @@ instead of each re-fetching and re-splitting diffs, and it independently improve
 - Semantic *classification* of a change into a crash-mechanism class (UAF/null/…) via
   LLM — that is a senior's job; this unit emits only cheap regex `change_tags` as a
   pre-filter, never the verdict.
-- The dossier Pydantic types, the `llm_call` abstraction, persistence of the dossier
+- The dossier Pydantic types, the agent substrate (#02), persistence of the dossier
   itself — their own sub-plans.
 
 ## Externalities
