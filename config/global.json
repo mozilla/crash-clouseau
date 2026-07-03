@@ -49,6 +49,13 @@
         "skip_if_existing": true,
         "max_seed_frames": 40,
         "agent_version": 1,
+        "patch_extraction":
+        {
+            "diff_byte_cap": 1000000,
+            "min_identifier_len": 3,
+            "timeout_secs": 30,
+            "enabled": true
+        },
         "searchfox":
         {
             "bin": "searchfox-cli",

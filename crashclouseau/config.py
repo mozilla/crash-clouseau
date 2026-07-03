@@ -142,3 +142,7 @@ def get_agent_max_seed_frames():
 
 def get_agent_version():
     return get_agent().get("agent_version", 1)
+
+
+def get_patch_extraction_cfg():
+    return get_agent().get("patch_extraction", {})
