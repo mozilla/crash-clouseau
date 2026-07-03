@@ -172,16 +172,37 @@ class TestParseAndValidate(unittest.TestCase):
         d = parse_and_validate("```json\n{not valid json,}\n```")
         self.assertEqual(d.verdict.decision, Decision.abstain)
 
-    def test_uncited_claim_abstains_but_validate_raises(self):
+    def test_uncited_supporting_edge_salvaged_not_abstained(self):
+        # New salvage contract: an uncited call-path edge is DROPPED (not kept), but
+        # the properly-cited strong-evidence verdict SURVIVES. parse_and_validate
+        # never raises; validate_dossier on the same object still does.
         obj = copy.deepcopy(_dossier())
         obj["call_path"]["edges"][0]["citations"] = []
         text = "prose\n```json\n" + json.dumps(obj) + "\n```\n"
-        # parse_and_validate must NEVER raise -> abstain
         d = parse_and_validate(text)
-        self.assertEqual(d.verdict.decision, Decision.abstain)
-        # validate_dossier on the same object DOES raise
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)  # verdict kept
+        self.assertEqual(len(d.call_path.edges), 0)                     # uncited edge dropped
         with self.assertRaises(ValidationError):
             validate_dossier(obj)
+
+    def test_uncited_hunk_dropped_verdict_kept(self):
+        # A malformed/uncited supporting hunk must not discard the cited verdict.
+        obj = copy.deepcopy(_dossier())
+        obj["hunks"][0]["citations"] = []   # uncited hunk -> full validate fails
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)  # verdict survives
+        self.assertEqual(len(d.hunks), 0)                               # bad hunk dropped
+        self.assertEqual(len(d.call_path.edges), 1)                     # good evidence kept
+
+    def test_invalid_verdict_forces_abstain_but_keeps_evidence(self):
+        # An uncited strong-evidence verdict is unusable -> abstain (grounding gate
+        # preserved), but valid evidence is still salvaged for the panel.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["mechanism"]["citations"] = []
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertTrue(d.verdict.abstain_reason)
+        self.assertEqual(len(d.call_path.edges), 1)   # evidence salvaged despite bad verdict
 
     def test_valid_block_in_text_parses(self):
         text = "here is my answer\n```json\n" + json.dumps(_dossier()) + "\n```\n"

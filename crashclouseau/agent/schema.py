@@ -8,8 +8,12 @@ Pure-data Pydantic models + the every-claim-has-a-citation validation rule, plus
 the parse/validate helpers the #02 substrate calls on the principal's best-effort
 trailing ```json handoff (mirrors bugbug's ``parse_plan``). There is no strict
 JSON-schema exported to any API: structured output is validated *after* parse, and
-``parse_and_validate`` ABSTAINS rather than let an uncited/hallucinated claim
-survive. Only stdlib + pydantic + ``config`` are imported here (no db/SDK/network).
+``parse_and_validate`` never lets an uncited/hallucinated claim survive: on a
+validation failure it SALVAGES — keeps the sub-objects (and verdict) that validate,
+drops the ones that don't — so a single malformed optional field can't discard a
+properly-cited verdict; a verdict that fails its own grounding rules is still forced
+to abstain. Only stdlib + pydantic + ``config``/``logger`` are imported here (no
+db/SDK/network).
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ from pydantic import (
 )
 
 from crashclouseau import config
+from crashclouseau.logger import logger
 
 
 # --------------------------------------------------------------------------- #
@@ -298,31 +303,105 @@ def validate_dossier(obj: dict) -> Dossier:
     return Dossier.model_validate(obj)
 
 
-def parse_and_validate(result: str | dict) -> Dossier:
-    """Validate the best-effort handoff #02 parses from ``ResultMessage.result``
-    and ABSTAIN on failure. Never raises into the caller: on a missing/malformed
-    ```json block, invalid JSON, or an uncited claim, returns a Dossier whose
-    verdict is ``abstain`` with an ``abstain_reason`` naming the failure, so
-    hallucinated content never survives into the persisted verdict."""
-    reason: str | None = None
-    obj: dict | None = None
-    if isinstance(result, dict):
-        obj = result
-    else:
-        obj = _extract_last_json_block(result)
-        if obj is None:
-            reason = "no parseable ```json block in the agent result"
-    if obj is not None:
+def _abstain(reason: str) -> Dossier:
+    return Dossier(verdict=Verdict(decision=Decision.abstain, abstain_reason=reason))
+
+
+# Top-level Dossier sub-objects salvaged independently (singular fields).
+_SINGLE_FIELDS: dict[str, type[BaseModel]] = {
+    "crash": CrashBrief,
+    "candidate": Candidate,
+    "data_flow": DataFlowHypothesis,
+    "verdict": Verdict,
+}
+# ...and the Dossier list fields, salvaged per item.
+_LIST_FIELDS: dict[str, type[BaseModel]] = {
+    "hunks": DiffHunk,
+    "skeptic": SkepticResult,
+}
+
+
+def _salvage(obj: dict):
+    """Best-effort per-field validation: keep the sub-objects (and per-item list
+    entries / call-path edges) that validate, drop the ones that don't. Nothing
+    uncited SURVIVES — it is dropped, not kept — so the anti-hallucination guarantee
+    holds while a single malformed optional field no longer discards the whole
+    (properly-cited) verdict. Returns ``(kwargs, dropped)``."""
+    kwargs: dict = {}
+    dropped: list = []
+    if isinstance(obj.get("schema_version"), int):
+        kwargs["schema_version"] = obj["schema_version"]
+
+    for name, model in _SINGLE_FIELDS.items():
+        val = obj.get(name)
+        if val is None:
+            continue
         try:
-            return validate_dossier(obj)
-        except ValidationError as exc:
-            reason = f"dossier validation failed: {exc}"
-    return Dossier(
-        verdict=Verdict(
-            decision=Decision.abstain,
-            abstain_reason=reason or "empty agent result",
-        )
-    )
+            kwargs[name] = model.model_validate(val)
+        except ValidationError:
+            dropped.append(name)
+
+    cp = obj.get("call_path")
+    if isinstance(cp, dict):
+        edges = []
+        for i, edge in enumerate(cp.get("edges") or []):
+            try:
+                edges.append(CallEdge.model_validate(edge))
+            except ValidationError:
+                dropped.append("call_path.edges[{}]".format(i))
+        try:
+            kwargs["call_path"] = CallPath(
+                edges=edges,
+                from_stackpos=cp.get("from_stackpos"),
+                to_symbol=cp.get("to_symbol") or "",
+            )
+        except ValidationError:
+            dropped.append("call_path")
+
+    for name, model in _LIST_FIELDS.items():
+        items = obj.get(name)
+        if not isinstance(items, list):
+            continue
+        kept = []
+        for i, item in enumerate(items):
+            try:
+                kept.append(model.model_validate(item))
+            except ValidationError:
+                dropped.append("{}[{}]".format(name, i))
+        if kept:
+            kwargs[name] = kept
+
+    return kwargs, dropped
+
+
+def parse_and_validate(result: str | dict) -> Dossier:
+    """Validate the best-effort handoff #02 parses from ``ResultMessage.result``.
+    Never raises into the caller. On a missing/malformed ```json block or invalid
+    JSON, returns an abstain Dossier. On a schema-validation failure, SALVAGES: keep
+    the sub-objects/verdict that validate, drop the ones that don't — so one bad
+    optional field can't discard a properly-cited verdict. A verdict that is absent
+    or fails its own grounding rules (uncited strong-evidence, confidence below the
+    floor, ...) is forced to abstain, but any salvaged evidence is still attached."""
+    obj = result if isinstance(result, dict) else _extract_last_json_block(result)
+    if obj is None:
+        return _abstain("no parseable ```json block in the agent result")
+    try:
+        return validate_dossier(obj)
+    except ValidationError as exc:
+        kwargs, dropped = _salvage(obj)
+        if dropped:
+            logger.warning("dossier salvage: dropped %s", ", ".join(dropped))
+        if "verdict" not in kwargs:
+            # verdict absent or failed its own grounding rules -> cannot be trusted;
+            # abstain, but keep whatever evidence was salvageable for the panel.
+            kwargs["verdict"] = Verdict(
+                decision=Decision.abstain,
+                abstain_reason="dossier validation failed (verdict unusable): {}".format(exc),
+            )
+        try:
+            return Dossier(**kwargs)
+        except ValidationError:
+            return _abstain("dossier validation failed: {}".format(exc))
 
 
 def validate_role_fragment(role: str, obj):
