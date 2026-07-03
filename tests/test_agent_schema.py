@@ -289,5 +289,25 @@ class TestDbJson(unittest.TestCase):
             dossier_from_db_json(j)
 
 
+class TestDataFlowOperationFreeform(unittest.TestCase):
+    """Regression: a live run emitted data_flow.operation='null_deref', which a
+    narrow Literal rejected -> false-abstain masking a valid dossier. operation is
+    a free-form label now (citations are the grounding gate)."""
+
+    def test_role_fragment_accepts_arbitrary_operation(self):
+        frag = validate_role_fragment(
+            "data-flow-tracer",
+            {"summary": "s", "object_name": "o", "operation": "null_deref",
+             "citations": [_searchfox()]},
+        )
+        self.assertEqual(frag.operation, "null_deref")
+
+    def test_full_dossier_accepts_arbitrary_operation(self):
+        obj = copy.deepcopy(_dossier())
+        obj["data_flow"]["operation"] = "double_free"
+        d = validate_dossier(obj)
+        self.assertEqual(d.data_flow.operation, "double_free")
+
+
 if __name__ == "__main__":
     unittest.main()

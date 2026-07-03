@@ -187,7 +187,11 @@ class DiffHunk(Cited):
 class DataFlowHypothesis(Cited):
     summary: str
     object_name: str = ""
-    operation: Literal["free", "mutate", "null", "oob", "other"] = "other"
+    # Free-form mechanism label (e.g. free / mutate / null_deref / uaf / oob /
+    # double_free / uninitialized / other). Kept a plain str, not a strict enum:
+    # it is descriptive, not grounding-critical (citations are the anti-hallucination
+    # gate), and a narrow Literal caused false-abstains on real model output.
+    operation: str = "other"
     crash_site: StackFrameCitation | None = None
 
 
