@@ -168,7 +168,12 @@ class Candidate(BaseModel):
 class CallEdge(Cited):
     caller_symbol: str
     callee_symbol: str
-    via: Literal["calls-from", "calls-to", "calls-between", "define"]
+    # The searchfox query the edge came from. Kept a free-form str, not a strict
+    # Literal["calls-from","calls-to","calls-between","define"]: the model routinely
+    # annotates it (e.g. "calls-from (virtual)") and a narrow Literal then discards
+    # the WHOLE dossier via parse_and_validate -> a false abstain on an otherwise good
+    # run. Descriptive only (citations are the grounding gate), so a str is safe.
+    via: str = ""
 
 
 class CallPath(BaseModel):
