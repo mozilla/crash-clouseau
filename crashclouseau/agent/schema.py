@@ -186,7 +186,13 @@ class DiffHunk(Cited):
     node: str
     filename: str
     header: str = ""
-    lines: list[DiffLineCitation] = Field(default_factory=list)
+    # Supplementary changed-line detail. Kept an untyped list, NOT
+    # list[DiffLineCitation]: the model often emits bare strings (e.g. the raw diff
+    # text) here, and a strict item type made parse_and_validate discard the WHOLE
+    # dossier -> a false abstain (same failure mode as `via`/`operation`). Grounding
+    # is enforced by the Cited `citations` requirement; well-formed diff_line dicts
+    # here are still picked up by the code view, bare strings are ignored.
+    lines: list = Field(default_factory=list)
 
 
 class DataFlowHypothesis(Cited):
