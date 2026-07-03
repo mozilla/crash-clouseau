@@ -118,3 +118,27 @@ def get_llm():
 
 def get_llm_role(role):
     return get_llm().get("roles", {}).get(role, {})
+
+
+def get_agent_enabled():
+    return get_agent().get("enabled", True)
+
+
+def get_agent_queue():
+    return get_agent().get("queue", "agent")
+
+
+def get_agent_job_timeout():
+    return get_agent().get("job_timeout", 1800)
+
+
+def get_agent_skip_if_existing():
+    return get_agent().get("skip_if_existing", True)
+
+
+def get_agent_max_seed_frames():
+    return get_agent().get("max_seed_frames", 40)
+
+
+def get_agent_version():
+    return get_agent().get("agent_version", 1)

@@ -43,6 +43,12 @@
         "schema_version": 1,
         "min_citations_per_claim": 1,
         "abstain_below_confidence": 0.5,
+        "enabled": true,
+        "queue": "agent",
+        "job_timeout": 1800,
+        "skip_if_existing": true,
+        "max_seed_frames": 40,
+        "agent_version": 1,
         "searchfox":
         {
             "bin": "searchfox-cli",

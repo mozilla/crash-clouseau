@@ -9,7 +9,7 @@ from .logger import logger
 from . import config
 
 
-listen = ["high", "default", "low"]
+listen = ["high", "default", "low", "agent"]
 redis_url = os.getenv("REDIS_URL", config.get_redis())
 # The ssl_* kwargs are only valid for SSL connections (rediss://), e.g. the
 # Heroku Redis add-on; passing them to a plain redis:// connection (local

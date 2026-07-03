@@ -97,6 +97,17 @@ def put_report(uuid, buildid, channel, product, chgset):
     models.UUID.add_stack_hash(uuid, sh, jsh)
     models.UUID.set_analyzed(uuid, useless)
 
+    if not useless:
+        # Fire the evidence agent for a scored report. Lazy import keeps
+        # claude-agent-sdk out of the ingestion/web import path; wrapped so an
+        # enqueue failure can never break ingestion.
+        try:
+            from .agent.orchestrator import enqueue_agent
+
+            enqueue_agent(uuid)
+        except Exception as e:
+            logger.warning("could not enqueue evidence agent for %s: %s", uuid, e)
+
 
 def analyze_one_report(uuid=None):
     """Get a non-analyzed UUID in the database and analyze it"""
