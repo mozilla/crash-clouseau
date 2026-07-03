@@ -29,8 +29,10 @@ _BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
 _GROUND = (
     " You have read-only access. Quote only what a tool actually returned; never "
     "invent a symbol, edge, or line. Every claim you make must carry its citation "
-    "(a searchfox permalink + mangled symbol id, an exact diff line, or an exact "
-    "stack frame). If you cannot ground a claim, say so rather than guess."
+    "(a searchfox permalink + the DEMANGLED/readable symbol name — both copied "
+    "VERBATIM from the tool output; never hand-write a mangled `_Z...` id from "
+    "memory — an exact diff line, or an exact stack frame). If you cannot ground a "
+    "claim, say so rather than guess."
 )
 
 _ROLES: dict[str, dict] = {
