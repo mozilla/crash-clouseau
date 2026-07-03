@@ -5,7 +5,10 @@
 # DATABASE_URL=sqlite:// python -m unittest tests.test_agent_tools
 import asyncio
 import unittest
+from unittest import mock
 
+from crashclouseau.agent import patch_extract
+from crashclouseau.agent.tools.patch import PatchCtx, diff
 from crashclouseau.searchfox import (
     CallEdge,
     CallGraph,
@@ -95,6 +98,40 @@ class TestSdkWiring(unittest.TestCase):
         ctx = SearchfoxCtx(client=_StubClient())
         server = build_sdk_server("searchfox", ctx, sfcg.TOOLS)
         self.assertIsNotNone(server)
+
+
+class TestPatchTool(unittest.TestCase):
+    def _ext(self):
+        fd = patch_extract.FileDiff(
+            filename="dom/base/ChildIterator.cpp", status="modified",
+            hunks=[patch_extract.Hunk(
+                old_start=268, new_start=270, enclosing_function="GetNextChild",
+                added_lines=[(270, "  foo();")], deleted_lines=[(268, "  bar();")])],
+        )
+        return patch_extract.PatchExtraction(
+            node="hg123", channel="nightly", raw_diff="x", files=[fd])
+
+    def test_diff_renders_parsed_patch(self):
+        # git hash -> git2hg -> extract; output is citation-ready (node/file/line/side/content)
+        with mock.patch("crashclouseau.inspector.git2hg", return_value="hg123") as g2h, \
+             mock.patch("crashclouseau.agent.patch_extract.extract",
+                        return_value=self._ext()) as ex:
+            out = asyncio.run(diff(PatchCtx(channel="nightly"), "gitABC"))
+        g2h.assert_called_once_with("gitABC")
+        ex.assert_called_once_with("hg123", "nightly")
+        self.assertIn("dom/base/ChildIterator.cpp", out)
+        self.assertIn("+ 270:   foo();", out)
+        self.assertIn("- 268:   bar();", out)
+        self.assertIn("GetNextChild", out)
+        self.assertIn("gitABC", out)   # shows the candidate node the agent knows
+
+    def test_diff_falls_back_when_no_hg_counterpart(self):
+        ext = patch_extract.PatchExtraction(node="n", channel="beta", raw_diff=None, files=[])
+        with mock.patch("crashclouseau.inspector.git2hg", return_value=""), \
+             mock.patch("crashclouseau.agent.patch_extract.extract", return_value=ext) as ex:
+            out = asyncio.run(diff(PatchCtx(channel="beta"), "already-hg"))
+        ex.assert_called_once_with("already-hg", "beta")  # node used as-is
+        self.assertIn("No diff available", out)
 
 
 if __name__ == "__main__":

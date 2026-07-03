@@ -35,7 +35,9 @@ from crashclouseau.agent import roles
 from crashclouseau.logger import logger
 from crashclouseau.agent.result import CrashTriageResult
 from crashclouseau.agent.schema import parse_and_validate
+from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
+from crashclouseau.agent.tools.patch import PatchCtx
 from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
 from crashclouseau.searchfox import SearchfoxClient
 from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
@@ -90,6 +92,22 @@ def _user_prompt(crash: dict) -> str:
     ]
     if stack:
         lines += ["", "Stack:", str(stack)]
+    candidates = crash.get("candidates") or []
+    if candidates:
+        lines += [
+            "",
+            "Scored candidate changesets (already ranked by proximity to the crash — "
+            "read each with the mcp__patch__diff tool; do not hunt for them):",
+        ]
+        for c in candidates[:20]:
+            parts = [str(c.get("node", ""))]
+            if c.get("score") is not None:
+                parts.append("score={}".format(c["score"]))
+            if c.get("bug"):
+                parts.append("bug={}".format(c["bug"]))
+            if c.get("backedout"):
+                parts.append("backed-out")
+            lines.append("- " + " ".join(parts))
     if extra:
         lines += ["", str(extra)]
     return "\n".join(lines)
@@ -210,8 +228,15 @@ def build_options(
     if searchfox_client is None:
         searchfox_client = SearchfoxClient()
     ctx = SearchfoxCtx(client=searchfox_client)
-    mcp_servers = {"searchfox": build_sdk_server("searchfox", ctx, searchfox_cg.TOOLS)}
-    allowed = [*_BUILTIN_TOOLS, "Task", *roles.searchfox_tool_ids()]
+    patch_ctx = PatchCtx(channel=crash.get("channel", "nightly"))
+    mcp_servers = {
+        "searchfox": build_sdk_server("searchfox", ctx, searchfox_cg.TOOLS),
+        "patch": build_sdk_server("patch", patch_ctx, patch_tools.TOOLS),
+    }
+    allowed = [
+        *_BUILTIN_TOOLS, "Task",
+        *roles.searchfox_tool_ids(), *roles.patch_tool_ids(),
+    ]
 
     if recorder is not None:
         _, actions_server = actions_server_for(recorder, types=NEEDINFO_ACTIONS)

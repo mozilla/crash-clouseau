@@ -80,6 +80,21 @@ def build_seed(uuid):
         )
         for f in frames
     )
+    # The scored candidate changesets are already in the DB (frame.changesets); hand
+    # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
+    # instead of hunting for candidates with searchfox/Bash.
+    cand: dict = {}
+    for f in frames:
+        for node, cs in (f.get("changesets") or {}).items():
+            score = cs.get("score") or 0
+            if node not in cand or score > (cand[node].get("score") or 0):
+                cand[node] = {
+                    "node": node,
+                    "score": score,
+                    "bug": cs.get("bugid"),
+                    "backedout": cs.get("backedout"),
+                }
+    candidates = sorted(cand.values(), key=lambda c: -(c.get("score") or 0))
     return {
         "uuid": uuid,
         "signature": info.get("signature", ""),
@@ -89,6 +104,7 @@ def build_seed(uuid):
         "version": info.get("version"),
         "frames": frames,
         "stack": stack_text,
+        "candidates": candidates,
         "raw_crash": raw_crash,
     }
 

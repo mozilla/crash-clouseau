@@ -89,6 +89,30 @@ class TestBuildOptions(unittest.TestCase):
         o = self._opts()
         self.assertNotIn(ACTIONS_SERVER_NAME, o.mcp_servers)
 
+    def test_patch_server_wired(self):
+        o = self._opts()
+        self.assertIn("patch", o.mcp_servers)
+        self.assertIn("mcp__patch__diff", o.allowed_tools)
+        # patch-scout + data-flow-tracer get the deterministic patch tool; skeptic doesn't
+        self.assertIn("mcp__patch__diff", o.agents["patch-scout"].tools)
+        self.assertIn("mcp__patch__diff", o.agents["data-flow-tracer"].tools)
+        self.assertNotIn("mcp__patch__diff", o.agents["skeptic"].tools)
+
+    def test_user_prompt_lists_candidates(self):
+        crash = dict(_CRASH, candidates=[
+            {"node": "abc123def456", "score": 9, "bug": 111, "backedout": False},
+            {"node": "ffff00001111", "score": 3, "bug": None, "backedout": True},
+        ])
+        p = triage._user_prompt(crash)
+        self.assertIn("abc123def456", p)
+        self.assertIn("score=9", p)
+        self.assertIn("bug=111", p)
+        self.assertIn("mcp__patch__diff", p)   # steer to the tool, not shelling
+        self.assertIn("backed-out", p)
+
+    def test_user_prompt_no_candidate_block_when_absent(self):
+        self.assertNotIn("candidate changesets", triage._user_prompt(_CRASH))
+
 
 class TestBuildResult(unittest.TestCase):
     def test_valid_handoff(self):

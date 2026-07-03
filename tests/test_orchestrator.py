@@ -117,6 +117,25 @@ class TestBuildSeed(unittest.TestCase):
         self.assertEqual(seed["signature"], "Foo::Bar")
         self.assertIn("Foo::Bar", seed["stack"])
 
+    def test_seed_candidates_ranked_and_deduped(self):
+        res = {"frames": [
+            {"stackpos": 0, "function": "F", "filename": "a.cpp", "line": 1,
+             "changesets": {"n1": {"score": 3, "bugid": 111, "backedout": False},
+                            "n2": {"score": 9, "bugid": 222, "backedout": True}}},
+            {"stackpos": 1, "function": "G", "filename": "b.cpp", "line": 2,
+             "changesets": {"n1": {"score": 5, "bugid": 111, "backedout": False}}},
+        ]}
+        with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, {})), \
+             mock.patch.object(orch.models.UUID, "get_info",
+                               return_value={"signature": "F", "channel": "nightly",
+                                             "product": "Firefox", "buildid": "x", "version": "1"}), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+            seed = orch.build_seed("u-1")
+        cands = seed["candidates"]
+        self.assertEqual([c["node"] for c in cands], ["n2", "n1"])  # by score desc
+        self.assertEqual(cands[0], {"node": "n2", "score": 9, "bug": 222, "backedout": True})
+        self.assertEqual(cands[1]["score"], 5)  # n1 deduped to its max score across frames
+
 
 class TestRunEvidenceAgent(unittest.TestCase):
     def _patches(self):

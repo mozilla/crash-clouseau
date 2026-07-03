@@ -21,6 +21,9 @@ _SEARCHFOX = [
     f"mcp__searchfox__{name}"
     for name in ("calls_from", "calls_to", "calls_between", "define", "lookup", "search")
 ]
+# Deterministic #14 patch-extraction, exposed as a tool so patch-scout / data-flow
+# read a candidate's diff in one fast call instead of shelling out.
+_PATCH = ["mcp__patch__diff"]
 _BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
 
 _GROUND = (
@@ -53,20 +56,25 @@ _ROLES: dict[str, dict] = {
     "patch-scout": {
         "description": "Intersect the neighborhood with recent patches and summarize, "
         "in one cited line, what each candidate changed.",
-        "prompt": "You are the patch scout. Given the neighborhood functions and the "
-        "candidate diffs, match changed functions to the neighborhood and write a "
-        "one-line, fully-cited semantic summary per candidate (cite the diff line and "
-        "the searchfox symbol)." + _GROUND,
-        "tools": [*_BUILTIN_READ, "mcp__searchfox__define", "mcp__searchfox__search"],
+        "prompt": "You are the patch scout. For each candidate changeset, call the "
+        "`mcp__patch__diff` tool to get its parsed diff (changed files, hunks with "
+        "exact line numbers + content + enclosing function) — do NOT shell out with "
+        "git/hg. Match changed functions to the neighborhood and write a one-line, "
+        "fully-cited semantic summary per candidate (cite the diff line and the "
+        "searchfox symbol)." + _GROUND,
+        "tools": [*_BUILTIN_READ, "mcp__patch__diff",
+                  "mcp__searchfox__define", "mcp__searchfox__search"],
     },
     "data-flow-tracer": {
         "description": "Read the function bodies along a call path and decide whether "
         "a change can free/mutate/null/overrun the crashing value.",
         "prompt": "You are the data-flow tracer. For a (candidate patch, crash frame) "
-        "pair, read the path bodies with define and reason about whether the change "
-        "can free/mutate/null/overrun the value the crash site dereferences. Return a "
-        "cited hypothesis or 'insufficient'." + _GROUND,
-        "tools": [*_BUILTIN_READ, "mcp__searchfox__define", "mcp__searchfox__search"],
+        "pair, read the changed lines with `mcp__patch__diff` and the path bodies with "
+        "define, then reason about whether the change can free/mutate/null/overrun the "
+        "value the crash site dereferences. Return a cited hypothesis or "
+        "'insufficient'." + _GROUND,
+        "tools": [*_BUILTIN_READ, "mcp__patch__diff",
+                  "mcp__searchfox__define", "mcp__searchfox__search"],
     },
     "skeptic": {
         "description": "Adversarially re-verify each assembled claim (edges, diff "
@@ -82,6 +90,10 @@ _ROLES: dict[str, dict] = {
 
 def searchfox_tool_ids() -> list[str]:
     return list(_SEARCHFOX)
+
+
+def patch_tool_ids() -> list[str]:
+    return list(_PATCH)
 
 
 def role_names() -> list[str]:
