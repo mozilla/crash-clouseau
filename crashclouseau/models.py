@@ -16,6 +16,16 @@ from .logger import logger
 CHANNEL_TYPE = db.Enum(*config.get_channels(), name="CHANNEL_TYPE")
 PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
 
+# Evidence-agent persistence (#04). The dossier JSON content schema is owned by
+# the dossier-builder sub-plan (#03); this layer stores the envelope + verdict.
+DOSSIER_SCHEMA_VERSION = 1
+VERDICT_TYPE = db.Enum(
+    "culprit", "unrelated", "abstain", "error", name="VERDICT_TYPE"
+)
+AGENT_STATUS_TYPE = db.Enum(
+    "pending", "running", "done", "error", name="AGENT_STATUS_TYPE"
+)
+
 
 class LastDate(db.Model):
     __tablename__ = "lastdate"
@@ -1322,6 +1332,209 @@ class CrashStack(db.Model):
             }
 
         return res, uuid_info
+
+
+class Dossier(db.Model):
+    __tablename__ = "dossiers"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    uuidid = db.Column(
+        db.Integer,
+        db.ForeignKey("uuids.id", ondelete="CASCADE"),
+        index=True,
+        unique=True,
+    )
+    schema_version = db.Column(db.Integer, default=DOSSIER_SCHEMA_VERSION)
+    payload = db.Column(pg.JSONB)
+    status = db.Column(AGENT_STATUS_TYPE, default="pending")
+    worker_models = db.Column(pg.JSONB, default=list)
+    seed_score = db.Column(db.Integer, nullable=True)
+    input_tokens = db.Column(db.Integer, default=0)
+    output_tokens = db.Column(db.Integer, default=0)
+    cache_read_tokens = db.Column(db.Integer, default=0)
+    cost_usd = db.Column(db.Numeric(10, 4), nullable=True)
+    created = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
+    )
+    updated = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        server_default=db.func.now(),
+        onupdate=db.func.now(),
+    )
+
+    __table_args__ = (db.UniqueConstraint("uuidid", name="uix_dossiers_uuidid"),)
+
+    @staticmethod
+    def upsert(
+        uuid,
+        payload=None,
+        status=None,
+        worker_models=None,
+        seed_score=None,
+        input_tokens=None,
+        output_tokens=None,
+        cache_read_tokens=None,
+        cost_usd=None,
+        commit=True,
+    ):
+        uuidid = UUID.get_id(uuid)
+        provided = {
+            k: v
+            for k, v in (
+                ("payload", payload),
+                ("status", status),
+                ("worker_models", worker_models),
+                ("seed_score", seed_score),
+                ("input_tokens", input_tokens),
+                ("output_tokens", output_tokens),
+                ("cache_read_tokens", cache_read_tokens),
+                ("cost_usd", cost_usd),
+            )
+            if v is not None
+        }
+        ins = pg.insert(Dossier).values(
+            uuidid=uuidid, schema_version=DOSSIER_SCHEMA_VERSION, **provided
+        )
+        upd = ins.on_conflict_do_update(
+            index_elements=["uuidid"], set_={**provided, "updated": db.func.now()}
+        )
+        db.session.execute(upd)
+        if commit:
+            db.session.commit()
+
+    @staticmethod
+    def set_status(uuid, status, commit=True):
+        uuidid = UUID.get_id(uuid)
+        q = db.session.query(Dossier).filter(Dossier.uuidid == uuidid)
+        q.update({"status": status, "updated": db.func.now()})
+        if commit:
+            db.session.commit()
+
+    @staticmethod
+    def add_usage(
+        uuid,
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cost_usd=None,
+        commit=True,
+    ):
+        uuidid = UUID.get_id(uuid)
+        q = db.session.query(Dossier).filter(Dossier.uuidid == uuidid)
+        upd = {
+            "input_tokens": Dossier.input_tokens + input_tokens,
+            "output_tokens": Dossier.output_tokens + output_tokens,
+            "cache_read_tokens": Dossier.cache_read_tokens + cache_read_tokens,
+            "updated": db.func.now(),
+        }
+        if cost_usd is not None:
+            upd["cost_usd"] = cost_usd
+        q.update(upd, synchronize_session=False)
+        if commit:
+            db.session.commit()
+
+    @staticmethod
+    def get_by_uuid(uuid):
+        return (
+            db.session.query(Dossier)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .filter(UUID.uuid == uuid)
+            .first()
+        )
+
+    @staticmethod
+    def get_pending(limit=1):
+        return (
+            db.session.query(Dossier)
+            .filter(Dossier.status == "pending")
+            .order_by(Dossier.created)
+            .limit(limit)
+            .all()
+        )
+
+
+class Verdict(db.Model):
+    __tablename__ = "verdicts"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    uuidid = db.Column(
+        db.Integer,
+        db.ForeignKey("uuids.id", ondelete="CASCADE"),
+        index=True,
+        unique=True,
+    )
+    dossierid = db.Column(
+        db.Integer, db.ForeignKey("dossiers.id", ondelete="CASCADE"), nullable=True
+    )
+    verdict = db.Column(VERDICT_TYPE)
+    confidence = db.Column(db.Integer, nullable=True)
+    principal_model = db.Column(db.String(64))
+    rationale = db.Column(db.Text)
+    evidence = db.Column(pg.JSONB, default=list)
+    effort = db.Column(db.String(16), nullable=True)
+    created = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
+    )
+
+    __table_args__ = (db.UniqueConstraint("uuidid", name="uix_verdicts_uuidid"),)
+
+    @staticmethod
+    def set(
+        uuid,
+        verdict,
+        confidence=None,
+        principal_model=None,
+        rationale=None,
+        evidence=None,
+        effort=None,
+        dossierid=None,
+        commit=True,
+    ):
+        uuidid = UUID.get_id(uuid)
+        provided = {
+            k: v
+            for k, v in (
+                ("verdict", verdict),
+                ("confidence", confidence),
+                ("principal_model", principal_model),
+                ("rationale", rationale),
+                ("evidence", evidence),
+                ("effort", effort),
+                ("dossierid", dossierid),
+            )
+            if v is not None
+        }
+        ins = pg.insert(Verdict).values(uuidid=uuidid, **provided)
+        upd = ins.on_conflict_do_update(index_elements=["uuidid"], set_=provided)
+        db.session.execute(upd)
+        if commit:
+            db.session.commit()
+
+    @staticmethod
+    def get_by_uuid(uuid):
+        return (
+            db.session.query(Verdict)
+            .join(UUID, Verdict.uuidid == UUID.id)
+            .filter(UUID.uuid == uuid)
+            .first()
+        )
+
+    @staticmethod
+    def get_for_build(buildid, product, channel):
+        bdate = utils.get_build_date(buildid)
+        return (
+            db.session.query(Verdict)
+            .select_from(Verdict)
+            .join(UUID, Verdict.uuidid == UUID.id)
+            .join(Build, UUID.buildid == Build.id)
+            .filter(
+                Build.buildid == bdate,
+                Build.product == product,
+                Build.channel == channel,
+            )
+            .all()
+        )
 
 
 def commit():
