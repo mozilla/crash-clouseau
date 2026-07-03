@@ -1453,6 +1453,35 @@ class Dossier(db.Model):
             .all()
         )
 
+    @staticmethod
+    def mark_action_applied(uuid, index, result_id, applied_at=None, commit=True):
+        """Record the apply/replay outcome of one recorded action (#12).
+
+        Recorded actions live inside ``payload["actions"]`` (a list written by the
+        orchestrator, hackbot ``ActionsRecorder`` shape). This stamps
+        ``applied_at``/``result_id`` on the action at ``index`` so the human-confirmed
+        apply step is idempotent (a re-apply is a no-op) and auditable. Reassigns the
+        whole ``payload`` dict so SQLAlchemy flags the JSONB column dirty (it is a
+        plain ``pg.JSONB``, not a ``MutableDict``). No-op when the row/index is absent.
+        """
+        d = Dossier.get_by_uuid(uuid)
+        if d is None or not d.payload:
+            return False
+        payload = dict(d.payload)
+        actions = list(payload.get("actions") or [])
+        if index < 0 or index >= len(actions):
+            return False
+        action = dict(actions[index])
+        action["applied_at"] = applied_at or datetime.now(pytz.utc).isoformat()
+        action["result_id"] = result_id
+        actions[index] = action
+        payload["actions"] = actions
+        d.payload = payload
+        db.session.add(d)
+        if commit:
+            db.session.commit()
+        return True
+
 
 class Verdict(db.Model):
     __tablename__ = "verdicts"
@@ -1535,6 +1564,47 @@ class Verdict(db.Model):
             )
             .all()
         )
+
+    @staticmethod
+    def get_evidence(uuid):
+        """Read the persisted verdict + dossier + recorded actions for one UUID (#12).
+
+        Returns a plain dict the UI/API render (never an ORM row), or ``None`` when
+        no verdict row exists (panel hidden / apply route 404s). ``dossier`` is the
+        #03 dossier sub-object of ``Dossier.payload``; ``actions`` is the recorded
+        ``[{type, params, reasoning[, applied_at, result_id]}]`` list the orchestrator
+        stored under ``payload["actions"]``. Read-only.
+        """
+        row = (
+            db.session.query(Verdict, Dossier)
+            .select_from(Verdict)
+            .join(UUID, Verdict.uuidid == UUID.id)
+            .outerjoin(Dossier, Dossier.uuidid == UUID.id)
+            .filter(UUID.uuid == uuid)
+            .first()
+        )
+        if row is None:
+            return None
+        v, d = row
+        payload = (d.payload if d is not None else None) or {}
+        return {
+            "uuid": uuid,
+            "verdict": v.verdict,
+            "confidence": v.confidence,
+            "principal_model": v.principal_model,
+            "rationale": v.rationale,
+            "evidence": v.evidence or [],
+            "effort": v.effort,
+            "dossier": payload.get("dossier") or {},
+            "actions": payload.get("actions") or [],
+            "over_budget": bool(payload.get("over_budget")),
+            "status": d.status if d is not None else None,
+            "cost_usd": (
+                float(d.cost_usd)
+                if (d is not None and d.cost_usd is not None)
+                else None
+            ),
+        }
 
 
 def commit():

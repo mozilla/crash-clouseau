@@ -148,5 +148,26 @@ def get_patch_extraction_cfg():
     return get_agent().get("patch_extraction", {})
 
 
+def get_agent_ui():
+    """UI/apply knobs for the evidence panel + apply/replay step (#12).
+
+    Normalized so callers never re-derive defaults: ``show_abstain`` (show the
+    panel for ABSTAIN verdicts), ``high_confidence_label`` (badge text),
+    ``apply_min_confidence`` (numeric 0-100 gate — ``Verdict.confidence`` is stored
+    as an int, high==85 via CONFIDENCE_SCORE), and ``enabled_types`` (the ONLY
+    recorded action types the human-confirmed apply route is allowed to execute).
+    """
+    agent = get_agent()
+    ui = agent.get("ui", {})
+    return {
+        "show_abstain": ui.get("show_abstain", False),
+        "high_confidence_label": ui.get("high_confidence_label", "STRONG EVIDENCE"),
+        "apply_min_confidence": agent.get("confidence", {}).get("apply_min", 85),
+        "enabled_types": agent.get("apply", {}).get(
+            "enabled_types", ["bugzilla.add_comment", "bugzilla.update_bug"]
+        ),
+    }
+
+
 def get_eval():
     return _get_global().get("eval", {})

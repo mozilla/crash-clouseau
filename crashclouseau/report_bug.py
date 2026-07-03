@@ -73,8 +73,12 @@ def get_stats(data, buildid):
         return False, {"count": count, "installs": installs}
 
 
-def finalize_comment(bzquery, first, stats, info, changeset, bugid):
-    """Finalize the comment to put in the bug report"""
+def finalize_comment(bzquery, first, stats, info, changeset, bugid, evidence_summary=None):
+    """Finalize the comment to put in the bug report.
+
+    ``evidence_summary`` (#12) is the principal's evidence lines. It is appended to
+    the drafted comment ONLY when provided, so the ``bug.txt`` render — and thus the
+    drafted comment when omitted — is byte-identical to before."""
     comment = bzquery["comment"][0]
     env = Environment(loader=FileSystemLoader("templates"))
     template = env.get_template("bug.txt")
@@ -97,12 +101,14 @@ def finalize_comment(bzquery, first, stats, info, changeset, bugid):
         first=first,
     )
     comment = comment.replace("\\n", "\n")
+    if evidence_summary:
+        comment = comment.rstrip("\n") + "\n\n" + evidence_summary + "\n"
     bzquery["comment"] = comment
     bzurl = "https://bugzilla.mozilla.org/enter_bug.cgi"
     return bzurl + "?" + urlencode(bzquery, True)
 
 
-async def get_info_helper(uuid, changeset):
+async def get_info_helper(uuid, changeset, evidence_summary=None):
     info = models.UUID.get_info(uuid)
     bugid = models.Node.get_bugid(changeset, info["channel"])
     sgn = info["signature"]
@@ -141,13 +147,17 @@ async def get_info_helper(uuid, changeset):
     first, stats = get_stats(r3.json(), int(info["buildid"]))
     bzdata = r2.json() if bugid else {}
     ni = improve(bzquery, bzdata, bugid)
-    url = finalize_comment(bzquery, first, stats, info, changeset, bugid)
+    url = finalize_comment(
+        bzquery, first, stats, info, changeset, bugid, evidence_summary=evidence_summary
+    )
 
     bzw.wait()
 
     return url, ni, sgn, bugsdata
 
 
-def get_info(uuid, changeset):
+def get_info(uuid, changeset, evidence_summary=None):
     """Get the info (comment and Bugzilla stuff) to put in the bug report"""
-    return asyncio.get_event_loop().run_until_complete(get_info_helper(uuid, changeset))
+    return asyncio.get_event_loop().run_until_complete(
+        get_info_helper(uuid, changeset, evidence_summary=evidence_summary)
+    )

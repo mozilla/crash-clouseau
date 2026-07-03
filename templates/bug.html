@@ -38,5 +38,14 @@
     <p>
       <a href="{{ url }}">Create a new bug</a>{% if needinfo %} and ni on <a href="mailto:{{ needinfo }}">{{ needinfo }}</a>{% endif %}.
     </p>
+    {% if evidence_summary -%}
+    <div class="evidence-draft">
+      <h3>Clouseau evidence</h3>
+      <pre>{{ evidence_summary|e }}</pre>
+      {% if culprit_author -%}
+      <p>Suspected regressor author (consider a needinfo): {% if culprit_ni %}<a href="mailto:{{ culprit_ni }}">{{ culprit_author|e }}</a>{% else %}{{ culprit_author|e }}{% endif %}.</p>
+      {% endif -%}
+    </div>
+    {% endif -%}
   </body>
 </html>

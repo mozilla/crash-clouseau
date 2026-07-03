@@ -145,3 +145,237 @@ s.red {
 .listbugs {
     margin: 0 0 0.5em 0;
 }
+
+/* Evidence panel (#12) */
+.evidence-panel {
+    border: 1px solid #ccc;
+    border-left: 4px solid #0060df;
+    background-color: #f7f9fc;
+    padding: 0.5em 1em 1em 1em;
+    margin: 1em 0;
+}
+
+.evidence-panel h2 {
+    margin: 0.3em 0 0.6em 0;
+    font-size: 1.4em;
+}
+
+.evidence-panel h3 {
+    margin: 0.2em 0;
+    font-size: 1.1em;
+}
+
+.evidence-section {
+    margin: 0.8em 0;
+    padding-top: 0.4em;
+    border-top: 1px solid #e0e0e0;
+}
+
+.confidence-badge {
+    display: inline-block;
+    padding: 0.1em 0.6em;
+    border-radius: 0.8em;
+    font-size: 0.75em;
+    font-weight: bold;
+    color: #fff;
+    vertical-align: middle;
+}
+
+.confidence-badge.high { background-color: #2e7d32; }
+.confidence-badge.medium { background-color: #e6a700; color: #222; }
+.confidence-badge.low { background-color: #c05621; }
+.confidence-badge.abstain { background-color: #777; }
+
+.model-tag {
+    display: inline-block;
+    margin-left: 0.4em;
+    padding: 0.1em 0.5em;
+    border-radius: 0.4em;
+    background-color: #e0e0e0;
+    font-size: 0.7em;
+    font-weight: normal;
+    vertical-align: middle;
+}
+
+.model-tag.warn { background-color: #f2c94c; }
+
+.muted { color: #666; }
+
+/* Readability: long prose (data-flow summary, mechanism/consistency, abstain
+ * rationale, reasoning) is easier to read at a bounded measure with more leading. */
+.evidence-panel p,
+.evidence-panel li {
+    line-height: 1.6;
+}
+
+.evidence-panel > p,
+.evidence-section > p,
+.reasoning {
+    max-width: 78ch;
+}
+
+.flag {
+    display: inline-block;
+    padding: 0 0.4em;
+    background-color: #c0392b;
+    color: #fff;
+    border-radius: 0.3em;
+    font-size: 0.85em;
+}
+
+.cite {
+    font-size: 0.9em;
+}
+
+ul.cites, ol.call-path, ul.skeptic {
+    margin: 0.2em 0;
+    padding-left: 1.4em;
+}
+
+ol.call-path code {
+    background-color: #eef;
+    padding: 0 0.2em;
+}
+
+.via { color: #888; font-size: 0.85em; }
+
+.skeptic-status {
+    display: inline-block;
+    min-width: 3em;
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 0.8em;
+}
+
+.skeptic-pass .skeptic-status { color: #2e7d32; }
+.skeptic-fail .skeptic-status { color: #c0392b; }
+.skeptic-unverifiable .skeptic-status { color: #e6a700; }
+
+.audit-trail .audit-action {
+    border: 1px solid #ddd;
+    background-color: #fff;
+    padding: 0.5em;
+    margin: 0.5em 0;
+}
+
+.audit-action.applied {
+    border-left: 4px solid #2e7d32;
+    opacity: 0.85;
+}
+
+.action-type {
+    font-family: monospace;
+    font-weight: bold;
+}
+
+.applied-mark {
+    color: #2e7d32;
+    font-size: 0.85em;
+    margin-left: 0.5em;
+}
+
+.action-body {
+    background-color: #f3f3f3;
+    border: 1px solid #e0e0e0;
+    padding: 0.4em;
+    margin: 0.3em 0;
+    max-height: 18em;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.action-change strong { color: #0060df; }
+
+.reasoning { color: #444; margin: 0.2em 0; }
+
+.apply-results { margin: 0.5em 0; }
+
+.evidence-draft pre {
+    background-color: #f3f3f3;
+    border: 1px solid #e0e0e0;
+    padding: 0.4em;
+    white-space: pre-wrap;
+}
+
+/* Two-pane code view (#12): searchfox source | changed lines from the dossier */
+.codeview-body { margin: 0; }
+
+.codeview-header {
+    padding: 0.5em 1em;
+    background: #f0f0f0;
+    border-bottom: 1px solid #ccc;
+}
+
+.codeview {
+    display: flex;
+    height: calc(100vh - 2.6em);
+}
+
+.codeview-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid #ccc;
+}
+
+.codeview-pane:last-child { border-right: none; }
+
+.pane-label {
+    padding: 0.3em 0.7em;
+    background: #e8e8e8;
+    border-bottom: 1px solid #ddd;
+    font-weight: bold;
+}
+
+.codeview-pane iframe {
+    flex: 1;
+    width: 100%;
+    border: 0;
+}
+
+.diff {
+    flex: 1;
+    overflow: auto;
+    background: #fbfbfb;
+    padding: 0.4em 0;
+}
+
+a.dl {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+}
+
+.dl {
+    white-space: pre;
+    font-family: Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 0 0.6em;
+    cursor: pointer;
+}
+
+.dl:hover { box-shadow: inset 3px 0 0 #0060df; }
+
+.dl-added { background: #e6ffed; }
+.dl-deleted { background: #ffeef0; }
+
+.dl .ln {
+    display: inline-block;
+    width: 4em;
+    margin-right: 0.6em;
+    color: #999;
+    text-align: right;
+    user-select: none;
+}
+
+.dl .mark {
+    display: inline-block;
+    width: 1.2em;
+    text-align: center;
+}
+
+.dl-added .mark { color: #22863a; }
+.dl-deleted .mark { color: #cb2431; }

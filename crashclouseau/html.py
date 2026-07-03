@@ -4,10 +4,13 @@
 
 from flask import request, render_template, abort, redirect
 import json
+import re
 from libmozdata.hgmozilla import Mercurial
-from . import utils, models, report_bug
+from . import utils, models, report_bug, bugzilla_apply
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
+
+_EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
 
 
 def crashstack():
@@ -23,6 +26,13 @@ def crashstack():
             channel,
             uuid_info["product"],
         )
+        evidence = bugzilla_apply.build_evidence(uuid)
+        # Show the panel for strong-evidence verdicts; for ABSTAIN only when the
+        # UI is configured to surface them.
+        vt = evidence["verdict"] if evidence else None
+        show_evidence = bool(
+            evidence and (vt == "culprit" or evidence["ui"]["show_abstain"])
+        )
         return render_template(
             "crashstack.html",
             uuid_info=uuid_info,
@@ -32,6 +42,8 @@ def crashstack():
             repo_url=repo_url,
             channel=channel,
             sgn_url=sgn_url,
+            evidence=evidence,
+            show_evidence=show_evidence,
         )
     abort(404)
 
@@ -99,6 +111,95 @@ def reports_no_score():
         abort(404)
 
 
+# searchfox tree per Firefox channel (post hg->git migration; mozilla-* names
+# 301-redirect to these). Unknown channels fall back to the main tree.
+_SF_TREE = {
+    "nightly": "firefox-main",
+    "beta": "firefox-beta",
+    "release": "firefox-release",
+}
+_SF_DEFAULT_TREE = "firefox-main"
+
+
+def _searchfox_tree(channel):
+    return _SF_TREE.get(channel, _SF_DEFAULT_TREE)
+
+
+def _collect_diff_lines(dossier, filename):
+    """Gather the persisted ``diff_line`` citations for one file from anywhere in the
+    dossier (hunks, call-path edges, data-flow, verdict claims) — the changed lines
+    are already evidence, so the diff pane needs no fetch (cloud-safe). Deduped by
+    (line, side, content), sorted by line."""
+    out = {}
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("kind") == "diff_line" and node.get("filename") == filename:
+                key = (node.get("line"), node.get("side"), node.get("content"))
+                out.setdefault(key, {
+                    "line": node.get("line") or 0,
+                    "side": node.get("side") or "context",
+                    "content": node.get("content") or "",
+                })
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(dossier or {})
+    return sorted(
+        out.values(),
+        key=lambda d: (d["line"], 0 if d["side"] == "deleted" else 1),
+    )
+
+
+def codeview():
+    """Two-pane code view for a touched file (#12): searchfox source on the left,
+    the changed lines (rendered from the persisted dossier evidence) on the right.
+    No hg/GitHub web viewer, no fetch — cloud-safe."""
+    uuid = request.args.get("uuid", "")
+    filename = request.args.get("filename", "")
+    node = request.args.get("node", "")          # regressor changeset (for display)
+    line = request.args.get("line", "")
+    channel = request.args.get("channel", "")
+    rev = request.args.get("rev", "")            # build source revision (from the DB)
+    tree = request.args.get("repo", "") or _searchfox_tree(channel)
+
+    dossier = {}
+    if uuid:
+        ev = bugzilla_apply.build_evidence(uuid)
+        if ev:
+            dossier = ev.get("dossier") or {}
+    diff_lines = _collect_diff_lines(dossier, filename) if filename else []
+
+    if filename and rev:
+        # Pin to the exact revision the crashing build was built from, on the
+        # channel's tree, so the source matches the crash (not tip). searchfox
+        # accepts the DB's 12-char short rev.
+        sf_base = "https://searchfox.org/{}/rev/{}/{}".format(tree, rev, filename)
+    elif filename:
+        sf_base = "https://searchfox.org/{}/source/{}".format(tree, filename)
+    else:
+        sf_base = "https://searchfox.org/{}/".format(tree)
+    # searchfox anchors each line as id="line-<n>" (NOT id="<n>"), so the fragment
+    # must be "#line-<n>" for the browser to natively scroll to it.
+    sf_src = sf_base + ("#line-{}".format(line) if line else "")
+
+    return render_template(
+        "codeview.html",
+        filename=filename,
+        node=node,
+        line=line,
+        channel=channel,
+        rev=rev,
+        tree=tree,
+        sf_base=sf_base,
+        sf_src=sf_src,
+        diff_lines=diff_lines,
+    )
+
+
 def diff():
     filename = request.args.get("filename", "")
     line = request.args.get("line", "")
@@ -119,12 +220,62 @@ def diff():
     )
 
 
+def _draft_evidence(uuid, changeset):
+    """Evidence summary + suspected-regressor author for the preserved enter_bug
+    draft (#12). Returns ``(summary_text|None, ni_email|None, author_display|None)``.
+    The author is surfaced only when the dossier's culprit node matches the drafted
+    changeset. Degrades to ``(None, None, None)`` for any non-culprit/absent verdict."""
+    try:
+        ev = models.Verdict.get_evidence(uuid)
+    except Exception:
+        ev = None
+    if not ev or ev.get("verdict") != "culprit":
+        return None, None, None
+
+    dossier = ev.get("dossier") or {}
+    cand = dossier.get("candidate") or {}
+    vdict = dossier.get("verdict") or {}
+    mech = ((vdict.get("mechanism") or {}).get("statement") or "").strip()
+    conf = vdict.get("confidence") or ""
+
+    lines = []
+    if mech:
+        head = "Clouseau evidence" + (" (confidence {})".format(conf) if conf else "")
+        lines.append("{}: {}".format(head, mech))
+
+    node = cand.get("node") or ""
+    author = (cand.get("author") or "").strip()
+    if node:
+        detail = "Suspected regressor: {}".format(node)
+        if cand.get("bug"):
+            detail += " (bug {})".format(cand["bug"])
+        if author:
+            detail += " by {}".format(author)
+        lines.append(detail + ".")
+
+    summary = "\n".join(lines) if lines else None
+
+    matches = bool(node and changeset and node[:12] == changeset[:12])
+    author_display = author if (matches and author) else None
+    ni_email = None
+    if author_display:
+        m = _EMAIL_RE.search(author_display)
+        if m:
+            ni_email = m.group(1)
+        elif "@" in author_display and " " not in author_display:
+            ni_email = author_display
+    return summary, ni_email, author_display
+
+
 def bug():
     uuid = request.args.get("uuid", "")
     changeset = request.args.get("changeset", "")
 
     if uuid and changeset:
-        url, ni, signature, bugdata = report_bug.get_info(uuid, changeset)
+        summary, culprit_ni, culprit_author = _draft_evidence(uuid, changeset)
+        url, ni, signature, bugdata = report_bug.get_info(
+            uuid, changeset, evidence_summary=summary
+        )
         bugdata = sorted(bugdata.items())
         return render_template(
             "bug.html",
@@ -133,6 +284,9 @@ def bug():
             needinfo=ni,
             bugdata=bugdata,
             signature=signature,
+            evidence_summary=summary,
+            culprit_author=culprit_author,
+            culprit_ni=culprit_ni,
         )
     abort(404)
 

@@ -38,3 +38,45 @@ def reports():
     res = models.Signature.get_reports(signatures, product, channel)
 
     return jsonify(res)
+
+
+def evidence():
+    """Read-only verdict/dossier/recorded-actions JSON for the evidence panel (#12).
+    Writes nothing to Bugzilla or the DB. ``verdict`` is ``None`` when no row exists."""
+    from crashclouseau import bugzilla_apply
+
+    uuid = request.args.get("uuid", "")
+    if not uuid:
+        abort(400, "No uuid provided")
+
+    ev = bugzilla_apply.build_evidence(uuid)
+    if ev is None:
+        return jsonify({"uuid": uuid, "verdict": None})
+    return jsonify(ev)
+
+
+def apply_actions():
+    """Execute the human-confirmed subset of recorded Bugzilla actions (#12).
+
+    The ONLY write path to Bugzilla in the product, reached only from the POST route
+    behind an explicit browser ``confirm()``. Trusts only ``{uuid, indices}``; the
+    persisted action bodies are re-read server-side."""
+    from crashclouseau import bugzilla_apply
+
+    data = request.get_json(silent=True) or {}
+    uuid = data.get("uuid", "")
+    indices = data.get("indices")
+    if not uuid:
+        abort(400, "No uuid provided")
+    ok_indices = isinstance(indices, list) and all(
+        isinstance(i, int) and not isinstance(i, bool) for i in indices
+    )
+    if not ok_indices:
+        abort(400, "indices must be a list of integers")
+
+    try:
+        results = bugzilla_apply.apply_recorded_actions(uuid, indices)
+    except LookupError:
+        abort(404, "No dossier for uuid")
+
+    return jsonify({"uuid": uuid, "results": results})

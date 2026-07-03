@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/clouseau.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=1">
+    <link rel="stylesheet" href="/clouseau.css?v=3">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script src="/clouseau.js"></script>
@@ -41,6 +41,169 @@
     </div>
     <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.org/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
     <p>The crash signature is <a href="{{ sgn_url }}">{{ uuid_info['signature']|e }}</a>.</p>
+    {% macro cite(c, node, chan, uuid) -%}
+      {% if c and c['kind'] == 'searchfox' -%}
+        {% set pl = c['permalink'] or '' -%}
+        {% if pl.startswith('https://') or pl.startswith('http://') -%}
+        <a class="cite" href="{{ pl }}" target="_blank" rel="noopener">searchfox:{{ c['symbol_id']|e }}{% if c['rev'] %} @ {{ c['rev'][:12] }} (indexed rev){% endif %}</a>
+        {% else -%}
+        <span class="cite">searchfox:{{ c['symbol_id']|e }}{% if pl %} ({{ pl|e }}){% endif %}</span>
+        {% endif -%}
+      {% elif c and c['kind'] == 'diff_line' -%}
+        <a class="cite" href="/codeview.html?uuid={{ uuid|urlencode }}&filename={{ c['filename']|urlencode }}&node={{ c['node'] }}&line={{ c['line'] }}&channel={{ chan }}&rev={{ node }}" target="_blank" rel="noopener">{{ c['filename']|e }}:{{ c['line'] }} ({{ c['side'] }})</a>
+      {% elif c and c['kind'] == 'stack_frame' -%}
+        <span class="cite">frame #{{ c['stackpos'] }} {{ c['function']|e }} {{ c['filename']|e }}:{{ c['line'] }}</span>
+      {% endif -%}
+    {%- endmacro %}
+    {% if show_evidence and evidence -%}
+    {% set d = evidence['dossier'] or {} -%}
+    {% set node = uuid_info['node'] -%}
+    {% set conf = evidence['confidence'] -%}
+    {% set cclass = 'high' if (conf is not none and conf >= 85) else ('medium' if (conf is not none and conf >= 50) else 'low') -%}
+    <div class="evidence-panel">
+      <h2>
+        Clouseau evidence
+        {% if evidence['verdict'] == 'culprit' -%}
+        <span class="confidence-badge {{ cclass }}">{{ evidence['ui']['high_confidence_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
+        {% else -%}
+        <span class="confidence-badge abstain">ABSTAIN</span>
+        {% endif -%}
+        {% if evidence['principal_model'] -%}<span class="model-tag">{{ evidence['principal_model']|e }}</span>{% endif -%}
+        {% if evidence['over_budget'] -%}<span class="model-tag warn">over budget</span>{% endif -%}
+      </h2>
+
+      {% if evidence['verdict'] == 'abstain' -%}
+      <p class="muted">Insufficient evidence &mdash; no culprit identified.{% if evidence['rationale'] %} {{ evidence['rationale']|e }}{% endif %}</p>
+      {% endif -%}
+
+      {% if d.get('crash') and d['crash'].get('failure_class') -%}
+      <p><strong>Failure class:</strong> {{ d['crash']['failure_class']|e }}{% if d['crash'].get('moz_crash_reason') %} &mdash; {{ d['crash']['moz_crash_reason']|e }}{% endif %}</p>
+      {% endif -%}
+
+      {% set cand = d.get('candidate') -%}
+      {% if cand and cand.get('node') -%}
+      <div class="evidence-section">
+        <h3>Suspected regressor</h3>
+        <p>
+          <code>{{ cand['node'] }}</code>
+          {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}">bug {{ cand['bug'] }}</a>{% endif %}
+          {% if cand.get('author') %} &mdash; {{ cand['author']|e }}{% endif %}
+          {% if cand.get('backedout') %} <span class="flag">backed out</span>{% endif %}
+        </p>
+        {% if cand.get('changed_functions') -%}
+        <p class="muted">Changed functions: {{ cand['changed_functions']|join(', ')|e }}</p>
+        {% endif -%}
+        <p><button type="button" data-node="{{ cand['node'] }}" onclick="draftBug(this.dataset.node)">Draft a bug for this changeset</button></p>
+      </div>
+      {% endif -%}
+
+      {% set vd = d.get('verdict') -%}
+      {% if vd and vd.get('mechanism') and vd['mechanism'].get('statement') -%}
+      <div class="evidence-section">
+        <h3>Mechanism</h3>
+        <p>{{ vd['mechanism']['statement']|e }}</p>
+        <ul class="cites">{% for c in vd['mechanism'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
+      </div>
+      {% endif -%}
+      {% if vd and vd.get('consistency') and vd['consistency'].get('statement') -%}
+      <div class="evidence-section">
+        <h3>Consistency with the crash</h3>
+        <p>{{ vd['consistency']['statement']|e }}</p>
+        <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
+      </div>
+      {% endif -%}
+
+      {% set cp = d.get('call_path') -%}
+      {% if cp and cp.get('edges') -%}
+      <div class="evidence-section">
+        <h3>Call path{% if cp.get('to_symbol') %} to {{ cp['to_symbol']|e }}{% endif %}</h3>
+        <ol class="call-path">
+          {% for e in cp['edges'] -%}
+          <li>
+            <code>{{ e['caller_symbol']|e }}</code> &rarr; <code>{{ e['callee_symbol']|e }}</code>
+            <span class="via">({{ e['via'] }})</span>
+            {% for c in e.get('citations') or [] %} {{ cite(c, node, channel, uuid_info['uuid']) }}{% endfor %}
+          </li>
+          {% endfor -%}
+        </ol>
+      </div>
+      {% endif -%}
+
+      {% if d.get('hunks') -%}
+      <div class="evidence-section">
+        <h3>Changed code</h3>
+        {% for h in d['hunks'] -%}
+        {% set _hl = ((h.get('lines') or []) + (h.get('citations') or [])) | selectattr('kind', 'equalto', 'diff_line') | list -%}
+        <p class="hunk-file"><a href="/codeview.html?uuid={{ uuid_info['uuid']|urlencode }}&filename={{ h['filename']|urlencode }}&node={{ h['node'] }}{% if _hl %}&line={{ _hl[0]['line'] }}{% endif %}&channel={{ channel }}&rev={{ uuid_info['node'] }}" target="_blank" rel="noopener">{{ h['filename']|e }}</a>{% if h.get('header') %} <span class="muted">{{ h['header']|e }}</span>{% endif %}</p>
+        <ul class="cites">{% for c in (h.get('lines') or []) + (h.get('citations') or []) %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
+        {% endfor -%}
+      </div>
+      {% endif -%}
+
+      {% set df = d.get('data_flow') -%}
+      {% if df and df.get('summary') -%}
+      <div class="evidence-section">
+        <h3>Data flow{% if df.get('operation') %} ({{ df['operation']|e }}){% endif %}</h3>
+        <p>{{ df['summary']|e }}{% if df.get('object_name') %} <span class="muted">[{{ df['object_name']|e }}]</span>{% endif %}</p>
+        <ul class="cites">{% for c in df.get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}{% if df.get('crash_site') %}<li>{{ cite(df['crash_site'], node, channel, uuid_info['uuid']) }}</li>{% endif %}</ul>
+      </div>
+      {% endif -%}
+
+      {% if d.get('skeptic') -%}
+      <div class="evidence-section">
+        <h3>Skeptic review</h3>
+        <ul class="skeptic">
+          {% for s in d['skeptic'] -%}
+          <li class="skeptic-{{ s['status'] }}"><span class="skeptic-status">{{ s['status'] }}</span> {{ s.get('claim_ref')|e }}{% if s.get('note') %} &mdash; {{ s['note']|e }}{% endif %}</li>
+          {% endfor -%}
+        </ul>
+      </div>
+      {% endif -%}
+
+      {% if evidence['actions'] -%}
+      <div class="evidence-section audit-trail">
+        <h3>Recorded Bugzilla actions <span class="muted">(recorded by the agent &mdash; nothing is posted without your click)</span></h3>
+        {% for a in evidence['actions'] -%}
+        {% if a is mapping -%}
+        {% set p = a.get('params') or {} -%}
+        {% set atype = a.get('type') -%}
+        <div class="audit-action{% if a.get('applied_at') %} applied{% endif %}">
+          <div class="audit-head">
+            {% if loop.index0 in evidence['apply_indices'] and not a.get('applied_at') -%}
+            <label><input type="checkbox" class="apply-cb" value="{{ loop.index0 }}" checked> </label>
+            {% endif -%}
+            <span class="action-type">{{ atype }}</span>
+            {% if p.get('bug_id') %}&rarr; <a href="https://bugzilla.mozilla.org/{{ p['bug_id'] }}">bug {{ p['bug_id'] }}</a>{% endif %}
+            {% if a.get('applied_at') %}<span class="applied-mark">applied {{ a['applied_at'] }}{% if a.get('result_id') %} (#{{ a['result_id'] }}){% endif %}</span>{% endif %}
+          </div>
+          {% if atype == 'bugzilla.add_comment' -%}
+          <pre class="action-body">{{ p.get('text', '')|e }}</pre>
+          {% elif atype == 'bugzilla.update_bug' -%}
+          {% set flags = (p.get('changes') or {}).get('flags') or [] -%}
+          {% set nis = flags|selectattr('name', 'equalto', 'needinfo')|list -%}
+          {% if nis -%}
+          <p class="action-change">needinfo{% for f in nis %} <strong>{{ f.get('requestee', '?')|e }}</strong>{% endfor %}</p>
+          {% endif -%}
+          <pre class="action-body">{{ (p.get('changes') or {})|tojson(indent=2)|e }}</pre>
+          {% else -%}
+          <pre class="action-body">{{ p|tojson(indent=2)|e }}</pre>
+          {% endif -%}
+          {% if a.get('reasoning') %}<p class="reasoning"><em>{{ a['reasoning']|e }}</em></p>{% endif %}
+        </div>
+        {% endif -%}
+        {% endfor -%}
+        {% if evidence['can_apply'] -%}
+        <p>
+          <button type="button" id="applyActionsBtn" onclick="applyActions()">Apply selected recorded actions to Bugzilla&hellip;</button>
+        </p>
+        <div id="apply-results"></div>
+        {% elif evidence['apply_indices'] -%}
+        <p class="muted">The apply control is offered only for high-confidence strong-evidence verdicts.</p>
+        {% endif -%}
+      </div>
+      {% endif -%}
+    </div>
+    {% endif -%}
     {% if stack -%}
     <table>
       <thead>

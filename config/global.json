@@ -49,6 +49,19 @@
         "skip_if_existing": true,
         "max_seed_frames": 40,
         "agent_version": 1,
+        "ui":
+        {
+            "show_abstain": false,
+            "high_confidence_label": "STRONG EVIDENCE"
+        },
+        "confidence":
+        {
+            "apply_min": 85
+        },
+        "apply":
+        {
+            "enabled_types": ["bugzilla.add_comment", "bugzilla.update_bug"]
+        },
         "patch_extraction":
         {
             "diff_byte_cap": 1000000,

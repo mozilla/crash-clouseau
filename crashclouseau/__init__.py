@@ -55,6 +55,13 @@ def diff_html():
     return html.diff()
 
 
+@app.route("/codeview.html")
+def codeview_html():
+    from crashclouseau import html
+
+    return html.codeview()
+
+
 @app.route("/")
 @app.route("/reports.html")
 def reports_html():
@@ -131,3 +138,19 @@ def api_reports():
     from crashclouseau import api
 
     return api.reports()
+
+
+@app.route("/api/evidence", methods=["GET"])
+@cross_origin()
+def api_evidence():
+    from crashclouseau import api
+
+    return api.evidence()
+
+
+@app.route("/api/evidence/apply", methods=["POST"])
+@cross_origin()
+def api_evidence_apply():
+    from crashclouseau import api
+
+    return api.apply_actions()

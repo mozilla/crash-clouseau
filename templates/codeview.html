@@ -1,0 +1,37 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/clouseau.ico">
+    <link rel="stylesheet" href="/clouseau.css?v=3">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Code view &mdash; {{ filename }}</title>
+  </head>
+  <body class="codeview-body">
+    <div class="codeview-header">
+      <strong>{{ filename|e }}</strong>{% if node %} @ <code>{{ node[:12] }}</code>{% endif %}
+      &middot; <a href="{{ sf_src }}" target="_blank" rel="noopener">open in searchfox &#8599;</a>
+    </div>
+    <div class="codeview">
+      <div class="codeview-pane">
+        <div class="pane-label">searchfox &mdash; {{ tree }}{% if rev %} @ {{ rev[:12] }} (build revision){% else %} (tip){% endif %}</div>
+        <iframe id="sf" name="sf" src="{{ sf_src }}" title="searchfox source" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <div class="codeview-pane">
+        <div class="pane-label">changed lines &mdash; from the evidence dossier <span class="muted">(click a line to jump to it in searchfox)</span></div>
+        {% if diff_lines -%}
+        <div class="diff">
+          {% for d in diff_lines -%}
+          <a class="dl dl-{{ d['side'] }}" href="{{ sf_base }}#line-{{ d['line']|int }}" target="sf" title="Jump to line {{ d['line']|int }} in searchfox"><span class="ln">{{ d['line'] }}</span><span class="mark">{% if d['side'] == 'added' %}+{% elif d['side'] == 'deleted' %}-{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</a>
+          {% endfor -%}
+        </div>
+        {% else -%}
+        <p class="muted" style="padding:1em;">No changed-line citations are stored for this file in the dossier. Use the searchfox pane on the left to browse the source.</p>
+        {% endif -%}
+      </div>
+    </div>
+  </body>
+</html>

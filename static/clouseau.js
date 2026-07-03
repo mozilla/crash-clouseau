@@ -144,3 +144,75 @@ function openPushlog() {
               + "&channel=" + params[2];
     window.open(url, "_blank");
 }
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+}
+
+// Evidence panel (#12): apply the human-confirmed subset of recorded Bugzilla
+// actions. Nothing is posted until the explicit confirm() below is accepted.
+function applyActions() {
+    const boxes = document.querySelectorAll(".apply-cb:checked");
+    const indices = Array.from(boxes).map(b => parseInt(b.value, 10));
+    if (!indices.length) {
+        window.alert("Select at least one recorded action to apply.");
+        return;
+    }
+    if (!window.confirm(
+        "This will POST to Bugzilla for the selected recorded action(s): "
+        + "add the recorded comment and/or set the recorded needinfo flag on the "
+        + "referenced bug(s). It cannot be undone from here. Continue?")) {
+        return;
+    }
+    const btn = document.getElementById("applyActionsBtn");
+    if (btn) { btn.disabled = true; }
+    fetch("/api/evidence/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uuid: UUID, indices: indices })
+    }).then(r => r.json()).then(function (data) {
+        renderApplyResults(data);
+    }).catch(function (e) {
+        window.alert("Apply failed: " + e);
+        if (btn) { btn.disabled = false; }
+    });
+}
+
+function renderApplyResults(data) {
+    const el = document.getElementById("apply-results");
+    if (!el) { return; }
+    const results = (data && data.results) || [];
+    const items = results.map(function (r) {
+        let line;
+        if (r.ok) {
+            line = "✔ action #" + r.index + " (" + (r.type || "?") + ")";
+            if (r.result_id) { line += " → " + r.result_id; }
+            if (r.skipped) { line += " [" + r.skipped + "]"; }
+            if (r.draft_url) { line += " — draft: " + r.draft_url; }
+        } else {
+            line = "✗ action #" + r.index + " (" + (r.type || "?") + "): "
+                 + (r.error || "failed");
+        }
+        return "<li>" + escapeHtml(line) + "</li>";
+    });
+    el.innerHTML = items.length ? "<ul class=\"apply-results\">" + items.join("") + "</ul>"
+                                : "<p>No actions applied.</p>";
+    // Disable the now-applied checkboxes so a second click is a no-op locally too.
+    document.querySelectorAll(".apply-cb:checked").forEach(function (b) {
+        b.checked = false;
+        b.disabled = true;
+    });
+}
+
+// Preserved enter_bug draft (#12): open the human-filled new-bug draft. Files
+// nothing until the human submits the Bugzilla form.
+function draftBug(node) {
+    if (!window.confirm(
+        "Open a pre-filled NEW-bug draft for changeset " + node
+        + "? Nothing is filed until you submit the Bugzilla form.")) {
+        return;
+    }
+    location.href = "bug.html?changeset=" + node + "&uuid=" + UUID;
+}
