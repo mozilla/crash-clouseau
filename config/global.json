@@ -40,6 +40,9 @@
     },
     "agent":
     {
+        "schema_version": 1,
+        "min_citations_per_claim": 1,
+        "abstain_below_confidence": 0.5,
         "searchfox":
         {
             "bin": "searchfox-cli",
@@ -49,6 +52,26 @@
             "retries": 2,
             "retry_backoff_secs": 1.5,
             "cache_enabled": true
+        },
+        "llm":
+        {
+            "principal": {"model": "opus", "effort": "high", "max_turns": 40},
+            "roles":
+            {
+                "crash-interpreter": {"model": "haiku"},
+                "call-graph-explorer": {"model": "sonnet", "effort": "high"},
+                "patch-scout": {"model": "haiku"},
+                "data-flow-tracer": {"model": "sonnet", "effort": "high"},
+                "skeptic": {"model": "haiku"}
+            },
+            "pricing":
+            {
+                "claude-haiku-4-5": {"in": 1.0, "out": 5.0},
+                "claude-sonnet-5": {"in": 3.0, "out": 15.0},
+                "claude-opus-4-8": {"in": 5.0, "out": 25.0},
+                "claude-fable-5": {"in": 10.0, "out": 50.0}
+            },
+            "max_cost_usd_per_crash": 2.0
         }
     }
 }

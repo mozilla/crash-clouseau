@@ -98,3 +98,23 @@ def get_agent():
 
 def get_searchfox():
     return get_agent().get("searchfox", {})
+
+
+def get_agent_schema_version():
+    return get_agent().get("schema_version", 1)
+
+
+def get_min_citations_per_claim():
+    return get_agent().get("min_citations_per_claim", 1)
+
+
+def get_abstain_below_confidence():
+    return get_agent().get("abstain_below_confidence", 0.5)
+
+
+def get_llm():
+    return get_agent().get("llm", {})
+
+
+def get_llm_role(role):
+    return get_llm().get("roles", {}).get(role, {})
