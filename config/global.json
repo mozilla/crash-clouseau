@@ -42,7 +42,7 @@
     {
         "schema_version": 1,
         "min_citations_per_claim": 1,
-        "abstain_below_confidence": 0.5,
+        "abstain_below_confidence": 0.85,
         "enabled": true,
         "queue": "agent",
         "job_timeout": 1800,

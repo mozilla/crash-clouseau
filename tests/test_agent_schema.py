@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from crashclouseau.agent.schema import (
     Citation,
+    Confidence,
     Decision,
     SearchfoxCitation,
     DiffLineCitation,
@@ -234,6 +235,15 @@ class TestVerdictRules(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_dossier(obj)
 
+    def test_strong_medium_confidence_raises(self):
+        # The confidence floor (config abstain_below_confidence=0.85) enforces
+        # system.md's "strong-evidence REQUIRES confidence:high": medium (0.5) is
+        # below the floor, so it must be rejected just like low.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = self._verdict(confidence="medium")
+        with self.assertRaises(ValidationError):
+            validate_dossier(obj)
+
     def test_strong_without_mechanism_raises(self):
         obj = copy.deepcopy(_dossier())
         v = self._verdict()
@@ -241,6 +251,49 @@ class TestVerdictRules(unittest.TestCase):
         obj["verdict"] = v
         with self.assertRaises(ValidationError):
             validate_dossier(obj)
+
+    def test_skeptic_fail_downgrades_to_abstain(self):
+        # A skeptic `fail` on any culprit-chain claim vetoes a strong-evidence
+        # verdict: it is downgraded to abstain IN PLACE, and the evidence survives.
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = [{"claim_ref": "edge0", "status": "fail", "note": "no edge"}]
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertEqual(d.verdict.confidence, Confidence.low)  # not the old high
+        self.assertIn("skeptic", d.verdict.abstain_reason)
+        self.assertIn("edge0", d.verdict.abstain_reason)
+        self.assertTrue(d.hunks)              # evidence preserved, not dropped
+        self.assertTrue(d.call_path.edges)
+
+    def test_skeptic_unverifiable_keeps_strong(self):
+        # `unverifiable` (a searchfox hole) is advisory, not a veto.
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = [{"claim_ref": "edge0", "status": "unverifiable", "note": "hole"}]
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+
+    def test_skeptic_fail_with_malformed_citation_still_vetoes(self):
+        # A `fail` carrying a malformed citation must NOT be dropped: the veto keys
+        # on status, so the strong-evidence verdict is still downgraded.
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = [{
+            "claim_ref": "edge0", "status": "fail",
+            "citations": [{"kind": "searchfox", "permalink": "x"}],  # missing symbol_id/repo
+        }]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("skeptic", d.verdict.abstain_reason)
+
+    def test_skeptic_fail_survives_salvage_path(self):
+        # Force parse_and_validate's salvage path (an uncited call edge) while a
+        # failing skeptic result is present: the veto must still fire on the
+        # Dossier(**kwargs) rebuild rather than being bypassed.
+        obj = copy.deepcopy(_dossier())
+        obj["call_path"]["edges"].append({"caller_symbol": "X", "callee_symbol": "Y"})
+        obj["skeptic"] = [{"claim_ref": "edge0", "status": "fail"}]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("skeptic", d.verdict.abstain_reason)
 
     def test_abstain_requires_reason(self):
         obj = copy.deepcopy(_dossier())

@@ -44,6 +44,7 @@ Emit only fields you can fill and cite; omit the rest. Shape:
   "call_path": {"edges": [{"caller_symbol": "js::gc::GCMarker::markCurrentColorInParallel", "callee_symbol": "js::gc::MarkingTracerT::processMarkStackTop", "via": "calls-from", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::gc::MarkingTracerT::processMarkStackTop", "repo": "mozilla-central"}]}]},
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
+  "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
   "verdict": {"decision": "strong-evidence|abstain", "confidence": "low|medium|high", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "optional text for a human to confirm", "abstain_reason": "required iff decision=abstain"}
 }
 ```
@@ -52,6 +53,11 @@ Rules for the verdict:
 - `decision: "strong-evidence"` REQUIRES a cited `mechanism`, a cited `consistency`
   claim, and `confidence: "high"`. Use it only when the chain from the changeset to
   the crash site is verified end to end.
+- Record the skeptic's re-verification of every claim in the `skeptic` array. If the
+  skeptic returns `fail` on ANY claim in the culprit chain, you MUST abstain — a
+  schema check enforces this (a strong-evidence verdict with a failing skeptic result
+  is rejected and forced to abstain). Mark a searchfox hole `unverifiable` (which only
+  lowers confidence), NOT `fail`.
 - Otherwise use `decision: "abstain"` with an `abstain_reason` and NO `needinfo_draft`.
 - Any claim-bearing field (`call_path` edges, `hunks`, `data_flow`, verdict
   `mechanism`/`consistency`) without a citation will be rejected and force an abstain,

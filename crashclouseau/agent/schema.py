@@ -71,6 +71,11 @@ class CitationKind(str, Enum):
 
 
 # Categorical confidence -> numeric, for the abstain_below_confidence floor.
+# NOTE: config ``abstain_below_confidence`` is deliberately set to ``high``'s score
+# (0.85) so the floor + strict ``<`` in Verdict._consistency_rule enforce system.md's
+# "strong-evidence REQUIRES confidence:high". These two move together: lowering this
+# score or the config floor re-admits medium; raising the floor above 0.85 makes
+# strong-evidence impossible.
 CONFIDENCE_SCORE: dict[Confidence, float] = {
     Confidence.low: 0.25,
     Confidence.medium: 0.5,
@@ -212,10 +217,17 @@ class DataFlowHypothesis(Cited):
 
 
 class SkepticResult(BaseModel):
-    claim_ref: str
+    # Only ``status`` is strict — ``claim_ref``/``citations`` are intentionally lax
+    # (str default, untyped list; same rationale as DiffHunk.lines / CallEdge.via).
+    # The binding skeptic veto (Dossier._skeptic_veto) keys on ``status``, so a
+    # malformed supporting citation or a missing claim_ref must NOT make a ``fail``
+    # result fail validation: parse_and_validate's per-item salvage would drop it
+    # and silently bypass the veto, letting a refuted strong-evidence verdict reach
+    # the apply UI.
     status: SkepticStatus
+    claim_ref: str = ""
     note: str = ""
-    citations: list[Citation] = Field(default_factory=list)
+    citations: list = Field(default_factory=list)
 
 
 class Claim(Cited):
@@ -263,6 +275,33 @@ class Dossier(BaseModel):
     skeptic: list[SkepticResult] = Field(default_factory=list)
     verdict: Verdict | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _skeptic_veto(self):
+        """Binding skeptic veto: a strong-evidence verdict cannot stand if the
+        skeptic FAILED to re-verify a claim in the chain. The rule lives on Dossier
+        (not Verdict) because only here can it see both the ``skeptic`` results and
+        the ``verdict``. It DOWNGRADES in place to abstain rather than raising: a
+        raising validator here would fall through ``parse_and_validate``'s salvage
+        rebuild (``Dossier(**kwargs)``) to a bare abstain and discard the salvaged
+        evidence, whereas an in-place downgrade keeps the evidence panel populated.
+        ``unverifiable`` is advisory, not a veto — searchfox holes (virtual/IPC/FFI/
+        macro/template) are expected and handled by lowering confidence per the
+        grounding rule; only an active ``fail`` refutes the verdict."""
+        v = self.verdict
+        if v is None or v.decision != Decision.strong_evidence:
+            return self
+        failed = [s.claim_ref for s in self.skeptic if s.status == SkepticStatus.failed]
+        if failed:
+            self.verdict = Verdict(
+                decision=Decision.abstain,
+                confidence=Confidence.low,  # a refuted chain is low-confidence
+                abstain_reason=(
+                    "skeptic refuted the culprit chain (failed claims: {}); "
+                    "downgraded from strong-evidence".format(", ".join(failed) or "?")
+                ),
+            )
+        return self
 
 
 # Per-role fragment models validated from a role's parsed trailing-```json block.
