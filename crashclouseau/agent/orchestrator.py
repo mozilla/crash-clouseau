@@ -189,8 +189,11 @@ def run_evidence_agent(uuid):
                 uuid, result.total_cost_usd, cap,
             )
 
+        # ``result.actions`` is the single source of truth (build_result folds the
+        # recorder's actions + the synthesized needinfo into it); model_dump already
+        # carries it, so don't overwrite with the raw recorder here — that would drop
+        # the bridged needinfo action the apply UI needs.
         payload = result.model_dump(mode="json")
-        payload["actions"] = list(recorder.actions)
         if over_budget:
             payload["over_budget"] = True
 

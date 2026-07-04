@@ -34,7 +34,7 @@ from crashclouseau import config
 from crashclouseau.agent import roles
 from crashclouseau.logger import logger
 from crashclouseau.agent.result import CrashTriageResult
-from crashclouseau.agent.schema import parse_and_validate
+from crashclouseau.agent.schema import Decision, parse_and_validate
 from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
 from crashclouseau.agent.tools.patch import PatchCtx
@@ -140,14 +140,10 @@ class _RunTrace:
     def _label(name, inp):
         inp = inp or {}
         if name in _RunTrace._SUBAGENT_TOOLS:
-            desc = str(inp.get("description") or inp.get("prompt") or "")[:100]
-            role = ""
-            for k in ("subagent_type", "subagentType", "agent_type", "agent",
-                      "type", "name", "role"):
-                if inp.get(k):
-                    role = str(inp[k])
-                    break
-            return "{}: {}".format(role, desc) if role else desc
+            # Description only. The spawn line and summary print the role
+            # (subagent_type) separately, so embedding it here duplicated it
+            # ("▶ spawn navigator — navigator: desc").
+            return str(inp.get("description") or inp.get("prompt") or "")[:100]
         if name == "Bash":
             return str(inp.get("command", ""))[:100]
         for k in ("symbol", "caller", "callee", "file_path", "pattern", "path", "query"):
@@ -197,7 +193,7 @@ class _RunTrace:
         if self.tasks:
             logger.info("agent: AI subagent tasks (slowest first):")
             for st, label, secs in sorted(self.tasks, key=lambda t: -t[2]):
-                logger.info("agent:   %6.1fs  %s", secs, label)
+                logger.info("agent:   %6.1fs  %s — %s", secs, st, label)
         if self._tool:
             logger.info("agent: tools (slowest first):")
             for name, (n, secs) in sorted(self._tool.items(), key=lambda kv: -kv[1][1]):
@@ -258,22 +254,64 @@ def build_options(
     return ClaudeAgentOptions(**kwargs)
 
 
+def _needinfo_action(dossier) -> dict | None:
+    """Bridge a strong-evidence verdict's ``needinfo_draft`` into a recordable
+    ``bugzilla.add_comment`` action for the human-confirmed #12 apply step.
+
+    The agent only *drafts* the needinfo text (the ``needinfo_draft`` field of the
+    JSON dossier); it does not call the ``actions`` MCP tool, so ``recorder.actions``
+    is otherwise always empty and the apply UI has nothing to execute. This
+    synthesizes one apply-eligible action from what the agent already produced.
+    Returns ``None`` unless the verdict is strong-evidence with a draft and a known
+    candidate bug. Shape matches ``ActionsRecorder.record`` / ``bugzilla_apply``:
+    ``{type, params:{bug_id, text, is_private}, reasoning}``."""
+    if dossier is None:
+        return None
+    v, c = dossier.verdict, dossier.candidate
+    if v is None or v.decision != Decision.strong_evidence:
+        return None
+    if not v.needinfo_draft or c is None or not c.bug:
+        return None
+    return {
+        "type": "bugzilla.add_comment",
+        # Default private: the candidate bug may be security-restricted and the draft
+        # can quote the crash mechanism. A human confirms (and can un-private) before
+        # apply; over-privating is far safer than leaking sec details on a public post.
+        "params": {"bug_id": c.bug, "text": v.needinfo_draft, "is_private": True},
+        "reasoning": "auto-drafted from the strong-evidence verdict's needinfo_draft; "
+                     "human-confirmed before apply",
+    }
+
+
 def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
     """Fold a terminal ``ResultMessage`` into a typed ``CrashTriageResult``,
     best-effort parsing + #03-validating the trailing ```json handoff (abstain on
-    failure). Raises ``AgentError`` on a missing/errored result."""
+    failure). Raises ``AgentError`` on a missing/errored result. The recorded
+    actions are the agent's own (via the ``actions`` MCP server) plus a synthesized
+    needinfo (``_needinfo_action``) so a strong-evidence verdict always yields an
+    apply-eligible action even though the agent only drafts the text."""
     if result_msg is None:
         raise AgentError("crash triage produced no result message")
     if getattr(result_msg, "is_error", False):
         detail = result_msg.result or getattr(result_msg, "subtype", "")
         raise AgentError(f"crash triage failed: {detail}")
     dossier = parse_and_validate(result_msg.result)
+    actions = list(recorder.actions) if recorder is not None else []
+    bridged = _needinfo_action(dossier)
+    if bridged is not None:
+        bp = bridged["params"]
+        # Dedup on the full (type, bug_id, text): suppress only a true duplicate of
+        # this exact needinfo, never a distinct comment the agent already recorded
+        # for the same bug (that would silently drop the drafted needinfo).
+        dup = any(a.get("type") == bridged["type"] and (a.get("params") or {}).get("bug_id") == bp["bug_id"] and (a.get("params") or {}).get("text") == bp["text"] for a in actions)
+        if not dup:
+            actions.append(bridged)
     return CrashTriageResult(
         num_turns=result_msg.num_turns,
         total_cost_usd=result_msg.total_cost_usd,
         result=result_msg.result or "",
         dossier=dossier,
-        actions=list(recorder.actions) if recorder is not None else [],
+        actions=actions,
     )
 
 

@@ -59,9 +59,13 @@ def _abstain_result():
 def _triage_returning(result, record_action=False):
     async def _fake(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
         if record_action and recorder is not None:
-            recorder.record(
+            # In production build_result folds the recorder's actions into
+            # result.actions; the orchestrator persists result.actions (not the raw
+            # recorder), so model that here by reflecting the record on the result.
+            act = recorder.record(
                 "bugzilla.update_bug", {"bug_id": 1, "changes": {}}, reasoning="x"
             )
+            result.actions = [act]
         return result
 
     return _fake

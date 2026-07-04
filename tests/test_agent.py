@@ -144,6 +144,58 @@ class TestBuildResult(unittest.TestCase):
         self.assertEqual(len(r.actions), 1)
         self.assertEqual(r.actions[0]["type"], "bugzilla.update_bug")
 
+    _BRIDGE_DOSSIER = {
+        "candidate": {"node": "abc123", "bug": 456},
+        "verdict": {
+            "decision": "strong-evidence", "confidence": "high",
+            "needinfo_draft": "Did bug 456 regress this?",
+            "mechanism": {"statement": "UAF", "citations": [_SF]},
+            "consistency": {"statement": "matches poison", "citations": [_SF]},
+        },
+    }
+
+    def _bridge_msg(self):
+        return _result_msg("x\n```json\n" + json.dumps(self._BRIDGE_DOSSIER) + "\n```")
+
+    def test_needinfo_bridged_to_action(self):
+        # strong-evidence + needinfo_draft + candidate.bug -> one apply-eligible
+        # add_comment action even though the agent only drafted the text.
+        r = build_result(self._bridge_msg())
+        self.assertEqual(r.decision, Decision.strong_evidence)
+        self.assertEqual(len(r.actions), 1)
+        a = r.actions[0]
+        self.assertEqual(a["type"], "bugzilla.add_comment")
+        self.assertEqual(a["params"]["bug_id"], 456)
+        self.assertEqual(a["params"]["text"], "Did bug 456 regress this?")
+        self.assertTrue(a["params"]["is_private"])   # default private (may be sec bug)
+
+    def test_no_bridge_without_needinfo_or_bug(self):
+        # strong-evidence but no needinfo_draft / candidate -> nothing to apply.
+        r = build_result(_result_msg("x\n```json\n" + _DOSSIER_JSON + "\n```"))
+        self.assertEqual(r.decision, Decision.strong_evidence)
+        self.assertEqual(r.actions, [])
+
+    def test_no_bridge_on_abstain(self):
+        r = build_result(_result_msg("no json here at all"))
+        self.assertEqual(r.decision, Decision.abstain)
+        self.assertEqual(r.actions, [])
+
+    def test_bridge_not_duplicated(self):
+        # an identical add_comment already recorded for the bug suppresses the bridge.
+        rec = ActionsRecorder(uploader=None)
+        rec.record("bugzilla.add_comment",
+                   {"bug_id": 456, "text": "Did bug 456 regress this?"}, reasoning="x")
+        r = build_result(self._bridge_msg(), recorder=rec)
+        self.assertEqual(len(r.actions), 1)
+
+    def test_bridge_kept_when_recorded_text_differs(self):
+        # a DISTINCT recorded comment for the same bug must not drop the drafted
+        # needinfo — both stay apply-eligible.
+        rec = ActionsRecorder(uploader=None)
+        rec.record("bugzilla.add_comment", {"bug_id": 456, "text": "unrelated"}, reasoning="x")
+        r = build_result(self._bridge_msg(), recorder=rec)
+        self.assertEqual(len(r.actions), 2)
+
 
 class _FakeSDKClient:
     def __init__(self, options=None):
