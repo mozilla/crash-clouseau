@@ -141,6 +141,10 @@ def _verdict_row(result):
     if verdict.decision == Decision.strong_evidence:
         vt = "culprit"
         rationale = (verdict.mechanism.statement if verdict.mechanism else "") or ""
+    elif verdict.decision == Decision.lead:
+        vt = "lead"
+        mech = verdict.mechanism.statement if verdict.mechanism else ""
+        rationale = mech or verdict.needinfo_draft or "plausible related changeset; mechanism unverified"
     else:
         vt = "abstain"
         rationale = verdict.abstain_reason or ""

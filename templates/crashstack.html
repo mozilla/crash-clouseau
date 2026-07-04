@@ -59,12 +59,16 @@
     {% set d = evidence['dossier'] or {} -%}
     {% set node = uuid_info['node'] -%}
     {% set conf = evidence['confidence'] -%}
+    {% set vd = d.get('verdict') -%}
+    {% set is_lead = evidence['verdict'] == 'lead' -%}
     {% set cclass = 'high' if (conf is not none and conf >= 85) else ('medium' if (conf is not none and conf >= 50) else 'low') -%}
     <div class="evidence-panel">
       <h2>
         Clouseau evidence
         {% if evidence['verdict'] == 'culprit' -%}
         <span class="confidence-badge {{ cclass }}">{{ evidence['ui']['high_confidence_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
+        {% elif is_lead -%}
+        <span class="confidence-badge lead">{{ evidence['ui']['lead_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% else -%}
         <span class="confidence-badge abstain">ABSTAIN</span>
         {% endif -%}
@@ -76,6 +80,16 @@
       <p class="muted">Insufficient evidence &mdash; no culprit identified.{% if evidence['rationale'] %} {{ evidence['rationale']|e }}{% endif %}</p>
       {% endif -%}
 
+      {% if is_lead -%}
+      <p class="muted">Plausible lead &mdash; a related changeset was found, but the mechanism is <strong>not verified end&#8209;to&#8209;end</strong>. Worth a look by someone familiar with this code, who may not be the cause.</p>
+      {% if vd and vd.get('needinfo_draft') -%}
+      <div class="evidence-section">
+        <h3>Suggested needinfo (draft &mdash; review before sending)</h3>
+        <p class="needinfo-draft">{{ vd['needinfo_draft']|e }}</p>
+      </div>
+      {% endif -%}
+      {% endif -%}
+
       {% if d.get('crash') and d['crash'].get('failure_class') -%}
       <p><strong>Failure class:</strong> {{ d['crash']['failure_class']|e }}{% if d['crash'].get('moz_crash_reason') %} &mdash; {{ d['crash']['moz_crash_reason']|e }}{% endif %}</p>
       {% endif -%}
@@ -83,7 +97,7 @@
       {% set cand = d.get('candidate') -%}
       {% if cand and cand.get('node') -%}
       <div class="evidence-section">
-        <h3>Suspected regressor</h3>
+        <h3>{% if is_lead %}Possibly-related changeset{% else %}Suspected regressor{% endif %}</h3>
         <p>
           <code>{{ cand['node'] }}</code>
           {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}">bug {{ cand['bug'] }}</a>{% endif %}
@@ -97,17 +111,16 @@
       </div>
       {% endif -%}
 
-      {% set vd = d.get('verdict') -%}
       {% if vd and vd.get('mechanism') and vd['mechanism'].get('statement') -%}
       <div class="evidence-section">
-        <h3>Mechanism</h3>
+        <h3>{% if is_lead %}Working hypothesis (unverified){% else %}Mechanism{% endif %}</h3>
         <p>{{ vd['mechanism']['statement']|e }}</p>
         <ul class="cites">{% for c in vd['mechanism'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
       {% if vd and vd.get('consistency') and vd['consistency'].get('statement') -%}
       <div class="evidence-section">
-        <h3>Consistency with the crash</h3>
+        <h3>{% if is_lead %}Why it may be related{% else %}Consistency with the crash{% endif %}</h3>
         <p>{{ vd['consistency']['statement']|e }}</p>
         <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
@@ -169,7 +182,7 @@
         {% set atype = a.get('type') -%}
         <div class="audit-action{% if a.get('applied_at') %} applied{% endif %}">
           <div class="audit-head">
-            {% if loop.index0 in evidence['apply_indices'] and not a.get('applied_at') -%}
+            {% if evidence['can_apply'] and loop.index0 in evidence['apply_indices'] and not a.get('applied_at') -%}
             <label><input type="checkbox" class="apply-cb" value="{{ loop.index0 }}" checked> </label>
             {% endif -%}
             <span class="action-type">{{ atype }}</span>

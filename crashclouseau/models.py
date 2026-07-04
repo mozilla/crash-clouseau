@@ -7,7 +7,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy import inspect, func
+from sqlalchemy import inspect, func, text
 import pytz
 from . import config, db, utils
 from .logger import logger
@@ -20,7 +20,7 @@ PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
 # the dossier-builder sub-plan (#03); this layer stores the envelope + verdict.
 DOSSIER_SCHEMA_VERSION = 1
 VERDICT_TYPE = db.Enum(
-    "culprit", "unrelated", "abstain", "error", name="VERDICT_TYPE"
+    "culprit", "lead", "unrelated", "abstain", "error", name="VERDICT_TYPE"
 )
 AGENT_STATUS_TYPE = db.Enum(
     "pending", "running", "done", "error", name="AGENT_STATUS_TYPE"
@@ -1611,13 +1611,62 @@ def commit():
     db.session.commit()
 
 
+# Named-enum values added after the initial deploy. Postgres does NOT alter an
+# existing named enum on create_all(), and there is no migration framework here, so
+# each new value must be added explicitly (idempotently) at startup — see
+# _ensure_enum_values(). Fresh DBs and the full create.py recreate get them from the
+# db.Enum(...) definitions directly; only long-lived Postgres DBs need this.
+_ENUM_ADDITIONS = {"VERDICT_TYPE": ("lead",)}
+
+
+def _ensure_enum_values():
+    """Bring a long-lived Postgres DB's named enums up to date with _ENUM_ADDITIONS.
+    A no-op on non-Postgres (db.Enum renders as VARCHAR, so create_all already carries
+    every value). For each value: first check pg_enum with a plain SELECT (allowed even
+    for a restricted DML-only runtime role) and SKIP the DDL when it already exists — so
+    a hardened role whose migrations run separately isn't hit by ``ALTER TYPE`` on every
+    startup. Only a genuinely-missing value triggers the (AUTOCOMMIT, so it never trips
+    the in-transaction restriction) ADD VALUE, and any failure is logged, NOT raised, so
+    it can never abort init/bootstrap. Values are hard-coded literals (never user input)."""
+    engine = db.engine
+    if engine.dialect.name != "postgresql":
+        return
+    for enum_name, values in _ENUM_ADDITIONS.items():
+        for value in values:
+            try:
+                with engine.connect() as conn:
+                    exists = conn.execute(
+                        text(
+                            "SELECT 1 FROM pg_enum e JOIN pg_type t "
+                            "ON t.oid = e.enumtypid "
+                            "WHERE lower(t.typname) = lower(:n) AND e.enumlabel = :v"
+                        ),
+                        {"n": enum_name, "v": value},
+                    ).first()
+                    if exists:
+                        continue
+                    conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+                    conn.execute(
+                        text('ALTER TYPE "{}" ADD VALUE IF NOT EXISTS \'{}\''.format(
+                            enum_name, value))
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "could not ensure enum %s value %r (add it manually if the DB is "
+                    "missing it): %s", enum_name, value, exc
+                )
+
+
 def create():
     engine = db.engine
-    if not inspect(engine).has_table("lastdate"):
+    fresh = not inspect(engine).has_table("lastdate")
+    if fresh:
         db.create_all()
         db.session.commit()
-        return True
-    return False
+    # Idempotently add post-deploy enum values to a long-lived DB (no-op when fresh,
+    # since create_all just built the enums from their current definitions).
+    _ensure_enum_values()
+    return fresh
 
 
 def clear():

@@ -184,7 +184,15 @@ s.red {
 .confidence-badge.high { background-color: #2e7d32; }
 .confidence-badge.medium { background-color: #e6a700; color: #222; }
 .confidence-badge.low { background-color: #c05621; }
+.confidence-badge.lead { background-color: #d98a00; color: #222; }
 .confidence-badge.abstain { background-color: #777; }
+
+.needinfo-draft {
+    padding: 0.6em 0.8em;
+    border-left: 3px solid #d98a00;
+    background-color: #fff8ec;
+    white-space: pre-wrap;
+}
 
 .model-tag {
     display: inline-block;

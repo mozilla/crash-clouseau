@@ -15,6 +15,7 @@ from unittest import mock  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 from crashclouseau.agent.result import CrashTriageResult  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
+    Candidate,
     Claim,
     Confidence,
     Decision,
@@ -52,6 +53,22 @@ def _abstain_result():
         result="ok",
         dossier=Dossier(
             verdict=Verdict(decision=Decision.abstain, abstain_reason="not enough")
+        ),
+    )
+
+
+def _lead_result(cost=0.2):
+    return CrashTriageResult(
+        num_turns=4,
+        total_cost_usd=cost,
+        result="ok",
+        dossier=Dossier(
+            candidate=Candidate(node="abc123def456", bug=42),  # the lead anchor
+            verdict=Verdict(
+                decision=Decision.lead,
+                confidence=Confidence.medium,
+                needinfo_draft="could you take a look at this crash?",
+            )
         ),
     )
 
@@ -180,6 +197,15 @@ class TestRunEvidenceAgent(unittest.TestCase):
                         _triage_returning(_abstain_result())):
             orch.run_evidence_agent("u-1")
         self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
+
+    def test_lead_persists_lead(self):
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        with pD, pV, pC, pS, pSc, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                        _triage_returning(_lead_result())):
+            orch.run_evidence_agent("u-1")
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "lead")
+        self.assertEqual(MVerd.set.call_args.kwargs["confidence"], 50)
 
     def test_exception_isolation(self):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()

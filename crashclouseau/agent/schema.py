@@ -49,6 +49,7 @@ class FailureClass(str, Enum):
 
 class Decision(str, Enum):
     strong_evidence = "strong-evidence"
+    lead = "lead"
     abstain = "abstain"
 
 
@@ -257,6 +258,17 @@ class Verdict(BaseModel):
                 raise ValueError("strong-evidence requires a cited mechanism claim")
             if self.consistency is None or not self.consistency.citations:
                 raise ValueError("strong-evidence requires a cited consistency claim")
+        elif self.decision == Decision.lead:
+            # A lead is plausible-but-unverified: it must never wear a high-confidence
+            # badge, so clamp `high` down to `medium`. This is a fixed one-way clamp,
+            # independent of the tunable strong-evidence floor (keying on the floor
+            # would fail to clamp — or mis-clamp — if the floor is retuned). The
+            # cited-anchor requirement (a candidate/hunk/edge) is enforced at the
+            # Dossier level (``_skeptic_veto``), which can see those fields — it is
+            # deliberately NOT raised here: raising would trip parse_and_validate's
+            # salvage and drop an otherwise-useful lead.
+            if self.confidence == Confidence.high:
+                self.confidence = Confidence.medium
         elif self.decision == Decision.abstain:
             if not self.abstain_reason:
                 raise ValueError("abstain requires an abstain_reason")
@@ -276,30 +288,83 @@ class Dossier(BaseModel):
     verdict: Verdict | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    def _has_lead_anchor(self) -> bool:
+        """True when something *cited* still points a human at an area — a candidate
+        changeset, a cited diff hunk, or a cited call-path edge. Enough to hand over a
+        lead even when the mechanism isn't verified end to end."""
+        if self.candidate is not None and self.candidate.node:
+            return True
+        if any(h.citations for h in self.hunks):
+            return True
+        if self.call_path and any(e.citations for e in self.call_path.edges):
+            return True
+        return False
+
+    def _soft_lead_draft(self) -> str | None:
+        """A soft, non-accusatory needinfo draft for a DOWNGRADED lead that does NOT
+        assert the (skeptic-refuted) mechanism — it names the candidate and asks for
+        help. Returns None when there is no candidate to name (the panel then shows the
+        lead without a pre-written draft)."""
+        c = self.candidate
+        if c is None or not c.node:
+            return None
+        bug = " (bug {})".format(c.bug) if c.bug else ""
+        return (
+            "A skeptic review could not confirm the mechanism, but changeset {}{} looks "
+            "like a plausible lead for this crash. Could you help figure out whether it "
+            "is related — or point us to who could? This is not an accusation.".format(
+                c.node, bug
+            )
+        )
+
     @model_validator(mode="after")
     def _skeptic_veto(self):
-        """Binding skeptic veto: a strong-evidence verdict cannot stand if the
-        skeptic FAILED to re-verify a claim in the chain. The rule lives on Dossier
-        (not Verdict) because only here can it see both the ``skeptic`` results and
-        the ``verdict``. It DOWNGRADES in place to abstain rather than raising: a
-        raising validator here would fall through ``parse_and_validate``'s salvage
-        rebuild (``Dossier(**kwargs)``) to a bare abstain and discard the salvaged
-        evidence, whereas an in-place downgrade keeps the evidence panel populated.
-        ``unverifiable`` is advisory, not a veto — searchfox holes (virtual/IPC/FFI/
-        macro/template) are expected and handled by lowering confidence per the
-        grounding rule; only an active ``fail`` refutes the verdict."""
+        """Skeptic ladder + lead-anchor gate (on Dossier, so it can see the skeptic
+        results alongside candidate/hunks/call_path). Mutates in place and NEVER raises
+        — a raising validator would fall through ``parse_and_validate``'s salvage
+        rebuild to a bare abstain and discard salvaged evidence.
+
+        (1) A skeptic ``fail`` refutes a strong-evidence *mechanism*, but a cited
+        candidate/hunk/edge may still be a useful LEAD — so a ``fail`` DOWNGRADES
+        strong-evidence to ``lead`` when such an anchor stands (dropping the now-stale
+        assertive draft for a SOFT one that doesn't restate the refuted mechanism), and
+        only collapses to ``abstain`` when nothing cited remains. ``unverifiable`` is
+        advisory (a searchfox hole), not a ``fail``.
+
+        (2) ANY lead — including one the model emits directly — must carry a cited
+        anchor; an anchorless lead is demoted to abstain (nothing to hand a human)."""
         v = self.verdict
-        if v is None or v.decision != Decision.strong_evidence:
+        if v is None:
             return self
-        failed = [s.claim_ref for s in self.skeptic if s.status == SkepticStatus.failed]
-        if failed:
+        # (1) Skeptic ladder on a strong-evidence verdict.
+        if v.decision == Decision.strong_evidence:
+            failed = [s.claim_ref for s in self.skeptic
+                      if s.status == SkepticStatus.failed]
+            if failed:
+                detail = "skeptic refuted the mechanism (failed: {})".format(
+                    ", ".join(failed) or "?"
+                )
+                if self._has_lead_anchor():
+                    self.verdict = Verdict(
+                        decision=Decision.lead,
+                        confidence=Confidence.medium,
+                        needinfo_draft=self._soft_lead_draft(),
+                        mechanism=v.mechanism,
+                        consistency=v.consistency,
+                    )
+                else:
+                    self.verdict = Verdict(
+                        decision=Decision.abstain,
+                        confidence=Confidence.low,
+                        abstain_reason=detail + "; no cited candidate/hunk/edge remains",
+                    )
+        # (2) A lead (from the ladder OR emitted directly) needs a cited anchor.
+        if self.verdict.decision == Decision.lead and not self._has_lead_anchor():
             self.verdict = Verdict(
                 decision=Decision.abstain,
-                confidence=Confidence.low,  # a refuted chain is low-confidence
-                abstain_reason=(
-                    "skeptic refuted the culprit chain (failed claims: {}); "
-                    "downgraded from strong-evidence".format(", ".join(failed) or "?")
-                ),
+                confidence=Confidence.low,
+                abstain_reason="lead has no cited candidate/hunk/edge anchor; "
+                               "nothing to act on",
             )
         return self
 

@@ -64,7 +64,7 @@ class TestSchemaDefinition(unittest.TestCase):
         self.assertTrue(col.unique)
 
     def test_enum_values(self):
-        self.assertEqual(set(VERDICT_TYPE.enums), {"culprit", "unrelated", "abstain", "error"})
+        self.assertEqual(set(VERDICT_TYPE.enums), {"culprit", "lead", "unrelated", "abstain", "error"})
         self.assertEqual(set(AGENT_STATUS_TYPE.enums), {"pending", "running", "done", "error"})
         self.assertEqual(DOSSIER_SCHEMA_VERSION, 1)
 

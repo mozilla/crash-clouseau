@@ -161,7 +161,9 @@ def get_agent_ui():
     ui = agent.get("ui", {})
     return {
         "show_abstain": ui.get("show_abstain", False),
+        "show_lead": ui.get("show_lead", True),
         "high_confidence_label": ui.get("high_confidence_label", "STRONG EVIDENCE"),
+        "lead_label": ui.get("lead_label", "LEAD"),
         "apply_min_confidence": agent.get("confidence", {}).get("apply_min", 85),
         "enabled_types": agent.get("apply", {}).get(
             "enabled_types", ["bugzilla.add_comment", "bugzilla.update_bug"]

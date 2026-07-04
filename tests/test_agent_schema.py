@@ -252,48 +252,118 @@ class TestVerdictRules(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_dossier(obj)
 
-    def test_skeptic_fail_downgrades_to_abstain(self):
-        # A skeptic `fail` on any culprit-chain claim vetoes a strong-evidence
-        # verdict: it is downgraded to abstain IN PLACE, and the evidence survives.
+    def test_skeptic_fail_downgrades_to_lead(self):
+        # A skeptic `fail` no longer collapses to abstain when a cited anchor
+        # (candidate/hunk/edge) stands: the ladder downgrades to a LEAD in place,
+        # capping confidence at medium and keeping the evidence.
         obj = copy.deepcopy(_dossier())
         obj["skeptic"] = [{"claim_ref": "edge0", "status": "fail", "note": "no edge"}]
         d = validate_dossier(obj)
-        self.assertEqual(d.verdict.decision, Decision.abstain)
-        self.assertEqual(d.verdict.confidence, Confidence.low)  # not the old high
-        self.assertIn("skeptic", d.verdict.abstain_reason)
-        self.assertIn("edge0", d.verdict.abstain_reason)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
         self.assertTrue(d.hunks)              # evidence preserved, not dropped
         self.assertTrue(d.call_path.edges)
+        self.assertTrue(d.candidate.node)
+        # the stale assertive draft is replaced by a soft one naming the candidate
+        self.assertNotEqual(d.verdict.needinfo_draft, "please confirm")
+        self.assertIn(d.candidate.node, d.verdict.needinfo_draft)
+
+    def test_skeptic_fail_no_anchor_abstains(self):
+        # With NO cited anchor (no candidate, no hunks, no cited edge), a skeptic
+        # `fail` still collapses to abstain — nothing to hand a human.
+        obj = copy.deepcopy(_dossier())
+        for k in ("candidate", "hunks", "call_path", "data_flow"):
+            obj.pop(k, None)
+        obj["skeptic"] = [{"claim_ref": "mechanism", "status": "fail"}]
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("skeptic", d.verdict.abstain_reason)
 
     def test_skeptic_unverifiable_keeps_strong(self):
-        # `unverifiable` (a searchfox hole) is advisory, not a veto.
+        # `unverifiable` (a searchfox hole) is advisory, not a downgrade trigger.
         obj = copy.deepcopy(_dossier())
         obj["skeptic"] = [{"claim_ref": "edge0", "status": "unverifiable", "note": "hole"}]
         d = validate_dossier(obj)
         self.assertEqual(d.verdict.decision, Decision.strong_evidence)
 
-    def test_skeptic_fail_with_malformed_citation_still_vetoes(self):
-        # A `fail` carrying a malformed citation must NOT be dropped: the veto keys
-        # on status, so the strong-evidence verdict is still downgraded.
+    def test_skeptic_fail_with_malformed_citation_still_downgrades(self):
+        # A `fail` carrying a malformed citation must NOT be dropped: the ladder keys
+        # on status, so the verdict is still downgraded (to a lead — anchor stands).
         obj = copy.deepcopy(_dossier())
         obj["skeptic"] = [{
             "claim_ref": "edge0", "status": "fail",
             "citations": [{"kind": "searchfox", "permalink": "x"}],  # missing symbol_id/repo
         }]
         d = parse_and_validate(obj)
-        self.assertEqual(d.verdict.decision, Decision.abstain)
-        self.assertIn("skeptic", d.verdict.abstain_reason)
+        self.assertEqual(d.verdict.decision, Decision.lead)
 
     def test_skeptic_fail_survives_salvage_path(self):
         # Force parse_and_validate's salvage path (an uncited call edge) while a
-        # failing skeptic result is present: the veto must still fire on the
-        # Dossier(**kwargs) rebuild rather than being bypassed.
+        # failing skeptic result is present: the ladder must still fire on the
+        # Dossier(**kwargs) rebuild (candidate/hunk anchor survives -> lead).
         obj = copy.deepcopy(_dossier())
         obj["call_path"]["edges"].append({"caller_symbol": "X", "callee_symbol": "Y"})
         obj["skeptic"] = [{"claim_ref": "edge0", "status": "fail"}]
         d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+
+    def test_lead_verdict_validates(self):
+        # A directly-emitted lead (plausible changeset, unverified) validates and
+        # keeps its soft needinfo_draft.
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = []
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "medium",
+            "needinfo_draft": "could you take a look at this crash?",
+            "mechanism": {"statement": "maybe related", "citations": [_diff_line()]},
+        }
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.needinfo_draft, "could you take a look at this crash?")
+
+    def test_lead_confidence_clamped_to_medium(self):
+        # A lead must never wear a high-confidence badge — clamp an over-claim.
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = []
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "high",
+            "mechanism": {"statement": "maybe", "citations": [_diff_line()]},
+        }
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_lead_confidence_clamp_independent_of_floor(self):
+        # The clamp is a fixed 'never high' rule, not tied to the tunable floor: a
+        # retuned floor must not let a high-confidence lead through.
+        from unittest import mock
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = []
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "high",
+            "mechanism": {"statement": "m", "citations": [_diff_line()]},
+        }
+        with mock.patch("crashclouseau.config.get_abstain_below_confidence",
+                        return_value=0.95):
+            d = validate_dossier(obj)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_lead_without_anchor_abstains(self):
+        # A directly-emitted lead with NO cited candidate/hunk/edge is demoted to
+        # abstain — there is nothing to hand a human (guards the anchor invariant on
+        # the direct-emit path, not just the skeptic-downgrade path).
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = []
+        for k in ("candidate", "hunks", "call_path"):
+            obj.pop(k, None)
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "medium",
+            "needinfo_draft": "please look",
+            "mechanism": {"statement": "hunch", "citations": [_stack_frame()]},
+        }
+        d = validate_dossier(obj)
         self.assertEqual(d.verdict.decision, Decision.abstain)
-        self.assertIn("skeptic", d.verdict.abstain_reason)
+        self.assertIn("anchor", d.verdict.abstain_reason)
 
     def test_abstain_requires_reason(self):
         obj = copy.deepcopy(_dossier())

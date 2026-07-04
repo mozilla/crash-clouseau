@@ -52,7 +52,9 @@
         "ui":
         {
             "show_abstain": false,
-            "high_confidence_label": "STRONG EVIDENCE"
+            "show_lead": true,
+            "high_confidence_label": "STRONG EVIDENCE",
+            "lead_label": "LEAD"
         },
         "confidence":
         {
