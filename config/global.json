@@ -53,16 +53,25 @@
         {
             "show_abstain": false,
             "show_lead": true,
+            "show_experts": true,
             "high_confidence_label": "STRONG EVIDENCE",
             "lead_label": "LEAD"
         },
         "confidence":
         {
-            "apply_min": 85
+            "apply_min": 85,
+            "lead_apply_min": 50
         },
         "apply":
         {
             "enabled_types": ["bugzilla.add_comment", "bugzilla.update_bug"]
+        },
+        "filters":
+        {
+            "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr"],
+            "ubiquitous_symbols": ["nsTArray", "nsTHashMap", "nsTHashtable", "nsBaseHashtable", "mozilla::HashMap", "mozilla::HashTable", "PLDHashTable", "RefPtr", "nsCOMPtr", "nsTString", "nsTSubstring", "nsAString", "nsString", "mozilla::Vector", "UniquePtr", "nsRefPtrHashtable"],
+            "anchor_frame_patterns": ["MessageLoop::Run", "MessagePump", "nsThread::ThreadFunc", "ThreadFuncPoolThread", "_PR_NativeRunThread", "nsThread::ProcessNextEvent", "mozilla::ipc::MessageChannel::", "TaskController", "XRE_main", "content_process_main", "nsAppShell::", "GeckoStart", "PR_RunThread"],
+            "penalty": 0.1
         },
         "patch_extraction":
         {

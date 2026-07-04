@@ -33,12 +33,14 @@ def crashstack():
             for e in cp.get("edges") or []:
                 e["caller_pretty"] = utils.demangle(e.get("caller_symbol", ""))
                 e["callee_pretty"] = utils.demangle(e.get("callee_symbol", ""))
-        # Show the panel for strong-evidence (culprit) and lead verdicts; for
-        # ABSTAIN only when the UI is configured to surface them.
+        # Show the panel for strong-evidence (culprit) and lead verdicts, and whenever
+        # area-experts were found (a knowledgeable person to surface, even on abstain);
+        # for a bare ABSTAIN only when the UI is configured to surface them.
         vt = evidence["verdict"] if evidence else None
         ui = evidence["ui"] if evidence else {}
+        has_experts = bool((evidence.get("dossier") or {}).get("area_experts")) if evidence else False
         show_evidence = bool(evidence and (
-            vt == "culprit" or (vt == "lead" and ui.get("show_lead", True)) or (vt == "abstain" and ui.get("show_abstain"))
+            vt == "culprit" or (vt == "lead" and ui.get("show_lead", True)) or (has_experts and ui.get("show_experts", True)) or (vt == "abstain" and ui.get("show_abstain"))
         ))
         return render_template(
             "crashstack.html",

@@ -188,6 +188,21 @@ class TestBuildResult(unittest.TestCase):
         r = build_result(self._bridge_msg(), recorder=rec)
         self.assertEqual(len(r.actions), 1)
 
+    def test_lead_needinfo_bridged(self):
+        # #15 phase 4: a lead with a candidate + soft draft also becomes an
+        # apply-eligible add_comment (leads are now apply-eligible, human-gated).
+        dossier = {
+            "candidate": {"node": "leadnode", "bug": 789},
+            "verdict": {"decision": "lead", "confidence": "medium",
+                        "needinfo_draft": "soft: could you take a look?"},
+        }
+        r = build_result(_result_msg("x\n```json\n" + json.dumps(dossier) + "\n```"))
+        self.assertEqual(r.decision, Decision.lead)
+        self.assertEqual(len(r.actions), 1)
+        self.assertEqual(r.actions[0]["type"], "bugzilla.add_comment")
+        self.assertEqual(r.actions[0]["params"]["bug_id"], 789)
+        self.assertEqual(r.actions[0]["params"]["text"], "soft: could you take a look?")
+
     def test_bridge_kept_when_recorded_text_differs(self):
         # a DISTINCT recorded comment for the same bug must not drop the drafted
         # needinfo — both stay apply-eligible.

@@ -154,8 +154,82 @@ class TestBuildSeed(unittest.TestCase):
             seed = orch.build_seed("u-1")
         cands = seed["candidates"]
         self.assertEqual([c["node"] for c in cands], ["n2", "n1"])  # by score desc
-        self.assertEqual(cands[0], {"node": "n2", "score": 9, "bug": 222, "backedout": True})
+        self.assertEqual(
+            cands[0],
+            {"node": "n2", "score": 9, "bug": 222, "backedout": True, "noise": False},
+        )
         self.assertEqual(cands[1]["score"], 5)  # n1 deduped to its max score across frames
+
+    def test_seed_downranks_anchor_frame_only_candidate(self):
+        # A candidate supported ONLY by a universal anchor frame is down-ranked below a
+        # lower-raw-score candidate on a real frame (#15 phase 3), never dropped.
+        res = {"frames": [
+            {"stackpos": 0, "function": "MessageLoop::Run", "filename": "ipc/x.cpp",
+             "line": 1, "changesets": {"anchor": {"score": 100, "bugid": 1, "backedout": False}}},
+            {"stackpos": 1, "function": "RealCode::doThing", "filename": "dom/y.cpp",
+             "line": 2, "changesets": {"real": {"score": 5, "bugid": 2, "backedout": False}}},
+        ]}
+        with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, {})), \
+             mock.patch.object(orch.models.UUID, "get_info",
+                               return_value={"channel": "nightly"}), \
+             mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+            seed = orch.build_seed("u-1")
+        cands = {c["node"]: c for c in seed["candidates"]}
+        self.assertTrue(cands["anchor"]["noise"])
+        self.assertFalse(cands["real"]["noise"])
+        # 100*0.1=10 > 5, so anchor still ranks first here — but it's tagged noise so
+        # the agent/prompt down-ranks it; the raw score is preserved for fidelity.
+        self.assertEqual(cands["anchor"]["score"], 100)
+        self.assertEqual([c["node"] for c in seed["candidates"]], ["anchor", "real"])
+
+    def test_candidate_on_real_and_anchor_frame_not_noise(self):
+        # A node supported by BOTH an anchor frame and a real code frame is NOT tagged
+        # noise (regression: the per-node all-noise fix), and keeps its max raw score.
+        res = {"frames": [
+            {"stackpos": 0, "function": "MessageLoop::Run", "filename": "ipc/x.cpp",
+             "line": 1, "changesets": {"both": {"score": 100, "bugid": 1, "backedout": False}}},
+            {"stackpos": 1, "function": "RealCode::doThing", "filename": "dom/y.cpp",
+             "line": 2, "changesets": {"both": {"score": 5, "bugid": 1, "backedout": False}}},
+        ]}
+        with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, {})), \
+             mock.patch.object(orch.models.UUID, "get_info", return_value={"channel": "nightly"}), \
+             mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+            seed = orch.build_seed("u-1")
+        both = {c["node"]: c for c in seed["candidates"]}["both"]
+        self.assertFalse(both["noise"])
+        self.assertEqual(both["score"], 100)
+
+    def test_ubiquitous_symbol_frame_is_noise(self):
+        # A frame whose FUNCTION is a ubiquitous primitive (not just its path) is noise.
+        res = {"frames": [
+            {"stackpos": 0, "function": "mozilla::HashMap<int>::lookup", "filename": "dom/z.cpp",
+             "line": 1, "changesets": {"n": {"score": 9, "bugid": 1, "backedout": False}}},
+        ]}
+        with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, {})), \
+             mock.patch.object(orch.models.UUID, "get_info", return_value={"channel": "nightly"}), \
+             mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+            seed = orch.build_seed("u-1")
+        self.assertTrue(seed["candidates"][0]["noise"])
+
+    def test_seed_attaches_area_experts(self):
+        res = {"frames": [
+            {"stackpos": 0, "function": "F", "filename": "dom/a.cpp", "line": 1,
+             "changesets": {"n1": {"score": 9, "bugid": 111, "backedout": False}}},
+        ]}
+        authors = {"n1": {"email": "dev@m.org", "real": "Dev", "nick": "d",
+                          "bug": 111, "backedout": False}}
+        with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, {})), \
+             mock.patch.object(orch.models.UUID, "get_info",
+                               return_value={"channel": "nightly"}), \
+             mock.patch.object(orch.models.Node, "authors_for", return_value=authors), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+            seed = orch.build_seed("u-1")
+        self.assertEqual(len(seed["experts"]), 1)
+        self.assertEqual(seed["experts"][0]["email"], "dev@m.org")
+        self.assertIn("n1", seed["experts"][0]["reason"])
 
 
 class TestRunEvidenceAgent(unittest.TestCase):

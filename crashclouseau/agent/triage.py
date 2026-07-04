@@ -107,6 +107,8 @@ def _user_prompt(crash: dict) -> str:
                 parts.append("bug={}".format(c["bug"]))
             if c.get("backedout"):
                 parts.append("backed-out")
+            if c.get("noise"):
+                parts.append("(likely-noise: down-rank)")
             lines.append("- " + " ".join(parts))
     if extra:
         lines += ["", str(extra)]
@@ -262,13 +264,15 @@ def _needinfo_action(dossier) -> dict | None:
     JSON dossier); it does not call the ``actions`` MCP tool, so ``recorder.actions``
     is otherwise always empty and the apply UI has nothing to execute. This
     synthesizes one apply-eligible action from what the agent already produced.
-    Returns ``None`` unless the verdict is strong-evidence with a draft and a known
-    candidate bug. Shape matches ``ActionsRecorder.record`` / ``bugzilla_apply``:
+    Returns ``None`` unless the verdict is strong-evidence OR a lead (#15 phase 4) with
+    a draft and a known candidate bug — a lead carries the soft, non-accusatory draft,
+    so the human can send it as a needinfo to a knowledgeable person. Shape matches
+    ``ActionsRecorder.record`` / ``bugzilla_apply``:
     ``{type, params:{bug_id, text, is_private}, reasoning}``."""
     if dossier is None:
         return None
     v, c = dossier.verdict, dossier.candidate
-    if v is None or v.decision != Decision.strong_evidence:
+    if v is None or v.decision not in (Decision.strong_evidence, Decision.lead):
         return None
     if not v.needinfo_draft or c is None or not c.bug:
         return None
@@ -278,8 +282,8 @@ def _needinfo_action(dossier) -> dict | None:
         # can quote the crash mechanism. A human confirms (and can un-private) before
         # apply; over-privating is far safer than leaking sec details on a public post.
         "params": {"bug_id": c.bug, "text": v.needinfo_draft, "is_private": True},
-        "reasoning": "auto-drafted from the strong-evidence verdict's needinfo_draft; "
-                     "human-confirmed before apply",
+        "reasoning": "auto-drafted from the verdict's needinfo_draft ({}); "
+                     "human-confirmed before apply".format(v.decision.value),
     }
 
 

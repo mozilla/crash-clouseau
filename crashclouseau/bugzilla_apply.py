@@ -56,6 +56,20 @@ def _confidence_ok(confidence, ui):
     return confidence is not None and confidence >= ui.get("apply_min_confidence", 85)
 
 
+def _apply_eligible(verdict, confidence, ui):
+    """Apply is allowed for a high-confidence culprit (>= apply_min) OR a lead at/above
+    the lower lead threshold (>= lead_apply_min, #15 phase 4). Abstain is never
+    eligible. The human still has to confirm — this only gates whether the control is
+    offered / a POST is accepted."""
+    if verdict == "culprit":
+        return _confidence_ok(confidence, ui)
+    if verdict == "lead":
+        return confidence is not None and confidence >= ui.get(
+            "lead_apply_min_confidence", 50
+        )
+    return False
+
+
 def build_evidence(uuid):
     """Verdict/dossier/actions + UI/apply policy for one UUID, or ``None`` when no
     verdict row exists (panel hidden). Read-only."""
@@ -66,9 +80,8 @@ def build_evidence(uuid):
     idxs = applicable_indices(ev.get("actions"), ui)
     ev["ui"] = ui
     ev["apply_indices"] = idxs
-    is_culprit = ev.get("verdict") == "culprit"
     ev["can_apply"] = bool(
-        is_culprit and _confidence_ok(ev.get("confidence"), ui) and idxs
+        _apply_eligible(ev.get("verdict"), ev.get("confidence"), ui) and idxs
     )
     return ev
 
@@ -146,15 +159,15 @@ def apply_recorded_actions(uuid, indices):
 
     # Server-side authorization gate (defense-in-depth — the UI only *hides* the apply
     # control; a hand-crafted POST must not bypass it). The apply path executes ONLY for
-    # a high-confidence strong-evidence ("culprit") verdict; an abstain/low-confidence
-    # UUID is refused outright, before any write.
-    if ev.get("verdict") != "culprit" or not _confidence_ok(ev.get("confidence"), ui):
+    # a high-confidence culprit or a lead at/above the lead threshold; an abstain or
+    # below-threshold UUID is refused outright, before any write.
+    if not _apply_eligible(ev.get("verdict"), ev.get("confidence"), ui):
         return [
             {
                 "index": i,
                 "ok": False,
                 "error": "verdict not eligible for apply "
-                         "(requires high-confidence strong-evidence)",
+                         "(requires a high-confidence culprit or a lead)",
             }
             for i in indices
         ]

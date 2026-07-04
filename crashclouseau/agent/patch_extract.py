@@ -81,6 +81,21 @@ class PatchExtraction:
     def churn(self):
         return churn(self.files)
 
+    def is_cosmetic(self):
+        """True when EVERY changed file is a pure reflow/reindent/mode/rename (no
+        semantic change). A non-empty inert patch is a strong down-rank signal."""
+        return bool(self.files) and all(file_is_cosmetic(f) for f in self.files)
+
+    def is_inert(self):
+        """True when the whole patch is noise for crash-triage purposes: every file is
+        cosmetic, comment-only, or a doc/build-metadata file. 'Down-rank, never drop'
+        (a real fix CAN be comment-adjacent) — this is only a ranking/confidence hint,
+        surfaced to the agent, not a hard filter."""
+        return bool(self.files) and all(
+            file_is_cosmetic(f) or file_is_comment_only(f) or file_is_doc(f)
+            for f in self.files
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Fetch
@@ -304,6 +319,36 @@ def file_is_cosmetic(file_diff):
     if not file_diff.hunks:
         return file_diff.status in ("renamed", "copied")
     return all(is_cosmetic(h) for h in file_diff.hunks)
+
+
+_DOC_SUFFIXES = (".md", ".rst", ".txt", ".mdn")
+
+
+def _is_comment_line(x):
+    """Conservatively true for C/C++/Rust/JS comment lines: ``//``, ``/*``/``*/``, and
+    block-comment bodies (bare ``*`` or ``* text``). Deliberately NOT ``#`` — in C/C++
+    that is a preprocessor directive, a *semantic* change — and NOT ``*ident`` / ``*(``
+    which are pointer-deref writes, not comments (the false-positive that would down-rank
+    a real regressor). Missing a comment (false negative) is harmless; matching real code
+    (false positive) is not."""
+    return x.startswith("//") or x.startswith("/*") or x.startswith("*/") or x == "*" or x.startswith("* ")
+
+
+def is_comment_only(hunk):
+    """True when every non-blank changed line is a comment line. Down-rank hint only,
+    never a hard filter."""
+    lines = [t.strip() for _, t in (hunk.added_lines + hunk.deleted_lines)]
+    lines = [x for x in lines if x]
+    return bool(lines) and all(_is_comment_line(x) for x in lines)
+
+
+def file_is_comment_only(file_diff):
+    return bool(file_diff.hunks) and all(is_comment_only(h) for h in file_diff.hunks)
+
+
+def file_is_doc(file_diff):
+    name = (file_diff.filename or "").lower()
+    return name.endswith(_DOC_SUFFIXES) or "/docs/" in name or name.startswith("docs/")
 
 
 _TAG_PATTERNS = {

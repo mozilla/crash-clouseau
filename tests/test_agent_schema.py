@@ -365,6 +365,19 @@ class TestVerdictRules(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.abstain)
         self.assertIn("anchor", d.verdict.abstain_reason)
 
+    def test_area_experts_roundtrip(self):
+        # #15 phase 2: area_experts is deterministic (not Cited) and survives the
+        # DB JSON round-trip on any verdict.
+        obj = copy.deepcopy(_dossier())
+        obj["area_experts"] = [
+            {"name": "Alice", "email": "a@m.org", "nick": "al", "node": "0123456789ab",
+             "bug": 123, "reason": "authored candidate 0123456789ab (bug 123)"},
+        ]
+        d = validate_dossier(obj)
+        self.assertEqual(d.area_experts[0].email, "a@m.org")
+        d2 = dossier_from_db_json(dossier_to_db_json(d))
+        self.assertEqual(d2.area_experts[0].name, "Alice")
+
     def test_abstain_requires_reason(self):
         obj = copy.deepcopy(_dossier())
         obj["verdict"] = {"decision": "abstain", "confidence": "low"}

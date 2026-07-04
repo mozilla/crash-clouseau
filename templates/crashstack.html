@@ -82,12 +82,33 @@
 
       {% if is_lead -%}
       <p class="muted">Plausible lead &mdash; a related changeset was found, but the mechanism is <strong>not verified end&#8209;to&#8209;end</strong>. Worth a look by someone familiar with this code, who may not be the cause.</p>
-      {% if vd and vd.get('needinfo_draft') -%}
+      {# Show the draft as plain text only when that exact text isn't already surfaced
+         as a recorded action below — so a draft that never became an action is never
+         silently hidden (avoids both duplication and disappearance). #}
+      {% set draft = vd.get('needinfo_draft') if vd else None -%}
+      {% set ns = namespace(in_actions=false) -%}
+      {% for a in evidence['actions'] -%}
+        {% if a is mapping and (a.get('params') or {}).get('text') == draft -%}{% set ns.in_actions = true -%}{% endif -%}
+      {% endfor -%}
+      {% if draft and not ns.in_actions -%}
       <div class="evidence-section">
         <h3>Suggested needinfo (draft &mdash; review before sending)</h3>
-        <p class="needinfo-draft">{{ vd['needinfo_draft']|e }}</p>
+        <p class="needinfo-draft">{{ draft|e }}</p>
       </div>
       {% endif -%}
+      {% endif -%}
+
+      {% set experts = d.get('area_experts') or [] -%}
+      {% if experts -%}
+      <div class="evidence-section">
+        <h3>Suggested contacts &mdash; recently worked in this area</h3>
+        <p class="muted">People who recently changed code near the crash &mdash; someone to ask for help, not necessarily the cause.</p>
+        <ul class="experts">
+        {% for x in experts -%}
+          <li>{{ (x.get('name') or x.get('email') or x.get('nick') or '?')|e }}{% if x.get('email') %} &lt;{{ x['email']|e }}&gt;{% endif %}{% if x.get('reason') %} <span class="muted">&mdash; {{ x['reason']|e }}</span>{% endif %}</li>
+        {% endfor -%}
+        </ul>
+      </div>
       {% endif -%}
 
       {% if d.get('crash') and d['crash'].get('failure_class') -%}
@@ -207,11 +228,11 @@
         {% endfor -%}
         {% if evidence['can_apply'] -%}
         <p>
-          <button type="button" id="applyActionsBtn" onclick="applyActions()">Apply selected recorded actions to Bugzilla&hellip;</button>
+          <button type="button" id="applyActionsBtn" onclick="applyActions()">{% if is_lead %}Send needinfo to a knowledgeable person&hellip;{% else %}Apply selected recorded actions to Bugzilla&hellip;{% endif %}</button>
         </p>
         <div id="apply-results"></div>
         {% elif evidence['apply_indices'] -%}
-        <p class="muted">The apply control is offered only for high-confidence strong-evidence verdicts.</p>
+        <p class="muted">The apply control is offered only once the confidence clears the threshold (a high-confidence culprit, or a lead at/above the lead threshold).</p>
         {% endif -%}
       </div>
       {% endif -%}

@@ -63,7 +63,11 @@ _ROLES: dict[str, dict] = {
         "exact line numbers + content + enclosing function) — do NOT shell out with "
         "git/hg. Match changed functions to the neighborhood and write a one-line, "
         "fully-cited semantic summary per candidate (cite the diff line and the "
-        "searchfox symbol)." + _GROUND,
+        "searchfox symbol). DOWN-RANK obviously-unrelated candidates so leads stay "
+        "credible: cosmetic/comment/doc-only diffs (the tool prints a NOTE), changes "
+        "to ubiquitous primitives (nsTArray/HashMap/RefPtr/nsCOMPtr/strings/allocators "
+        "— a break there would crash all of Firefox, not one signature), and universal "
+        "bottom-of-stack frames used as anchors. Down-rank, don't discard." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff",
                   "mcp__searchfox__define", "mcp__searchfox__search"],
     },

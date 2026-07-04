@@ -37,6 +37,20 @@ you did not observe through a tool. If a decisive edge is a searchfox hole
 (virtual/IPC/FFI/macro/template), say so and lower your confidence — do not fabricate
 the link.
 
+## Weighing candidates (be smart, not too smart)
+Discount — do NOT treat as the culprit — changesets that are obviously unrelated, so your
+leads stay credible:
+- cosmetic / comment-only / doc-only diffs (the `mcp__patch__diff` tool flags these with a
+  NOTE line);
+- changes to ubiquitous primitives — containers / smart-pointers / strings / allocators
+  (nsTArray, HashMap, RefPtr, nsCOMPtr, nsTString, UniquePtr, mozalloc, …): if one of those
+  were broken, ALL of Firefox would crash, not this one signature;
+- universal bottom-of-stack frames used as anchors (the event loop, message pump, RunTask,
+  nsThread::ThreadFunc, process `main`): everything passes through them, so they don't point
+  at a cause.
+Down-rank these (lower confidence, prefer other candidates); do NOT delete them outright — a
+real regressor CAN live in a common file, so if the crash chain genuinely proves one, keep it.
+
 ## Final message: one JSON block
 End your final message with EXACTLY ONE fenced ```json block holding the dossier.
 Emit only fields you can fill and cite; omit the rest. Shape:

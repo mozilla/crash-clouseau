@@ -19,7 +19,8 @@ from __future__ import annotations
 import asyncio
 
 from crashclouseau import config, db, models, worker
-from crashclouseau.agent.schema import CONFIDENCE_SCORE, Decision
+from crashclouseau.agent.experts import area_experts
+from crashclouseau.agent.schema import AreaExpert, CONFIDENCE_SCORE, Decision
 from crashclouseau.logger import logger
 from crashclouseau.vendor.hackbot_runtime.actions.recorder import ActionsRecorder
 
@@ -83,28 +84,66 @@ def build_seed(uuid):
     # The scored candidate changesets are already in the DB (frame.changesets); hand
     # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
     # instead of hunting for candidates with searchfox/Bash.
+    # Down-rank (never drop) candidates whose only support is "noise": a universal
+    # bottom-of-stack anchor frame or a ubiquitous-primitive file (#15 phase 3). A
+    # candidate that also appears on a real frame keeps its real ranking via the max.
+    filters = config.get_agent_filters()
+
+    def _frame_is_noise(fr):
+        fn, fname = fr.get("function") or "", fr.get("filename") or ""
+        return any(p in fn for p in filters["anchor_frame_patterns"]) or any(s in fn for s in filters["ubiquitous_symbols"]) or any(p in fname for p in filters["ubiquitous_paths"])
+
+    # Per node: max raw score (display), max penalized score (ranking), and noise =
+    # ALL supporting frames are noise. A candidate that ALSO sits on a real code frame
+    # keeps its real ranking and is NOT tagged noise (so it still yields an expert).
     cand: dict = {}
     for f in frames:
+        fnoise = _frame_is_noise(f)
+        factor = filters["penalty"] if fnoise else 1.0
         for node, cs in (f.get("changesets") or {}).items():
             score = cs.get("score") or 0
-            if node not in cand or score > (cand[node].get("score") or 0):
+            eff = score * factor
+            prev = cand.get(node)
+            if prev is None:
                 cand[node] = {
                     "node": node,
                     "score": score,
+                    "_eff": eff,
                     "bug": cs.get("bugid"),
                     "backedout": cs.get("backedout"),
+                    "_all_noise": fnoise,
                 }
-    candidates = sorted(cand.values(), key=lambda c: -(c.get("score") or 0))
+            else:
+                prev["score"] = max(prev["score"], score)
+                prev["_eff"] = max(prev["_eff"], eff)
+                prev["_all_noise"] = prev["_all_noise"] and fnoise
+    candidates = sorted(cand.values(), key=lambda c: -c["_eff"])
+    for c in candidates:
+        c["noise"] = c.pop("_all_noise")
+        c.pop("_eff", None)
+
+    # Area-experts (#15 phase 2): the authors of the top non-noise candidates — a
+    # knowledgeable person to ask, computed from local data (migration-proof). Attached
+    # to the dossier by run_evidence_agent regardless of the verdict.
+    channel = info.get("channel", "nightly")
+    experts = []
+    try:
+        authors = models.Node.authors_for([c["node"] for c in candidates[:10]], channel)
+        experts = area_experts(candidates, authors, max_experts=3)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("agent: area-experts failed for %s: %s", uuid, exc)
+
     return {
         "uuid": uuid,
         "signature": info.get("signature", ""),
-        "channel": info.get("channel", "nightly"),
+        "channel": channel,
         "product": info.get("product", ""),
         "buildid": info.get("buildid"),
         "version": info.get("version"),
         "frames": frames,
         "stack": stack_text,
         "candidates": candidates,
+        "experts": experts,
         "raw_crash": raw_crash,
     }
 
@@ -192,6 +231,11 @@ def run_evidence_agent(uuid):
                 "agent: %s over budget: $%.4f > $%s",
                 uuid, result.total_cost_usd, cap,
             )
+
+        # Attach deterministic area-experts (#15 phase 2) to the dossier so a
+        # knowledgeable person is surfaced for ANY verdict (including abstain).
+        if result.dossier is not None and seed.get("experts"):
+            result.dossier.area_experts = [AreaExpert(**e) for e in seed["experts"]]
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already

@@ -493,6 +493,13 @@ class TestBuildEvidence(unittest.TestCase):
     def test_can_apply_false_for_abstain(self):
         self.assertFalse(self._build(verdict="abstain", confidence=90)["can_apply"])
 
+    def test_can_apply_true_for_lead_at_threshold(self):
+        # #15 phase 4: a lead is apply-eligible at/above the lower lead threshold (50).
+        self.assertTrue(self._build(verdict="lead", confidence=50)["can_apply"])
+
+    def test_can_apply_false_for_lead_below_threshold(self):
+        self.assertFalse(self._build(verdict="lead", confidence=40)["can_apply"])
+
     def test_none_when_no_verdict(self):
         with mock.patch("crashclouseau.models.Verdict.get_evidence", return_value=None):
             self.assertIsNone(bugzilla_apply.build_evidence("u-1"))

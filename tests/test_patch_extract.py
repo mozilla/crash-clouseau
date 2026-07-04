@@ -47,6 +47,41 @@ _NULLCHECK = """diff --git a/g.cpp b/g.cpp
    ptr->Use();
 """
 
+_COMMENT = """diff --git a/c.cpp b/c.cpp
+--- a/c.cpp
++++ b/c.cpp
+@@ -1,1 +1,3 @@ void f()
+   int x = 1;
++  // explain the thing
++  /* and another */
+"""
+
+_DOC = """diff --git a/docs/readme.md b/docs/readme.md
+--- a/docs/readme.md
++++ b/docs/readme.md
+@@ -1,1 +1,2 @@
+ title
++more prose
+"""
+
+# Regression (#15 review): `*out = x;` (pointer deref) and `#define` (preprocessor)
+# must NOT be classified as comment-only — they are real, semantic code changes.
+_PTR_WRITE = """diff --git a/p.cpp b/p.cpp
+--- a/p.cpp
++++ b/p.cpp
+@@ -1,1 +1,1 @@ void f(int* out)
+-  *out = 1;
++  *out = 2;
+"""
+
+_PREPROC = """diff --git a/q.cpp b/q.cpp
+--- a/q.cpp
++++ b/q.cpp
+@@ -1,1 +1,1 @@
+-#define MAX 10
++#define MAX 20
+"""
+
 
 class TestRealFixture(unittest.TestCase):
     @classmethod
@@ -95,6 +130,32 @@ class TestDerivedSignals(unittest.TestCase):
         files = pe.parse_hunks(_COSMETIC)
         self.assertTrue(pe.is_cosmetic(files[0].hunks[0]))
         self.assertTrue(pe.file_is_cosmetic(files[0]))
+
+    def test_comment_only_and_doc(self):
+        cfiles = pe.parse_hunks(_COMMENT)
+        self.assertTrue(pe.is_comment_only(cfiles[0].hunks[0]))
+        self.assertTrue(pe.file_is_comment_only(cfiles[0]))
+        self.assertFalse(pe.file_is_cosmetic(cfiles[0]))  # added comments != reflow
+        self.assertTrue(pe.file_is_doc(pe.parse_hunks(_DOC)[0]))
+
+    def test_pointer_deref_and_preproc_not_comment(self):
+        self.assertFalse(pe.is_comment_only(pe.parse_hunks(_PTR_WRITE)[0].hunks[0]))
+        self.assertFalse(pe.is_comment_only(pe.parse_hunks(_PREPROC)[0].hunks[0]))
+        ext = pe.PatchExtraction(node="n", channel="c", raw_diff="x",
+                                 files=pe.parse_hunks(_PTR_WRITE))
+        self.assertFalse(ext.is_inert())
+
+    def test_is_inert_and_is_cosmetic(self):
+        def ext(raw):
+            return pe.PatchExtraction(node="n", channel="nightly", raw_diff="x",
+                                      files=pe.parse_hunks(raw))
+        self.assertTrue(ext(_COMMENT).is_inert())        # comment-only
+        self.assertFalse(ext(_COMMENT).is_cosmetic())    # not a pure reflow
+        self.assertTrue(ext(_COSMETIC).is_cosmetic())
+        self.assertTrue(ext(_COSMETIC).is_inert())       # cosmetic implies inert
+        self.assertTrue(ext(_DOC).is_inert())            # doc-only
+        self.assertFalse(ext(_NULLCHECK).is_inert())     # real logic change
+        self.assertFalse(ext("").is_inert())             # empty is not "inert"
 
     def test_logic_change_not_cosmetic_and_null_check_tag(self):
         files = pe.parse_hunks(_NULLCHECK)

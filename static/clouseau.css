@@ -194,6 +194,12 @@ s.red {
     white-space: pre-wrap;
 }
 
+ul.experts {
+    margin: 0.3em 0 0;
+    padding-left: 1.2em;
+}
+ul.experts li { margin: 0.15em 0; }
+
 .model-tag {
     display: inline-block;
     margin-left: 0.4em;

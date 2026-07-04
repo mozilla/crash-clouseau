@@ -156,6 +156,33 @@ class Node(db.Model):
         self.hgauthor = HGAuthor.get_id(info["author"])
 
     @staticmethod
+    def authors_for(nodes, channel):
+        """Map each node hash -> {email, real, nick, bug, backedout, pushdate} from the
+        local DB (Node join HGAuthor), for the given channel. Migration-proof (no
+        network); used to surface area-experts (#15 phase 2). Skips the empty/default
+        author row."""
+        if not nodes:
+            return {}
+        rows = (
+            db.session.query(
+                Node.node, Node.bug, Node.backedout, Node.pushdate,
+                HGAuthor.email, HGAuthor.real, HGAuthor.nick,
+            )
+            .join(HGAuthor, Node.hgauthor == HGAuthor.id)
+            .filter(Node.channel == channel, Node.node.in_(list(nodes)))
+            .all()
+        )
+        out = {}
+        for node, bug, backedout, pushdate, email, real, nick in rows:
+            if not (email or real or nick):
+                continue  # the "" / default author carries no signal
+            out.setdefault(node, {
+                "email": email or "", "real": real or "", "nick": nick or "",
+                "bug": bug, "backedout": bool(backedout), "pushdate": pushdate,
+            })
+        return out
+
+    @staticmethod
     def get_min_date(channel):
         m = (
             db.session.query(db.func.min(Node.pushdate))

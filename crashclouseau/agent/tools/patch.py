@@ -47,6 +47,12 @@ def _fmt_patch(ext, node: str) -> str:
     if ext is None or ext.is_empty():
         return "No diff available for {} (channel {}).".format(node, ext.channel if ext else "?")
     out = ["patch {} (channel {}):".format(node, ext.channel)]
+    if ext.is_cosmetic():
+        out.append("  NOTE: cosmetic-only (reflow/reindent/rename/mode) — very unlikely "
+                   "to be the culprit; down-rank unless the crash proves otherwise.")
+    elif ext.is_inert():
+        out.append("  NOTE: comment/doc-only change — very unlikely to be the culprit; "
+                   "down-rank unless the crash proves otherwise.")
     n = 0
     for f in ext.files:
         out.append("file {} ({})".format(f.filename, f.status))

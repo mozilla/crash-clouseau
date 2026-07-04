@@ -237,6 +237,20 @@ class Claim(Cited):
     statement: str = ""
 
 
+class AreaExpert(BaseModel):
+    """A developer who recently worked in the crashing area — someone to ASK, not
+    necessarily the cause. Computed deterministically OUTSIDE the LLM (from local
+    ``Node.hgauthor``), so it is NOT a ``Cited`` claim and rides the dossier for any
+    verdict (including abstain). ``reason`` explains why they were surfaced."""
+
+    name: str = ""
+    email: str = ""
+    nick: str = ""
+    node: str = ""            # the changeset that placed them in the area
+    bug: int | None = None
+    reason: str = ""
+
+
 class Verdict(BaseModel):
     decision: Decision
     confidence: Confidence = Confidence.low
@@ -285,6 +299,7 @@ class Dossier(BaseModel):
     hunks: list[DiffHunk] = Field(default_factory=list)
     data_flow: DataFlowHypothesis | None = None
     skeptic: list[SkepticResult] = Field(default_factory=list)
+    area_experts: list[AreaExpert] = Field(default_factory=list)
     verdict: Verdict | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
