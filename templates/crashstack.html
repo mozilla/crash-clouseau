@@ -30,15 +30,6 @@
         </ul>
       </nav>
     </header>
-    <div id="changeset-menu">
-      <ul>
-        <li><a id="openChangeset">Open the changeset</a></li>
-        <li><a id="openDiff">Open the diff for the file</a></li>
-        <li><a id="openFileDiff">Open file|diff</a></li>
-        <li><a id="openAnnotateDiff">Open annotate|diff</a></li>
-        <li><a id="reportBug">Report a bug</a></li>
-      </ul>
-    </div>
     <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.org/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
     <p>The crash signature is <a href="{{ sgn_url }}">{{ uuid_info['signature']|e }}</a>.</p>
     {% macro cite(c, node, chan, uuid) -%}
@@ -267,8 +258,8 @@
               <div style="display:table-row;">
                 <div class="cell" style="width:25%">
                   <span>
-                    <a href="{{ repo_url }}/rev?node={{ chgset }}">{{ chgset }}</a>
-                    <a onclick="javascript: showChangesetMenu(event);"><span id="cset-{{ chgset }}-{{ pos }}" class="glass"></span></a>
+                    <a href="{{ repo_url }}/rev?node={{ chgset }}" target="_blank" rel="noopener">{{ chgset }}</a>
+                    <a href="/codeview.html?uuid={{ uuid_info['uuid']|urlencode }}&filename={{ info['filename']|urlencode }}&node={{ chgset }}&line={{ info['line'] }}&channel={{ channel }}&rev={{ uuid_info['node'] }}" target="_blank" rel="noopener" title="View this file in searchfox + the changed lines"><span class="glass"></span></a>
                   </span>
                 </div>
                 <div style="background-color:{{ colors[i['score']] }};width:15%;"

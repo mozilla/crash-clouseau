@@ -6,9 +6,6 @@
 
 "use strict";
 
-let loaded = false;
-let currentTarget = null;
-
 
 function getParams() {
     const params = ["buildid", "product", "channel"].map(function(i) {
@@ -61,80 +58,6 @@ function update_selects(type) {
     }
 
     update_buildids(prod, chan, bids);
-}
-
-function reportBug() {
-    const a = document.activeElement;
-    const changeset = a.innerText;
-    location.href = "bug.html?changeset=" + changeset
-                  + "&uuid=" + UUID;
-}
-
-function getOffset(el) {
-    const rect = el.getBoundingClientRect(),
-          scrollLeft = window.pageXOffset || document.documentElement.scrollLeft,
-          scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-    return { top: rect.top + scrollTop + rect.height + 2, left: rect.left + scrollLeft }
-}
-
-function load(menu) {
-    ["openChangeset", "openDiff", "openFileDiff", "openAnnotateDiff", "reportBug"].map(function(i) {
-        document.getElementById(i).addEventListener("click", function (event) {
-            menu.classList.remove("show");
-            window.open(event.target.myurl, "_blank");
-        }, false);
-    });
-    menu.addEventListener("mouseenter", function () {
-        window.clearTimeout(menu.timer);
-    });
-    menu.addEventListener("mouseleave", function () {
-        window.clearTimeout(menu.timer);
-        menu.classList.remove("show");
-    });
-}
-
-function showChangesetMenu(e) {
-    const menu = document.getElementById("changeset-menu");
-    const target = e.target;
-    if (!loaded) {
-        load(menu);
-        loaded = true;
-    }
-    if ((target === currentTarget) && menu.classList.contains("show")) {
-        currentTarget = null;
-        menu.classList.remove("show");
-        return false;
-    }
-    
-    currentTarget = target;
-    const info = target.id.split("-");
-    const changeset = info[1];
-    const pos = info[2];
-    const filename = document.getElementById("filename-" + pos).innerText;
-    const line = document.getElementById("line-" + pos).innerText;
-
-    document.getElementById("openChangeset").myurl = REPOURL + "/rev?node=" + changeset;
-    document.getElementById("openDiff").myurl = REPOURL + "/diff/" + changeset + "/" + filename;
-    const diffUrl = "/diff.html?filename=" + filename
-                  + "&line=" + line
-                  + "&node=" + NODE
-                  + "&changeset=" + changeset
-                  + "&channel=" + CHANNEL
-                  + "&style=";
-    document.getElementById("openFileDiff").myurl = diffUrl + "file";
-    document.getElementById("openAnnotateDiff").myurl = diffUrl + "annotate";
-    document.getElementById("reportBug").myurl = "bug.html?changeset=" + changeset + "&uuid=" + UUID;
-
-    const offset = getOffset(target);
-    menu.style.left = offset.left + "px";
-    menu.style.top = offset.top + "px";
-    
-    menu.timer = window.setTimeout(function () {
-        menu.classList.remove("show");
-    }, 3000);
-    menu.classList.add("show");
-
-    return false;
 }
 
 function openPushlog() {

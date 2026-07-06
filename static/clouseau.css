@@ -88,43 +88,6 @@ table td {
     width: 100%;
 }
 
-#changeset-menu {
-    display: none;
-    position: absolute;
-    z-index: 1;
-}
-
-#changeset-menu ul {
-    padding: 0;
-    margin: 0;
-    list-style: none;
-    line-height: 2em;
-    text-align: left;
-}
-
-#changeset-menu a {
-    display: block;
-    padding: 0.5em;
-    background: #ddd;
-    color: black;
-    width: 15em;
-    text-decoration: none;
-    cursor: pointer;
-}
-
-#changeset-menu a:hover {
-    background: #aaa;
-    color: #ddd;
-}
-
-#changeset-menu li {
-    border-bottom: 1px solid #aaa;
-}
-
-#changeset-menu.show {
-    display: block;
-}
-
 .glass {
     display: inline-block;
     background: url("/glass.png");
