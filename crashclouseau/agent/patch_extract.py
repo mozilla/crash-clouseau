@@ -24,7 +24,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .. import net
 from libmozdata.hgmozilla import RawRevision
 
 from crashclouseau import config
@@ -104,26 +103,23 @@ _RAW_CACHE: dict = {}
 
 
 def fetch_raw_diff(node, channel):
-    """GET the raw unified diff for an hg *node*; truncate to the byte cap; return
-    None (logged) on failure so callers degrade rather than raise. Cached per run."""
+    """Fetch the raw unified diff for an hg *node* via libmozdata's maintained raw-rev
+    client, which sets our User-Agent and adds 429 retry/backoff. Returns None (logged)
+    on failure so callers degrade rather than raise; truncated to the byte cap; cached.
+    ``RawRevision.get_revision`` returns the body only on HTTP 200 (a diff isn't JSON, so
+    its callback hands back ``res.text``); a 404/error yields no body, so we never
+    mistake an error page for a diff."""
     key = (channel, node)
     if key in _RAW_CACHE:
         return _RAW_CACHE[key]
     text = None
     try:
-        url = "{}/{}".format(RawRevision.get_url(channel), node)
-        resp = net.get(url, timeout=_cfg("timeout_secs"))
-        if resp.status_code == 200 and resp.text:
-            text = resp.text
+        diff = RawRevision.get_revision(channel=channel, node=node)
+        if diff:
             cap = _cfg("diff_byte_cap")
-            if cap and len(text) > cap:
-                text = text[:cap]
-        else:
-            logger.warning(
-                "patch_extract: raw-rev %s %s -> HTTP %s", channel, node, resp.status_code
-            )
+            text = diff[:cap] if (cap and len(diff) > cap) else diff
     except Exception as exc:
-        logger.warning("patch_extract: raw-rev fetch failed for %s: %s", node, exc)
+        logger.warning("patch_extract: raw-rev fetch failed for %s %s: %s", channel, node, exc)
     _RAW_CACHE[key] = text
     return text
 
