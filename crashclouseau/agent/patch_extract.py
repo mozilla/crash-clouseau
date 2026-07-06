@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import requests
+from .. import net
 from libmozdata.hgmozilla import RawRevision
 
 from crashclouseau import config
@@ -112,7 +112,7 @@ def fetch_raw_diff(node, channel):
     text = None
     try:
         url = "{}/{}".format(RawRevision.get_url(channel), node)
-        resp = requests.get(url, timeout=_cfg("timeout_secs"))
+        resp = net.get(url, timeout=_cfg("timeout_secs"))
         if resp.status_code == 200 and resp.text:
             text = resp.text
             cap = _cfg("diff_byte_cap")

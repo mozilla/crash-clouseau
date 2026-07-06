@@ -25,7 +25,7 @@ This module has two jobs:
 from __future__ import annotations
 
 import libmozdata.config
-import requests
+from . import net
 
 from crashclouseau import config, models
 from crashclouseau.logger import logger
@@ -91,7 +91,7 @@ def build_evidence(uuid):
 # --------------------------------------------------------------------------- #
 def _post_comment(bug_id, text, is_private, token):
     """POST /rest/bug/<id>/comment -> new comment id."""
-    r = requests.post(
+    r = net.post(
         "{}/{}/comment".format(_BZ_REST, bug_id),
         headers={"X-Bugzilla-API-Key": token},
         json={"comment": text, "is_private": bool(is_private)},
@@ -106,7 +106,7 @@ def _put_bug(bug_id, changes, token):
     needinfo flag gets set, from ``changes.flags``) -> the bug id on success."""
     if not changes:
         raise ValueError("update_bug action has no changes to apply")
-    r = requests.put(
+    r = net.put(
         "{}/{}".format(_BZ_REST, bug_id),
         headers={"X-Bugzilla-API-Key": token},
         json=changes,

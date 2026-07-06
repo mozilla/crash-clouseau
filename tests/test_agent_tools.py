@@ -136,3 +136,27 @@ class TestPatchTool(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNetUserAgent(unittest.TestCase):
+    """Every direct request we make must carry our identifying User-Agent."""
+
+    def test_injects_user_agent_and_preserves_headers(self):
+        from unittest import mock
+        from crashclouseau import net
+        with mock.patch.object(net.requests, "get") as g:
+            net.get("https://lando.moz.tools/x")
+            net.get("https://x/y", headers={"X-Token": "t"})
+        # UA stamped on the bare call...
+        self.assertEqual(g.call_args_list[0].kwargs["headers"]["User-Agent"], net.USER_AGENT)
+        # ...and merged alongside a caller-supplied header
+        h = g.call_args_list[1].kwargs["headers"]
+        self.assertEqual(h["X-Token"], "t")
+        self.assertEqual(h["User-Agent"], net.USER_AGENT)
+
+    def test_explicit_user_agent_not_clobbered(self):
+        from unittest import mock
+        from crashclouseau import net
+        with mock.patch.object(net.requests, "post") as p:
+            net.post("https://x", headers={"User-Agent": "custom"})
+        self.assertEqual(p.call_args.kwargs["headers"]["User-Agent"], "custom")

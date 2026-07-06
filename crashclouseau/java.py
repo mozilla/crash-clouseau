@@ -5,7 +5,7 @@
 import html
 from libmozdata.hgmozilla import Mercurial
 import re
-import requests
+from . import net
 import time
 from . import models, tools
 
@@ -113,7 +113,7 @@ def reformat_java_stacktrace(
 def get_sha(path, filename, sleep=0.1, retry=10):
     url = "{}/contents/{}".format(GITHUB_URL, path)
     for _ in range(retry):
-        r = requests.get(url)
+        r = net.get(url)
         if r.status_code == 200:
             for data in r.json():
                 if data["name"] == filename:
@@ -127,7 +127,7 @@ def get_sha(path, filename, sleep=0.1, retry=10):
 def get_java_files(root, sha, sleep=0.1, retry=10):
     url = "{}/git/trees/{}?recursive=1".format(GITHUB_URL, sha)
     for _ in range(retry):
-        r = requests.get(url)
+        r = net.get(url)
         if r.status_code == 200:
             res = []
             for data in r.json()["tree"]:

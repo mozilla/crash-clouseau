@@ -6,7 +6,7 @@ from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial, Revision
 from libmozdata import utils as lmdutils
 import re
-import requests
+from . import net
 from . import buildhub, hgauthors, models, utils
 
 
@@ -65,7 +65,7 @@ def pushlog(
     enddate += relativedelta(seconds=1)
     enddate = enddate.strftime(fmt)
     url = "{}/json-pushes".format(Mercurial.get_repo_url(channel))
-    r = requests.get(
+    r = net.get(
         url,
         params={"startdate": startdate, "enddate": enddate, "version": 2, "full": 1},
     )
@@ -78,7 +78,7 @@ def pushlog_for_revs(
     """Get the pushlog from startrev to endrev"""
     # startrev is not include in the pushlog
     url = "{}/json-pushes".format(Mercurial.get_repo_url(channel))
-    r = requests.get(
+    r = net.get(
         url,
         params={"fromchange": startrev, "tochange": endrev, "version": 2, "full": 1},
     )

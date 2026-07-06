@@ -208,7 +208,7 @@ class TestEvidenceApi(unittest.TestCase):
             "over_budget": False, "status": "done", "cost_usd": 1.0,
         }
         with mock.patch("crashclouseau.models.Verdict.get_evidence", return_value=raw), \
-                mock.patch.object(bugzilla_apply, "requests") as req:
+                mock.patch.object(bugzilla_apply, "net") as req:
             rv = self.client.get("/api/evidence?uuid=u-1")
         self.assertEqual(rv.status_code, 200)
         body = rv.get_json()
@@ -328,7 +328,7 @@ class TestApplyRecordedActions(unittest.TestCase):
              verdict="culprit", confidence=90):
         actions = _actions() if actions is None else actions
         ev = {"verdict": verdict, "confidence": confidence, "actions": actions}
-        with mock.patch.object(bugzilla_apply, "requests") as req, \
+        with mock.patch.object(bugzilla_apply, "net") as req, \
                 mock.patch.object(bugzilla_apply.libmozdata.config, "get",
                                   return_value=token), \
                 mock.patch("crashclouseau.models.Verdict.get_evidence",
@@ -385,7 +385,7 @@ class TestApplyRecordedActions(unittest.TestCase):
         ui = {"show_abstain": False, "high_confidence_label": "X",
               "apply_min_confidence": 85, "enabled_types": ["bugzilla.update_bug"]}
         with mock.patch.object(bugzilla_apply.config, "get_agent_ui", return_value=ui), \
-                mock.patch.object(bugzilla_apply, "requests") as req, \
+                mock.patch.object(bugzilla_apply, "net") as req, \
                 mock.patch.object(bugzilla_apply.libmozdata.config, "get",
                                   return_value="TESTTOKEN"), \
                 mock.patch("crashclouseau.models.Verdict.get_evidence",
@@ -401,7 +401,7 @@ class TestApplyRecordedActions(unittest.TestCase):
     def test_partial_failure_marks_only_the_success(self):
         # action 0 (comment) succeeds; action 1 (update_bug PUT) raises. The earlier
         # success must stay marked-applied so a retry never re-posts it.
-        with mock.patch.object(bugzilla_apply, "requests") as req, \
+        with mock.patch.object(bugzilla_apply, "net") as req, \
                 mock.patch.object(bugzilla_apply.libmozdata.config, "get",
                                   return_value="TESTTOKEN"), \
                 mock.patch("crashclouseau.models.Verdict.get_evidence",

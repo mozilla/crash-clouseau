@@ -7,7 +7,7 @@ import functools
 from jinja2 import Environment, FileSystemLoader
 import libmozdata.config
 from libmozdata.hgmozilla import Mercurial
-import requests
+from . import net
 from urllib.parse import parse_qs, urlencode, urlparse
 from . import buginfo, models, utils
 
@@ -131,13 +131,13 @@ async def get_info_helper(uuid, changeset, evidence_summary=None):
     }
 
     loop = asyncio.get_event_loop()
-    f1 = loop.run_in_executor(None, functools.partial(requests.get, cs))
+    f1 = loop.run_in_executor(None, functools.partial(net.get, cs))
     if bugid:
         f2 = loop.run_in_executor(
-            None, functools.partial(requests.get, bz, headers=bzh, params=bzq)
+            None, functools.partial(net.get, bz, headers=bzh, params=bzq)
         )
     f3 = loop.run_in_executor(
-        None, functools.partial(requests.get, cs_api, params=cs_api_q)
+        None, functools.partial(net.get, cs_api, params=cs_api_q)
     )
     r1 = await f1
     if bugid:

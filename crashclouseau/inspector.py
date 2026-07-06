@@ -4,7 +4,7 @@
 
 from libmozdata import socorro
 import re
-import requests
+from . import net
 from . import java, tools, utils
 from .logger import logger
 
@@ -36,7 +36,7 @@ def git2hg(git_hash):
     if git_hash in _GIT2HG_CACHE:
         return _GIT2HG_CACHE[git_hash]
     try:
-        r = requests.get(LANDO_GIT2HG.format(git_hash), timeout=30)
+        r = net.get(LANDO_GIT2HG.format(git_hash), timeout=30)
     except Exception as e:
         # network/transient error: don't cache, let it be retried
         logger.warning("Cannot reach lando for git hash {}: {}".format(git_hash, e))

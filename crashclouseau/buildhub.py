@@ -6,7 +6,7 @@ import asyncio
 from copy import deepcopy
 from functools import partial
 import json
-import requests
+from . import net
 import six
 import time
 from . import utils
@@ -30,7 +30,7 @@ def make_request(params, sleep, retry, callback):
     params = json.dumps(params)
 
     for _ in range(retry):
-        r = requests.post(URL, data=params)
+        r = net.post(URL, data=params)
         if "Backoff" in r.headers:
             time.sleep(sleep)
         else:

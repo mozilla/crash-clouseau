@@ -172,12 +172,12 @@ class TestDerivedSignals(unittest.TestCase):
 class TestFetchDegrade(unittest.TestCase):
     def test_fetch_failure_degrades_to_none(self):
         pe._RAW_CACHE.clear()
-        with mock.patch.object(pe.requests, "get", side_effect=OSError("boom")):
+        with mock.patch.object(pe.net, "get", side_effect=OSError("boom")):
             self.assertIsNone(pe.fetch_raw_diff("node-deadbeef", "nightly"))
 
     def test_extract_never_raises_on_fetch_failure(self):
         pe._RAW_CACHE.clear()
-        with mock.patch.object(pe.requests, "get", side_effect=OSError("boom")):
+        with mock.patch.object(pe.net, "get", side_effect=OSError("boom")):
             result = pe.extract("node-deadbeef2", "nightly")
         self.assertTrue(result.is_empty())
         self.assertIsNone(result.raw_diff)
