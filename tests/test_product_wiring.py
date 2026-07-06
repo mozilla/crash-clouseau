@@ -286,6 +286,27 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertEqual(rv.status_code, 200)
         self.assertIn("Recorded Bugzilla actions", rv.get_data(as_text=True))
 
+    def test_mechanism_lead_without_candidate(self):
+        # A lead with no pinned changeset (candidate=None) is a "mechanism lead"; the
+        # blurb must NOT claim a changeset was found, and no changeset section renders.
+        # Regression: the static blurb always said "a related changeset was found".
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["candidate"] = None
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("Mechanism lead", html)
+        self.assertIn("no specific regressing changeset", html)
+        self.assertNotIn("changeset was found", html)
+        self.assertNotIn("Possibly-related changeset", html)
+
+    def test_lead_with_candidate_says_changeset_found(self):
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("possibly-related changeset was found", html)
+        self.assertIn("Possibly-related changeset", html)
+        self.assertNotIn("Mechanism lead", html)
+
     def test_searchfox_permalink_scheme_allowlist(self):
         # A javascript: permalink must NOT become a clickable href (XSS guard).
         ev = _evidence()

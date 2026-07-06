@@ -53,6 +53,8 @@
     {% set vd = d.get('verdict') -%}
     {% set is_lead = evidence['verdict'] == 'lead' -%}
     {% set cclass = 'high' if (conf is not none and conf >= 85) else ('medium' if (conf is not none and conf >= 50) else 'low') -%}
+    {% set cand = d.get('candidate') -%}
+    {% set has_cand = cand and cand.get('node') -%}
     <div class="evidence-panel">
       <h2>
         Clouseau evidence
@@ -72,7 +74,11 @@
       {% endif -%}
 
       {% if is_lead -%}
-      <p class="muted">Plausible lead &mdash; a related changeset was found, but the mechanism is <strong>not verified end&#8209;to&#8209;end</strong>. Worth a look by someone familiar with this code, who may not be the cause.</p>
+      {% if has_cand -%}
+      <p class="muted">Plausible lead &mdash; a possibly-related changeset was found, but the mechanism is <strong>not verified end&#8209;to&#8209;end</strong>. Worth a look by someone familiar with this code, who may not be the cause.</p>
+      {% else -%}
+      <p class="muted">Mechanism lead &mdash; a plausible crash mechanism was identified, but <strong>no specific regressing changeset</strong> could be pinned. Worth a look by someone familiar with this code.</p>
+      {% endif -%}
       {# Show the draft as plain text only when that exact text isn't already surfaced
          as a recorded action below — so a draft that never became an action is never
          silently hidden (avoids both duplication and disappearance). #}
@@ -106,8 +112,7 @@
       <p><strong>Failure class:</strong> {{ d['crash']['failure_class']|e }}{% if d['crash'].get('moz_crash_reason') %} &mdash; {{ d['crash']['moz_crash_reason']|e }}{% endif %}</p>
       {% endif -%}
 
-      {% set cand = d.get('candidate') -%}
-      {% if cand and cand.get('node') -%}
+      {% if has_cand -%}
       <div class="evidence-section">
         <h3>{% if is_lead %}Possibly-related changeset{% else %}Suspected regressor{% endif %}</h3>
         <p>
