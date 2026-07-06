@@ -314,5 +314,9 @@ def enqueue_agent(uuid, channel=None):
         func=run_evidence_agent,
         args=(uuid,),
         result_ttl=0,
-        job_timeout=config.get_agent_job_timeout(),
+        # RQ's enqueue_call takes `timeout` (not `job_timeout`, which is the high-level
+        # enqueue() param) — the wrong kwarg raised TypeError, was swallowed by the
+        # caller's try/except, and silently dropped EVERY agent job. The value matters
+        # too: without it RQ's 180s default would kill a ~20-min triage mid-run.
+        timeout=config.get_agent_job_timeout(),
     )

@@ -113,6 +113,17 @@ class TestEnqueueGating(unittest.TestCase):
         kwargs = q.enqueue_call.call_args.kwargs
         self.assertIs(kwargs["func"], orch.run_evidence_agent)
         self.assertEqual(kwargs["args"], ("u-1",))
+        # RQ's enqueue_call takes `timeout`, not `job_timeout` — the wrong kwarg raised
+        # TypeError and silently dropped every agent job. Lock the correct name + that
+        # the value is passed (RQ's 180s default would kill a ~20-min triage).
+        self.assertIn("timeout", kwargs)
+        self.assertNotIn("job_timeout", kwargs)
+        self.assertEqual(kwargs["timeout"], orch.config.get_agent_job_timeout())
+        # And it must actually match rq.Queue.enqueue_call's real signature.
+        import inspect
+        import rq
+        sig = inspect.signature(rq.Queue.enqueue_call)
+        self.assertLessEqual(set(kwargs), set(sig.parameters))
 
     def test_non_nightly_channel_skipped(self):
         q = mock.MagicMock()
