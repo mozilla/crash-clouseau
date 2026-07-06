@@ -9,7 +9,11 @@ from .logger import logger
 from . import config
 
 
-listen = ["high", "default", "low", "agent"]
+# Queues THIS worker process consumes, from $QUEUES (space-separated). Default = all,
+# so a plain `python -m crashclouseau.worker` (local/tests) still drains everything.
+# The Procfile splits them: the ingestion `worker` runs "high default low" and a
+# dedicated `agentworker` runs "agent", so a ~20-min agent job never blocks ingestion.
+listen = os.getenv("QUEUES", "high default low agent").split()
 redis_url = os.getenv("REDIS_URL", config.get_redis())
 # The ssl_* kwargs are only valid for SSL connections (rediss://), e.g. the
 # Heroku Redis add-on; passing them to a plain redis:// connection (local
@@ -30,9 +34,14 @@ def black_hole(job, *exc_info):
 
 
 def get_queue(name="low"):
+    # Build queues on demand for ANY name (cached per process) so ENQUEUING is
+    # decoupled from what this process CONSUMES (`listen`): the ingestion worker must
+    # still be able to enqueue onto "agent" even though it no longer drains it.
     global __QUEUE
     if __QUEUE is None:
-        __QUEUE = {n: Queue(n, connection=conn, default_timeout=6000) for n in listen}
+        __QUEUE = {}
+    if name not in __QUEUE:
+        __QUEUE[name] = Queue(name, connection=conn, default_timeout=6000)
     return __QUEUE[name]
 
 
