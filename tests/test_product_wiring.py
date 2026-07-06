@@ -18,7 +18,7 @@ from unittest import mock  # noqa: E402
 
 from flask import render_template  # noqa: E402
 
-from crashclouseau import app, bugzilla_apply, html, report_bug  # noqa: E402
+from crashclouseau import app, bugzilla_apply, config, html, report_bug  # noqa: E402
 
 
 _SEARCHFOX = {
@@ -723,3 +723,17 @@ class TestDemangle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUiEnvOverride(unittest.TestCase):
+    """SHOW_ABSTAIN env override lets a canary surface every triaged crash's panel
+    (incl. abstains) for evaluation, without touching the shared config."""
+
+    def test_show_abstain_env_override(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SHOW_ABSTAIN", None)
+            self.assertFalse(config.get_agent_ui()["show_abstain"])  # default off
+            os.environ["SHOW_ABSTAIN"] = "1"
+            self.assertTrue(config.get_agent_ui()["show_abstain"])
+            os.environ["SHOW_ABSTAIN"] = "false"
+            self.assertFalse(config.get_agent_ui()["show_abstain"])

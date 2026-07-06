@@ -3,6 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import json
+import os
 
 
 __GLOBAL = None
@@ -155,19 +156,29 @@ def get_patch_extraction_cfg():
     return get_agent().get("patch_extraction", {})
 
 
+def _env_bool(name, default):
+    """A boolean config override from the environment (canary knob, like INGEST_CHANNELS
+    / QUEUES): unset -> default; 1/true/yes/on -> True; anything else -> False."""
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_agent_ui():
     """UI/apply knobs for the evidence panel + apply/replay step (#12).
 
     Normalized so callers never re-derive defaults: ``show_abstain`` (show the
-    panel for ABSTAIN verdicts), ``high_confidence_label`` (badge text),
-    ``apply_min_confidence`` (numeric 0-100 gate — ``Verdict.confidence`` is stored
-    as an int, high==85 via CONFIDENCE_SCORE), and ``enabled_types`` (the ONLY
+    panel for ABSTAIN verdicts; env override ``SHOW_ABSTAIN`` so a canary can surface
+    every triaged crash's rationale while evaluating), ``high_confidence_label`` (badge
+    text), ``apply_min_confidence`` (numeric 0-100 gate — ``Verdict.confidence`` is
+    stored as an int, high==85 via CONFIDENCE_SCORE), and ``enabled_types`` (the ONLY
     recorded action types the human-confirmed apply route is allowed to execute).
     """
     agent = get_agent()
     ui = agent.get("ui", {})
     return {
-        "show_abstain": ui.get("show_abstain", False),
+        "show_abstain": _env_bool("SHOW_ABSTAIN", ui.get("show_abstain", False)),
         "show_lead": ui.get("show_lead", True),
         "show_experts": ui.get("show_experts", True),
         "high_confidence_label": ui.get("high_confidence_label", "STRONG EVIDENCE"),
