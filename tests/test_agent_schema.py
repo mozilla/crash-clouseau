@@ -17,6 +17,7 @@ from crashclouseau.agent.schema import (
     SearchfoxCitation,
     DiffLineCitation,
     StackFrameCitation,
+    _normalize_citations,
     dossier_from_db_json,
     dossier_to_db_json,
     parse_and_validate,
@@ -216,6 +217,110 @@ class TestParseAndValidate(unittest.TestCase):
         text = f"```json\n{first}\n```\nmore\n```json\n{second}\n```"
         d = parse_and_validate(text)
         self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+
+
+class TestCitationNormalization(unittest.TestCase):
+    """The model routinely writes prose citation spellings ("stack-frame" with a
+    hyphen; a "removed" diff line) instead of the schema token. A live run had a
+    genuine, fully-cited LEAD downgraded to a FALSE abstain because such spellings in
+    the verdict's own mechanism/consistency citations made salvage drop the verdict.
+    parse_and_validate now normalizes these unambiguous variants at the parse boundary
+    (spelling only — never inventing a citation)."""
+
+    def test_normalize_maps_variants_recursively(self):
+        obj = {
+            "a": {"kind": "stack-frame", "side": None},
+            "b": [{"kind": "diff-line", "side": "removed"},
+                  {"kind": "SearchFox"}],
+            "c": {"phc_kind": "stack-frame"},  # NOT a citation field -> untouched
+        }
+        _normalize_citations(obj)
+        self.assertEqual(obj["a"]["kind"], "stack_frame")
+        self.assertEqual(obj["b"][0]["kind"], "diff_line")
+        self.assertEqual(obj["b"][0]["side"], "deleted")
+        self.assertEqual(obj["b"][1]["kind"], "searchfox")   # case-insensitive
+        self.assertEqual(obj["c"]["phc_kind"], "stack-frame")  # left alone
+
+    def test_normalize_passes_through_unknown_and_canonical(self):
+        obj = {"kind": "bogus", "side": "sideways"}
+        _normalize_citations(obj)
+        self.assertEqual(obj["kind"], "bogus")   # unknown -> unchanged (still invalid)
+        self.assertEqual(obj["side"], "sideways")
+
+    def test_hyphen_stack_frame_citation_validates(self):
+        adapter = TypeAdapter(Citation)
+        raw = _stack_frame()
+        raw["kind"] = "stack-frame"
+        with self.assertRaises(ValidationError):   # raw variant is invalid pre-normalize
+            adapter.validate_python(raw)
+        self.assertIsInstance(
+            adapter.validate_python(_normalize_citations(raw)), StackFrameCitation
+        )
+
+    def test_lead_with_hyphen_and_removed_spellings_survives(self):
+        # The exact live-run failure mode: a lead whose mechanism/consistency (and
+        # supporting evidence) cite "stack-frame"/"removed" must SURVIVE as a lead, not
+        # get salvaged to abstain.
+        sf = _stack_frame()
+        sf["kind"] = "stack-frame"
+        dl = _diff_line()
+        dl["side"] = "removed"
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = {
+            "decision": "lead",
+            "confidence": "medium",
+            "needinfo_draft": "could you take a look?",
+            "mechanism": {"statement": "stale ptr UAF", "citations": [sf, dl]},
+            "consistency": {"statement": "landed+reverted before build",
+                            "citations": [dl]},
+        }
+        obj["hunks"][0]["citations"] = [copy.deepcopy(dl)]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertTrue(d.verdict.mechanism and d.verdict.mechanism.citations)
+        self.assertTrue(d.verdict.consistency and d.verdict.consistency.citations)
+        self.assertEqual(len(d.hunks), 1)   # supporting hunk kept, not dropped
+
+    def test_lead_with_variant_citations_survives_the_salvage_path(self):
+        # Regression lock for the LOAD-BEARING invariant (parse_and_validate normalizes
+        # obj IN PLACE, so the _salvage fallback sees the normalized citations too — see
+        # the schema.py comment). The exact live bug went THROUGH salvage: the bad
+        # spellings made validate_dossier fail, and salvage dropped the whole verdict.
+        # Here the verdict citations use "stack-frame"/"removed" AND an unrelated uncited
+        # edge forces validate_dossier to fail -> salvage runs; the lead must SURVIVE
+        # (not collapse to a false abstain). Without normalization reaching salvage the
+        # verdict would be dropped.
+        sf = _stack_frame()
+        sf["kind"] = "stack-frame"
+        dl = _diff_line()
+        dl["side"] = "removed"
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = {
+            "decision": "lead",
+            "confidence": "medium",
+            "needinfo_draft": "could you take a look?",
+            "mechanism": {"statement": "stale ptr UAF", "citations": [sf, dl]},
+            "consistency": {"statement": "landed+reverted before build",
+                            "citations": [dl]},
+        }
+        obj["call_path"]["edges"][0]["citations"] = []  # uncited edge -> forces salvage
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)   # verdict survived salvage
+        self.assertTrue(d.verdict.mechanism and d.verdict.mechanism.citations)
+        self.assertEqual(len(d.call_path.edges), 0)           # proves salvage actually ran
+
+    def test_role_fragment_normalizes_before_validation(self):
+        # validate_role_fragment shares the same citation-spelling fix. Use a
+        # call-graph-explorer (CallPath) fragment, whose edge citations are strictly
+        # typed (list[Citation]) — a "stack-frame" spelling there fails without it.
+        sf = _stack_frame()
+        sf["kind"] = "stack-frame"
+        frag = {"edges": [{"caller_symbol": "A", "callee_symbol": "B",
+                           "via": "calls-from", "citations": [sf]}],
+                "to_symbol": "B"}
+        res = validate_role_fragment("call-graph-explorer", frag)
+        self.assertEqual(len(res.edges), 1)
+        self.assertEqual(res.edges[0].citations[0].kind, "stack_frame")
 
 
 class TestVerdictRules(unittest.TestCase):

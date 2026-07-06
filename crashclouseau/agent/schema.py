@@ -416,6 +416,54 @@ def _extract_last_json_block(text: str | None):
     return data if isinstance(data, dict) else None
 
 
+# Common LLM spelling variants for the citation discriminator (``kind``) and the diff
+# ``side``, keyed lowercased -> canonical enum token. The model routinely writes the
+# prose spelling ("stack-frame" with a hyphen; a "removed" diff line) instead of the
+# schema token, and a SINGLE such citation inside the verdict's own mechanism/
+# consistency claims otherwise makes ``_salvage`` drop the whole (correct, fully-cited)
+# verdict and force a FALSE abstain — observed live downgrading a genuine lead
+# (`stack-frame`/`removed`), and the `stack-frame` variant has recurred across runs.
+# Normalizing these unambiguous variants (incl. case) at the parse boundary keeps the
+# anti-hallucination guarantee — we only fix spelling of an EXISTING citation, never
+# invent one; an unknown value passes through unchanged and still fails validation.
+_KIND_ALIASES = {
+    "searchfox": "searchfox", "search-fox": "searchfox", "search_fox": "searchfox",
+    "diff_line": "diff_line", "diff-line": "diff_line", "diffline": "diff_line",
+    "diff line": "diff_line",
+    "stack_frame": "stack_frame", "stack-frame": "stack_frame",
+    "stackframe": "stack_frame", "stack frame": "stack_frame",
+}
+_SIDE_ALIASES = {
+    "added": "added", "add": "added", "addition": "added",
+    "deleted": "deleted", "removed": "deleted", "remove": "deleted",
+    "deletion": "deleted", "del": "deleted",
+    "context": "context", "unchanged": "context", "ctx": "context",
+    "unmodified": "context",
+}
+
+
+def _normalize_citations(obj):
+    """Rewrite common citation spelling variants (``kind``/``side``) to the canonical
+    enum tokens, recursively and in place. Keys strictly on the field names ``kind``
+    and ``side``, which in this schema appear ONLY on citations, so no other field is
+    touched (``phc_kind`` etc. are left alone). Case-insensitive; canonical values pass
+    through unchanged; an unrecognized value is left as-is (and will legitimately fail
+    validation). Returns ``obj`` for chaining."""
+    if isinstance(obj, dict):
+        k = obj.get("kind")
+        if isinstance(k, str):
+            obj["kind"] = _KIND_ALIASES.get(k.strip().lower(), k)
+        s = obj.get("side")
+        if isinstance(s, str):
+            obj["side"] = _SIDE_ALIASES.get(s.strip().lower(), s)
+        for v in obj.values():
+            _normalize_citations(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _normalize_citations(v)
+    return obj
+
+
 def validate_dossier(obj: dict) -> Dossier:
     """Strict gate: ``Dossier.model_validate`` — raises ``ValidationError`` on any
     uncited claim or malformed field."""
@@ -504,6 +552,10 @@ def parse_and_validate(result: str | dict) -> Dossier:
     obj = result if isinstance(result, dict) else _extract_last_json_block(result)
     if obj is None:
         return _abstain("no parseable ```json block in the agent result")
+    # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
+    # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
+    # place, so the ``_salvage`` fallback below sees the normalized citations too.
+    _normalize_citations(obj)
     try:
         return validate_dossier(obj)
     except ValidationError as exc:
@@ -529,6 +581,7 @@ def validate_role_fragment(role: str, obj):
     data-flow-tracer->DataFlowHypothesis, skeptic->SkepticResult,
     crash-interpreter->CrashBrief). Raises ``ValidationError`` on an uncited
     claim; the caller (#02) decides whether to abstain."""
+    _normalize_citations(obj)  # same citation-spelling fix as the dossier path
     if role == "patch-scout":
         return _DIFF_HUNK_LIST.validate_python(obj)
     model = _ROLE_FRAGMENTS.get(role)
