@@ -625,8 +625,20 @@ class TestCodeview(unittest.TestCase):
         self.assertEqual(rv.status_code, 200)
         self.assertIn("https://searchfox.org/firefox-main/source/a/b.cpp", rv.get_data(as_text=True))
 
-    def test_codeview_pins_to_build_rev_on_channel_tree(self):
-        # beta channel -> firefox-beta tree; rev -> /rev/<buildrev>/ (source as built).
+    def test_codeview_does_not_pin_to_build_rev(self):
+        # searchfox indexes ~tip, not arbitrary build revs, so a rev= must NOT produce a
+        # /rev/<build-rev>/ URL (that 500s with "Bad revision"); always use /source/.
+        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=None):
+            rv = self.client.get(
+                "/codeview.html?uuid=x&filename=a/b.cpp&rev=cf7befa1fd39&channel=nightly"
+            )
+        html_text = rv.get_data(as_text=True)
+        self.assertIn("https://searchfox.org/firefox-main/source/a/b.cpp", html_text)
+        self.assertNotIn("/rev/cf7befa1fd39", html_text)
+
+    def test_codeview_uses_channel_tree_at_tip_not_build_rev(self):
+        # beta channel -> firefox-beta tree; the build rev is NOT pinned (searchfox
+        # only indexes ~tip, so /rev/<buildrev>/ 500s "Bad revision") -> /source/ (tip).
         with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()):
             rv = self.client.get(
                 "/codeview.html?uuid=u-1&filename=dom/Foo.cpp&node=culpritnode1"
@@ -635,14 +647,13 @@ class TestCodeview(unittest.TestCase):
         self.assertEqual(rv.status_code, 200)
         t = rv.get_data(as_text=True)
         self.assertIn(
-            'src="https://searchfox.org/firefox-beta/rev/d0d4ceee5e1c/dom/Foo.cpp#line-42"',
-            t,
+            'src="https://searchfox.org/firefox-beta/source/dom/Foo.cpp#line-42"', t,
         )
         self.assertIn(
-            'href="https://searchfox.org/firefox-beta/rev/d0d4ceee5e1c/dom/Foo.cpp#line-42" target="sf"',
+            'href="https://searchfox.org/firefox-beta/source/dom/Foo.cpp#line-42" target="sf"',
             t,
         )
-        self.assertNotIn("/source/", t)   # pinned to the rev, not tip
+        self.assertNotIn("/rev/d0d4ceee5e1c", t)   # never pins to the build rev
 
     def test_searchfox_tree_by_channel(self):
         self.assertEqual(html._searchfox_tree("nightly"), "firefox-main")

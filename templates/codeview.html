@@ -17,7 +17,7 @@
     </div>
     <div class="codeview">
       <div class="codeview-pane">
-        <div class="pane-label">searchfox &mdash; {{ tree }}{% if rev %} @ {{ rev[:12] }} (build revision){% else %} (tip){% endif %}</div>
+        <div class="pane-label">searchfox &mdash; {{ tree }} <span class="muted">(current tip{% if rev %}; build {{ rev[:12] }} isn't indexed by searchfox{% endif %})</span></div>
         <iframe id="sf" name="sf" src="{{ sf_src }}" title="searchfox source" referrerpolicy="no-referrer"></iframe>
       </div>
       <div class="codeview-pane">

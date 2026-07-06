@@ -189,12 +189,12 @@ def codeview():
             dossier = ev.get("dossier") or {}
     diff_lines = _collect_diff_lines(dossier, filename) if filename else []
 
-    if filename and rev:
-        # Pin to the exact revision the crashing build was built from, on the
-        # channel's tree, so the source matches the crash (not tip). searchfox
-        # accepts the DB's 12-char short rev.
-        sf_base = "https://searchfox.org/{}/rev/{}/{}".format(tree, rev, filename)
-    elif filename:
+    # searchfox indexes ~tip, NOT arbitrary build revisions, so pinning to the crash's
+    # build rev gives "Bad revision" (HTTP 500). Use the tip /source/ view, which always
+    # resolves; the crash-accurate changed lines live in the right pane (from the
+    # dossier). `rev` is kept for display only. (The agent's own searchfox citations
+    # work because searchfox-cli returns permalinks at searchfox's INDEXED rev.)
+    if filename:
         sf_base = "https://searchfox.org/{}/source/{}".format(tree, filename)
     else:
         sf_base = "https://searchfox.org/{}/".format(tree)
