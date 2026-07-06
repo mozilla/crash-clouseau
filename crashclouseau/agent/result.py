@@ -21,6 +21,12 @@ class CrashTriageResult(HackbotAgentResult):
     result: str = ""
     dossier: Dossier | None = None
     actions: list[dict] = Field(default_factory=list)
+    # Aggregate token usage summed across every model the run used (principal +
+    # subagents), from the terminal ResultMessage's model_usage. Persisted by #11
+    # for the tasks/monitoring view; cost is carried separately by total_cost_usd.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
 
     @property
     def decision(self) -> Decision | None:

@@ -8,6 +8,7 @@
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
@@ -148,12 +149,39 @@ class TestTasksRoute(unittest.TestCase):
         self.assertIn("$0.37", body)
         # the second row is a stalled orphan
         self.assertIn("stalled", body)
+        # a running task gets a retrigger button; the done task does not (1 button total)
+        self.assertIn("retriggerTask('stalled1", body)
+        self.assertEqual(body.count("retriggerTask("), 1)
+
+    def test_error_task_gets_retrigger_button(self):
+        rows = [_row(uuid="err00001" + "0" * 28, status="error")]
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
+            rv = self.client.get("/tasks.html")
+        self.assertIn("retriggerTask('err00001", rv.get_data(as_text=True))
 
     def test_empty_shows_placeholder(self):
         with mock.patch.object(html.models.Dossier, "list_tasks", return_value=[]):
             rv = self.client.get("/tasks.html")
         self.assertEqual(rv.status_code, 200)
         self.assertIn("No triage runs yet", rv.get_data(as_text=True))
+
+
+class TestRetriggerEndpoint(unittest.TestCase):
+    def setUp(self):
+        self.client = app.test_client()
+
+    def test_retrigger_posts_to_orchestrator(self):
+        from crashclouseau.agent import orchestrator
+        with mock.patch.object(orchestrator, "retrigger_agent",
+                               return_value={"uuid": "u-1", "cancelled": True}) as rt:
+            rv = self.client.post("/api/tasks/retrigger", json={"uuid": "u-1"})
+        self.assertEqual(rv.status_code, 200)
+        rt.assert_called_once_with("u-1")
+        self.assertEqual(rv.get_json(), {"uuid": "u-1", "cancelled": True})
+
+    def test_retrigger_requires_uuid(self):
+        rv = self.client.post("/api/tasks/retrigger", json={})
+        self.assertEqual(rv.status_code, 400)
 
 
 if __name__ == "__main__":

@@ -80,3 +80,17 @@ def apply_actions():
         abort(404, "No dossier for uuid")
 
     return jsonify({"uuid": uuid, "results": results})
+
+
+def retrigger():
+    """Re-run triage for one uuid from the tasks view (error/running/stalled). If the
+    task is still running its RQ job is stopped first so we don't pay for two runs. The
+    run is forced past the nightly/proto/skip-existing gates since the operator asked
+    for this specific uuid. This is analysis only -- it writes nothing to Bugzilla."""
+    from crashclouseau.agent import orchestrator
+
+    data = request.get_json(silent=True) or {}
+    uuid = data.get("uuid") or request.args.get("uuid", "")
+    if not uuid:
+        abort(400, "No uuid provided")
+    return jsonify(orchestrator.retrigger_agent(uuid))

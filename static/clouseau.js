@@ -139,3 +139,30 @@ function draftBug(node) {
     }
     location.href = "bug.html?changeset=" + node + "&uuid=" + UUID;
 }
+
+// Tasks view: re-run triage for one crash. A running task is cancelled first
+// (server-side) so we don't pay for two runs. Analysis only -- posts nothing to
+// Bugzilla.
+function retriggerTask(uuid, btn) {
+    if (!window.confirm(
+        "Retrigger triage for " + uuid + "?\n"
+        + "If it is still running, that run will be cancelled first.")) {
+        return;
+    }
+    btn.disabled = true;
+    btn.textContent = "…";
+    fetch("/api/tasks/retrigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uuid: uuid })
+    }).then(function (r) {
+        if (!r.ok) { throw new Error("HTTP " + r.status); }
+        return r.json();
+    }).then(function () {
+        location.reload();
+    }).catch(function (e) {
+        window.alert("Retrigger failed: " + e);
+        btn.disabled = false;
+        btn.textContent = "retrigger";
+    });
+}

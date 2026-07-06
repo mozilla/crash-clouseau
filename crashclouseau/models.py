@@ -1474,6 +1474,44 @@ class Dossier(db.Model):
             db.session.commit()
 
     @staticmethod
+    def set_job_id(uuid, job_id, commit=True):
+        """Record the RQ job id (in payload) while a triage runs, so the tasks view's
+        retrigger can stop the in-flight job. Best-effort: no-op if the row isn't there.
+        Reassigns payload to a new dict so SQLAlchemy flags the JSONB column dirty."""
+        uuidid = UUID.get_id(uuid)
+        if uuidid is None:
+            return
+        d = db.session.query(Dossier).filter(Dossier.uuidid == uuidid).first()
+        if d is None:
+            return
+        payload = dict(d.payload or {})
+        payload["job_id"] = job_id
+        d.payload = payload
+        if commit:
+            db.session.commit()
+
+    @staticmethod
+    def reset_for_retrigger(uuid, commit=True):
+        """Mark a dossier ``pending`` (dropping any recorded job_id) so a forced retrigger
+        can re-claim it via the atomic ``claim_running`` -- ``done``/``error``/fresh
+        ``running`` are otherwise not claimable. Routing the retrigger back through the
+        same atomic claim is what collapses two concurrent retriggers of one uuid into a
+        single run (exactly one wins pending->running): no double-pay."""
+        uuidid = UUID.get_id(uuid)
+        if uuidid is None:
+            return
+        d = db.session.query(Dossier).filter(Dossier.uuidid == uuidid).first()
+        if d is None:
+            return
+        d.status = "pending"
+        d.updated = datetime.now(timezone.utc)
+        payload = dict(d.payload or {})
+        payload.pop("job_id", None)
+        d.payload = payload
+        if commit:
+            db.session.commit()
+
+    @staticmethod
     def add_usage(
         uuid,
         input_tokens=0,
@@ -1579,7 +1617,10 @@ class Dossier(db.Model):
             .select_from(Dossier)
             .join(UUID, Dossier.uuidid == UUID.id)
             .outerjoin(Signature, UUID.signatureid == Signature.id)
-            .outerjoin(Verdict, Verdict.dossierid == Dossier.id)
+            # Verdict is upserted 1:1 on uuidid (Verdict.set) and its dossierid is not
+            # populated, so join on uuidid -- joining on dossierid would drop every
+            # verdict. Dossier is also 1:1 per uuid, so this can't multiply rows.
+            .outerjoin(Verdict, Verdict.uuidid == UUID.id)
             .order_by(Dossier.created.desc())
             .limit(limit)
             .all()

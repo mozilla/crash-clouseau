@@ -6,9 +6,10 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/clouseau.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=5">
+    <link rel="stylesheet" href="/clouseau.css?v=6">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
+    <script src="/clouseau.js"></script>
   </head>
   <body>
     <header>
@@ -79,6 +80,7 @@
           <th style="text-align:right;">Cost</th>
           <th style="text-align:right;">Tokens&nbsp;(in&nbsp;/&nbsp;out&nbsp;/&nbsp;cache)</th>
           <th>Started&nbsp;(UTC)</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -104,10 +106,16 @@
             {%- else -%}&mdash;{%- endif -%}
           </td>
           <td class="task-ts">{% if t.created %}{{ t.created.strftime('%Y-%m-%d&nbsp;%H:%M') | safe }}{% endif %}</td>
+          <td>
+            {%- if t.status in ['error', 'running'] -%}
+            <button class="retrigger-btn" onclick="retriggerTask('{{ t.uuid }}', this)"
+                    title="Re-run this triage{% if t.status == 'running' %} (cancels the running job first){% endif %}">retrigger</button>
+            {%- else -%}&mdash;{%- endif -%}
+          </td>
         </tr>
         {% endfor -%}
         {% if not tasks -%}
-        <tr><td colspan="8" class="task-empty">No triage runs yet.</td></tr>
+        <tr><td colspan="9" class="task-empty">No triage runs yet.</td></tr>
         {%- endif %}
       </tbody>
     </table>

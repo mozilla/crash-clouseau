@@ -416,13 +416,26 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 
 .tasks { table-layout: fixed; }
 .tasks th:nth-child(1), .tasks td:nth-child(1) { width: 7%; }
-.tasks th:nth-child(2), .tasks td:nth-child(2) { width: 27%; }
-.tasks th:nth-child(3), .tasks td:nth-child(3) { width: 11%; }
-.tasks th:nth-child(4), .tasks td:nth-child(4) { width: 12%; }
+.tasks th:nth-child(2), .tasks td:nth-child(2) { width: 24%; }
+.tasks th:nth-child(3), .tasks td:nth-child(3) { width: 10%; }
+.tasks th:nth-child(4), .tasks td:nth-child(4) { width: 11%; }
 .tasks th:nth-child(5), .tasks td:nth-child(5) { width: 7%; }
-.tasks th:nth-child(6), .tasks td:nth-child(6) { width: 8%; }
-.tasks th:nth-child(7), .tasks td:nth-child(7) { width: 16%; }
-.tasks th:nth-child(8), .tasks td:nth-child(8) { width: 12%; }
+.tasks th:nth-child(6), .tasks td:nth-child(6) { width: 7%; }
+.tasks th:nth-child(7), .tasks td:nth-child(7) { width: 15%; }
+.tasks th:nth-child(8), .tasks td:nth-child(8) { width: 11%; }
+.tasks th:nth-child(9), .tasks td:nth-child(9) { width: 8%; }
+
+.retrigger-btn {
+    font-size: 0.75em;
+    padding: 0.2em 0.6em;
+    border: 1px solid #2f80ed;
+    border-radius: 0.8em;
+    background: #fff;
+    color: #2f80ed;
+    cursor: pointer;
+}
+.retrigger-btn:hover:not(:disabled) { background: #2f80ed; color: #fff; }
+.retrigger-btn:disabled { opacity: 0.5; cursor: default; }
 
 .tasks td a { font-family: monospace; }
 .task-sgn {

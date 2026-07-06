@@ -197,12 +197,20 @@ def _verdict_row(result):
             "evidence": _gather_evidence(dossier)}
 
 
-def run_evidence_agent(uuid):
+def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
-    Never raises out (ingestion isolation); marks dossier status on failure."""
+    Never raises out (ingestion isolation); marks dossier status on failure.
+
+    ``force`` (a tasks-view retrigger) re-runs this one explicit uuid: it bypasses the
+    cost dedup (skip-existing / proto) early-out. It still goes through the atomic
+    claim below — ``retrigger_agent`` first resets the dossier to ``pending`` so the
+    claim can re-take it — so two concurrent retriggers collapse to a single run."""
     try:
+        skip_dedup = config.get_agent_skip_if_existing()
         stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
-        if config.get_agent_skip_if_existing() and (
+        # Cheap cost dedup early-out (already-done / a same-proto sibling). A forced
+        # retrigger bypasses it; the atomic claim below is still the real guard.
+        if skip_dedup and not force and (
             models.Dossier.skip_triage(uuid, stale_after) or _proto_already_triaged(uuid)
         ):
             logger.info("agent: dossier/proto-signature already triaged for %s; skipping", uuid)
@@ -215,15 +223,19 @@ def run_evidence_agent(uuid):
         seed_score = _seed_score(uuid)
         # Atomically claim the run (sets status=running). This is the authoritative,
         # race-free guard: the skip_triage read above is only a cheap early-out, so two
-        # agentworkers that both passed it for the same stale uuid don't both run —
-        # exactly one wins claim_running, the loser skips (no double token cost). When
-        # skip_if_existing is off (force re-run), just mark it running unconditionally.
-        if config.get_agent_skip_if_existing():
+        # agentworkers (or two concurrent retriggers) that both got this far for the same
+        # uuid don't both run — exactly one wins claim_running, the loser skips (no double
+        # token cost). Only the global "re-run everything" mode (skip_if_existing off, and
+        # not a retrigger) force-marks running unconditionally.
+        if skip_dedup or force:
             if not models.Dossier.claim_running(uuid, stale_after):
                 logger.info("agent: %s claimed by another worker / settled; skipping", uuid)
                 return
         else:
             models.Dossier.upsert(uuid, payload={}, status="running", seed_score=seed_score)
+
+        # Record the RQ job id so a retrigger can stop this run mid-flight.
+        _record_job_id(uuid)
 
         llm_cfg = config.get_llm()
         tools_cfg = config.get_agent()
@@ -271,6 +283,9 @@ def run_evidence_agent(uuid):
             worker_models=worker_models,
             seed_score=seed_score,
             cost_usd=result.total_cost_usd,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
         )
 
         row = _verdict_row(result)
@@ -344,24 +359,29 @@ def reap_stale_agent_jobs():
         return 0
 
 
-def enqueue_agent(uuid, channel=None):
+def enqueue_agent(uuid, channel=None, force=False):
     """Enqueue one triage run on the dedicated queue. No-op when the agent is disabled,
     when ``channel`` is outside the configured set (nightly only by default), or when
     this uuid's proto-signature has already been triaged (dedup across builds — the
     authoritative skip is in ``run_evidence_agent``; this just avoids queueing a job we
-    would drop)."""
+    would drop).
+
+    ``force`` (a tasks-view retrigger of one explicit uuid) bypasses the channel and
+    proto-dedup gates and tells ``run_evidence_agent`` to re-run past its own guards."""
     if not config.get_agent_enabled():
         return
-    channels = config.get_agent_channels()
-    if channel is not None and channels and channel not in channels:
-        return
-    if config.get_agent_skip_if_existing() and _proto_already_triaged(uuid):
-        logger.info("agent: proto-signature already triaged for %s; not enqueuing", uuid)
-        return
+    if not force:
+        channels = config.get_agent_channels()
+        if channel is not None and channels and channel not in channels:
+            return
+        if config.get_agent_skip_if_existing() and _proto_already_triaged(uuid):
+            logger.info("agent: proto-signature already triaged for %s; not enqueuing", uuid)
+            return
     queue = worker.get_queue(config.get_agent_queue())
     queue.enqueue_call(
         func=run_evidence_agent,
         args=(uuid,),
+        kwargs={"force": force},
         result_ttl=0,
         # RQ's enqueue_call takes `timeout` (not `job_timeout`, which is the high-level
         # enqueue() param) — the wrong kwarg raised TypeError, was swallowed by the
@@ -369,3 +389,51 @@ def enqueue_agent(uuid, channel=None):
         # too: without it RQ's 180s default would kill a ~20-min triage mid-run.
         timeout=config.get_agent_job_timeout(),
     )
+
+
+def _record_job_id(uuid):
+    """Store this run's RQ job id on the dossier (best-effort), so a tasks-view
+    retrigger can stop it mid-flight. Only meaningful inside an RQ worker (where
+    ``get_current_job`` is set); a no-op in unit tests / direct calls."""
+    try:
+        from rq import get_current_job
+
+        job = get_current_job()
+        if job is not None:
+            models.Dossier.set_job_id(uuid, job.id)
+    except Exception:  # pragma: no cover - best-effort
+        logger.debug("agent: could not record job id for %s", uuid, exc_info=True)
+
+
+def cancel_running_job(uuid):
+    """Best-effort stop of the in-flight RQ job for a ``running`` dossier so a retrigger
+    doesn't leave the old (paid) run going. Returns True iff a stop command was issued.
+    No-op when the dossier isn't running or its job id wasn't recorded."""
+    d = models.Dossier.get_by_uuid(uuid)
+    if d is None or d.status != "running":
+        return False
+    job_id = (d.payload or {}).get("job_id")
+    if not job_id:
+        return False
+    try:
+        from rq.command import send_stop_job_command
+
+        send_stop_job_command(worker.conn, job_id)
+        logger.info("agent: sent stop for job %s (uuid %s)", job_id, uuid)
+        return True
+    except Exception as exc:
+        logger.warning("agent: could not stop job %s for %s: %s", job_id, uuid, exc)
+        return False
+
+
+def retrigger_agent(uuid, channel=None):
+    """Operator action from the tasks view: re-run triage for one uuid, first stopping a
+    still-running job so we don't pay for two. Forced past the nightly/proto/skip-existing
+    gates since it targets one explicit uuid. Resets the dossier to ``pending`` so the
+    re-run still goes through the atomic claim (concurrent retriggers collapse to one
+    run). Returns a small status dict."""
+    cancelled = cancel_running_job(uuid)
+    models.Dossier.reset_for_retrigger(uuid)
+    enqueue_agent(uuid, channel=channel, force=True)
+    logger.info("agent: retriggered %s (cancelled_running=%s)", uuid, cancelled)
+    return {"uuid": uuid, "cancelled": cancelled}

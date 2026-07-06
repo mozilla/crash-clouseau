@@ -125,6 +125,18 @@ class TestEnqueueGating(unittest.TestCase):
         sig = inspect.signature(rq.Queue.enqueue_call)
         self.assertLessEqual(set(kwargs), set(sig.parameters))
 
+    def test_force_bypasses_channel_and_proto(self):
+        # A retrigger forces past both the channel gate and proto dedup, and tells
+        # run_evidence_agent to re-run past its own guards (kwargs force=True).
+        q = mock.MagicMock()
+        with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
+             mock.patch.object(orch.config, "get_agent_channels", return_value=["nightly"]), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=True), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            orch.enqueue_agent("u-1", "beta", force=True)  # wrong channel + proto dup
+        q.enqueue_call.assert_called_once()
+        self.assertEqual(q.enqueue_call.call_args.kwargs["kwargs"], {"force": True})
+
     def test_non_nightly_channel_skipped(self):
         q = mock.MagicMock()
         with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
@@ -455,6 +467,83 @@ class TestRunEvidenceAgent(unittest.TestCase):
         done = self._done_upsert(MDoss)
         self.assertEqual(len(done.kwargs["payload"]["actions"]), 1)
         self.assertEqual(done.kwargs["payload"]["actions"][0]["type"], "bugzilla.update_bug")
+
+    def test_tokens_persisted(self):
+        # The aggregate token usage on the result is written to the done dossier
+        # (previously never passed -> the tasks view always showed 0/0/0).
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        res = _strong_result()
+        res.input_tokens, res.output_tokens, res.cache_read_tokens = 1234, 56, 7890
+        with pD, pV, pC, pS, pSc, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_returning(res)):
+            orch.run_evidence_agent("u-1")
+        done = self._done_upsert(MDoss)
+        self.assertEqual(done.kwargs["input_tokens"], 1234)
+        self.assertEqual(done.kwargs["output_tokens"], 56)
+        self.assertEqual(done.kwargs["cache_read_tokens"], 7890)
+
+    def test_force_reruns_via_claim(self):
+        # A retrigger (force=True) bypasses the skip_triage/proto EARLY-OUT but STILL goes
+        # through the atomic claim (the concurrency guard); it does not unconditionally
+        # upsert running. retrigger_agent resets the dossier to pending so the claim wins.
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.skip_triage.return_value = True  # would normally skip
+        MDoss.claim_running.return_value = True  # claimable (reset to pending)
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=True), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                        _triage_returning(_strong_result())):
+            orch.run_evidence_agent("u-1", force=True)
+        MDoss.claim_running.assert_called_once()  # went through the guard
+        self.assertIsNotNone(self._done_upsert(MDoss))
+        MVerd.set.assert_called_once()
+
+    def test_force_loser_of_claim_does_not_double_pay(self):
+        # Two concurrent retriggers of one uuid: the job that loses claim_running must NOT
+        # run a triage or persist -- this is what prevents the double-pay.
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.claim_running.return_value = False  # lost the atomic claim
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=True), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):
+            orch.run_evidence_agent("u-1", force=True)  # must not run / not raise
+        self.assertIsNone(self._done_upsert(MDoss))
+        MVerd.set.assert_not_called()
+
+
+class TestRetrigger(unittest.TestCase):
+    def test_cancel_running_job_sends_stop(self):
+        d = mock.MagicMock(status="running", payload={"job_id": "job-1"})
+        with mock.patch.object(orch.models.Dossier, "get_by_uuid", return_value=d), \
+             mock.patch("rq.command.send_stop_job_command") as stop:
+            self.assertTrue(orch.cancel_running_job("u-1"))
+        stop.assert_called_once()
+        self.assertEqual(stop.call_args.args[1], "job-1")  # (connection, job_id)
+
+    def test_cancel_noop_when_not_running(self):
+        d = mock.MagicMock(status="done", payload={"job_id": "job-1"})
+        with mock.patch.object(orch.models.Dossier, "get_by_uuid", return_value=d), \
+             mock.patch("rq.command.send_stop_job_command") as stop:
+            self.assertFalse(orch.cancel_running_job("u-1"))
+        stop.assert_not_called()
+
+    def test_cancel_noop_without_job_id(self):
+        d = mock.MagicMock(status="running", payload={})
+        with mock.patch.object(orch.models.Dossier, "get_by_uuid", return_value=d), \
+             mock.patch("rq.command.send_stop_job_command") as stop:
+            self.assertFalse(orch.cancel_running_job("u-1"))
+        stop.assert_not_called()
+
+    def test_retrigger_cancels_resets_then_force_enqueues(self):
+        with mock.patch.object(orch, "cancel_running_job", return_value=True) as cxl, \
+             mock.patch.object(orch.models.Dossier, "reset_for_retrigger") as rst, \
+             mock.patch.object(orch, "enqueue_agent") as enq:
+            out = orch.retrigger_agent("u-1")
+        cxl.assert_called_once_with("u-1")
+        rst.assert_called_once_with("u-1")  # reset so claim_running can re-take it
+        enq.assert_called_once()
+        self.assertTrue(enq.call_args.kwargs.get("force"))
+        self.assertEqual(out, {"uuid": "u-1", "cancelled": True})
 
 
 if __name__ == "__main__":

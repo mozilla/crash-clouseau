@@ -287,6 +287,24 @@ def _needinfo_action(dossier) -> dict | None:
     }
 
 
+def _sum_tokens(result_msg):
+    """Aggregate per-model token usage from the terminal ResultMessage into
+    (input, output, cache_read) totals. ``model_usage`` maps model -> usage dict;
+    keys arrive camelCase from the SDK with a snake_case fallback (same shape the
+    timing summary logs). Missing usage -> zeros."""
+    usage = getattr(result_msg, "model_usage", None) or {}
+    ti = to = tc = 0
+    for u in usage.values():
+        if not isinstance(u, dict):
+            continue
+        ti += int(u.get("inputTokens", u.get("input_tokens", 0)) or 0)
+        to += int(u.get("outputTokens", u.get("output_tokens", 0)) or 0)
+        tc += int(
+            u.get("cacheReadInputTokens", u.get("cache_read_input_tokens", 0)) or 0
+        )
+    return ti, to, tc
+
+
 def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
     """Fold a terminal ``ResultMessage`` into a typed ``CrashTriageResult``,
     best-effort parsing + #03-validating the trailing ```json handoff (abstain on
@@ -310,12 +328,16 @@ def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
         dup = any(a.get("type") == bridged["type"] and (a.get("params") or {}).get("bug_id") == bp["bug_id"] and (a.get("params") or {}).get("text") == bp["text"] for a in actions)
         if not dup:
             actions.append(bridged)
+    ti, to, tc = _sum_tokens(result_msg)
     return CrashTriageResult(
         num_turns=result_msg.num_turns,
         total_cost_usd=result_msg.total_cost_usd,
         result=result_msg.result or "",
         dossier=dossier,
         actions=actions,
+        input_tokens=ti,
+        output_tokens=to,
+        cache_read_tokens=tc,
     )
 
 

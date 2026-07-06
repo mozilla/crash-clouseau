@@ -191,3 +191,11 @@ def api_evidence_apply():
     from crashclouseau import api
 
     return api.apply_actions()
+
+
+@app.route("/api/tasks/retrigger", methods=["POST"])
+@cross_origin()
+def api_tasks_retrigger():
+    from crashclouseau import api
+
+    return api.retrigger()
