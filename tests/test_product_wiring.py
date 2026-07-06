@@ -597,7 +597,9 @@ class TestCodeview(unittest.TestCase):
         self.assertEqual(html._collect_diff_lines(dossier, "no/such/File.cpp"), [])
 
     def test_codeview_renders_two_panes(self):
-        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()):
+        # full-diff fetch unavailable here -> falls back to the dossier's cited lines.
+        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()), \
+             mock.patch("crashclouseau.agent.patch_extract.fetch_raw_diff", return_value=None):
             rv = self.client.get(
                 "/codeview.html?uuid=u-1&filename=dom/Foo.cpp&node=culpritnode1&line=42"
             )
@@ -639,7 +641,8 @@ class TestCodeview(unittest.TestCase):
     def test_codeview_uses_channel_tree_at_tip_not_build_rev(self):
         # beta channel -> firefox-beta tree; the build rev is NOT pinned (searchfox
         # only indexes ~tip, so /rev/<buildrev>/ 500s "Bad revision") -> /source/ (tip).
-        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()):
+        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()), \
+             mock.patch("crashclouseau.agent.patch_extract.fetch_raw_diff", return_value=None):
             rv = self.client.get(
                 "/codeview.html?uuid=u-1&filename=dom/Foo.cpp&node=culpritnode1"
                 "&line=42&channel=beta&rev=d0d4ceee5e1c"
@@ -654,6 +657,68 @@ class TestCodeview(unittest.TestCase):
             t,
         )
         self.assertNotIn("/rev/d0d4ceee5e1c", t)   # never pins to the build rev
+
+    _SAMPLE_DIFF = (
+        "diff --git a/dom/Foo.cpp b/dom/Foo.cpp\n"
+        "--- a/dom/Foo.cpp\n"
+        "+++ b/dom/Foo.cpp\n"
+        "@@ -40,4 +40,5 @@ void Foo::bar() {\n"
+        " context line A\n"
+        "-old line\n"
+        "+new line one\n"
+        "+delete mPtr;\n"
+        " context line B\n"
+        "diff --git a/other/File.cpp b/other/File.cpp\n"
+        "--- a/other/File.cpp\n"
+        "+++ b/other/File.cpp\n"
+        "@@ -1 +1 @@\n"
+        "-x\n"
+        "+y\n"
+    )
+
+    def test_file_diff_lines_parses_and_highlights(self):
+        from crashclouseau import html
+        cited = {("added", 42)}  # the dossier flagged the added line 42 as crash-relevant
+        out = html._file_diff_lines(self._SAMPLE_DIFF, "dom/Foo.cpp", cited)
+        # only the target file, not other/File.cpp
+        self.assertNotIn("y", [d["content"] for d in out])
+        self.assertTrue(any(d["kind"] == "hunk" for d in out))
+        self.assertTrue(any(d["kind"] == "deleted" and d["content"] == "old line" for d in out))
+        self.assertTrue(any(d["kind"] == "context" and d["content"] == "context line A" for d in out))
+        added = [d for d in out if d["kind"] == "added"]
+        self.assertEqual([d["content"] for d in added], ["new line one", "delete mPtr;"])
+        self.assertEqual([d["ln"] for d in added], [41, 42])
+        hl = [d for d in out if d["hl"]]
+        self.assertEqual(len(hl), 1)                    # only the cited line
+        self.assertEqual((hl[0]["content"], hl[0]["ln"]), ("delete mPtr;", 42))
+
+    def test_codeview_full_file_diff_with_highlight(self):
+        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()), \
+             mock.patch("crashclouseau.agent.patch_extract.fetch_raw_diff",
+                        return_value=self._SAMPLE_DIFF):
+            rv = self.client.get(
+                "/codeview.html?uuid=u-1&filename=dom/Foo.cpp&node=culpritnode1"
+                "&line=42&channel=nightly"
+            )
+        t = rv.get_data(as_text=True)
+        self.assertIn("new line one", t)   # full-file added line (not crash-relevant)
+        self.assertIn("dl-deleted", t)     # full diff shows deletions
+        self.assertIn("dl-context", t)     # ...and context
+        self.assertIn("dl-hunk", t)        # ...and hunk headers
+        self.assertIn("dl-added hl", t)    # the cited line is highlighted
+        self.assertNotIn("other/File.cpp", t)  # scoped to the one file
+
+    def test_codeview_full_diff_degrades_to_cited_lines(self):
+        # If the changeset diff can't be fetched, fall back to the dossier's cited lines.
+        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()), \
+             mock.patch("crashclouseau.agent.patch_extract.fetch_raw_diff", return_value=None):
+            rv = self.client.get(
+                "/codeview.html?uuid=u-1&filename=dom/Foo.cpp&node=culpritnode1"
+                "&line=42&channel=nightly"
+            )
+        t = rv.get_data(as_text=True)
+        self.assertIn("delete mPtr;", t)   # cited line still shown
+        self.assertNotIn("dl-hunk", t)     # but no full-diff hunk headers
 
     def test_searchfox_tree_by_channel(self):
         self.assertEqual(html._searchfox_tree("nightly"), "firefox-main")

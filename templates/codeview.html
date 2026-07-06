@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/clouseau.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=3">
+    <link rel="stylesheet" href="/clouseau.css?v=4">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Code view &mdash; {{ filename }}</title>
   </head>
@@ -21,15 +21,28 @@
         <iframe id="sf" name="sf" src="{{ sf_src }}" title="searchfox source" referrerpolicy="no-referrer"></iframe>
       </div>
       <div class="codeview-pane">
-        <div class="pane-label">changed lines &mdash; from the evidence dossier <span class="muted">(click a line to jump to it in searchfox)</span></div>
-        {% if diff_lines -%}
+        <div class="pane-label">diff for this file{% if node %} &mdash; <code>{{ node[:12] }}</code>{% endif %} <span class="muted">(crash-relevant lines highlighted{% if file_diff %}; click an added/context line to open it in searchfox{% endif %})</span></div>
+        {% if file_diff -%}
+        <div class="diff">
+          {% for d in file_diff -%}
+          {% if d['kind'] == 'hunk' -%}
+          <div class="dl dl-hunk">{{ d['content']|e }}</div>
+          {% elif d['kind'] in ('added', 'context') and d['ln'] -%}
+          <a class="dl dl-{{ d['kind'] }}{% if d['hl'] %} hl{% endif %}" href="{{ sf_base }}#line-{{ d['ln']|int }}" target="sf" title="Open line {{ d['ln'] }} in searchfox"><span class="ln">{{ d['ln'] }}</span><span class="mark">{% if d['kind'] == 'added' %}+{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</a>
+          {% else -%}
+          <span class="dl dl-{{ d['kind'] }}{% if d['hl'] %} hl{% endif %}"><span class="ln">{{ d['ln'] or '' }}</span><span class="mark">{% if d['kind'] == 'deleted' %}-{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</span>
+          {% endif -%}
+          {% endfor -%}
+        </div>
+        {% elif diff_lines -%}
+        {# Fell back to the dossier's cited lines (full diff couldn't be fetched). #}
         <div class="diff">
           {% for d in diff_lines -%}
-          <a class="dl dl-{{ d['side'] }}" href="{{ sf_base }}#line-{{ d['line']|int }}" target="sf" title="Jump to line {{ d['line']|int }} in searchfox"><span class="ln">{{ d['line'] }}</span><span class="mark">{% if d['side'] == 'added' %}+{% elif d['side'] == 'deleted' %}-{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</a>
+          <a class="dl dl-{{ d['side'] }} hl" href="{{ sf_base }}#line-{{ d['line']|int }}" target="sf" title="Jump to line {{ d['line']|int }} in searchfox"><span class="ln">{{ d['line'] }}</span><span class="mark">{% if d['side'] == 'added' %}+{% elif d['side'] == 'deleted' %}-{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</a>
           {% endfor -%}
         </div>
         {% else -%}
-        <p class="muted" style="padding:1em;">No changed-line citations are stored for this file in the dossier. Use the searchfox pane on the left to browse the source.</p>
+        <p class="muted" style="padding:1em;">No diff available for this file. Use the searchfox pane on the left to browse the source.</p>
         {% endif -%}
       </div>
     </div>

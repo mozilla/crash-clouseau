@@ -331,13 +331,22 @@ a.dl {
     font-size: 12px;
     line-height: 1.5;
     padding: 0 0.6em;
-    cursor: pointer;
 }
 
-.dl:hover { box-shadow: inset 3px 0 0 #0060df; }
+a.dl { cursor: pointer; }
+a.dl:hover { box-shadow: inset 3px 0 0 #0060df; }
 
 .dl-added { background: #e6ffed; }
 .dl-deleted { background: #ffeef0; }
+.dl-context { color: #24292e; }
+.dl-hunk { background: #f1f8ff; color: #586069; font-weight: 600; }
+
+/* crash-relevant lines (dossier-cited) highlighted within the full file diff */
+.dl.hl { box-shadow: inset 4px 0 0 #d98a00; }
+a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
+.dl-added.hl { background: #a6f0b8; }
+.dl-deleted.hl { background: #ffb8bf; }
+.dl-context.hl { background: #fff3cd; }
 
 .dl .ln {
     display: inline-block;

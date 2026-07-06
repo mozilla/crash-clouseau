@@ -170,6 +170,56 @@ def _collect_diff_lines(dossier, filename):
     )
 
 
+_DIFF_FILE_RE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
+_DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _file_diff_lines(raw_diff, filename, cited):
+    """Render the FULL unified diff of ``filename`` from a git-format raw changeset diff
+    as ``[{kind, ln, content, hl}]`` (kind: hunk|added|deleted|context). ``cited`` is a
+    set of ``(side, line)`` the dossier flagged — those lines get ``hl=True`` so the
+    crash-relevant hunk is highlighted within the whole file's diff. Empty if the file
+    isn't in the diff (or the fetch failed)."""
+    out = []
+    if not raw_diff:
+        return out
+    in_file = False
+    old_ln = new_ln = 0
+    for ln in raw_diff.splitlines():
+        fm = _DIFF_FILE_RE.match(ln)
+        if fm:
+            in_file = filename in (fm.group(1), fm.group(2))
+            continue
+        if not in_file:
+            continue
+        if ln.startswith("@@"):
+            hm = _DIFF_HUNK_RE.match(ln)
+            if hm:
+                old_ln, new_ln = int(hm.group(1)), int(hm.group(2))
+            out.append({"kind": "hunk", "ln": None, "content": ln, "hl": False})
+        elif ln.startswith("+++") or ln.startswith("---"):
+            continue  # file-header meta lines
+        elif ln.startswith("+"):
+            out.append({"kind": "added", "ln": new_ln, "content": ln[1:],
+                        "hl": ("added", new_ln) in cited})
+            new_ln += 1
+        elif ln.startswith("-"):
+            out.append({"kind": "deleted", "ln": old_ln, "content": ln[1:],
+                        "hl": ("deleted", old_ln) in cited})
+            old_ln += 1
+        elif ln[:1] in ("d", "i", "n", "r", "c", "B", "G", "S") and (
+            ln.startswith(("diff ", "index ", "new file", "deleted file",
+                           "rename ", "copy ", "Binary ", "GIT binary", "similarity "))
+        ):
+            continue  # inter-file / mode meta
+        else:
+            content = ln[1:] if ln.startswith(" ") else ln  # context (or blank)
+            out.append({"kind": "context", "ln": new_ln, "content": content, "hl": False})
+            old_ln += 1
+            new_ln += 1
+    return out
+
+
 def codeview():
     """Two-pane code view for a touched file (#12): searchfox source on the left,
     the changed lines (rendered from the persisted dossier evidence) on the right.
@@ -188,6 +238,20 @@ def codeview():
         if ev:
             dossier = ev.get("dossier") or {}
     diff_lines = _collect_diff_lines(dossier, filename) if filename else []
+
+    # Full diff of the changeset (``node``) for this file, with the dossier's cited
+    # (crash-relevant) lines highlighted. Fetched on demand (cached per process) via the
+    # patch-extraction raw-rev source; degrades to the cited lines alone on any failure.
+    file_diff = []
+    if node and filename:
+        try:
+            from crashclouseau.agent import patch_extract
+            cited = {(d["side"], int(d["line"])) for d in diff_lines if d.get("line")}
+            file_diff = _file_diff_lines(
+                patch_extract.fetch_raw_diff(node, channel), filename, cited
+            )
+        except Exception as exc:  # pragma: no cover - defensive; degrade to cited lines
+            logger.warning("codeview: full diff for %s @ %s failed: %s", filename, node, exc)
 
     # searchfox indexes ~tip, NOT arbitrary build revisions, so pinning to the crash's
     # build rev gives "Bad revision" (HTTP 500). Use the tip /source/ view, which always
@@ -213,6 +277,7 @@ def codeview():
         sf_base=sf_base,
         sf_src=sf_src,
         diff_lines=diff_lines,
+        file_diff=file_diff,
     )
 
 
