@@ -3,7 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from collections import defaultdict, OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
@@ -1514,6 +1514,44 @@ class Dossier(db.Model):
             .limit(limit)
             .all()
         )
+
+    @staticmethod
+    def skip_triage(uuid, stale_after_s):
+        """Whether triage of ``uuid`` should be SKIPPED: it is already ``done``/``error``,
+        or a run is genuinely in progress (``running`` and ``updated`` within
+        ``stale_after_s``). A ``running`` dossier OLDER than that is an orphan — its
+        worker died mid-run (e.g. a Heroku dyno restart, which SIGKILLs before the
+        exception handler can mark ``error``) — so it is NOT skipped and gets retried;
+        ``pending`` retries too. ``updated`` is stamped at run start (no heartbeat) and
+        RQ kills a run at its job timeout, so any ``running`` past the timeout is dead."""
+        d = Dossier.get_by_uuid(uuid)
+        if d is None:
+            return False
+        if d.status in ("done", "error"):
+            return True
+        if d.status == "running":
+            upd = d.updated
+            if upd is None:
+                return True  # unknown age -> assume in progress
+            if upd.tzinfo is None:
+                upd = upd.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - upd).total_seconds() < stale_after_s
+        return False  # pending -> run
+
+    @staticmethod
+    def get_stale_running(stale_after_s):
+        """UUIDs whose dossier is stuck ``running`` past ``stale_after_s`` — orphaned by
+        a dead worker. The reaper re-enqueues these so they self-heal instead of
+        blocking that crash forever (and wasting the partial run's cost for nothing)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        rows = (
+            db.session.query(UUID.uuid)
+            .select_from(Dossier)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .filter(Dossier.status == "running", Dossier.updated < cutoff)
+            .all()
+        )
+        return [r.uuid for r in rows]
 
     @staticmethod
     def mark_action_applied(uuid, index, result_id, applied_at=None, commit=True):

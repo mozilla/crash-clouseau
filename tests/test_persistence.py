@@ -7,6 +7,8 @@
 # on_conflict / ON DELETE CASCADE are Postgres-only) and are skipped otherwise:
 #   DATABASE_URL=postgresql://user@localhost/clouseau_test python -m unittest tests.test_persistence
 import unittest
+from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 from crashclouseau import db, models
 from crashclouseau.models import (
@@ -73,6 +75,50 @@ class TestSchemaDefinition(unittest.TestCase):
             self.assertTrue(callable(getattr(Dossier, m)))
         for m in ("set", "get_by_uuid", "get_for_build"):
             self.assertTrue(callable(getattr(Verdict, m)))
+
+
+class _FakeDossier:
+    def __init__(self, status, updated):
+        self.status = status
+        self.updated = updated
+
+
+class TestSkipTriage(unittest.TestCase):
+    """skip_triage: skip a done/error dossier or a FRESH running run; RETRY a stale
+    running orphan (dead worker, e.g. dyno restart) and pending. get_by_uuid mocked."""
+
+    STALE = 2100  # job_timeout(1800) + buffer(300)
+
+    def _skip(self, dossier):
+        with mock.patch.object(Dossier, "get_by_uuid", return_value=dossier):
+            return Dossier.skip_triage("u", self.STALE)
+
+    def test_no_dossier_runs(self):
+        self.assertFalse(self._skip(None))
+
+    def test_done_skips(self):
+        self.assertTrue(self._skip(_FakeDossier("done", datetime.now(timezone.utc))))
+
+    def test_error_skips(self):
+        self.assertTrue(self._skip(_FakeDossier("error", datetime.now(timezone.utc))))
+
+    def test_pending_runs(self):
+        self.assertFalse(self._skip(_FakeDossier("pending", datetime.now(timezone.utc))))
+
+    def test_fresh_running_skips(self):
+        fresh = datetime.now(timezone.utc) - timedelta(seconds=60)
+        self.assertTrue(self._skip(_FakeDossier("running", fresh)))
+
+    def test_stale_running_retries(self):
+        stale = datetime.now(timezone.utc) - timedelta(seconds=self.STALE + 60)
+        self.assertFalse(self._skip(_FakeDossier("running", stale)))
+
+    def test_naive_updated_treated_as_utc(self):
+        stale = datetime.utcnow() - timedelta(seconds=self.STALE + 60)  # naive (sqlite)
+        self.assertFalse(self._skip(_FakeDossier("running", stale)))
+
+    def test_running_without_updated_skips(self):
+        self.assertTrue(self._skip(_FakeDossier("running", None)))
 
 
 @unittest.skipUnless(_is_postgres(), "round-trip/cascade need a disposable Postgres backend")
@@ -155,6 +201,21 @@ class TestPersistenceRoundTrip(unittest.TestCase):
             db.session.query(UUID).filter(UUID.uuid == u).delete()
             db.session.query(Build).filter(Build.id == b.id).delete()
             db.session.commit()
+
+    def test_get_stale_running(self):
+        # A fresh running dossier isn't stale; backdate `updated` -> orphaned; a done
+        # dossier is never stale-running.
+        Dossier.upsert(self.UUID, payload={}, status="running")
+        self.assertNotIn(self.UUID, Dossier.get_stale_running(1800))
+        uid = db.session.query(UUID.id).filter(UUID.uuid == self.UUID).scalar()
+        old = datetime.now(timezone.utc) - timedelta(seconds=4000)
+        db.session.query(Dossier).filter(Dossier.uuidid == uid).update(
+            {"updated": old}, synchronize_session=False
+        )
+        db.session.commit()
+        self.assertIn(self.UUID, Dossier.get_stale_running(1800))
+        Dossier.set_status(self.UUID, "done")  # bumps updated + status
+        self.assertNotIn(self.UUID, Dossier.get_stale_running(1800))
 
     def test_proto_already_analyzed_dedup(self):
         # One paid agent run per proto-signature cluster: a dossier on ANY uuid sharing

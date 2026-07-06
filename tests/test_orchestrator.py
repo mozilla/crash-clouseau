@@ -164,6 +164,31 @@ class TestEnqueueGating(unittest.TestCase):
         q.enqueue_call.assert_called_once()
 
 
+class TestReaper(unittest.TestCase):
+    def test_reap_reenqueues_stale_running(self):
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                               return_value=["u1", "u2"]), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 2)
+        self.assertEqual(q.enqueue_call.call_count, 2)
+        kwargs = q.enqueue_call.call_args.kwargs
+        self.assertIs(kwargs["func"], orch.run_evidence_agent)
+        self.assertIn("timeout", kwargs)      # not job_timeout (RQ signature)
+
+    def test_reap_noop_when_none(self):
+        with mock.patch.object(orch.models.Dossier, "get_stale_running", return_value=[]), \
+             mock.patch.object(orch.worker, "get_queue") as gq:
+            self.assertEqual(orch.reap_stale_agent_jobs(), 0)
+        gq.assert_not_called()
+
+    def test_reap_never_raises(self):
+        with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                               side_effect=RuntimeError("db down")):
+            self.assertEqual(orch.reap_stale_agent_jobs(), 0)  # swallowed
+
+
 class TestBuildSeed(unittest.TestCase):
     def test_none_for_unknown_uuid(self):
         with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=({}, {})):
@@ -292,7 +317,8 @@ class TestRunEvidenceAgent(unittest.TestCase):
 
     def _patches(self):
         MDoss = mock.MagicMock()
-        MDoss.get_by_uuid.return_value = None  # not skipped
+        MDoss.get_by_uuid.return_value = None
+        MDoss.skip_triage.return_value = False  # not skipped (no dossier / fresh run)
         MVerd = mock.MagicMock()
         return (
             mock.patch.object(orch.models, "Dossier", MDoss),
@@ -348,7 +374,7 @@ class TestRunEvidenceAgent(unittest.TestCase):
 
     def test_skip_if_existing(self):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
-        MDoss.get_by_uuid.return_value = object()  # a dossier already exists
+        MDoss.skip_triage.return_value = True  # already done / a fresh run in progress
         with pD, pV, pC, pS, pSc, \
              mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):
             orch.run_evidence_agent("u-1")  # must not raise (triage not called)
@@ -358,7 +384,7 @@ class TestRunEvidenceAgent(unittest.TestCase):
         # No dossier for THIS uuid, but a proto-sibling was already triaged -> skip
         # (one paid run per proto-signature cluster, across builds).
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
-        MDoss.get_by_uuid.return_value = None
+        MDoss.skip_triage.return_value = False  # this uuid not itself done/running
         with pD, pV, pC, pS, pSc, \
              mock.patch.object(orch, "_proto_already_triaged", return_value=True), \
              mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):

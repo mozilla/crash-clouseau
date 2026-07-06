@@ -32,6 +32,9 @@ _MODEL_IDS = {
     "fable": "claude-fable-5",
 }
 _DEFAULT_COST_CAP = 2.0
+# A "running" dossier older than job_timeout + this buffer is a dead orphan (RQ kills a
+# run at job_timeout; the buffer avoids racing a run that's legitimately near the cap).
+_STALE_BUFFER_S = 300
 
 
 def _full_model(model):
@@ -198,8 +201,9 @@ def run_evidence_agent(uuid):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     Never raises out (ingestion isolation); marks dossier status on failure."""
     try:
+        stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
         if config.get_agent_skip_if_existing() and (
-            models.Dossier.get_by_uuid(uuid) or _proto_already_triaged(uuid)
+            models.Dossier.skip_triage(uuid, stale_after) or _proto_already_triaged(uuid)
         ):
             logger.info("agent: dossier/proto-signature already triaged for %s; skipping", uuid)
             return
@@ -293,6 +297,37 @@ def _proto_already_triaged(uuid):
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("agent: proto dedup check failed for %s: %s", uuid, exc)
         return False
+
+
+def reap_stale_agent_jobs():
+    """Re-enqueue crashes whose triage was orphaned — dossier stuck ``running`` past
+    job_timeout + buffer because the worker died mid-run (e.g. Heroku restarts dynos
+    ~daily / randomly, SIGKILLing before the exception handler can mark ``error``).
+    Called periodically by the clock. Self-heals: the orphan is retried instead of
+    blocking that crash forever, so its partial cost isn't wasted. A duplicate enqueue
+    is cheap — run_evidence_agent skips a crash whose run is genuinely fresh. Best-effort
+    (never raises out); returns how many were re-enqueued."""
+    try:
+        stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
+        uuids = models.Dossier.get_stale_running(stale_after)
+        if not uuids:
+            return 0
+        queue = worker.get_queue(config.get_agent_queue())
+        for uuid in uuids:
+            queue.enqueue_call(
+                func=run_evidence_agent,
+                args=(uuid,),
+                result_ttl=0,
+                timeout=config.get_agent_job_timeout(),
+            )
+        logger.warning(
+            "agent: reaped %d orphaned (stale-running) triage(s): %s",
+            len(uuids), ", ".join(uuids),
+        )
+        return len(uuids)
+    except Exception:  # pragma: no cover - defensive; never break the clock
+        logger.error("agent: reap_stale_agent_jobs failed", exc_info=True)
+        return 0
 
 
 def enqueue_agent(uuid, channel=None):
