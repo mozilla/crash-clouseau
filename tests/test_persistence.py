@@ -130,6 +130,41 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         self.assertIsNone(Dossier.get_by_uuid(self.UUID))
         self.assertIsNone(Verdict.get_by_uuid(self.UUID))
 
+    def test_proto_already_analyzed_dedup(self):
+        # One paid agent run per proto-signature cluster: a dossier on ANY uuid sharing
+        # this uuid's (signatureid, protohash) marks the whole cluster triaged (dedup
+        # across builds — a different uuid, same proto-signature). self.UUID has
+        # protohash "hash"; add a same-proto sibling and an unrelated (different proto).
+        sib = "test-9999-aaaa-bbbb-ccccddddeeee"
+        other = "test-8888-aaaa-bbbb-ccccddddeeee"
+        db.session.add(UUID(sib, None, "hash", None))        # same proto cluster
+        db.session.add(UUID(other, None, "otherhash", None))  # different cluster
+        db.session.commit()
+        try:
+            # Nothing triaged yet anywhere.
+            self.assertFalse(UUID.proto_already_analyzed(self.UUID))
+            self.assertFalse(UUID.proto_already_analyzed(sib))
+            self.assertFalse(UUID.proto_already_analyzed(other))
+            # A non-DONE sibling (running/error) must NOT suppress the cluster — else a
+            # single failed/stuck run poisons every other uuid in the proto cluster.
+            Dossier.upsert(sib, payload={}, status="running")
+            self.assertFalse(UUID.proto_already_analyzed(self.UUID))
+            Dossier.set_status(sib, "error")
+            self.assertFalse(UUID.proto_already_analyzed(self.UUID))
+            # Only a DONE sibling marks the whole "hash" cluster triaged (incl. the
+            # not-yet-run self.UUID); the different-proto crash stays unaffected.
+            Dossier.set_status(sib, "done")
+            self.assertTrue(UUID.proto_already_analyzed(self.UUID))
+            self.assertTrue(UUID.proto_already_analyzed(sib))
+            self.assertFalse(UUID.proto_already_analyzed(other))
+            # An unknown uuid never blocks a first run.
+            self.assertFalse(UUID.proto_already_analyzed("nope-not-a-uuid"))
+        finally:
+            db.session.query(UUID).filter(UUID.uuid.in_([sib, other])).delete(
+                synchronize_session=False
+            )
+            db.session.commit()
+
 
 if __name__ == "__main__":
     unittest.main()

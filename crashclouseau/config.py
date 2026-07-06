@@ -124,6 +124,13 @@ def get_agent_enabled():
     return get_agent().get("enabled", True)
 
 
+def get_agent_channels():
+    """Channels the evidence agent runs on. Defaults to nightly only — the product's
+    target population (small volume, high per-crash significance); beta/release would
+    multiply cost with less value. Empty list means "no channel filter" (all)."""
+    return get_agent().get("channels", ["nightly"])
+
+
 def get_agent_queue():
     return get_agent().get("queue", "agent")
 

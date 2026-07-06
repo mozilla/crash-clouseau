@@ -907,6 +907,41 @@ class UUID(db.Model):
         return ret
 
     @staticmethod
+    def proto_already_analyzed(uuid):
+        """True if any UUID sharing this uuid's ``(signatureid, protohash)`` already has a
+        DONE Dossier — i.e. the proto-signature has been SUCCESSFULLY triaged. Lets the
+        evidence agent run ONCE per proto-signature cluster instead of once per crash
+        uuid: the same crash recurring on a newer nightly build (a different uuid, same
+        proto) is not worth paying to re-triage. Deliberately ignores ``buildid`` (dedup
+        across builds).
+
+        Only a ``status == "done"`` dossier counts. A ``running``/``error``/``pending``
+        sibling must NOT suppress the cluster: ``run_evidence_agent`` commits a
+        ``running`` row before the LLM call and flips it to ``error`` on the transient
+        failures this pipeline isolates against (and a killed worker can leave one stuck
+        at ``running``). Counting those would let a single failed/stuck run permanently
+        drop every other uuid in the cluster; keying on ``done`` instead means an errored
+        first run is naturally retried by the next same-proto uuid. Returns False for an
+        unknown/proto-less uuid (so it never blocks a first run)."""
+        row = (
+            db.session.query(UUID.signatureid, UUID.protohash)
+            .filter(UUID.uuid == uuid)
+            .first()
+        )
+        if not row or not row.protohash:
+            return False
+        q = (
+            db.session.query(Dossier.id)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .filter(
+                UUID.signatureid == row.signatureid,
+                UUID.protohash == row.protohash,
+                Dossier.status == "done",
+            )
+        )
+        return db.session.query(q.exists()).scalar()
+
+    @staticmethod
     def add_stack_hash(uuid, sh, jsh, commit=True):
         q = db.session.query(UUID).filter(UUID.uuid == uuid)
         if sh:

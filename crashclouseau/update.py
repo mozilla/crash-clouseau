@@ -104,7 +104,7 @@ def put_report(uuid, buildid, channel, product, chgset):
         try:
             from .agent.orchestrator import enqueue_agent
 
-            enqueue_agent(uuid)
+            enqueue_agent(uuid, channel)
         except Exception as e:
             logger.warning("could not enqueue evidence agent for %s: %s", uuid, e)
 

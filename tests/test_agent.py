@@ -61,7 +61,7 @@ class TestBuildOptions(unittest.TestCase):
 
     def test_principal_tiering(self):
         o = self._opts()
-        self.assertEqual(o.model, "claude-opus-4-8")  # short "opus" -> full id
+        self.assertEqual(o.model, "claude-sonnet-5")  # config default; short "sonnet" -> full id
         self.assertEqual(o.max_turns, 40)
         self.assertEqual(getattr(o, "effort", None), "high")  # options-level
 

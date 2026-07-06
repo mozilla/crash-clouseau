@@ -198,8 +198,10 @@ def run_evidence_agent(uuid):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     Never raises out (ingestion isolation); marks dossier status on failure."""
     try:
-        if config.get_agent_skip_if_existing() and models.Dossier.get_by_uuid(uuid):
-            logger.info("agent: dossier already exists for %s; skipping", uuid)
+        if config.get_agent_skip_if_existing() and (
+            models.Dossier.get_by_uuid(uuid) or _proto_already_triaged(uuid)
+        ):
+            logger.info("agent: dossier/proto-signature already triaged for %s; skipping", uuid)
             return
 
         seed = build_seed(uuid)
@@ -281,9 +283,31 @@ def run_evidence_agent(uuid):
         return
 
 
-def enqueue_agent(uuid):
-    """Enqueue one triage run on the dedicated queue (no-op if disabled)."""
+def _proto_already_triaged(uuid):
+    """Best-effort: has this uuid's proto-signature already been triaged (a dossier for
+    any same-``(signatureid, protohash)`` uuid)? Fails OPEN (returns False) on any DB
+    error, so a dedup-check hiccup never skips a real crash or aborts a run — the cost
+    of a rare duplicate run is far cheaper than silently dropping a crash."""
+    try:
+        return bool(models.UUID.proto_already_analyzed(uuid))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("agent: proto dedup check failed for %s: %s", uuid, exc)
+        return False
+
+
+def enqueue_agent(uuid, channel=None):
+    """Enqueue one triage run on the dedicated queue. No-op when the agent is disabled,
+    when ``channel`` is outside the configured set (nightly only by default), or when
+    this uuid's proto-signature has already been triaged (dedup across builds — the
+    authoritative skip is in ``run_evidence_agent``; this just avoids queueing a job we
+    would drop)."""
     if not config.get_agent_enabled():
+        return
+    channels = config.get_agent_channels()
+    if channel is not None and channels and channel not in channels:
+        return
+    if config.get_agent_skip_if_existing() and _proto_already_triaged(uuid):
+        logger.info("agent: proto-signature already triaged for %s; not enqueuing", uuid)
         return
     queue = worker.get_queue(config.get_agent_queue())
     queue.enqueue_call(

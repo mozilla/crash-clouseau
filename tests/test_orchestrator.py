@@ -106,12 +106,51 @@ class TestEnqueueGating(unittest.TestCase):
     def test_enabled_enqueues(self):
         q = mock.MagicMock()
         with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
              mock.patch.object(orch.worker, "get_queue", return_value=q):
             orch.enqueue_agent("u-1")
         q.enqueue_call.assert_called_once()
         kwargs = q.enqueue_call.call_args.kwargs
         self.assertIs(kwargs["func"], orch.run_evidence_agent)
         self.assertEqual(kwargs["args"], ("u-1",))
+
+    def test_non_nightly_channel_skipped(self):
+        q = mock.MagicMock()
+        with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
+             mock.patch.object(orch.config, "get_agent_channels", return_value=["nightly"]), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            orch.enqueue_agent("u-1", "beta")
+            orch.enqueue_agent("u-1", "release")
+        q.enqueue_call.assert_not_called()
+
+    def test_nightly_channel_enqueues(self):
+        q = mock.MagicMock()
+        with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
+             mock.patch.object(orch.config, "get_agent_channels", return_value=["nightly"]), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            orch.enqueue_agent("u-1", "nightly")
+        q.enqueue_call.assert_called_once()
+
+    def test_proto_already_triaged_not_enqueued(self):
+        q = mock.MagicMock()
+        with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
+             mock.patch.object(orch.config, "get_agent_skip_if_existing", return_value=True), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=True), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            orch.enqueue_agent("u-1", "nightly")
+        q.enqueue_call.assert_not_called()
+
+    def test_proto_dedup_fails_open(self):
+        # A DB error in the dedup check must NOT skip the crash (fail-open to enqueue).
+        q = mock.MagicMock()
+        with mock.patch.object(orch.config, "get_agent_enabled", return_value=True), \
+             mock.patch.object(orch.models.UUID, "proto_already_analyzed",
+                               side_effect=RuntimeError("db down")), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            orch.enqueue_agent("u-1", "nightly")  # must not raise
+        q.enqueue_call.assert_called_once()
 
 
 class TestBuildSeed(unittest.TestCase):
@@ -233,6 +272,13 @@ class TestBuildSeed(unittest.TestCase):
 
 
 class TestRunEvidenceAgent(unittest.TestCase):
+    def setUp(self):
+        # Default: proto-signature not seen (so runs proceed). The dedicated dedup test
+        # overrides this locally. Avoids these tests hitting the real DB-less query.
+        p = mock.patch.object(orch, "_proto_already_triaged", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
+
     def _patches(self):
         MDoss = mock.MagicMock()
         MDoss.get_by_uuid.return_value = None  # not skipped
@@ -293,6 +339,17 @@ class TestRunEvidenceAgent(unittest.TestCase):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
         MDoss.get_by_uuid.return_value = object()  # a dossier already exists
         with pD, pV, pC, pS, pSc, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):
+            orch.run_evidence_agent("u-1")  # must not raise (triage not called)
+        MDoss.upsert.assert_not_called()
+
+    def test_skip_if_proto_already_triaged(self):
+        # No dossier for THIS uuid, but a proto-sibling was already triaged -> skip
+        # (one paid run per proto-signature cluster, across builds).
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.get_by_uuid.return_value = None
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=True), \
              mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):
             orch.run_evidence_agent("u-1")  # must not raise (triage not called)
         MDoss.upsert.assert_not_called()

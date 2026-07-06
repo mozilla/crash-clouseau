@@ -44,6 +44,7 @@
         "min_citations_per_claim": 1,
         "abstain_below_confidence": 0.85,
         "enabled": true,
+        "channels": ["nightly"],
         "queue": "agent",
         "job_timeout": 1800,
         "skip_if_existing": true,
@@ -92,13 +93,13 @@
         },
         "llm":
         {
-            "principal": {"model": "opus", "effort": "high", "max_turns": 40},
+            "principal": {"model": "sonnet", "effort": "high", "max_turns": 40},
             "roles":
             {
                 "crash-interpreter": {"model": "haiku"},
-                "call-graph-explorer": {"model": "sonnet", "effort": "high"},
+                "call-graph-explorer": {"model": "sonnet", "effort": "medium"},
                 "patch-scout": {"model": "haiku"},
-                "data-flow-tracer": {"model": "sonnet", "effort": "high"},
+                "data-flow-tracer": {"model": "sonnet", "effort": "medium"},
                 "skeptic": {"model": "haiku"}
             },
             "pricing":
