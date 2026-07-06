@@ -73,6 +73,12 @@ def reports():
                 buildid = products[prod][channel][0][0]
             signatures = models.UUID.get_uuids_from_buildid(buildid, prod, channel)
 
+        # Agent verdicts for this build, keyed by uuid, so the index can tag the
+        # culprit/lead crashes (empty when the agent hasn't run -> index unchanged).
+        verdicts = (
+            models.Verdict.map_for_build(buildid, prod, channel) if buildid else {}
+        )
+
         return render_template(
             "reports.html",
             buildids=json.dumps(products),
@@ -81,6 +87,7 @@ def reports():
             selected_channel=channel,
             selected_bid=buildid,
             signatures=signatures,
+            verdicts=verdicts,
             colors=utils.get_colors(),
         )
     except Exception:

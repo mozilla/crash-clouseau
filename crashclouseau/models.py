@@ -1628,6 +1628,27 @@ class Verdict(db.Model):
         )
 
     @staticmethod
+    def map_for_build(buildid, product, channel):
+        """``{uuid -> {"verdict", "confidence"}}`` for one build — lets reports.html tag
+        which scored crashes the agent found a culprit/lead for, so the interesting ones
+        are spottable from the index instead of clicking each. Empty when the agent
+        hasn't run (so the index is unchanged without it)."""
+        bdate = utils.get_build_date(buildid)
+        rows = (
+            db.session.query(UUID.uuid, Verdict.verdict, Verdict.confidence)
+            .select_from(Verdict)
+            .join(UUID, Verdict.uuidid == UUID.id)
+            .join(Build, UUID.buildid == Build.id)
+            .filter(
+                Build.buildid == bdate,
+                Build.product == product,
+                Build.channel == channel,
+            )
+            .all()
+        )
+        return {r.uuid: {"verdict": r.verdict, "confidence": r.confidence} for r in rows}
+
+    @staticmethod
     def get_evidence(uuid):
         """Read the persisted verdict + dossier + recorded actions for one UUID (#12).
 

@@ -130,6 +130,32 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         self.assertIsNone(Dossier.get_by_uuid(self.UUID))
         self.assertIsNone(Verdict.get_by_uuid(self.UUID))
 
+    def test_map_for_build(self):
+        # reports.html index tagging: {uuid -> {verdict, confidence}} for a build.
+        from crashclouseau import utils
+        from crashclouseau.models import Build
+        sbid = "20260204094524"
+        b = Build(utils.get_build_date(sbid), "Firefox", "nightly", "138.0a1", None)
+        db.session.add(b)
+        db.session.commit()
+        u = "test-map0-aaaa-bbbb-ccccddddeeee"
+        db.session.add(UUID(u, None, "protoZ", b.id))  # UUID.buildid = Build.id
+        db.session.commit()
+        try:
+            # No verdict yet -> uuid absent (index unchanged without the agent).
+            self.assertNotIn(u, Verdict.map_for_build(sbid, "Firefox", "nightly"))
+            Dossier.upsert(u, payload={})
+            Verdict.set(u, "lead", confidence=50)
+            m = Verdict.map_for_build(sbid, "Firefox", "nightly")
+            self.assertEqual(m[u]["verdict"], "lead")
+            self.assertEqual(m[u]["confidence"], 50)
+            # Scoped to the exact build/product/channel.
+            self.assertNotIn(u, Verdict.map_for_build(sbid, "Firefox", "beta"))
+        finally:
+            db.session.query(UUID).filter(UUID.uuid == u).delete()
+            db.session.query(Build).filter(Build.id == b.id).delete()
+            db.session.commit()
+
     def test_proto_already_analyzed_dedup(self):
         # One paid agent run per proto-signature cluster: a dossier on ANY uuid sharing
         # this uuid's (signatureid, protohash) marks the whole cluster triaged (dedup

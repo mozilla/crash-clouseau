@@ -83,6 +83,12 @@
               <div style="display:table-row;">
                 <div class="cell" style="float:left;width:80%">
                   <a href="crashstack.html?uuid={{ uuid }}">{{ uuid }}</a>
+                  {%- set v = verdicts.get(uuid) if verdicts else None %}
+                  {%- if v and v['verdict'] == 'culprit' %}
+                  <span class="confidence-badge high" title="agent: culprit{% if v['confidence'] is not none %} ({{ v['confidence'] }}%){% endif %}">culprit</span>
+                  {%- elif v and v['verdict'] == 'lead' %}
+                  <span class="confidence-badge lead" title="agent: lead{% if v['confidence'] is not none %} ({{ v['confidence'] }}%){% endif %}">lead</span>
+                  {%- endif %}
                 </div>
                 <div class="cell" style="float:right;width:20%">
                   <span style="background-color:{{ colors[score] }};">score: {{ score }}</span>
