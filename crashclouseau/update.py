@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from libmozdata import utils as lmdutils
@@ -215,10 +216,15 @@ def update_in_queue(channel, product, date=None):
     queue.enqueue_call(func=update, args=(date, channel, product), result_ttl=0)
 
 
-def update_all(
-    products=config.get_products(), channels=config.get_channels(), date=None
-):
-    """Update all"""
+def update_all(products=None, channels=None, date=None):
+    """Update all. Channels default to $INGEST_CHANNELS (space-separated) when set,
+    else all configured channels — lets a canary ingest nightly-only
+    (`heroku config:set INGEST_CHANNELS=nightly`) without touching the shared config
+    (which also defines the CHANNEL_TYPE enum, so it must keep every channel)."""
+    if products is None:
+        products = config.get_products()
+    if channels is None:
+        channels = os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()
     for product in products:
         for channel in channels:
             update_in_queue(channel, product)
