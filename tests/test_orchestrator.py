@@ -181,16 +181,32 @@ class TestReaper(unittest.TestCase):
         q = mock.MagicMock()
         with mock.patch.object(orch.models.Dossier, "get_stale_running",
                                return_value=["u1", "u2"]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending", return_value=[]), \
              mock.patch.object(orch.worker, "get_queue", return_value=q):
             n = orch.reap_stale_agent_jobs()
         self.assertEqual(n, 2)
         self.assertEqual(q.enqueue_call.call_count, 2)
         kwargs = q.enqueue_call.call_args.kwargs
         self.assertIs(kwargs["func"], orch.run_evidence_agent)
+        self.assertEqual(kwargs["kwargs"], {"force": False})  # running orphans aren't forced
         self.assertIn("timeout", kwargs)      # not job_timeout (RQ signature)
+
+    def test_reap_reenqueues_stale_pending_forced(self):
+        # A retrigger that got orphaned (pending, job lost to a restart) is recovered,
+        # forced so proto-dedup can't skip the explicit re-run.
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running", return_value=[]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending",
+                               return_value=["p1"]), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 1)
+        q.enqueue_call.assert_called_once()
+        self.assertEqual(q.enqueue_call.call_args.kwargs["kwargs"], {"force": True})
 
     def test_reap_noop_when_none(self):
         with mock.patch.object(orch.models.Dossier, "get_stale_running", return_value=[]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending", return_value=[]), \
              mock.patch.object(orch.worker, "get_queue") as gq:
             self.assertEqual(orch.reap_stale_agent_jobs(), 0)
         gq.assert_not_called()
@@ -214,7 +230,9 @@ class TestReaper(unittest.TestCase):
 
         def _run():
             with mock.patch.object(orch.models.Dossier, "get_stale_running",
-                                   side_effect=_fake_get_stale):
+                                   side_effect=_fake_get_stale), \
+                 mock.patch.object(orch.models.Dossier, "get_stale_pending",
+                                   return_value=[]):
                 orch.reap_stale_agent_jobs()
 
         t = threading.Thread(target=_run)

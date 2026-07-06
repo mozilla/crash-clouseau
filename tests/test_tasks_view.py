@@ -159,6 +159,19 @@ class TestTasksRoute(unittest.TestCase):
             rv = self.client.get("/tasks.html")
         self.assertIn("retriggerTask('err00001", rv.get_data(as_text=True))
 
+    def test_zero_tokens_render_as_dash(self):
+        # A row with no token data (old run / not finished) shows a dash, not 0/0/0.
+        rows = [
+            _row(uuid="withtok0" + "0" * 28, status="done",
+                 input_tokens=5000, output_tokens=100, cache_read_tokens=200),
+            _row(uuid="notok000" + "0" * 28, status="done",
+                 input_tokens=0, output_tokens=0, cache_read_tokens=0),
+        ]
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
+            body = self.client.get("/tasks.html").get_data(as_text=True)
+        self.assertIn("5000", body)                       # real tokens shown
+        self.assertNotIn("0&nbsp;/&nbsp;0&nbsp;/&nbsp;0", body)  # zero row -> dash
+
     def test_empty_shows_placeholder(self):
         with mock.patch.object(html.models.Dossier, "list_tasks", return_value=[]):
             rv = self.client.get("/tasks.html")

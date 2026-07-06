@@ -100,8 +100,9 @@
           </td>
           <td style="text-align:right;">{{ t.duration_str }}</td>
           <td style="text-align:right;">{% if t.cost_usd is not none %}${{ '%.4f' | format(t.cost_usd) }}{% else %}&mdash;{% endif %}</td>
-          <td style="text-align:right;" class="task-tok">
-            {%- if t.input_tokens is not none -%}
+          <td style="text-align:right;" class="task-tok"
+              title="input / output / cache-read tokens (blank for runs before token capture, or not yet finished)">
+            {%- if (t.input_tokens or 0) or (t.output_tokens or 0) or (t.cache_read_tokens or 0) -%}
             {{ t.input_tokens }}&nbsp;/&nbsp;{{ t.output_tokens }}&nbsp;/&nbsp;{{ t.cache_read_tokens }}
             {%- else -%}&mdash;{%- endif -%}
           </td>

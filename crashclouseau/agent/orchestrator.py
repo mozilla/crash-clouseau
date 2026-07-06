@@ -338,22 +338,36 @@ def reap_stale_agent_jobs():
     try:
         with app.app_context():
             stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
-            uuids = models.Dossier.get_stale_running(stale_after)
-            if not uuids:
+            stale_running = models.Dossier.get_stale_running(stale_after)
+            # Pending only comes from a retrigger reset; force so proto-dedup doesn't
+            # skip the recovery (the operator explicitly asked to re-run this uuid).
+            stale_pending = models.Dossier.get_stale_pending(stale_after)
+            if not stale_running and not stale_pending:
                 return 0
             queue = worker.get_queue(config.get_agent_queue())
-            for uuid in uuids:
+            for uuid in stale_running:
                 queue.enqueue_call(
                     func=run_evidence_agent,
                     args=(uuid,),
+                    kwargs={"force": False},
+                    result_ttl=0,
+                    timeout=config.get_agent_job_timeout(),
+                )
+            for uuid in stale_pending:
+                queue.enqueue_call(
+                    func=run_evidence_agent,
+                    args=(uuid,),
+                    kwargs={"force": True},
                     result_ttl=0,
                     timeout=config.get_agent_job_timeout(),
                 )
             logger.warning(
-                "agent: reaped %d orphaned (stale-running) triage(s): %s",
-                len(uuids), ", ".join(uuids),
+                "agent: reaped %d orphaned (stale-running) + %d stuck (stale-pending) "
+                "triage(s): %s",
+                len(stale_running), len(stale_pending),
+                ", ".join(stale_running + stale_pending),
             )
-            return len(uuids)
+            return len(stale_running) + len(stale_pending)
     except Exception:  # pragma: no cover - defensive; never break the clock
         logger.error("agent: reap_stale_agent_jobs failed", exc_info=True)
         return 0

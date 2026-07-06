@@ -1642,6 +1642,23 @@ class Dossier(db.Model):
         return [r.uuid for r in rows]
 
     @staticmethod
+    def get_stale_pending(stale_after_s):
+        """UUIDs stuck ``pending`` past ``stale_after_s``. A dossier only becomes pending
+        via reset_for_retrigger (a tasks-view retrigger); if the forced job it enqueued is
+        then lost — e.g. a Heroku dyno restart kills the worker before pickup — nothing
+        else requeues it, so it would sit pending forever. The reaper re-enqueues these
+        (forced) so a retrigger self-heals across a restart."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        rows = (
+            db.session.query(UUID.uuid)
+            .select_from(Dossier)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .filter(Dossier.status == "pending", Dossier.updated < cutoff)
+            .all()
+        )
+        return [r.uuid for r in rows]
+
+    @staticmethod
     def mark_action_applied(uuid, index, result_id, applied_at=None, commit=True):
         """Record the apply/replay outcome of one recorded action (#12).
 

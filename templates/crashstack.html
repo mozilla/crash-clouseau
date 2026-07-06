@@ -66,7 +66,7 @@
         <span class="confidence-badge abstain">ABSTAIN</span>
         {% endif -%}
         {% if evidence['principal_model'] -%}<span class="model-tag">{{ evidence['principal_model']|e }}</span>{% endif -%}
-        {% if evidence['over_budget'] -%}<span class="model-tag warn">over budget</span>{% endif -%}
+        {% if evidence['over_budget'] -%}<span class="model-tag warn" title="This triage cost ${{ '%.2f'|format(evidence['cost_usd'] or 0) }}, above the configured per-crash budget (max_cost_usd_per_crash). The cap is advisory &mdash; it's logged and flagged, but the run still finished and was saved; it does not stop or truncate the analysis.">over budget</span>{% endif -%}
       </h2>
 
       {% if evidence['verdict'] == 'abstain' -%}
