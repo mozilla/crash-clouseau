@@ -837,3 +837,28 @@ class TestLinkify(unittest.TestCase):
     def test_empty(self):
         from crashclouseau import linkify
         self.assertEqual(linkify(None), "")
+
+
+class TestReportsIndexBadges(unittest.TestCase):
+    """The reports index badges culprit/lead always; abstain only in show_abstain mode."""
+
+    def _render(self, verdict, show_abstain):
+        from flask import render_template
+        sigs = [("Sig::A", {"uuids": [("uuid-x", 5)], "number": 1, "installs": 1, "url": "#"})]
+        with app.test_request_context():
+            return render_template(
+                "reports.html", buildids="{}",
+                products={"Firefox": {"nightly": [["20260101000000", "1.0"]]}},
+                selected_product="Firefox", selected_channel="nightly",
+                selected_bid="20260101000000", signatures=sigs,
+                verdicts={"uuid-x": {"verdict": verdict, "confidence": 20}},
+                show_abstain=show_abstain, colors={5: "#eee"},
+            )
+
+    def test_abstain_badge_only_when_show_abstain(self):
+        self.assertIn(">abstain</span>", self._render("abstain", True))
+        self.assertNotIn(">abstain</span>", self._render("abstain", False))
+
+    def test_lead_and_culprit_always_badged(self):
+        self.assertIn(">lead</span>", self._render("lead", False))
+        self.assertIn(">culprit</span>", self._render("culprit", False))

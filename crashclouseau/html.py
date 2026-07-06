@@ -6,7 +6,7 @@ from flask import request, render_template, abort, redirect
 import json
 import re
 from libmozdata.hgmozilla import Mercurial
-from . import utils, models, report_bug, bugzilla_apply
+from . import utils, models, report_bug, bugzilla_apply, config
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
@@ -78,6 +78,9 @@ def reports():
         verdicts = (
             models.Verdict.map_for_build(buildid, prod, channel) if buildid else {}
         )
+        # Abstains are badged on the index only in evaluation mode (SHOW_ABSTAIN), so
+        # they're findable while evaluating without cluttering prod (most crashes abstain).
+        show_abstain = config.get_agent_ui().get("show_abstain", False)
 
         return render_template(
             "reports.html",
@@ -88,6 +91,7 @@ def reports():
             selected_bid=buildid,
             signatures=signatures,
             verdicts=verdicts,
+            show_abstain=show_abstain,
             colors=utils.get_colors(),
         )
     except Exception:

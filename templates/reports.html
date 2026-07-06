@@ -88,6 +88,8 @@
                   <span class="confidence-badge high" title="agent: culprit{% if v['confidence'] is not none %} ({{ v['confidence'] }}%){% endif %}">culprit</span>
                   {%- elif v and v['verdict'] == 'lead' %}
                   <span class="confidence-badge lead" title="agent: lead{% if v['confidence'] is not none %} ({{ v['confidence'] }}%){% endif %}">lead</span>
+                  {%- elif v and v['verdict'] == 'abstain' and show_abstain %}
+                  <span class="confidence-badge abstain" title="agent: abstain{% if v['confidence'] is not none %} ({{ v['confidence'] }}%){% endif %}">abstain</span>
                   {%- endif %}
                 </div>
                 <div class="cell" style="float:right;width:20%">
