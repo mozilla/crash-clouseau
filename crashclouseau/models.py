@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy import inspect, func, text
+from sqlalchemy import and_, inspect, func, or_, text
 import pytz
 from . import config, db, utils
 from .logger import logger
@@ -1537,6 +1537,32 @@ class Dossier(db.Model):
                 upd = upd.replace(tzinfo=timezone.utc)
             return (datetime.now(timezone.utc) - upd).total_seconds() < stale_after_s
         return False  # pending -> run
+
+    @staticmethod
+    def claim_running(uuid, stale_after_s):
+        """Atomically claim ``uuid`` for a run: set ``status='running'`` + ``updated=now()``
+        iff no dossier exists yet, or it is ``pending``, or a STALE ``running`` orphan
+        (``updated`` older than ``stale_after_s``). Returns True iff THIS caller won the
+        claim, so with several agentworkers exactly one runs a given uuid — no double-pay.
+        ``done``/``error``/a FRESH ``running`` are not claimable -> False. A single atomic
+        Postgres ``INSERT .. ON CONFLICT DO UPDATE .. WHERE .. RETURNING`` (no
+        check-then-set race between the skip decision and marking it running)."""
+        uuidid = UUID.get_id(uuid)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        ins = pg.insert(Dossier).values(
+            uuidid=uuidid, schema_version=DOSSIER_SCHEMA_VERSION, status="running"
+        )
+        stmt = ins.on_conflict_do_update(
+            index_elements=["uuidid"],
+            set_={"status": "running", "updated": db.func.now()},
+            where=or_(
+                Dossier.status == "pending",
+                and_(Dossier.status == "running", Dossier.updated < cutoff),
+            ),
+        ).returning(Dossier.id)
+        won = db.session.execute(stmt).first() is not None
+        db.session.commit()
+        return won
 
     @staticmethod
     def get_stale_running(stale_after_s):

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 
-from crashclouseau import config, db, models, worker
+from crashclouseau import app, config, db, models, worker
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import AreaExpert, CONFIDENCE_SCORE, Decision
 from crashclouseau.logger import logger
@@ -213,7 +213,17 @@ def run_evidence_agent(uuid):
             return
 
         seed_score = _seed_score(uuid)
-        models.Dossier.upsert(uuid, payload={}, status="running", seed_score=seed_score)
+        # Atomically claim the run (sets status=running). This is the authoritative,
+        # race-free guard: the skip_triage read above is only a cheap early-out, so two
+        # agentworkers that both passed it for the same stale uuid don't both run —
+        # exactly one wins claim_running, the loser skips (no double token cost). When
+        # skip_if_existing is off (force re-run), just mark it running unconditionally.
+        if config.get_agent_skip_if_existing():
+            if not models.Dossier.claim_running(uuid, stale_after):
+                logger.info("agent: %s claimed by another worker / settled; skipping", uuid)
+                return
+        else:
+            models.Dossier.upsert(uuid, payload={}, status="running", seed_score=seed_score)
 
         llm_cfg = config.get_llm()
         tools_cfg = config.get_agent()
@@ -307,24 +317,28 @@ def reap_stale_agent_jobs():
     blocking that crash forever, so its partial cost isn't wasted. A duplicate enqueue
     is cheap — run_evidence_agent skips a crash whose run is genuinely fresh. Best-effort
     (never raises out); returns how many were re-enqueued."""
+    # Runs on the clock's APScheduler pool THREAD, which has no Flask app context (the
+    # import-time app.app_context().push() is main-thread only), so the DB query would
+    # raise "Working outside of application context" — push a context for the DB work.
     try:
-        stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
-        uuids = models.Dossier.get_stale_running(stale_after)
-        if not uuids:
-            return 0
-        queue = worker.get_queue(config.get_agent_queue())
-        for uuid in uuids:
-            queue.enqueue_call(
-                func=run_evidence_agent,
-                args=(uuid,),
-                result_ttl=0,
-                timeout=config.get_agent_job_timeout(),
+        with app.app_context():
+            stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
+            uuids = models.Dossier.get_stale_running(stale_after)
+            if not uuids:
+                return 0
+            queue = worker.get_queue(config.get_agent_queue())
+            for uuid in uuids:
+                queue.enqueue_call(
+                    func=run_evidence_agent,
+                    args=(uuid,),
+                    result_ttl=0,
+                    timeout=config.get_agent_job_timeout(),
+                )
+            logger.warning(
+                "agent: reaped %d orphaned (stale-running) triage(s): %s",
+                len(uuids), ", ".join(uuids),
             )
-        logger.warning(
-            "agent: reaped %d orphaned (stale-running) triage(s): %s",
-            len(uuids), ", ".join(uuids),
-        )
-        return len(uuids)
+            return len(uuids)
     except Exception:  # pragma: no cover - defensive; never break the clock
         logger.error("agent: reap_stale_agent_jobs failed", exc_info=True)
         return 0

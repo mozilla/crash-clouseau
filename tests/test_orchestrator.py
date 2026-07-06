@@ -188,6 +188,28 @@ class TestReaper(unittest.TestCase):
                                side_effect=RuntimeError("db down")):
             self.assertEqual(orch.reap_stale_agent_jobs(), 0)  # swallowed
 
+    def test_reap_pushes_app_context_off_main_thread(self):
+        # The clock runs the reaper on an APScheduler pool thread with no Flask app
+        # context; the reaper must push one or its DB query raises. Run it on a fresh
+        # thread and assert the DB call sees an app context.
+        import threading
+        import flask
+        seen = {}
+
+        def _fake_get_stale(stale):
+            seen["ctx"] = flask.has_app_context()
+            return []
+
+        def _run():
+            with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                                   side_effect=_fake_get_stale):
+                orch.reap_stale_agent_jobs()
+
+        t = threading.Thread(target=_run)
+        t.start()
+        t.join()
+        self.assertTrue(seen.get("ctx"))  # reaper established an app context off-thread
+
 
 class TestBuildSeed(unittest.TestCase):
     def test_none_for_unknown_uuid(self):
@@ -319,6 +341,7 @@ class TestRunEvidenceAgent(unittest.TestCase):
         MDoss = mock.MagicMock()
         MDoss.get_by_uuid.return_value = None
         MDoss.skip_triage.return_value = False  # not skipped (no dossier / fresh run)
+        MDoss.claim_running.return_value = True  # this worker wins the atomic claim
         MVerd = mock.MagicMock()
         return (
             mock.patch.object(orch.models, "Dossier", MDoss),
@@ -379,6 +402,19 @@ class TestRunEvidenceAgent(unittest.TestCase):
              mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):
             orch.run_evidence_agent("u-1")  # must not raise (triage not called)
         MDoss.upsert.assert_not_called()
+
+    def test_lost_atomic_claim_skips(self):
+        # skip_triage passed (looked stale/absent) but another worker won the atomic
+        # claim first -> this worker must NOT run (no double-pay).
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.skip_triage.return_value = False
+        MDoss.claim_running.return_value = False  # lost the race
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_must_not_run):
+            orch.run_evidence_agent("u-1")  # must not raise (triage not called)
+        MVerd.set.assert_not_called()
+        self.assertIsNone(self._done_upsert(MDoss))  # no "done" persisted
 
     def test_skip_if_proto_already_triaged(self):
         # No dossier for THIS uuid, but a proto-sibling was already triaged -> skip

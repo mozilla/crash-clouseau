@@ -217,6 +217,22 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         Dossier.set_status(self.UUID, "done")  # bumps updated + status
         self.assertNotIn(self.UUID, Dossier.get_stale_running(1800))
 
+    def test_claim_running_atomic(self):
+        # First claim wins (creates a running dossier); an immediate second claim loses
+        # (fresh running); a stale running is re-claimable; done is not.
+        self.assertTrue(Dossier.claim_running(self.UUID, 1800))
+        self.assertEqual(Dossier.get_by_uuid(self.UUID).status, "running")
+        self.assertFalse(Dossier.claim_running(self.UUID, 1800))  # fresh -> not claimable
+        uid = db.session.query(UUID.id).filter(UUID.uuid == self.UUID).scalar()
+        old = datetime.now(timezone.utc) - timedelta(seconds=4000)
+        db.session.query(Dossier).filter(Dossier.uuidid == uid).update(
+            {"updated": old}, synchronize_session=False
+        )
+        db.session.commit()
+        self.assertTrue(Dossier.claim_running(self.UUID, 1800))   # stale -> reclaimable
+        Dossier.set_status(self.UUID, "done")
+        self.assertFalse(Dossier.claim_running(self.UUID, 1800))  # done -> not claimable
+
     def test_proto_already_analyzed_dedup(self):
         # One paid agent run per proto-signature cluster: a dossier on ANY uuid sharing
         # this uuid's (signatureid, protohash) marks the whole cluster triaged (dedup
