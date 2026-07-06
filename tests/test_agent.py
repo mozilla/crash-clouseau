@@ -260,5 +260,36 @@ class TestRunCrashTriage(unittest.TestCase):
         self.assertEqual(r.num_turns, 3)
 
 
+class TestSumTokens(unittest.TestCase):
+    def test_model_usage_camelcase_summed_across_models(self):
+        rm = SimpleNamespace(model_usage={
+            "opus": {"inputTokens": 100, "outputTokens": 20, "cacheReadInputTokens": 500},
+            "sonnet": {"inputTokens": 50, "outputTokens": 10, "cacheReadInputTokens": 200},
+        }, usage=None)
+        self.assertEqual(triage._sum_tokens(rm), (150, 30, 700))
+
+    def test_model_usage_snake_case_accepted(self):
+        rm = SimpleNamespace(model_usage={
+            "opus": {"input_tokens": 7, "output_tokens": 3, "cache_read_input_tokens": 9},
+        }, usage=None)
+        self.assertEqual(triage._sum_tokens(rm), (7, 3, 9))
+
+    def test_falls_back_to_aggregate_usage_when_no_model_usage(self):
+        # model_usage absent/empty -> use the aggregate usage dict (snake_case).
+        rm = SimpleNamespace(model_usage=None, usage={
+            "input_tokens": 42, "output_tokens": 8, "cache_read_input_tokens": 99,
+        })
+        self.assertEqual(triage._sum_tokens(rm), (42, 8, 99))
+
+    def test_empty_both_is_zero(self):
+        self.assertEqual(triage._sum_tokens(SimpleNamespace(model_usage=None, usage=None)),
+                         (0, 0, 0))
+
+    def test_non_dict_entries_ignored(self):
+        rm = SimpleNamespace(model_usage={"x": None, "y": "bad",
+                                          "z": {"inputTokens": 5}}, usage=None)
+        self.assertEqual(triage._sum_tokens(rm), (5, 0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

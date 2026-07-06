@@ -288,21 +288,37 @@ def _needinfo_action(dossier) -> dict | None:
 
 
 def _sum_tokens(result_msg):
-    """Aggregate per-model token usage from the terminal ResultMessage into
-    (input, output, cache_read) totals. ``model_usage`` maps model -> usage dict;
-    keys arrive camelCase from the SDK with a snake_case fallback (same shape the
-    timing summary logs). Missing usage -> zeros."""
-    usage = getattr(result_msg, "model_usage", None) or {}
+    """(input, output, cache_read) token totals for the whole run, robust to both usage
+    shapes the CLI can report on the terminal ResultMessage:
+
+    - ``model_usage`` (from ``modelUsage``): per-model breakdown with camelCase keys
+      (``inputTokens``/``outputTokens``/``cacheReadInputTokens``). Summed across models
+      it includes subagents, so it's the fullest total -- preferred when present.
+    - ``usage``: the aggregate dict with Anthropic snake_case keys
+      (``input_tokens``/``output_tokens``/``cache_read_input_tokens``) -- the fallback.
+
+    Missing/empty usage -> zeros. Kept lenient (accepts either key casing on either
+    field) because the exact shape has varied across CLI versions."""
+    mu = getattr(result_msg, "model_usage", None) or {}
     ti = to = tc = 0
-    for u in usage.values():
+    for u in mu.values():
         if not isinstance(u, dict):
             continue
         ti += int(u.get("inputTokens", u.get("input_tokens", 0)) or 0)
         to += int(u.get("outputTokens", u.get("output_tokens", 0)) or 0)
-        tc += int(
-            u.get("cacheReadInputTokens", u.get("cache_read_input_tokens", 0)) or 0
+        tc += int(u.get("cacheReadInputTokens", u.get("cache_read_input_tokens", 0)) or 0)
+    if ti or to or tc:
+        return ti, to, tc
+
+    # No per-model data -> fall back to the aggregate usage dict.
+    u = getattr(result_msg, "usage", None)
+    if isinstance(u, dict):
+        return (
+            int(u.get("input_tokens", u.get("inputTokens", 0)) or 0),
+            int(u.get("output_tokens", u.get("outputTokens", 0)) or 0),
+            int(u.get("cache_read_input_tokens", u.get("cacheReadInputTokens", 0)) or 0),
         )
-    return ti, to, tc
+    return 0, 0, 0
 
 
 def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
