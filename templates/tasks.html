@@ -1,0 +1,115 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/clouseau.ico">
+    <link rel="stylesheet" href="/clouseau.css?v=5">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Agent tasks</title>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <ul class="nav">
+          <li>
+            <a href="https://www.mozilla.org/" class="brand">mozilla</a>
+          </li>
+          <li>
+            <a href="/reports.html" class="navlink">Reports</a>
+          </li>
+          <li style="float:right;">
+            <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    <h2 class="task-title">Agent triage tasks</h2>
+
+    <div class="task-cards">
+      <div class="task-card">
+        <span class="tc-num">{{ summary.total }}</span>
+        <span class="tc-label">tasks (recent)</span>
+      </div>
+      <div class="task-card">
+        <span class="tc-num">{{ summary.done }} <small>({{ summary.pct_done }}%)</small></span>
+        <span class="tc-label">done</span>
+      </div>
+      <div class="task-card">
+        <span class="tc-num">{{ summary.running }}</span>
+        <span class="tc-label">running</span>
+      </div>
+      <div class="task-card {% if summary.stalled %}tc-warn{% endif %}">
+        <span class="tc-num">{{ summary.stalled }}</span>
+        <span class="tc-label">stalled</span>
+      </div>
+      <div class="task-card {% if summary.error %}tc-err{% endif %}">
+        <span class="tc-num">{{ summary.error }}</span>
+        <span class="tc-label">error</span>
+      </div>
+      <div class="task-card">
+        <span class="tc-num">${{ '%.2f' | format(summary.cost_total) }}</span>
+        <span class="tc-label">total cost</span>
+      </div>
+      <div class="task-card">
+        <span class="tc-num">${{ '%.3f' | format(summary.cost_avg) }}</span>
+        <span class="tc-label">avg / done</span>
+      </div>
+      <div class="task-card">
+        <span class="tc-num">{{ summary.duration_avg_str }}</span>
+        <span class="tc-label">avg duration</span>
+      </div>
+    </div>
+
+    <div class="task-progress" title="{{ summary.done }} / {{ summary.total }} done">
+      <div class="task-progress-bar" style="width:{{ summary.pct_done }}%;"></div>
+    </div>
+
+    <table class="tasks">
+      <thead>
+        <tr>
+          <th>Crash</th>
+          <th>Signature</th>
+          <th>Status</th>
+          <th>Verdict</th>
+          <th style="text-align:right;">Duration</th>
+          <th style="text-align:right;">Cost</th>
+          <th style="text-align:right;">Tokens&nbsp;(in&nbsp;/&nbsp;out&nbsp;/&nbsp;cache)</th>
+          <th>Started&nbsp;(UTC)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tasks -%}
+        <tr>
+          <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
+          <td class="task-sgn" title="{{ t.signature }}">{{ t.signature }}</td>
+          <td>
+            <span class="status-badge status-{{ t.status }}">{{ t.status }}</span>
+            {% if t.stalled -%}<span class="status-badge status-stalled">stalled</span>{%- endif %}
+          </td>
+          <td>
+            {% if t.verdict -%}
+            <span class="confidence-badge {{ t.verdict }}">{{ t.verdict }}</span>
+            {% if t.confidence is not none %}<span class="task-conf">{{ '%.2f' | format(t.confidence) }}</span>{% endif %}
+            {%- else -%}&mdash;{%- endif %}
+          </td>
+          <td style="text-align:right;">{{ t.duration_str }}</td>
+          <td style="text-align:right;">{% if t.cost_usd is not none %}${{ '%.4f' | format(t.cost_usd) }}{% else %}&mdash;{% endif %}</td>
+          <td style="text-align:right;" class="task-tok">
+            {%- if t.input_tokens is not none -%}
+            {{ t.input_tokens }}&nbsp;/&nbsp;{{ t.output_tokens }}&nbsp;/&nbsp;{{ t.cache_read_tokens }}
+            {%- else -%}&mdash;{%- endif -%}
+          </td>
+          <td class="task-ts">{% if t.created %}{{ t.created.strftime('%Y-%m-%d&nbsp;%H:%M') | safe }}{% endif %}</td>
+        </tr>
+        {% endfor -%}
+        {% if not tasks -%}
+        <tr><td colspan="8" class="task-empty">No triage runs yet.</td></tr>
+        {%- endif %}
+      </tbody>
+    </table>
+  </body>
+</html>

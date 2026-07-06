@@ -1565,6 +1565,27 @@ class Dossier(db.Model):
         return won
 
     @staticmethod
+    def list_tasks(limit=500):
+        """Recent triage runs (newest first) for the tasks/monitoring view: the uuid
+        string + signature + verdict alongside each dossier's status/timestamps/cost/
+        tokens. Returns raw rows; the view layer derives duration/stalled/aggregates."""
+        return (
+            db.session.query(
+                UUID.uuid, Signature.signature, Dossier.status,
+                Dossier.created, Dossier.updated, Dossier.cost_usd,
+                Dossier.input_tokens, Dossier.output_tokens, Dossier.cache_read_tokens,
+                Dossier.worker_models, Verdict.verdict, Verdict.confidence,
+            )
+            .select_from(Dossier)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .outerjoin(Signature, UUID.signatureid == Signature.id)
+            .outerjoin(Verdict, Verdict.dossierid == Dossier.id)
+            .order_by(Dossier.created.desc())
+            .limit(limit)
+            .all()
+        )
+
+    @staticmethod
     def get_stale_running(stale_after_s):
         """UUIDs whose dossier is stuck ``running`` past ``stale_after_s`` — orphaned by
         a dead worker. The reaper re-enqueues these so they self-heal instead of

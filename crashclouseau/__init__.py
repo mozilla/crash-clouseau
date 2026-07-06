@@ -107,6 +107,13 @@ def reports_no_scorehtml():
     return html.reports_no_score()
 
 
+@app.route("/tasks.html")
+def tasks_html():
+    from crashclouseau import html
+
+    return html.tasks()
+
+
 @app.route("/bug.html")
 def bug_html():
     from crashclouseau import html

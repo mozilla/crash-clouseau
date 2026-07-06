@@ -3,6 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from flask import request, render_template, abort, redirect
+from datetime import datetime, timezone
 import json
 import re
 from libmozdata.hgmozilla import Mercurial
@@ -94,6 +95,112 @@ def reports():
             show_abstain=show_abstain,
             colors=utils.get_colors(),
         )
+    except Exception:
+        logger.error("Invalid URL: {}".format(request.url), exc_info=True)
+        abort(404)
+
+
+def _fmt_duration(seconds):
+    """Human-readable duration for the tasks view ('45s', '18m', '1.4h')."""
+    if seconds is None:
+        return "—"
+    if seconds < 90:
+        return "{:.0f}s".format(seconds)
+    if seconds < 5400:
+        return "{:.0f}m".format(seconds / 60)
+    return "{:.1f}h".format(seconds / 3600)
+
+
+def _aware(dt):
+    """Treat naive timestamps (sqlite) as UTC so arithmetic matches the aware
+    timestamps Postgres returns."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _task_view(rows, stale_after_s, now):
+    """Turn raw Dossier.list_tasks rows into per-task display dicts + a fleet summary.
+
+    Pure (takes `now`) so it's testable without patching the clock. A "running" task
+    whose last update is older than stale_after_s is flagged stalled: its worker very
+    likely died -- the same threshold the reaper uses to requeue orphans. Duration is
+    the run time for finished tasks (done/error) and elapsed-so-far for live ones."""
+    tasks = []
+    counts = {"done": 0, "running": 0, "error": 0, "pending": 0}
+    stalled = 0
+    cost_total = 0.0
+    costed = 0
+    durations_done = []
+    for r in rows:
+        created = _aware(r.created)
+        updated = _aware(r.updated)
+        status = r.status or "pending"
+        counts[status] = counts.get(status, 0) + 1
+
+        if status in ("done", "error") and created and updated:
+            duration = (updated - created).total_seconds()
+        elif created:
+            duration = (now - created).total_seconds()
+        else:
+            duration = None
+
+        is_stalled = status == "running" and updated is not None and (now - updated).total_seconds() > stale_after_s
+        if is_stalled:
+            stalled += 1
+
+        cost = float(r.cost_usd) if r.cost_usd is not None else None
+        if cost is not None:
+            cost_total += cost
+            costed += 1
+        if status == "done" and duration is not None:
+            durations_done.append(duration)
+
+        tasks.append(
+            {
+                "uuid": r.uuid,
+                "signature": r.signature or "",
+                "status": status,
+                "stalled": is_stalled,
+                "duration_s": duration,
+                "duration_str": _fmt_duration(duration),
+                "cost_usd": cost,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "cache_read_tokens": r.cache_read_tokens,
+                "verdict": r.verdict,
+                "confidence": r.confidence,
+                "created": created,
+            }
+        )
+
+    total = len(rows)
+    done = counts.get("done", 0)
+    avg_dur = sum(durations_done) / len(durations_done) if durations_done else None
+    return tasks, {
+        "total": total,
+        "done": done,
+        "running": counts.get("running", 0),
+        "error": counts.get("error", 0),
+        "pending": counts.get("pending", 0),
+        "stalled": stalled,
+        "pct_done": round(100 * done / total) if total else 0,
+        "cost_total": cost_total,
+        "cost_avg": cost_total / costed if costed else 0.0,
+        "duration_avg_s": avg_dur,
+        "duration_avg_str": _fmt_duration(avg_dur),
+    }
+
+
+def tasks():
+    try:
+        # Flag orphans with the same threshold the reaper uses: a run past job_timeout
+        # plus a buffer that avoids racing a run legitimately near the cap (see the
+        # _STALE_BUFFER_S note in agent.orchestrator).
+        stale_after = config.get_agent_job_timeout() + 300
+        rows = models.Dossier.list_tasks()
+        tasks_, summary = _task_view(rows, stale_after, datetime.now(timezone.utc))
+        return render_template("tasks.html", tasks=tasks_, summary=summary)
     except Exception:
         logger.error("Invalid URL: {}".format(request.url), exc_info=True)
         abort(404)

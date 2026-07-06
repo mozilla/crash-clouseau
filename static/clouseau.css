@@ -365,3 +365,86 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 
 .dl-added .mark { color: #22863a; }
 .dl-deleted .mark { color: #cb2431; }
+
+/* ---- Agent tasks (monitoring) view ---------------------------------- */
+.nav li a.navlink {
+    display: inline-block;
+    padding: 0.9em 0.9em;
+    color: #0060df;
+    text-decoration: none;
+}
+.nav li a.navlink:hover { text-decoration: underline; }
+
+.task-title { margin: 0.6em 0.2em; }
+
+/* verdict colour missing from the confidence-badge set: culprit = "found it" */
+.confidence-badge.culprit { background-color: #2e7d32; }
+
+.task-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6em;
+    margin: 0.4em 0 0.6em 0;
+}
+.task-card {
+    flex: 1 1 8em;
+    min-width: 7em;
+    padding: 0.6em 0.8em;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background-color: #f7f9fc;
+    text-align: center;
+}
+.task-card.tc-warn { background-color: #fff3e0; border-color: #f2994a; }
+.task-card.tc-err { background-color: #fdecea; border-color: #eb5757; }
+.tc-num { display: block; font-size: 1.6em; font-weight: bold; }
+.tc-num small { font-size: 0.55em; font-weight: normal; color: #555; }
+.tc-label { display: block; font-size: 0.8em; color: #666; }
+
+.task-progress {
+    height: 8px;
+    background-color: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 0.8em;
+}
+.task-progress-bar {
+    height: 100%;
+    background-color: #2e7d32;
+    transition: width 0.3s;
+}
+
+.tasks { table-layout: fixed; }
+.tasks th:nth-child(1), .tasks td:nth-child(1) { width: 7%; }
+.tasks th:nth-child(2), .tasks td:nth-child(2) { width: 27%; }
+.tasks th:nth-child(3), .tasks td:nth-child(3) { width: 11%; }
+.tasks th:nth-child(4), .tasks td:nth-child(4) { width: 12%; }
+.tasks th:nth-child(5), .tasks td:nth-child(5) { width: 7%; }
+.tasks th:nth-child(6), .tasks td:nth-child(6) { width: 8%; }
+.tasks th:nth-child(7), .tasks td:nth-child(7) { width: 16%; }
+.tasks th:nth-child(8), .tasks td:nth-child(8) { width: 12%; }
+
+.tasks td a { font-family: monospace; }
+.task-sgn {
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.task-tok, .task-ts { font-family: monospace; color: #555; }
+.task-conf { margin-left: 0.4em; color: #555; }
+.task-empty { text-align: center; color: #777; font-style: italic; }
+
+.status-badge {
+    display: inline-block;
+    padding: 0.1em 0.6em;
+    border-radius: 0.8em;
+    font-size: 0.75em;
+    font-weight: bold;
+    color: #fff;
+}
+.status-badge.status-done { background-color: #2e7d32; }
+.status-badge.status-running { background-color: #2f80ed; }
+.status-badge.status-pending { background-color: #999; }
+.status-badge.status-error { background-color: #c0392b; }
+.status-badge.status-stalled { background-color: #e67e22; margin-left: 0.3em; }
