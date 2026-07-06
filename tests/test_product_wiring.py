@@ -259,7 +259,8 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("rev=buildnode1234", html)
         self.assertIn("channel=nightly", html)
         self.assertNotIn("/diff.html", html)
-        self.assertNotIn("/rev?node=", html)
+        # the candidate changeset node now links to the channel's hg repo
+        self.assertIn("/rev?node=culpritnode1", html)
         # culprit + call path + data flow + skeptic
         self.assertIn("bug 99999", html)
         self.assertIn("A::run", html)
@@ -737,3 +738,26 @@ class TestUiEnvOverride(unittest.TestCase):
             self.assertTrue(config.get_agent_ui()["show_abstain"])
             os.environ["SHOW_ABSTAIN"] = "false"
             self.assertFalse(config.get_agent_ui()["show_abstain"])
+
+
+class TestLinkify(unittest.TestCase):
+    """The panel's free-text fields hyperlink bug/changeset refs, safely (escape first)."""
+
+    def test_bug_and_changeset_and_escaping(self):
+        from crashclouseau import linkify
+        out = str(linkify("bug 1867743 in fdb65c5972a9 <script>x</script>",
+                          "https://hg.mozilla.org/mozilla-central"))
+        self.assertIn('href="https://bugzilla.mozilla.org/1867743"', out)
+        self.assertIn('/rev?node=fdb65c5972a9"', out)
+        self.assertIn("&lt;script&gt;", out)      # HTML escaped, not injected
+        self.assertNotIn("<script>", out)
+
+    def test_no_repo_url_leaves_hashes_plain(self):
+        from crashclouseau import linkify
+        out = str(linkify("bug 42 and abcdef123456", ""))
+        self.assertIn("bugzilla.mozilla.org/42", out)
+        self.assertNotIn("/rev?node=", out)
+
+    def test_empty(self):
+        from crashclouseau import linkify
+        self.assertEqual(linkify(None), "")

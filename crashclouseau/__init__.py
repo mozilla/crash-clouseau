@@ -6,8 +6,10 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS, cross_origin
 from flask_sqlalchemy import SQLAlchemy
 from libmozdata.socorro import Socorro
+from markupsafe import Markup, escape
 import logging
 import os
+import re
 from . import config
 
 
@@ -26,6 +28,34 @@ cors = CORS(app)
 app.config["CORS_HEADERS"] = "Content-Type"
 log = logging.getLogger(__name__)
 app.app_context().push()
+
+
+_BUG_RE = re.compile(r"\bbug\s+(\d+)", re.I)
+_HASH_RE = re.compile(r"\b[0-9a-f]{12,40}\b")
+
+
+@app.template_filter("linkify")
+def linkify(text, repo_url=""):
+    """Escape free text, then hyperlink ``bug NNN`` -> Bugzilla and bare 12-40 hex
+    changeset hashes -> the channel's hg repo (``repo_url``). The text is HTML-escaped
+    FIRST, so the only markup is the anchors we inject from a matched bug id (digits) or
+    changeset (hex) — no agent-authored text can inject HTML. Used on the evidence
+    panel's free-text fields (mechanism/consistency/data-flow/needinfo/rationale)."""
+    if not text:
+        return ""
+    s = str(escape(text))
+    s = _BUG_RE.sub(
+        r'<a href="https://bugzilla.mozilla.org/\1" target="_blank" '
+        r'rel="noopener">bug \1</a>',
+        s,
+    )
+    if repo_url:
+        s = _HASH_RE.sub(
+            lambda m: '<a href="{}/rev?node={}" target="_blank" rel="noopener">{}</a>'
+            .format(repo_url, m.group(0), m.group(0)),
+            s,
+        )
+    return Markup(s)
 
 
 @app.teardown_request

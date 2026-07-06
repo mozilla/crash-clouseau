@@ -77,7 +77,7 @@
       </h2>
 
       {% if evidence['verdict'] == 'abstain' -%}
-      <p class="muted">Insufficient evidence &mdash; no culprit identified.{% if evidence['rationale'] %} {{ evidence['rationale']|e }}{% endif %}</p>
+      <p class="muted">Insufficient evidence &mdash; no culprit identified.{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
       {% endif -%}
 
       {% if is_lead -%}
@@ -93,7 +93,7 @@
       {% if draft and not ns.in_actions -%}
       <div class="evidence-section">
         <h3>Suggested needinfo (draft &mdash; review before sending)</h3>
-        <p class="needinfo-draft">{{ draft|e }}</p>
+        <p class="needinfo-draft">{{ draft|linkify(repo_url) }}</p>
       </div>
       {% endif -%}
       {% endif -%}
@@ -120,8 +120,8 @@
       <div class="evidence-section">
         <h3>{% if is_lead %}Possibly-related changeset{% else %}Suspected regressor{% endif %}</h3>
         <p>
-          <code>{{ cand['node'] }}</code>
-          {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}">bug {{ cand['bug'] }}</a>{% endif %}
+          <a href="{{ repo_url }}/rev?node={{ cand['node'] }}" target="_blank" rel="noopener"><code>{{ cand['node'] }}</code></a>
+          {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}" target="_blank" rel="noopener">bug {{ cand['bug'] }}</a>{% endif %}
           {% if cand.get('author') %} &mdash; {{ cand['author']|e }}{% endif %}
           {% if cand.get('backedout') %} <span class="flag">backed out</span>{% endif %}
         </p>
@@ -135,14 +135,14 @@
       {% if vd and vd.get('mechanism') and vd['mechanism'].get('statement') -%}
       <div class="evidence-section">
         <h3>{% if is_lead %}Working hypothesis (unverified){% else %}Mechanism{% endif %}</h3>
-        <p>{{ vd['mechanism']['statement']|e }}</p>
+        <p>{{ vd['mechanism']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['mechanism'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
       {% if vd and vd.get('consistency') and vd['consistency'].get('statement') -%}
       <div class="evidence-section">
         <h3>{% if is_lead %}Why it may be related{% else %}Consistency with the crash{% endif %}</h3>
-        <p>{{ vd['consistency']['statement']|e }}</p>
+        <p>{{ vd['consistency']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
@@ -178,7 +178,7 @@
       {% if df and df.get('summary') -%}
       <div class="evidence-section">
         <h3>Data flow{% if df.get('operation') %} ({{ df['operation']|e }}){% endif %}</h3>
-        <p>{{ df['summary']|e }}{% if df.get('object_name') %} <span class="muted">[{{ df['object_name']|e }}]</span>{% endif %}</p>
+        <p>{{ df['summary']|linkify(repo_url) }}{% if df.get('object_name') %} <span class="muted">[{{ df['object_name']|e }}]</span>{% endif %}</p>
         <ul class="cites">{% for c in df.get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}{% if df.get('crash_site') %}<li>{{ cite(df['crash_site'], node, channel, uuid_info['uuid']) }}</li>{% endif %}</ul>
       </div>
       {% endif -%}
