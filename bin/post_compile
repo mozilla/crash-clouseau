@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Heroku Python-buildpack post_compile hook.
+#
+# The evidence agent shells out to the external `searchfox-cli` binary
+# (crashclouseau/searchfox.py) for call-graph grounding. It queries searchfox.org
+# over the network, so the dyno only needs the binary itself (no local index). We
+# fetch the upstream *static musl* release build, which is fully self-contained and
+# therefore runs on any Heroku stack regardless of glibc.
+#
+# We also drop a .profile.d export so $SEARCHFOX_CLI is set on every dyno with no
+# manual `heroku config:set` — searchfox.py resolves $SEARCHFOX_CLI before PATH. The
+# shared config (agent.searchfox.bin = "searchfox-cli") is left untouched so local
+# dev / CI keep using the cargo-installed binary on PATH.
+set -euo pipefail
+
+SFX_VERSION="0.18.0"
+SFX_TARBALL="searchfox-cli-${SFX_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+SFX_URL="https://github.com/padenot/searchfox-cli/releases/download/v${SFX_VERSION}/${SFX_TARBALL}"
+DEST="bin/searchfox-cli"
+
+echo "-----> searchfox-cli: fetching v${SFX_VERSION} (static musl)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+curl --fail --silent --show-error --location --retry 3 -o "${tmp}/sfx.tgz" "${SFX_URL}"
+tar -xzf "${tmp}/sfx.tgz" -C "${tmp}"
+sfx_bin="$(find "${tmp}" -type f -name searchfox-cli | head -1)"
+if [ -z "${sfx_bin}" ]; then
+    echo " !     searchfox-cli binary not found in ${SFX_TARBALL}"
+    exit 1
+fi
+mkdir -p bin
+cp "${sfx_bin}" "${DEST}"
+chmod +x "${DEST}"
+
+# Fail the build LOUDLY if the binary can't run — far better than a silent runtime
+# miss that would make every agent run degrade to abstain.
+"./${DEST}" --version
+
+# Export $SEARCHFOX_CLI on every dyno (respecting an explicit override if one is set).
+# /app is the runtime app root on Heroku; files written here are part of the slug.
+mkdir -p .profile.d
+cat > .profile.d/searchfox-cli.sh <<'PROFILE'
+export SEARCHFOX_CLI="${SEARCHFOX_CLI:-/app/bin/searchfox-cli}"
+PROFILE
+
+echo "-----> searchfox-cli: installed at /app/${DEST}; \$SEARCHFOX_CLI exported via .profile.d"

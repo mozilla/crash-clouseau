@@ -7,3 +7,7 @@ server.crt
 server.csr
 server.key
 local.json
+
+# Fetched at build time by bin/post_compile (Heroku); never commit these.
+bin/searchfox-cli
+.profile.d/searchfox-cli.sh
