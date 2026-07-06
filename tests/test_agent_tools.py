@@ -160,3 +160,43 @@ class TestNetUserAgent(unittest.TestCase):
         with mock.patch.object(net.requests, "post") as p:
             net.post("https://x", headers={"User-Agent": "custom"})
         self.assertEqual(p.call_args.kwargs["headers"]["User-Agent"], "custom")
+
+
+class TestGit2hg(unittest.TestCase):
+    """inspector.git2hg uses libmozdata's Lando client; port semantics: cache hits +
+    misses (LandoMissingCommit), but never cache transient errors (retriable)."""
+
+    def setUp(self):
+        from crashclouseau import inspector
+        inspector._GIT2HG_CACHE.clear()
+        inspector._LANDO = None
+
+    def _fake_lando(self, **kw):
+        from unittest import mock
+        fake = mock.MagicMock()
+        fake.git2hg.configure_mock(**kw)
+        return mock.patch("crashclouseau.inspector.LandoCommitMapAPI", return_value=fake), fake
+
+    def test_success_caches(self):
+        from crashclouseau import inspector
+        from libmozdata.lando import CommitMap
+        p, fake = self._fake_lando(return_value=CommitMap(git_hash="g", hg_hash="hh"))
+        with p:
+            self.assertEqual(inspector.git2hg("g"), "hh")
+            self.assertEqual(inspector.git2hg("g"), "hh")   # cached
+        fake.git2hg.assert_called_once()
+
+    def test_missing_commit_caches_empty(self):
+        from crashclouseau import inspector
+        from libmozdata.lando import LandoMissingCommit
+        p, _ = self._fake_lando(side_effect=LandoMissingCommit("no"))
+        with p:
+            self.assertEqual(inspector.git2hg("v"), "")
+        self.assertIn("v", inspector._GIT2HG_CACHE)
+
+    def test_transient_error_not_cached(self):
+        from crashclouseau import inspector
+        p, _ = self._fake_lando(side_effect=RuntimeError("network"))
+        with p:
+            self.assertEqual(inspector.git2hg("t"), "")
+        self.assertNotIn("t", inspector._GIT2HG_CACHE)

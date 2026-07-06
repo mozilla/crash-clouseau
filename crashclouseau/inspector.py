@@ -3,8 +3,8 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from libmozdata import socorro
+from libmozdata.lando import LandoCommitMapAPI, LandoMissingCommit
 import re
-from . import net
 from . import java, tools, utils
 from .logger import logger
 
@@ -17,8 +17,11 @@ HG_PAT = re.compile("hg:hg.mozilla.org[^:]*:([^:]*):([a-z0-9]+)")
 GIT_PAT = re.compile("git:github.com/[^:]*:([^:]*):([0-9a-f]+)")
 # Lando exposes a git<->hg mapping; we convert the git hashes found in crash
 # frames back to mercurial revs so the rest of the (hg-based) pipeline keeps
-# working unchanged.
-LANDO_GIT2HG = "https://lando.moz.tools/api/git2hg/firefox/{}"
+# working unchanged. Use libmozdata's maintained Lando client — it sets our
+# User-Agent (from config) and raises LandoMissingCommit on a 404. Built lazily
+# (its constructor requires the [User-Agent] config) so importing this module
+# never depends on that config being present.
+_LANDO = None
 # Cache git->hg lookups for the lifetime of the worker. We cache misses too:
 # many frames point at vendored, non-Firefox sources (the Rust std lib lives in
 # rust-lang/rust, etc.) whose hashes have no Firefox hg counterpart, and a crash
@@ -29,27 +32,24 @@ _GIT2HG_CACHE = {}
 
 
 def git2hg(git_hash):
-    """Convert a git hash to its mercurial counterpart using lando.
+    """Convert a git hash to its mercurial counterpart via lando (libmozdata).
 
     Returns "" when the hash has no Firefox hg counterpart (e.g. frames from
     vendored sources such as the Rust standard library)."""
+    global _LANDO
     if git_hash in _GIT2HG_CACHE:
         return _GIT2HG_CACHE[git_hash]
+    if _LANDO is None:
+        _LANDO = LandoCommitMapAPI()
     try:
-        r = net.get(LANDO_GIT2HG.format(git_hash), timeout=30)
-    except Exception as e:
-        # network/transient error: don't cache, let it be retried
-        logger.warning("Cannot reach lando for git hash {}: {}".format(git_hash, e))
-        return ""
-    if r.status_code == 404:
+        hg_hash = _LANDO.git2hg(git_hash).hg_hash
+    except LandoMissingCommit:
         # not a Firefox commit (vendored/3rd-party source): cache the miss
         _GIT2HG_CACHE[git_hash] = ""
         return ""
-    try:
-        r.raise_for_status()
-        hg_hash = r.json().get("hg_hash", "")
     except Exception as e:
-        logger.warning("Cannot convert git hash {} to hg: {}".format(git_hash, e))
+        # network / transient / API error: don't cache, let it be retried
+        logger.warning("Cannot convert git hash {} to hg via lando: {}".format(git_hash, e))
         return ""
     _GIT2HG_CACHE[git_hash] = hg_hash
     return hg_hash
