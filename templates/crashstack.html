@@ -102,7 +102,7 @@
         <p class="muted">People who recently changed code near the crash &mdash; someone to ask for help, not necessarily the cause.</p>
         <ul class="experts">
         {% for x in experts -%}
-          <li>{{ (x.get('name') or x.get('email') or x.get('nick') or '?')|e }}{% if x.get('email') %} &lt;{{ x['email']|e }}&gt;{% endif %}{% if x.get('reason') %} <span class="muted">&mdash; {{ x['reason']|e }}</span>{% endif %}</li>
+          <li>{{ (x.get('name') or x.get('email') or x.get('nick') or '?')|e }}{% if x.get('email') %} &lt;{{ x['email']|e }}&gt;{% endif %}{% if x.get('reason') %} <span class="muted">&mdash; {{ x['reason']|linkify(repo_url) }}</span>{% endif %}</li>
         {% endfor -%}
         </ul>
       </div>

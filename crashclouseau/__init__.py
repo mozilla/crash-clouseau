@@ -32,18 +32,27 @@ app.app_context().push()
 
 _BUG_RE = re.compile(r"\bbug\s+(\d+)", re.I)
 _HASH_RE = re.compile(r"\b[0-9a-f]{12,40}\b")
+# Pretty-print ASCII flow arrows in agent prose (e.g. call chains "A -> B -> C"),
+# but ONLY when whitespace-delimited — never touch C++ member access like
+# `data->SetInvoker`, which has no surrounding spaces. Applied to the raw text
+# before escaping, so the substituted Unicode char passes through escape() untouched.
+_ARROWS = {"->": "→", "<-": "←", "<->": "↔"}
+_ARROW_RE = re.compile(r"(?<=\s)(<->|<-|->)(?=\s)")
 
 
 @app.template_filter("linkify")
 def linkify(text, repo_url=""):
     """Escape free text, then hyperlink ``bug NNN`` -> Bugzilla and bare 12-40 hex
-    changeset hashes -> the channel's hg repo (``repo_url``). The text is HTML-escaped
-    FIRST, so the only markup is the anchors we inject from a matched bug id (digits) or
-    changeset (hex) — no agent-authored text can inject HTML. Used on the evidence
-    panel's free-text fields (mechanism/consistency/data-flow/needinfo/rationale)."""
+    changeset hashes -> the channel's hg repo (``repo_url``), and turn whitespace-
+    delimited ASCII arrows (`` -> `` / `` <- `` / `` <-> ``) into real ones. The text is
+    HTML-escaped FIRST (after the arrow pass, which only inserts Unicode), so the only
+    markup is the anchors we inject from a matched bug id (digits) or changeset (hex) —
+    no agent-authored text can inject HTML. Used on the evidence panel's free-text
+    fields (mechanism/consistency/data-flow/needinfo/rationale/expert reason)."""
     if not text:
         return ""
-    s = str(escape(text))
+    s = _ARROW_RE.sub(lambda m: _ARROWS[m.group(1)], str(text))
+    s = str(escape(s))
     s = _BUG_RE.sub(
         r'<a href="https://bugzilla.mozilla.org/\1" target="_blank" '
         r'rel="noopener">bug \1</a>',

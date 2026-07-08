@@ -859,6 +859,26 @@ class TestLinkify(unittest.TestCase):
         from crashclouseau import linkify
         self.assertEqual(linkify(None), "")
 
+    def test_spaced_arrows_prettified(self):
+        from crashclouseau import linkify
+        out = str(linkify("A::f -> B::g <- C::h <-> D::i", ""))
+        self.assertIn("A::f → B::g ← C::h ↔ D::i", out)
+        self.assertNotIn("->", out)
+        self.assertNotIn("<-", out)
+
+    def test_cpp_member_access_not_touched(self):
+        from crashclouseau import linkify
+        out = str(linkify("HidePopover dereferences data->SetInvoker(nullptr)", ""))
+        self.assertIn("data-&gt;SetInvoker", out)   # C++ arrow escaped, not converted
+        self.assertNotIn("→", out)
+
+    def test_expert_reason_links_hash_and_bug(self):
+        from crashclouseau import linkify
+        out = str(linkify("authored candidate 1404f5a62772 (bug 2014622)",
+                          "https://hg.mozilla.org/mozilla-central"))
+        self.assertIn("/rev?node=1404f5a62772", out)
+        self.assertIn("bugzilla.mozilla.org/2014622", out)
+
 
 class TestReportsIndexBadges(unittest.TestCase):
     """The reports index badges culprit/lead always; abstain only in show_abstain mode."""
