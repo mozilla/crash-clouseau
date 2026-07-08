@@ -32,24 +32,25 @@ REG = "abc123def456"
 _SF = SearchfoxCitation(permalink="p#1", symbol_id="_Z", repo="mozilla-central")
 
 
-def _result(node=None, strong=False, lead=False, cost=0.1, out_tokens=0, in_tokens=0):
+def _result(node=None, strong=False, lead=False, cost=0.1, out_tokens=0, in_tokens=0,
+            bug=None, mech_text="m"):
     hunks = []
     candidate = None
     call_path = None
     if node:
         dl = DiffLineCitation(node=node, filename="f.cpp", line=10, side="added", content="x")
         hunks = [DiffHunk(node=node, filename="f.cpp", lines=[dl], citations=[dl])]
-        candidate = Candidate(node=node)
+        candidate = Candidate(node=node, bug=bug)
     if strong:
         verdict = Verdict(
             decision=Decision.strong_evidence, confidence=Confidence.high,
-            mechanism=Claim(statement="m", citations=[_SF]),
+            mechanism=Claim(statement=mech_text, citations=[_SF]),
             consistency=Claim(statement="c", citations=[_SF]),
         )
     elif lead:
         verdict = Verdict(
             decision=Decision.lead, confidence=Confidence.medium,
-            mechanism=Claim(statement="m", citations=[_SF]),
+            mechanism=Claim(statement=mech_text, citations=[_SF]),
         )
         if not node:
             # A lead naming no changeset ("mechanism lead"): sustained by a cited
@@ -156,6 +157,47 @@ class TestLeadPrecision(unittest.TestCase):
         self.assertEqual(
             M.lead_precision([case], {"u1": _result(strong=False)})["n_lead"], 0
         )
+
+
+REGBUG = 2021892
+
+
+class TestGroundTruthMatching(unittest.TestCase):
+    """A run hits the ground truth by NODE or by BUG — the bug match is alias-free, so it
+    catches the case where the dossier's mozilla-central rev != the regressor's autoland
+    landing rev."""
+
+    def test_bug_match_via_candidate_bug(self):
+        # Wrong node, but the candidate names the regressor bug -> hit.
+        case = _case("u1", reg="", regressor_nodes=["aaaaaaaaaaaa"],
+                     regressor_bugs=[REGBUG], on_stack_label=False)
+        r = M.lead_precision([case], {"u1": _result(node="0000deadbeef", bug=REGBUG, lead=True)})
+        self.assertEqual(r["lead_precision"], 1.0)
+
+    def test_bug_match_via_mechanism_text(self):
+        case = _case("u1", reg="", regressor_bugs=[REGBUG], on_stack_label=False)
+        r = M.lead_precision(
+            [case], {"u1": _result(lead=True, mech_text="regressed by bug %d" % REGBUG)}
+        )
+        self.assertEqual(r["lead_precision"], 1.0)
+
+    def test_node_match_against_the_set(self):
+        # regressor_nodes has several; the dossier citing any one is a hit.
+        case = _case("u1", reg="", regressor_nodes=["aaaaaaaaaaaa", REG], on_stack_label=False)
+        r = M.lead_precision([case], {"u1": _result(node=REG, lead=True)})
+        self.assertEqual(r["lead_precision"], 1.0)
+
+    def test_no_match_when_neither_node_nor_bug(self):
+        case = _case("u1", reg="", regressor_nodes=["aaaaaaaaaaaa"],
+                     regressor_bugs=[REGBUG], on_stack_label=False)
+        r = M.lead_precision([case], {"u1": _result(node="0000deadbeef", lead=True)})
+        self.assertEqual(r["lead_precision"], 0.0)
+
+    def test_offstack_recall_counts_bug_match(self):
+        case = _case("u1", reg="", regressor_bugs=[REGBUG],
+                     seed_nodes=[], on_stack_label=False)
+        r = M.offstack_recall([case], {"u1": _result(node="0000deadbeef", bug=REGBUG, strong=True)})
+        self.assertEqual(r["offstack_recall"], 1.0)
 
 
 class TestCostSummary(unittest.TestCase):

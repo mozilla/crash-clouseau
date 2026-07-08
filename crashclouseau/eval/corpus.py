@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 from libmozdata import socorro
@@ -34,8 +35,10 @@ _BZ_FIELDS = ["id", "regressed_by", "cf_crash_signature", "assigned_to",
 def _first_signature(raw):
     if not raw:
         return ""
+    # get_signatures returns an (unordered) set; pick deterministically so a re-freeze
+    # of the same bug yields the same case.
     sigs = utils.get_signatures([raw])
-    return sigs[0] if sigs else ""
+    return sorted(sigs)[0] if sigs else ""
 
 
 def mine_clouseau_bugs(start_date, end_date):
@@ -57,6 +60,30 @@ def mine_clouseau_bugs(start_date, end_date):
     return records
 
 
+def mine_regression_bugs(start_date, end_date, severities=("S1", "S2", "critical")):
+    """INDEPENDENT ground truth: recent regression bugs (a ``regressed_by`` changeset +
+    a crash signature), NOT restricted to the clouseau alias — used when that alias is
+    empty, and non-circular (we don't score Clouseau on bugs Clouseau filed). Restricted
+    to higher severities so the corpus stays crashes worth triaging."""
+    params = {
+        "include_fields": _BZ_FIELDS,
+        "f1": "regressed_by", "o1": "isnotempty",
+        "f2": "cf_crash_signature", "o2": "isnotempty",
+        "f3": "creation_ts", "o3": "greaterthaneq", "v3": start_date,
+        "f4": "creation_ts", "o4": "lessthaneq", "v4": end_date,
+        "f5": "bug_severity", "o5": "anyexact", "v5": ",".join(severities),
+    }
+    records = []
+
+    def handler(bug, data):
+        if bug.get("regressed_by") and bug.get("cf_crash_signature"):
+            data.append(bug)
+
+    Bugzilla(params, bughandler=handler, bugdata=records).get_data().wait()
+    logger.info("eval: mined %d regression bugs", len(records))
+    return records
+
+
 def resolve_uuids(signature, channel="nightly", limit=3):
     """Representative nightly UUID(s) for a signature via SuperSearch."""
     params = {
@@ -74,6 +101,40 @@ def resolve_uuids(signature, channel="nightly", limit=3):
 
     socorro.SuperSearch(params=params, handler=handler, handlerdata=uuids).wait()
     return uuids
+
+
+_BACKOUT_RE = re.compile(r"back(?:ed)?\s*out", re.I)
+
+
+def _regressor_nodes(bug_ids, channels=("nightly", "beta", "release")):
+    """Landing changeset short-revs for the regressor bug(s) — the changesets that
+    INTRODUCED the regression, parsed from their Bugzilla landing comments via
+    libmozdata (backout comments skipped). This is the ACTUAL ground-truth regressor:
+    ``regressed_by`` is a list of bug IDs, NOT changesets, so the crash bug's own id is
+    useless here. Best-effort — a bug whose landings don't parse (e.g. a git-only landing
+    comment) just contributes no nodes, and bug-id matching still carries the eval."""
+    if not bug_ids:
+        return []
+    comments: dict = {}
+
+    def handler(data, bugid):
+        comments[bugid] = data.get("comments", [])
+
+    try:
+        Bugzilla(
+            [str(b) for b in bug_ids], commenthandler=handler
+        ).get_data().wait()
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("eval: could not fetch regressor comments for %s: %s", bug_ids, exc)
+        return []
+
+    nodes = set()
+    for cmts in comments.values():
+        for landing in Bugzilla.get_landing_comments(cmts, list(channels)):
+            if _BACKOUT_RE.search(landing["comment"].get("text", "")):
+                continue
+            nodes.add(landing["revision"][:12])
+    return sorted(nodes)
 
 
 def _seed_nodes(uuid):
@@ -104,6 +165,7 @@ def freeze(records, corpus_dir=None):
     corpus_dir = corpus_dir or config.get_eval().get("corpus_dir", "corpus")
     os.makedirs(corpus_dir, exist_ok=True)
     cases = []
+    seen: set = set()
     for rec in records:
         sig = _first_signature(rec.get("cf_crash_signature"))
         if not sig:
@@ -113,6 +175,9 @@ def freeze(records, corpus_dir=None):
             logger.warning("eval: no nightly uuid for %r", sig)
             continue
         uuid = uuids[0]
+        if uuid in seen:  # two bugs can resolve to the same representative crash
+            continue
+        seen.add(uuid)
         data = inspector.get_crash_data(uuid)
         if not data:
             continue
@@ -121,13 +186,15 @@ def freeze(records, corpus_dir=None):
         crash_path = os.path.join(case_dir, "processed_crash.json")
         with open(crash_path, "w") as handle:
             json.dump(data, handle)
-        reg_git = (rec.get("regressed_by") or [None])[0]
-        reg_hg = inspector.git2hg(reg_git) if reg_git else ""
+        reg_bugs = [int(b) for b in (rec.get("regressed_by") or []) if b]
+        reg_nodes = _regressor_nodes(reg_bugs)
         case = CorpusCase(
             uuid=uuid,
             signature=sig,
-            regressor_node=reg_hg or "",
-            regressor_bug=rec.get("id"),
+            regressor_node=(reg_nodes[0] if reg_nodes else ""),
+            regressor_nodes=reg_nodes,
+            regressor_bug=(reg_bugs[0] if reg_bugs else None),
+            regressor_bugs=reg_bugs,
             crash_json_path=crash_path,
             seed_nodes=_seed_nodes(uuid),
         )

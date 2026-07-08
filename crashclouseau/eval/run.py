@@ -41,6 +41,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m crashclouseau.eval.run")
     parser.add_argument("cmd", choices=["mine", "label", "rerun", "score", "all"])
     parser.add_argument("--corpus-dir", default=None)
+    parser.add_argument("--source", choices=["clouseau", "regression"], default="clouseau",
+                        help="corpus source: the clouseau BMO alias, or general "
+                             "regression bugs with a crash signature")
     parser.add_argument("--sweep", default=None, help="path to a SweepConfig JSON")
     parser.add_argument("--baseline", default=None)
     parser.add_argument("--out", default="metrics.json")
@@ -55,7 +58,9 @@ def main(argv=None):
         start, end = (args.start, args.end)
         if not (start and end):
             start, end = _default_window()
-        corpus_mod.freeze(corpus_mod.mine_clouseau_bugs(start, end), corpus_dir)
+        miner = (corpus_mod.mine_regression_bugs if args.source == "regression"
+                 else corpus_mod.mine_clouseau_bugs)
+        corpus_mod.freeze(miner(start, end), corpus_dir)
 
     cases, corpus_hash = corpus_mod.load_corpus(corpus_dir)
 

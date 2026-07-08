@@ -14,8 +14,15 @@ from pydantic import BaseModel, Field
 class CorpusCase(BaseModel):
     uuid: str
     signature: str = ""
-    regressor_node: str = ""          # hg node (git regressors are git2hg-resolved at freeze)
-    regressor_bug: int | None = None
+    # Ground truth. ``regressed_by`` gives regressor BUG ids (authoritative, alias-free);
+    # their landing changesets are resolved from Bugzilla comments. A run "hits" if its
+    # dossier references ANY regressor node OR bug (node matching is best-effort — the
+    # dossier cites mozilla-central/searchfox revs that need not string-equal the
+    # autoland landing revs, so the bug match is the robust signal).
+    regressor_node: str = ""                                # first resolved node (compat)
+    regressor_nodes: list[str] = Field(default_factory=list)  # all resolved landing revs
+    regressor_bug: int | None = None                        # first regressor bug (compat)
+    regressor_bugs: list[int] = Field(default_factory=list)   # regressed_by (authoritative)
     regressor_author: str = ""
     channel: str = "nightly"
     crash_json_path: str | None = None

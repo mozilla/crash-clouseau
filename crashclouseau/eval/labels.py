@@ -48,13 +48,19 @@ def _stack_basenames(case):
 
 
 def derive_onstack_label(case):
-    """True if the regressor changeset touched a file on the crash stack; False if
-    off-stack; None if undeterminable (no regressor node / empty diff)."""
-    if not case.regressor_node:
+    """True if ANY regressor changeset touched a file on the crash stack; False if all
+    are off-stack; None if undeterminable (no regressor node / empty diffs)."""
+    nodes = case.regressor_nodes or ([case.regressor_node] if case.regressor_node else [])
+    if not nodes:
         return None
-    ext = patch_extract.extract(case.regressor_node, case.channel)
-    reg_files = {os.path.basename(fd.filename) for fd in ext.files}
+    reg_files = set()
+    for node in nodes:
+        try:
+            ext = patch_extract.extract(node, case.channel)
+        except Exception:  # pragma: no cover - network
+            continue
+        reg_files |= {os.path.basename(fd.filename) for fd in ext.files}
     if not reg_files:
-        logger.warning("eval: no diff files for regressor %s", case.regressor_node)
+        logger.warning("eval: no diff files for regressor(s) %s", nodes)
         return None
     return bool(reg_files & _stack_basenames(case))

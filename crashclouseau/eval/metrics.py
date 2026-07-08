@@ -15,6 +15,7 @@ offline."""
 from __future__ import annotations
 
 import json
+import re
 
 from crashclouseau import utils
 from crashclouseau.agent.schema import Decision
@@ -69,11 +70,58 @@ def _is_lead(dossier):
     return dossier.verdict.decision == Decision.lead
 
 
+_BUG_RE = re.compile(r"\bbug\s+(\d+)", re.I)
+
+
+def _case_nodes(case):
+    """Ground-truth regressor nodes (short-rev) — the resolved landing set, or the
+    single-node compat field."""
+    nodes = case.regressor_nodes or ([case.regressor_node] if case.regressor_node else [])
+    return {_short(n) for n in nodes if n}
+
+
+def _case_bugs(case):
+    """Ground-truth regressor bug ids (authoritative from ``regressed_by``)."""
+    bugs = list(case.regressor_bugs) or ([case.regressor_bug] if case.regressor_bug else [])
+    return {int(b) for b in bugs if b}
+
+
+def _bugs_in_dossier(dossier):
+    """Every bug id the dossier points at: the candidate's bug + any ``bug NNN`` cited in
+    the free-text mechanism/consistency/needinfo. Bug matching is alias-free, so it is the
+    robust signal when the dossier's node (a mozilla-central/searchfox rev) doesn't
+    string-equal the regressor's autoland landing rev."""
+    bugs = set()
+    if dossier is None:
+        return bugs
+    if dossier.candidate and dossier.candidate.bug:
+        bugs.add(int(dossier.candidate.bug))
+    v = dossier.verdict
+    texts = []
+    if v:
+        for claim in (v.mechanism, v.consistency):
+            if claim and claim.statement:
+                texts.append(claim.statement)
+        if getattr(v, "needinfo_draft", None):
+            texts.append(v.needinfo_draft)
+    for text in texts:
+        for m in _BUG_RE.finditer(text or ""):
+            bugs.add(int(m.group(1)))
+    return bugs
+
+
+def _hit(case, dossier):
+    """True if the dossier points at the true regressor by NODE or by BUG."""
+    if _case_nodes(case) & _nodes_in_dossier(dossier):
+        return True
+    return bool(_case_bugs(case) & _bugs_in_dossier(dossier))
+
+
 def _findable(case):
     """Proxy: the regressor is on-stack, or in the stack-only seed set."""
     if case.on_stack_label is True:
         return True
-    return _short(case.regressor_node) in {_short(n) for n in case.seed_nodes}
+    return bool(_case_nodes(case) & {_short(n) for n in case.seed_nodes})
 
 
 def offstack_recall(cases, results):
@@ -83,10 +131,9 @@ def offstack_recall(cases, results):
         return {"offstack_recall": 0.0, "stackonly_recall": 0.0, "n_offstack": 0}
     reached = seed_hit = 0
     for case in off:
-        rn = _short(case.regressor_node)
-        if rn and rn in _nodes_in_dossier(_dossier(results, case.uuid)):
+        if _hit(case, _dossier(results, case.uuid)):
             reached += 1
-        if rn and rn in {_short(n) for n in case.seed_nodes}:
+        if _case_nodes(case) & {_short(n) for n in case.seed_nodes}:
             seed_hit += 1
     return {
         "offstack_recall": reached / n,
@@ -108,7 +155,7 @@ def evidence_correctness(cases, results, diff_checker=None):
         return {"evidence_precision": 0.0, "n_strong": 0}
     correct = 0
     for case, dossier in strong:
-        named_ok = bool(dossier.candidate) and _short(dossier.candidate.node) == _short(case.regressor_node)
+        named_ok = _hit(case, dossier)  # references the true regressor by node or bug
         cited = bool(_nodes_in_dossier(dossier) or (dossier.call_path and dossier.call_path.edges))
         diff_ok = True if diff_checker is None else bool(diff_checker(case, dossier))
         if named_ok and cited and diff_ok:
@@ -117,9 +164,9 @@ def evidence_correctness(cases, results, diff_checker=None):
 
 
 def lead_precision(cases, results):
-    """Precision of ``lead`` verdicts: share of leads whose dossier references the true
-    regressor node. A strict lower-bound proxy for "is this lead worth a human's time" —
-    a mechanism lead that names no changeset counts as a miss here, so read it alongside
+    """Precision of ``lead`` verdicts: share of leads that reference the true regressor
+    (by node OR bug). A strict lower-bound proxy for "is this lead worth a human's time" —
+    a mechanism lead that names no regressor counts as a miss here, so read it alongside
     the calibration matrix (``lead_unfindable`` is the low-value-lead risk cell)."""
     by_uuid = {c.uuid: c for c in cases}
     leads = []
@@ -129,11 +176,7 @@ def lead_precision(cases, results):
             leads.append((by_uuid[uuid], dossier))
     if not leads:
         return {"lead_precision": 0.0, "n_lead": 0}
-    hit = 0
-    for case, dossier in leads:
-        rn = _short(case.regressor_node)
-        if rn and rn in _nodes_in_dossier(dossier):
-            hit += 1
+    hit = sum(1 for case, dossier in leads if _hit(case, dossier))
     return {"lead_precision": hit / len(leads), "n_lead": len(leads)}
 
 
