@@ -38,6 +38,27 @@
             }
         }
     },
+    "spike":
+    {
+        "floor":
+        {
+            "Firefox":
+            {
+                "nightly": 3,
+                "beta": 10,
+                "release": 50
+            }
+        },
+        "ratio":
+        {
+            "Firefox":
+            {
+                "nightly": 3,
+                "beta": 3,
+                "release": 3
+            }
+        }
+    },
     "agent":
     {
         "schema_version": 1,

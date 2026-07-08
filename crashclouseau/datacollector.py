@@ -75,8 +75,11 @@ def get_buildids_from_socorro(search_buildid, search_date, product):
 
 
 def get_new_signatures(product, channel, date):
-    """Get the new signatures. In nightly that means that we collect
-    only signatures with no crashes in last few days"""
+    """Collect the crash signatures worth triaging for a product/channel. A signature is
+    kept when its per-day crash count SPIKES -- it clears an absolute floor and jumps well
+    above the loudest of the preceding ``ndays`` days (see ``utils.is_spike``). This
+    catches both a signature appearing from ~zero and a sudden worsening of an existing
+    one, without firing on low-volume churn."""
 
     limit = config.get_limit_facets()
     bids, search_date = get_builds(product, channel, date)
@@ -137,11 +140,13 @@ def get_new_signatures(product, channel, date):
 
     shift = config.get_ndays() if channel == "nightly" else 1
     threshold = config.get_threshold("installs", product, channel)
+    floor = config.get_spike("floor", product, channel)
+    ratio = config.get_spike("ratio", product, channel)
     big_data = {}
     small_data = {}
 
     for sgn, numbers in data.items():
-        bids, big = utils.get_new_crashing_bids(numbers, shift, threshold)
+        bids, big = utils.get_new_crashing_bids(numbers, shift, threshold, floor, ratio)
         if bids:
             d = {
                 "bids": bids,

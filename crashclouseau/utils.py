@@ -160,29 +160,51 @@ def hash(s):
     return hashlib.sha224(s.encode("utf-8")).hexdigest()
 
 
-def compare_numbers(n, before):
-    """Check if the n is non-null and if all the numbers before are null"""
-    return n and all(x == 0 for x in before)
+def is_spike(n, before, floor, ratio):
+    """True if the day count ``n`` is worth flagging given the preceding ``before`` window.
+
+    Union of two conditions -- a strict EXTENSION of the original step rule, so everything
+    it caught still fires, plus two cases it never could:
+
+    * appears from a HARD zero -- ``max(before) == 0`` and ``n >= 1``. This IS the old rule
+      (``n and all(x == 0 for x in before)``), kept verbatim so no current detection is
+      lost: e.g. ``0,0,0 -> N`` for any ``N >= 1``.
+    * spikes over a nonzero baseline -- ``n >= floor`` AND ``n >= ratio * max(before)``: it
+      clears an absolute floor and stands out against the LOUDEST recent day (``max``, not
+      ``mean``, so one busy prior day can't be averaged into a phantom spike). Adds the two
+      cases the step rule could never reach: a spike after a stray blip (``0,0,1,0 -> 3``
+      with floor=ratio=3) and a sudden worsening of a live signature (``10,20,10 -> 150``).
+
+    ``floor``/``ratio`` (config ``spike``) gate ONLY the second condition -- the from-zero
+    sensitivity is unchanged."""
+    baseline = max(before) if before else 0
+    if baseline == 0:
+        return n >= 1
+    return n >= floor and n >= ratio * baseline
 
 
-def get_spike_indices(numbers, ndays):
-    """Get the spikes indices from the numbers (list)"""
-    # we've something like [0, 0, 0, 2, 0, 0, 0, 3, 1, 0, 0, 9] and ndays=3
-    # and we want to get [3, 7]
+def get_spike_indices(numbers, ndays, floor, ratio):
+    """Yield indices ``i >= ndays`` where ``numbers[i]`` is a spike vs the ``ndays`` before
+    it (see ``is_spike``).
+
+    e.g. numbers=[0, 0, 0, 2, 0, 0, 0, 8, 1, 0, 0, 30], ndays=3, floor=3, ratio=3
+    -> [3, 7, 11]: 3 and 7 appear from a zero window (n >= 1); 11 is a spike over a stray
+    blip ([1, 0, 0] -> needs >= max(3, 3*1) = 3). The old step rule yielded only [3, 7] --
+    the lone 1 in index 11's window blocked it; index 8's 1 is below the floor."""
     for i in range(ndays, len(numbers)):
-        if compare_numbers(numbers[i], numbers[(i - ndays):i]):
+        if is_spike(numbers[i], numbers[(i - ndays):i], floor, ratio):
             yield i
 
 
-def get_new_crashing_bids(numbers, ndays, threshold):
-    """Get the crashing buildids (according to the numbers)
-    and keep it if the number of installs is less than threshold"""
+def get_new_crashing_bids(numbers, ndays, threshold, floor, ratio):
+    """Get the crashing buildids for the spike days (see ``get_spike_indices``); within a
+    spike day keep the first buildid whose install count reaches ``threshold``."""
     data = [(k, v["count"]) for k, v in numbers.items()]
     data = sorted(data)
     nums = [n for _, n in data]
     res = {}
     big = False
-    for i in get_spike_indices(nums, ndays):
+    for i in get_spike_indices(nums, ndays, floor, ratio):
         day, count = data[i]
         if count >= 500:
             big = True

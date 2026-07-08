@@ -93,6 +93,24 @@ def get_threshold(typ, product, channel):
     )
 
 
+# Fallback when the ``spike`` block (or a product/channel within it) is absent: bias to
+# FEWER detections so a stripped config stays quiet rather than flooding the pipeline.
+_SPIKE_DEFAULTS = {"floor": 5, "ratio": 3}
+
+
+def get_spike(typ, product, channel):
+    """Spike-detection knob ``typ`` (``"floor"`` | ``"ratio"``) for a product/channel.
+    ``floor`` = minimum crashes on the spike day; ``ratio`` = minimum multiple over the
+    loudest of the preceding days. See ``utils.is_spike``."""
+    return (
+        _get_global()
+        .get("spike", {})
+        .get(typ, {})
+        .get(product, {})
+        .get(channel, _SPIKE_DEFAULTS[typ])
+    )
+
+
 def get_agent():
     return _get_global().get("agent", {})
 
