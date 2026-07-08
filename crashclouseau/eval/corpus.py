@@ -243,11 +243,18 @@ def freeze(records, corpus_dir=None):
         sig = _first_signature(rec.get("cf_crash_signature"))
         if not sig:
             continue
-        uuids = resolve_uuids(sig)
-        if not uuids:
-            logger.warning("eval: no nightly uuid for %r", sig)
+        # Many regression signatures no longer crash on nightly (fixed there) but still
+        # do on beta/release — try each channel so the corpus isn't starved by the
+        # nightly-only + 30-day-retention constraint.
+        uuid = channel = None
+        for ch in ("nightly", "beta", "release"):
+            found = resolve_uuids(sig, channel=ch)
+            if found:
+                uuid, channel = found[0], ch
+                break
+        if not uuid:
+            logger.warning("eval: no uuid (any channel) for %r", sig)
             continue
-        uuid = uuids[0]
         if uuid in seen:  # two bugs can resolve to the same representative crash
             continue
         seen.add(uuid)
@@ -269,6 +276,7 @@ def freeze(records, corpus_dir=None):
             regressor_nodes=reg_nodes,
             regressor_bug=(reg_bugs[0] if reg_bugs else None),
             regressor_bugs=reg_bugs,
+            channel=channel,
             crash_json_path=crash_path,
             seed_nodes=_seed_nodes(uuid),
             candidates=_seed_candidates(data),
