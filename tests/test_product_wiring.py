@@ -859,6 +859,31 @@ class TestLinkify(unittest.TestCase):
         from crashclouseau import linkify
         self.assertEqual(linkify(None), "")
 
+    def test_backtick_code_becomes_code_tag(self):
+        from crashclouseau import linkify
+        out = str(linkify("guarded by `ASSERT(textureUnit != -1)` only", ""))
+        self.assertIn("<code>ASSERT(textureUnit != -1)</code>", out)
+
+    def test_code_span_escaped_and_exempt_from_rewrites(self):
+        from crashclouseau import linkify
+        # C++ inside a code span stays literal: -> not turned into an arrow, <T> escaped,
+        # and a hash inside code is not link-ified.
+        out = str(linkify("see `mHead -> next` and `Foo<T>` and `abcdef123456`",
+                          "https://hg.mozilla.org/mozilla-central"))
+        self.assertIn("<code>mHead -&gt; next</code>", out)   # literal ->, no arrow
+        self.assertNotIn("→", out)
+        self.assertIn("<code>Foo&lt;T&gt;</code>", out)
+        self.assertIn("<code>abcdef123456</code>", out)       # not a rev link
+        self.assertNotIn("/rev?node=abcdef123456", out)
+
+    def test_prose_around_code_still_linkified(self):
+        from crashclouseau import linkify
+        out = str(linkify("`x` from bug 42 in fdb65c5972a9",
+                          "https://hg.mozilla.org/mozilla-central"))
+        self.assertIn("<code>x</code>", out)
+        self.assertIn("bugzilla.mozilla.org/42", out)
+        self.assertIn("/rev?node=fdb65c5972a9", out)
+
     def test_spaced_arrows_prettified(self):
         from crashclouseau import linkify
         out = str(linkify("A::f -> B::g <- C::h <-> D::i", ""))

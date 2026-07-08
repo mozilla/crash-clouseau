@@ -209,9 +209,13 @@ ul.cites, ol.call-path, ul.skeptic {
     padding-left: 1.4em;
 }
 
-ol.call-path code {
+/* Inline code in the evidence panel: call-path symbols, and `code` spans the agent
+   backticks in its prose (mechanism / data-flow / consistency summaries). */
+.evidence-panel code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background-color: #eef;
-    padding: 0 0.2em;
+    padding: 0.05em 0.3em;
+    border-radius: 3px;
 }
 
 .via { color: #888; font-size: 0.85em; }

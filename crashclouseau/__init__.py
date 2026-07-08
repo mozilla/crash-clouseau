@@ -38,20 +38,17 @@ _HASH_RE = re.compile(r"\b[0-9a-f]{12,40}\b")
 # before escaping, so the substituted Unicode char passes through escape() untouched.
 _ARROWS = {"->": "→", "<-": "←", "<->": "↔"}
 _ARROW_RE = re.compile(r"(?<=\s)(<->|<-|->)(?=\s)")
+# Inline `code` spans (markdown backticks) the agent emits in its prose — e.g. a
+# quoted expression or symbol in a data-flow/mechanism summary. Kept to a single line
+# so a stray backtick can't swallow a whole paragraph.
+_CODE_RE = re.compile(r"`([^`\n]+)`")
 
 
-@app.template_filter("linkify")
-def linkify(text, repo_url=""):
-    """Escape free text, then hyperlink ``bug NNN`` -> Bugzilla and bare 12-40 hex
-    changeset hashes -> the channel's hg repo (``repo_url``), and turn whitespace-
-    delimited ASCII arrows (`` -> `` / `` <- `` / `` <-> ``) into real ones. The text is
-    HTML-escaped FIRST (after the arrow pass, which only inserts Unicode), so the only
-    markup is the anchors we inject from a matched bug id (digits) or changeset (hex) —
-    no agent-authored text can inject HTML. Used on the evidence panel's free-text
-    fields (mechanism/consistency/data-flow/needinfo/rationale/expert reason)."""
-    if not text:
-        return ""
-    s = _ARROW_RE.sub(lambda m: _ARROWS[m.group(1)], str(text))
+def _linkify_prose(text, repo_url):
+    """Prose pipeline: prettify whitespace-delimited arrows, HTML-escape, then hyperlink
+    ``bug NNN`` and bare 12-40 hex changeset hashes. Code spans are handled separately in
+    ``linkify`` (this never sees them)."""
+    s = _ARROW_RE.sub(lambda m: _ARROWS[m.group(1)], text)
     s = str(escape(s))
     s = _BUG_RE.sub(
         r'<a href="https://bugzilla.mozilla.org/\1" target="_blank" '
@@ -64,7 +61,27 @@ def linkify(text, repo_url=""):
             .format(repo_url, m.group(0), m.group(0)),
             s,
         )
-    return Markup(s)
+    return s
+
+
+@app.template_filter("linkify")
+def linkify(text, repo_url=""):
+    """Render an agent free-text field to safe HTML. Inline ```code``` spans become
+    ``<code>`` (their content HTML-escaped and EXEMPT from the arrow/bug/hash rewrites,
+    so C++ like ``a->b`` stays literal); the prose around them is escaped and gets
+    ``bug NNN`` / changeset-hash links plus pretty arrows. Everything is HTML-escaped, so
+    no agent-authored text can inject markup. Used on the evidence panel's free-text
+    fields (mechanism/consistency/data-flow/needinfo/rationale/expert reason)."""
+    if not text:
+        return ""
+    s = str(text)
+    parts, last = [], 0
+    for m in _CODE_RE.finditer(s):
+        parts.append(_linkify_prose(s[last:m.start()], repo_url))
+        parts.append("<code>" + str(escape(m.group(1))) + "</code>")
+        last = m.end()
+    parts.append(_linkify_prose(s[last:], repo_url))
+    return Markup("".join(parts))
 
 
 @app.teardown_request

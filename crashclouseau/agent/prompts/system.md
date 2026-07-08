@@ -89,7 +89,11 @@ This checklist is not evidence. It only helps you choose what to verify with too
 
 ## Final message: one JSON block
 End your final message with EXACTLY ONE fenced ```json block holding the dossier.
-Emit only fields you can fill and cite; omit the rest. Shape:
+Emit only fields you can fill and cite; omit the rest. In the free-text fields
+(mechanism/consistency/data-flow summaries, needinfo), wrap code in `backticks`
+CONSISTENTLY — identifiers, function/method/type names, expressions, and file paths —
+so it renders as code (e.g. `ASSERT(textureUnit != -1)`, `ProgramD3D::getSamplerMapping`);
+don't backtick some code and leave the rest bare. Shape:
 
 ```json
 {
