@@ -33,7 +33,9 @@ _GROUND = (
     "(a searchfox permalink + the DEMANGLED/readable symbol name — both copied "
     "VERBATIM from the tool output; never hand-write a mangled `_Z...` id from "
     "memory — an exact diff line, or an exact stack frame). If you cannot ground a "
-    "claim, say so rather than guess."
+    "claim, say so rather than guess. Whenever you quote code in prose — identifiers, "
+    "function/type names, expressions, `file:line`, paths — wrap it in `backticks` so "
+    "it renders as code; be consistent, don't backtick some and leave the rest bare."
 )
 
 _ROLES: dict[str, dict] = {

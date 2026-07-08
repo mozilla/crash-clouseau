@@ -109,7 +109,7 @@
       {% endif -%}
 
       {% if d.get('crash') and d['crash'].get('failure_class') -%}
-      <p><strong>Failure class:</strong> {{ d['crash']['failure_class']|e }}{% if d['crash'].get('moz_crash_reason') %} &mdash; {{ d['crash']['moz_crash_reason']|e }}{% endif %}</p>
+      <p><strong>Failure class:</strong> {{ d['crash']['failure_class']|e }}{% if d['crash'].get('moz_crash_reason') %} &mdash; <code>{{ d['crash']['moz_crash_reason']|e }}</code>{% endif %}</p>
       {% endif -%}
 
       {% if has_cand -%}
@@ -122,7 +122,7 @@
           {% if cand.get('backedout') %} <span class="flag">backed out</span>{% endif %}
         </p>
         {% if cand.get('changed_functions') -%}
-        <p class="muted">Changed functions: {{ cand['changed_functions']|join(', ')|e }}</p>
+        <p class="muted">Changed functions: <code>{{ cand['changed_functions']|join(', ')|e }}</code></p>
         {% endif -%}
         <p><button type="button" data-node="{{ cand['node'] }}" onclick="draftBug(this.dataset.node)">Draft a bug for this changeset</button></p>
       </div>
@@ -184,7 +184,7 @@
         <h3>Skeptic review</h3>
         <ul class="skeptic">
           {% for s in d['skeptic'] -%}
-          <li class="skeptic-{{ s['status'] }}"><span class="skeptic-status">{{ s['status'] }}</span> {{ s.get('claim_ref')|e }}{% if s.get('note') %} &mdash; {{ s['note']|e }}{% endif %}</li>
+          <li class="skeptic-{{ s['status'] }}"><span class="skeptic-status">{{ s['status'] }}</span> {{ s.get('claim_ref')|e }}{% if s.get('note') %} &mdash; {{ s['note']|linkify(repo_url) }}{% endif %}</li>
           {% endfor -%}
         </ul>
       </div>
@@ -218,7 +218,7 @@
           {% else -%}
           <pre class="action-body">{{ p|tojson(indent=2)|e }}</pre>
           {% endif -%}
-          {% if a.get('reasoning') %}<p class="reasoning"><em>{{ a['reasoning']|e }}</em></p>{% endif %}
+          {% if a.get('reasoning') %}<p class="reasoning"><em>{{ a['reasoning']|linkify(repo_url) }}</em></p>{% endif %}
         </div>
         {% endif -%}
         {% endfor -%}
