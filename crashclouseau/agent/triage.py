@@ -75,6 +75,63 @@ def _system_prompt() -> str:
         return handle.read()
 
 
+def _short_value(value, limit=300):
+    if value is None or value == "":
+        return ""
+    text = str(value).replace("\n", " ").strip()
+    if len(text) > limit:
+        return text[:limit - 3] + "..."
+    return text
+
+
+def _first_present(*values):
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return ""
+
+
+def _crash_facts(crash: dict) -> list[str]:
+    """Compact processed-crash facts for the LLM.
+
+    The full Socorro payload can be large; expose the failure signals that help the
+    crash-interpreter classify the crash and the data-flow role pick mechanisms.
+    """
+    raw = crash.get("raw_crash") or {}
+    dump = raw.get("json_dump") or {}
+    info = dump.get("crash_info") or {}
+    lines = []
+
+    facts = [
+        ("Product", _first_present(crash.get("product"), raw.get("product"))),
+        ("Version", _first_present(crash.get("version"), raw.get("version"))),
+        ("Build ID", _first_present(crash.get("buildid"), raw.get("build_id"))),
+        ("Crash type", _first_present(info.get("type"), raw.get("reason"))),
+        ("Fault address", _first_present(info.get("address"), raw.get("address"))),
+        ("Crashing thread", _first_present(
+            info.get("crashing_thread"), raw.get("crashing_thread")
+        )),
+        ("MOZ_CRASH_REASON", _first_present(
+            raw.get("moz_crash_reason"), dump.get("moz_crash_reason")
+        )),
+        ("Crash reason", raw.get("reason")),
+        ("Assertion", info.get("assertion")),
+        ("PHC kind", _first_present(raw.get("phc_kind"), info.get("phc_kind"))),
+        ("PHC alloc stack", _first_present(
+            raw.get("phc_alloc_stack"), info.get("phc_alloc_stack")
+        )),
+        ("PHC free stack", _first_present(
+            raw.get("phc_free_stack"), info.get("phc_free_stack")
+        )),
+        ("Async shutdown timeout", raw.get("async_shutdown_timeout")),
+    ]
+    for label, value in facts:
+        value = _short_value(value)
+        if value:
+            lines.append(f"{label}: {value}")
+    return lines
+
+
 def _user_prompt(crash: dict) -> str:
     uuid = crash.get("uuid", "")
     signature = crash.get("signature", "")
@@ -84,12 +141,18 @@ def _user_prompt(crash: dict) -> str:
     lines = [
         "Investigate this Firefox crash and identify the regressor changeset, "
         "reaching off-stack functions through the call graph where needed. "
-        "Abstain unless the evidence chain is verified end to end.",
+        "Return strong-evidence only when the evidence chain is verified end to "
+        "end. Otherwise prefer a cited lead when a candidate changeset, hunk, or "
+        "call-path edge points a human at the right area. Abstain only when there "
+        "is no cited lead worth anyone's time.",
         "",
         f"UUID: {uuid}",
         f"Signature: {signature}",
         f"Channel: {channel}",
     ]
+    facts = _crash_facts(crash)
+    if facts:
+        lines += ["", "Crash facts:", *facts]
     if stack:
         lines += ["", "Stack:", str(stack)]
     candidates = crash.get("candidates") or []
@@ -97,7 +160,11 @@ def _user_prompt(crash: dict) -> str:
         lines += [
             "",
             "Scored candidate changesets (already ranked by proximity to the crash — "
-            "read each with the mcp__patch__diff tool; do not hunt for them):",
+            "read each with the mcp__patch__diff tool. Treat this seed list as a "
+            "priority queue, not as a closed world: use it first, but if the "
+            "call-graph neighborhood points at off-stack files/functions not covered "
+            "by these seeds, say so and treat that as a cited lead rather than "
+            "pretending the seed list is complete):",
         ]
         for c in candidates[:20]:
             parts = [str(c.get("node", ""))]

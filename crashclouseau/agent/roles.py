@@ -21,8 +21,9 @@ _SEARCHFOX = [
     f"mcp__searchfox__{name}"
     for name in ("calls_from", "calls_to", "calls_between", "define", "lookup", "search")
 ]
-# Deterministic #14 patch-extraction, exposed as a tool so patch-scout / data-flow
-# read a candidate's diff in one fast call instead of shelling out.
+# Deterministic #14 patch-extraction, exposed as a tool so patch-scout /
+# data-flow / skeptic read a candidate's diff in one fast call instead of
+# shelling out.
 _PATCH = ["mcp__patch__diff"]
 _BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
 
@@ -42,7 +43,17 @@ _ROLES: dict[str, dict] = {
         "prompt": "You are the crash interpreter. Turn the provided processed-crash "
         "facts into a normalized crash brief: classify the failure "
         "(uaf/null_deref/assertion/oob/shutdownhang/other) only from the decoded "
-        "signals, pick the thread that matters, and list the frames." + _GROUND,
+        "signals, pick the thread that matters, and list the actionable frames (skip "
+        "the universal bottom-of-stack anchors: event loop, message pump, thread "
+        "entry). Prefer decoded "
+        "crash facts (crash_info.type/address, MOZ_CRASH_REASON, PHC alloc/free "
+        "stacks, assertion text, async-shutdown fields) over guessing from the "
+        "signature alone. End with one fenced ```json block shaped like: "
+        "{\"uuid\":\"...\",\"signature\":\"...\",\"failure_class\":\"uaf|null_deref|"
+        "assertion|oob|shutdownhang|other\",\"faulting_address\":\"...\","
+        "\"moz_crash_reason\":\"...\",\"reason\":\"...\",\"crashing_thread\":0,"
+        "\"frames\":[{\"stackpos\":0,\"function\":\"...\",\"filename\":\"...\","
+        "\"line\":0,\"node\":\"...\",\"inlines\":[]}]}." + _GROUND,
         "tools": [*_BUILTIN_READ],
     },
     "call-graph-explorer": {
@@ -51,8 +62,20 @@ _ROLES: dict[str, dict] = {
         "prompt": "You are the call-graph explorer (navigator). Starting from the "
         "crash frames, drive the searchfox tools (calls_from/calls_to/calls_between/"
         "define/search) to build a cited neighborhood, explicitly reaching off-stack "
-        "functions. Recover virtual/IPC/FFI edges via search. Explore persistently to "
-        "a fixpoint; record holes rather than inventing edges." + _GROUND,
+        "functions. Start from the first actionable non-anchor frames, expand both "
+        "callers and callees to bounded depth, and use search only to bridge likely "
+        "virtual/IPC/FFI/macro/template/cross-language holes. If the principal names "
+        "candidate files/functions, bias exploration toward reaching them (as well as "
+        "the off-stack area around the crash) so the neighborhood is useful to the "
+        "patch scout. A search hit without a "
+        "symbol_id is a clue or caveat, not a final call-edge citation. Explore "
+        "persistently to a fixpoint; record holes rather than inventing edges. End "
+        "with one fenced ```json block shaped like: {\"edges\":[{\"caller_symbol\":"
+        "\"Readable::caller\",\"callee_symbol\":\"Readable::callee\",\"via\":"
+        "\"calls-from|calls-to|calls-between|search-hole\",\"citations\":[{\"kind\":"
+        "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
+        "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}],\"from_stackpos\":0,"
+        "\"to_symbol\":\"Readable::symbol\"}." + _GROUND,
         "tools": [*_BUILTIN_READ, *_SEARCHFOX],
     },
     "patch-scout": {
@@ -63,11 +86,21 @@ _ROLES: dict[str, dict] = {
         "exact line numbers + content + enclosing function) — do NOT shell out with "
         "git/hg. Match changed functions to the neighborhood and write a one-line, "
         "fully-cited semantic summary per candidate (cite the diff line and the "
-        "searchfox symbol). DOWN-RANK obviously-unrelated candidates so leads stay "
+        "searchfox symbol). Treat the provided seed list as a priority queue, not as "
+        "proof that no off-stack candidate exists: if neighborhood files/functions "
+        "point outside the seed list, report that gap as a cited lead/caveat for the "
+        "principal. DOWN-RANK obviously-unrelated candidates so leads stay "
         "credible: cosmetic/comment/doc-only diffs (the tool prints a NOTE), changes "
         "to ubiquitous primitives (nsTArray/HashMap/RefPtr/nsCOMPtr/strings/allocators "
         "— a break there would crash all of Firefox, not one signature), and universal "
-        "bottom-of-stack frames used as anchors. Down-rank, don't discard." + _GROUND,
+        "bottom-of-stack frames used as anchors. Down-rank, don't discard. Order your "
+        "output so the candidate whose change best matches the crashing area comes "
+        "first. End with "
+        "one fenced ```json block containing a list of diff-hunk objects shaped like: "
+        "[{\"node\":\"<hg node>\",\"filename\":\"...\",\"header\":\"@@ ... @@\","
+        "\"lines\":[],\"citations\":[{\"kind\":\"diff_line\",\"node\":\"<hg node>\","
+        "\"filename\":\"...\",\"line\":42,\"side\":\"added|deleted|context\","
+        "\"content\":\"exact tool line\"}]}]." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff",
                   "mcp__searchfox__define", "mcp__searchfox__search"],
     },
@@ -77,8 +110,18 @@ _ROLES: dict[str, dict] = {
         "prompt": "You are the data-flow tracer. For a (candidate patch, crash frame) "
         "pair, read the changed lines with `mcp__patch__diff` and the path bodies with "
         "define, then reason about whether the change can free/mutate/null/overrun the "
-        "value the crash site dereferences. Return a cited hypothesis or "
-        "'insufficient'." + _GROUND,
+        "value the crash site dereferences. Also consider Firefox-specific mechanisms: "
+        "refcount/lifetime changes, task dispatch ordering, IPC actor teardown, GC "
+        "marking/tracing, shutdown ordering, assertion invariant changes, thread/race "
+        "assumptions, Rust panic paths, and FFI boundary changes. Return a cited "
+        "hypothesis or 'insufficient'. End with one fenced ```json block only when "
+        "you have at least one citation for the hypothesis, shaped like: {\"summary\":"
+        "\"...\",\"object_name\":\"...\",\"operation\":\"free|mutate|null_deref|uaf|"
+        "oob|race|assertion|shutdown|gc|ipc|other\",\"crash_site\":{\"kind\":"
+        "\"stack_frame\",\"uuid\":\"...\",\"stackpos\":0,\"filename\":\"...\","
+        "\"function\":\"...\",\"line\":0,\"node\":\"...\"},\"citations\":[{\"kind\":"
+        "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
+        "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff",
                   "mcp__searchfox__define", "mcp__searchfox__search"],
     },
@@ -87,9 +130,15 @@ _ROLES: dict[str, dict] = {
         "lines, reachability) and refute the unsupported ones.",
         "prompt": "You are the skeptic. Independently re-verify every claim in a "
         "candidate chain — re-query searchfox for each claimed edge, re-check each "
-        "cited diff line — and mark each pass/fail/unverifiable. A claim without a "
-        "fresh citation cannot pass." + _GROUND,
-        "tools": [*_BUILTIN_READ, *_SEARCHFOX],
+        "cited diff line with `mcp__patch__diff` — and mark each pass/fail/"
+        "unverifiable. Use fail for a contradiction or missing claimed evidence; use "
+        "unverifiable for searchfox holes such as virtual/IPC/FFI/macro/template "
+        "edges. A claim without a fresh citation cannot pass. End with one fenced "
+        "```json block holding a LIST with ONE object per claim you checked, shaped "
+        "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\","
+        "\"status\":\"pass|fail|unverifiable\",\"note\":\"...\",\"citations\":[...]}]"
+        "." + _GROUND,
+        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff"],
     },
 }
 

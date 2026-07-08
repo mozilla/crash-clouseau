@@ -14,6 +14,7 @@ from crashclouseau.agent.schema import (
     Citation,
     Confidence,
     Decision,
+    SkepticStatus,
     SearchfoxCitation,
     DiffLineCitation,
     StackFrameCitation,
@@ -529,6 +530,18 @@ class TestRoleFragments(unittest.TestCase):
                 "patch-scout",
                 [{"node": "0123456789ab", "filename": "f.cpp", "citations": []}],
             )
+
+    def test_skeptic_fragment_is_list(self):
+        # The skeptic re-verifies EVERY claim in one pass, so its fragment is a list
+        # (matching Dossier.skeptic and the role prompt), not a single object.
+        frags = validate_role_fragment(
+            "skeptic",
+            [{"claim_ref": "edge0", "status": "pass", "citations": [_searchfox()]},
+             {"claim_ref": "hunk0", "status": "fail", "note": "no such line"}],
+        )
+        self.assertEqual(len(frags), 2)
+        self.assertEqual(frags[0].status, SkepticStatus.passed)
+        self.assertEqual(frags[1].status, SkepticStatus.failed)
 
     def test_unknown_role_raises(self):
         with self.assertRaises(ValueError):

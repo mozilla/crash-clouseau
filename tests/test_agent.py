@@ -93,10 +93,10 @@ class TestBuildOptions(unittest.TestCase):
         o = self._opts()
         self.assertIn("patch", o.mcp_servers)
         self.assertIn("mcp__patch__diff", o.allowed_tools)
-        # patch-scout + data-flow-tracer get the deterministic patch tool; skeptic doesn't
+        # patch-scout, data-flow-tracer, and skeptic get the deterministic patch tool.
         self.assertIn("mcp__patch__diff", o.agents["patch-scout"].tools)
         self.assertIn("mcp__patch__diff", o.agents["data-flow-tracer"].tools)
-        self.assertNotIn("mcp__patch__diff", o.agents["skeptic"].tools)
+        self.assertIn("mcp__patch__diff", o.agents["skeptic"].tools)
 
     def test_user_prompt_lists_candidates(self):
         crash = dict(_CRASH, candidates=[
@@ -109,6 +109,38 @@ class TestBuildOptions(unittest.TestCase):
         self.assertIn("bug=111", p)
         self.assertIn("mcp__patch__diff", p)   # steer to the tool, not shelling
         self.assertIn("backed-out", p)
+        self.assertIn("prefer a cited lead", p)
+        self.assertIn("not as a closed world", p)
+
+    def test_user_prompt_includes_compact_crash_facts(self):
+        crash = dict(
+            _CRASH,
+            product="Firefox",
+            buildid="20260708000000",
+            version="129.0a1",
+            raw_crash={
+                "reason": "EXCEPTION_ACCESS_VIOLATION_READ",
+                "moz_crash_reason": "MOZ_DIAGNOSTIC_ASSERT(mThing)",
+                "json_dump": {
+                    "crash_info": {
+                        "type": "EXCEPTION_ACCESS_VIOLATION_READ",
+                        "address": "0x0",
+                        "crashing_thread": 0,
+                        "assertion": "mThing",
+                        "phc_alloc_stack": False,
+                    }
+                },
+            },
+        )
+        p = triage._user_prompt(crash)
+        self.assertIn("Crash facts:", p)
+        self.assertIn("Product: Firefox", p)
+        self.assertIn("Build ID: 20260708000000", p)
+        self.assertIn("Crash type: EXCEPTION_ACCESS_VIOLATION_READ", p)
+        self.assertIn("Fault address: 0x0", p)
+        self.assertIn("Crashing thread: 0", p)
+        self.assertIn("MOZ_CRASH_REASON: MOZ_DIAGNOSTIC_ASSERT(mThing)", p)
+        self.assertIn("PHC alloc stack: False", p)
 
     def test_user_prompt_no_candidate_block_when_absent(self):
         self.assertNotIn("candidate changesets", triage._user_prompt(_CRASH))

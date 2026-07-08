@@ -389,9 +389,12 @@ _ROLE_FRAGMENTS: dict[str, type[BaseModel]] = {
     "crash-interpreter": CrashBrief,
     "call-graph-explorer": CallPath,
     "data-flow-tracer": DataFlowHypothesis,
-    "skeptic": SkepticResult,
 }
+# Roles whose trailing block is a LIST, validated per item: patch-scout emits one hunk
+# object per candidate; skeptic emits one verification object per claim it re-checked
+# (matching Dossier.skeptic, which is list[SkepticResult]).
 _DIFF_HUNK_LIST = TypeAdapter(list[DiffHunk])
+_SKEPTIC_LIST = TypeAdapter(list[SkepticResult])
 
 
 # --------------------------------------------------------------------------- #
@@ -578,12 +581,14 @@ def parse_and_validate(result: str | dict) -> Dossier:
 def validate_role_fragment(role: str, obj):
     """Validate one role's parsed sub-block against its fragment model
     (call-graph-explorer->CallPath, patch-scout->list[DiffHunk],
-    data-flow-tracer->DataFlowHypothesis, skeptic->SkepticResult,
+    data-flow-tracer->DataFlowHypothesis, skeptic->list[SkepticResult],
     crash-interpreter->CrashBrief). Raises ``ValidationError`` on an uncited
     claim; the caller (#02) decides whether to abstain."""
     _normalize_citations(obj)  # same citation-spelling fix as the dossier path
     if role == "patch-scout":
         return _DIFF_HUNK_LIST.validate_python(obj)
+    if role == "skeptic":
+        return _SKEPTIC_LIST.validate_python(obj)
     model = _ROLE_FRAGMENTS.get(role)
     if model is None:
         raise ValueError(f"unknown role fragment: {role!r}")
