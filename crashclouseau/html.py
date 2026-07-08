@@ -171,6 +171,7 @@ def _task_view(rows, stale_after_s, now):
                 "verdict": r.verdict,
                 "confidence": r.confidence,
                 "created": created,
+                "error": getattr(r, "error", None),
             }
         )
 

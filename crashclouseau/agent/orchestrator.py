@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 
+from rq import Retry
+
 from crashclouseau import app, config, db, models, worker
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import AreaExpert, CONFIDENCE_SCORE, Decision
@@ -35,6 +37,34 @@ _DEFAULT_COST_CAP = 2.0
 # A "running" dossier older than job_timeout + this buffer is a dead orphan (RQ kills a
 # run at job_timeout; the buffer avoids racing a run that's legitimately near the cap).
 _STALE_BUFFER_S = 300
+
+# Substrings (in the exception type or message) that mark a TRANSIENT failure worth an
+# automatic retry rather than a terminal error. A ~20-min triage fires hundreds of
+# Anthropic + searchfox + hg calls, and a single un-retried network/API/stream blip
+# aborts the whole run; retrying lets that self-heal instead of dropping the crash.
+# Deliberately narrow: a code bug (KeyError/ValueError/…) matches nothing and fails fast.
+_TRANSIENT_MARKERS = (
+    "overloaded", "rate limit", "ratelimit", "too many requests", "429", "529",
+    "timeout", "timed out", "connection", "econnreset", "temporarily",
+    "unavailable", "server error", "internal server", "bad gateway",
+    "gateway timeout", "stream", "process ended", "processerror",
+    "apiconnection", "apitimeout", "apistatus",
+)
+
+
+def _should_retry(exc) -> bool:
+    blob = "{}: {}".format(type(exc).__name__, exc).lower()
+    return any(m in blob for m in _TRANSIENT_MARKERS)
+
+
+def _current_job():
+    """The RQ job running this call, or None (e.g. under the eval runner / a probe)."""
+    try:
+        from rq import get_current_job
+
+        return get_current_job()
+    except Exception:  # pragma: no cover - defensive
+        return None
 
 
 def _full_model(model):
@@ -199,7 +229,10 @@ def _verdict_row(result):
 
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
-    Never raises out (ingestion isolation); marks dossier status on failure.
+    On failure it records the reason (dossier ``payload['error']``) and marks status; a
+    TRANSIENT failure with RQ retries remaining is RE-RAISED so RQ requeues the job (the
+    only case this raises — ingestion enqueues onto RQ and never runs this inline, so a
+    raise can't break ingestion), otherwise it settles on ``error`` and returns.
 
     ``force`` (a tasks-view retrigger) re-runs this one explicit uuid: it bypasses the
     cost dedup (skip-existing / proto) early-out. It still goes through the atomic
@@ -303,10 +336,26 @@ def run_evidence_agent(uuid, force=False):
             "agent: %s done (verdict=%s turns=%s cost=$%.4f)",
             uuid, row["verdict"], result.num_turns, result.total_cost_usd or 0.0,
         )
-    except Exception:
+    except Exception as exc:
         logger.error("agent: run_evidence_agent failed for %s", uuid, exc_info=True)
+        reason = "{}: {}".format(type(exc).__name__, exc)
+        job = _current_job()
+        retries_left = (getattr(job, "retries_left", 0) or 0) if job is not None else 0
+        if _should_retry(exc) and retries_left > 0:
+            # Transient blip with RQ retries remaining: reset to pending so the retry's
+            # claim_running can re-take it, stash the reason, and RE-RAISE so RQ requeues
+            # this same job. Only when retries are exhausted do we settle on `error`.
+            logger.info(
+                "agent: %s transient failure (%d retr%s left); requeuing",
+                uuid, retries_left, "y" if retries_left == 1 else "ies",
+            )
+            try:
+                models.Dossier.set_status(uuid, "pending", error=reason)
+            except Exception:  # pragma: no cover - best-effort
+                pass
+            raise
         try:
-            models.Dossier.set_status(uuid, "error")
+            models.Dossier.set_status(uuid, "error", error=reason)
         except Exception:  # pragma: no cover - best-effort
             pass
         return
@@ -402,6 +451,10 @@ def enqueue_agent(uuid, channel=None, force=False):
         # caller's try/except, and silently dropped EVERY agent job. The value matters
         # too: without it RQ's 180s default would kill a ~20-min triage mid-run.
         timeout=config.get_agent_job_timeout(),
+        # Auto-retry a transient blip (see _should_retry) up to twice, with backoff so a
+        # provider/searchfox outage doesn't turn into a retry-storm. run_evidence_agent
+        # re-raises only transient failures; a real error fails on the first attempt.
+        retry=Retry(max=2, interval=[60, 300]),
     )
 
 

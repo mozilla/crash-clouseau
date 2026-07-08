@@ -92,6 +92,10 @@ async def _triage_boom(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, ex
     raise RuntimeError("triage exploded")
 
 
+async def _triage_transient(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
+    raise RuntimeError("API error: Overloaded (529)")
+
+
 async def _triage_must_not_run(**kwargs):
     raise AssertionError("run_crash_triage should not have been called")
 
@@ -418,12 +422,39 @@ class TestRunEvidenceAgent(unittest.TestCase):
         self.assertEqual(MVerd.set.call_args.kwargs["confidence"], 50)
 
     def test_exception_isolation(self):
+        # A non-transient error: settle on `error`, record the reason, do NOT raise.
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
         with pD, pV, pC, pS, pSc, \
              mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_boom):
             orch.run_evidence_agent("u-1")  # must not raise
-        MDoss.set_status.assert_called_with("u-1", "error")
+        call = MDoss.set_status.call_args
+        self.assertEqual(call.args[:2], ("u-1", "error"))
+        self.assertIn("triage exploded", call.kwargs.get("error", ""))
         MVerd.set.assert_not_called()
+
+    def test_transient_failure_requeues_when_retries_left(self):
+        # A transient blip with RQ retries remaining: reset to `pending` (so the retry
+        # can re-claim it), record the reason, and RE-RAISE so RQ requeues the job.
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(retries_left=2)), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_transient):
+            with self.assertRaises(RuntimeError):
+                orch.run_evidence_agent("u-1")
+        call = MDoss.set_status.call_args
+        self.assertEqual(call.args[:2], ("u-1", "pending"))
+        self.assertIn("Overloaded", call.kwargs.get("error", ""))
+
+    def test_transient_failure_errors_when_no_retries_left(self):
+        # Same transient blip, but retries are exhausted -> settle on `error`, no raise.
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(retries_left=0)), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_transient):
+            orch.run_evidence_agent("u-1")  # must not raise
+        call = MDoss.set_status.call_args
+        self.assertEqual(call.args[:2], ("u-1", "error"))
+        self.assertIn("Overloaded", call.kwargs.get("error", ""))
 
     def test_skip_if_existing(self):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()

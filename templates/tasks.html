@@ -89,8 +89,9 @@
           <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
           <td class="task-sgn" title="{{ t.signature }}">{{ t.signature }}</td>
           <td>
-            <span class="status-badge status-{{ t.status }}">{{ t.status }}</span>
+            <span class="status-badge status-{{ t.status }}"{% if t.error %} title="{{ t.error }}"{% endif %}>{{ t.status }}</span>
             {% if t.stalled -%}<span class="status-badge status-stalled">stalled</span>{%- endif %}
+            {% if t.error -%}<div class="task-err" title="{{ t.error }}">{{ t.error[:120] }}{% if t.error|length > 120 %}&hellip;{% endif %}</div>{%- endif %}
           </td>
           <td>
             {% if t.verdict -%}

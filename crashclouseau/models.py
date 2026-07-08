@@ -1466,10 +1466,24 @@ class Dossier(db.Model):
             db.session.commit()
 
     @staticmethod
-    def set_status(uuid, status, commit=True):
+    def set_status(uuid, status, error=None, commit=True):
+        """Set a dossier's status. When ``error`` is given (the failure path), the short
+        reason is stashed in the JSONB ``payload`` (key ``error``) so it OUTLIVES the
+        ephemeral worker-log buffer and can surface in the tasks view — the row has no
+        dedicated error column, and there is no migration framework here. Reassigns
+        payload to a new dict so SQLAlchemy flags the column dirty (see ``set_job_id``)."""
         uuidid = UUID.get_id(uuid)
-        q = db.session.query(Dossier).filter(Dossier.uuidid == uuidid)
-        q.update({"status": status, "updated": db.func.now()})
+        if uuidid is None:
+            return
+        d = db.session.query(Dossier).filter(Dossier.uuidid == uuidid).first()
+        if d is None:
+            return
+        d.status = status
+        d.updated = db.func.now()
+        if error is not None:
+            payload = dict(d.payload or {})
+            payload["error"] = str(error)[:1000]
+            d.payload = payload
         if commit:
             db.session.commit()
 
@@ -1613,6 +1627,8 @@ class Dossier(db.Model):
                 Dossier.created, Dossier.updated, Dossier.cost_usd,
                 Dossier.input_tokens, Dossier.output_tokens, Dossier.cache_read_tokens,
                 Dossier.worker_models, Verdict.verdict, Verdict.confidence,
+                # Failure reason (stashed by set_status on the error path); NULL otherwise.
+                Dossier.payload["error"].astext.label("error"),
             )
             .select_from(Dossier)
             .join(UUID, Dossier.uuidid == UUID.id)

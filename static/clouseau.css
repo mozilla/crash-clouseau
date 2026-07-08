@@ -447,6 +447,16 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 .task-tok, .task-ts { font-family: monospace; color: #555; }
 .task-conf { margin-left: 0.4em; color: #555; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
+.task-err {
+    margin-top: 0.3em;
+    font-family: monospace;
+    font-size: 0.85em;
+    color: #c0392b;
+    max-width: 22em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .status-badge {
     display: inline-block;
