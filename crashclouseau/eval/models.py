@@ -37,9 +37,18 @@ class Metrics(BaseModel):
     offstack_recall: float = 0.0
     stackonly_recall: float = 0.0
     evidence_precision: float = 0.0
-    abstain_calibration: dict = Field(default_factory=dict)
+    lead_precision: float = 0.0       # of leads, share that reference the true regressor
+    abstain_calibration: dict = Field(default_factory=dict)  # {strong,lead,abstain}x{find,unfind}
     n_cases: int = 0
     n_offstack: int = 0
     n_strong: int = 0
+    n_lead: int = 0
+    # Cost/usage, aggregated across the re-run (per-case avg + total). Lets a sweep or a
+    # prompt change weigh a quality delta against its cost delta (a drop to a cheaper
+    # model, or a heavier prompt, both show up here).
+    mean_cost_usd: float = 0.0
+    total_cost_usd: float = 0.0
+    mean_output_tokens: float = 0.0
+    mean_input_tokens: float = 0.0
     corpus_hash: str = ""
     sweep_config: dict = Field(default_factory=dict)

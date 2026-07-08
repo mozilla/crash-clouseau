@@ -38,14 +38,17 @@ def _sweep_llm_cfg(sweep_config):
     return llm_cfg
 
 
-def _render_stack(crash_json_path):
+def _load_crash(crash_json_path):
     if not crash_json_path:
-        return ""
+        return {}
     try:
         with open(crash_json_path) as handle:
-            data = json.load(handle)
+            return json.load(handle)
     except (OSError, json.JSONDecodeError):
-        return ""
+        return {}
+
+
+def _render_stack(data):
     dump = data.get("json_dump", {})
     ct = dump.get("crash_info", {}).get("crashing_thread", 0) or 0
     threads = dump.get("threads", [])
@@ -60,11 +63,20 @@ def _render_stack(crash_json_path):
 
 
 def _case_to_crash(case):
+    # Mirror build_seed's crash shape so the SAME _user_prompt / _crash_facts path runs
+    # under eval as in prod. The frozen processed_crash.json IS the "raw_crash" dict the
+    # facts reader expects (buildid lives under `build`). Without raw_crash here, the
+    # crash-facts block renders empty and an A/B would be blind to that prompt input.
+    raw = _load_crash(case.crash_json_path)
     return {
         "uuid": case.uuid,
         "signature": case.signature,
         "channel": case.channel,
-        "stack": _render_stack(case.crash_json_path),
+        "stack": _render_stack(raw),
+        "product": raw.get("product", ""),
+        "buildid": raw.get("build", ""),
+        "version": raw.get("version", ""),
+        "raw_crash": raw,
     }
 
 

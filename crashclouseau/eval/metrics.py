@@ -63,6 +63,12 @@ def _is_strong(dossier):
     return dossier.verdict.decision == Decision.strong_evidence
 
 
+def _is_lead(dossier):
+    if not (dossier and dossier.verdict):
+        return False
+    return dossier.verdict.decision == Decision.lead
+
+
 def _findable(case):
     """Proxy: the regressor is on-stack, or in the stack-only seed set."""
     if case.on_stack_label is True:
@@ -110,48 +116,106 @@ def evidence_correctness(cases, results, diff_checker=None):
     return {"evidence_precision": correct / len(strong), "n_strong": len(strong)}
 
 
+def lead_precision(cases, results):
+    """Precision of ``lead`` verdicts: share of leads whose dossier references the true
+    regressor node. A strict lower-bound proxy for "is this lead worth a human's time" —
+    a mechanism lead that names no changeset counts as a miss here, so read it alongside
+    the calibration matrix (``lead_unfindable`` is the low-value-lead risk cell)."""
+    by_uuid = {c.uuid: c for c in cases}
+    leads = []
+    for uuid in results:
+        dossier = _dossier(results, uuid)
+        if _is_lead(dossier) and uuid in by_uuid:
+            leads.append((by_uuid[uuid], dossier))
+    if not leads:
+        return {"lead_precision": 0.0, "n_lead": 0}
+    hit = 0
+    for case, dossier in leads:
+        rn = _short(case.regressor_node)
+        if rn and rn in _nodes_in_dossier(dossier):
+            hit += 1
+    return {"lead_precision": hit / len(leads), "n_lead": len(leads)}
+
+
+def cost_summary(results):
+    """Per-case mean + total cost/tokens over the scored (non-None) results."""
+    scored = [r for r in results.values() if r is not None]
+    n = len(scored)
+    if not n:
+        return {"mean_cost_usd": 0.0, "total_cost_usd": 0.0,
+                "mean_output_tokens": 0.0, "mean_input_tokens": 0.0, "n_scored": 0}
+    total = sum(float(getattr(r, "total_cost_usd", 0.0) or 0.0) for r in scored)
+    out = sum(int(getattr(r, "output_tokens", 0) or 0) for r in scored)
+    inp = sum(int(getattr(r, "input_tokens", 0) or 0) for r in scored)
+    return {
+        "mean_cost_usd": total / n, "total_cost_usd": total,
+        "mean_output_tokens": out / n, "mean_input_tokens": inp / n, "n_scored": n,
+    }
+
+
 def abstain_calibration(cases, results):
+    """{strong, lead, abstain} x {findable, unfindable} confusion matrix. The cells that
+    matter for a prompt/threshold change: ``abstain_findable`` (false abstains — should
+    fall) and ``lead_unfindable`` (leads offered where even the seed missed the regressor
+    — the low-value-lead risk that should stay bounded)."""
     conf = {
-        "strong_findable": 0, "strong_unfindable": 0,
-        "abstain_findable": 0, "abstain_unfindable": 0,
+        v + f: 0
+        for v in ("strong_", "lead_", "abstain_")
+        for f in ("findable", "unfindable")
     }
     for case in cases:
-        strong = _is_strong(_dossier(results, case.uuid))
-        findable = _findable(case)
-        key = ("strong" if strong else "abstain") + (
-            "_findable" if findable else "_unfindable"
+        dossier = _dossier(results, case.uuid)
+        verdict = "strong_" if _is_strong(dossier) else (
+            "lead_" if _is_lead(dossier) else "abstain_"
         )
-        conf[key] += 1
+        conf[verdict + ("findable" if _findable(case) else "unfindable")] += 1
     return conf
 
 
 def compute_metrics(cases, results, sweep_config=None, corpus_hash="", diff_checker=None):
     off = offstack_recall(cases, results)
     ev = evidence_correctness(cases, results, diff_checker=diff_checker)
+    ld = lead_precision(cases, results)
+    cost = cost_summary(results)
     return Metrics(
         offstack_recall=off["offstack_recall"],
         stackonly_recall=off["stackonly_recall"],
         evidence_precision=ev["evidence_precision"],
+        lead_precision=ld["lead_precision"],
         abstain_calibration=abstain_calibration(cases, results),
         n_cases=len(cases),
         n_offstack=off["n_offstack"],
         n_strong=ev["n_strong"],
+        n_lead=ld["n_lead"],
+        mean_cost_usd=cost["mean_cost_usd"],
+        total_cost_usd=cost["total_cost_usd"],
+        mean_output_tokens=cost["mean_output_tokens"],
+        mean_input_tokens=cost["mean_input_tokens"],
         corpus_hash=corpus_hash,
         sweep_config=sweep_config or {},
     )
 
 
 def compare_to_baseline(metrics, baseline_path):
-    """Compare against a committed baseline metrics.json; return a pass/regress
-    summary keyed on the two headline metrics."""
+    """Compare against a committed baseline metrics.json. ``deltas`` are the quality
+    metrics (higher is better) and gate pass/regress. ``info`` is non-gating context for
+    a prompt/threshold change: the false-abstain count (lower is better) and the cost
+    delta (so a quality win can be weighed against what it cost)."""
     try:
         with open(baseline_path) as handle:
             base = json.load(handle)
     except (OSError, json.JSONDecodeError):
-        return {"status": "no-baseline", "deltas": {}}
+        return {"status": "no-baseline", "deltas": {}, "info": {}}
     deltas = {
         "offstack_recall": metrics.offstack_recall - base.get("offstack_recall", 0.0),
         "evidence_precision": metrics.evidence_precision - base.get("evidence_precision", 0.0),
+        "lead_precision": metrics.lead_precision - base.get("lead_precision", 0.0),
     }
     regressed = any(v < -1e-9 for v in deltas.values())
-    return {"status": "regress" if regressed else "pass", "deltas": deltas}
+    base_cal = base.get("abstain_calibration") or {}
+    info = {
+        "abstain_findable": (metrics.abstain_calibration.get("abstain_findable", 0)
+                             - base_cal.get("abstain_findable", 0)),
+        "mean_cost_usd": metrics.mean_cost_usd - base.get("mean_cost_usd", 0.0),
+    }
+    return {"status": "regress" if regressed else "pass", "deltas": deltas, "info": info}
