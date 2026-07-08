@@ -347,6 +347,15 @@ class TestRerunCorpus(unittest.TestCase):
         self.assertIn("MOZ_CRASH_REASON: MOZ_CRASH(x)", p)
         self.assertIn("Crash type: SIGSEGV", p)
 
+    def test_case_to_crash_carries_seed_candidates(self):
+        # Frozen candidates must reach the crash dict so the agent gets a seed (closes
+        # the no-candidates fidelity gap); the user prompt then lists them.
+        case = CorpusCase(uuid="u1", candidates=[{"node": "abc123def456", "bug": 42, "score": 3}])
+        crash = R._case_to_crash(case)
+        self.assertEqual(crash["candidates"], [{"node": "abc123def456", "bug": 42, "score": 3}])
+        from crashclouseau.agent import triage
+        self.assertIn("abc123def456", triage._user_prompt(crash))
+
 
 if __name__ == "__main__":
     unittest.main()

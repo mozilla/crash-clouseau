@@ -18,12 +18,12 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
 from libmozdata.bugzilla import Bugzilla
 
-from crashclouseau import config, inspector, models, utils
+from crashclouseau import config, inspector, models, pushlog, utils
 from crashclouseau.eval.models import CorpusCase
 from crashclouseau.logger import logger
 
@@ -60,7 +60,80 @@ def mine_clouseau_bugs(start_date, end_date):
     return records
 
 
-def mine_regression_bugs(start_date, end_date, severities=("S1", "S2", "critical")):
+def _is_target_crash(data):
+    """Keep only crashes Clouseau can triage: desktop Firefox, native (non-Java), with at
+    least one symbolicated Firefox frame (a source file). Drops Fenix/Fennec/Thunderbird
+    (unsupported), Java crashes, and system-only stacks like ``<unknown in ntdll.pdb>``."""
+    if not data or data.get("java_stack_trace"):
+        return False
+    if (data.get("product") or "Firefox") != "Firefox":
+        return False
+    dump = data.get("json_dump") or {}
+    ct = (dump.get("crash_info") or {}).get("crashing_thread", 0) or 0
+    threads = dump.get("threads") or []
+    frames = threads[ct]["frames"] if ct < len(threads) else []
+    return any(f.get("file") for f in frames)
+
+
+def _stack_files(data):
+    """Basenames of source files on the crashing thread. Frame ``file`` is ``path:<rev>``
+    (the source-link suffix), so strip the rev with ``inspector.get_path_node`` before
+    taking the basename — otherwise nothing matches a changeset's clean filenames."""
+    dump = data.get("json_dump") or {}
+    ct = (dump.get("crash_info") or {}).get("crashing_thread", 0) or 0
+    threads = dump.get("threads") or []
+    frames = threads[ct]["frames"] if ct < len(threads) else []
+    files = set()
+    for f in frames:
+        uri = f.get("file")
+        if not uri:
+            continue
+        try:
+            filename, _ = inspector.get_path_node(uri)
+        except Exception:  # pragma: no cover - defensive
+            filename = uri
+        if filename:
+            files.add(os.path.basename(filename))
+    return files
+
+
+def _seed_candidates(data, limit=20):
+    """Approximate build_seed's scored candidates WITHOUT the DB: interesting-file
+    changesets pushed in the ``ndays`` before the crash's build that touch a file on the
+    crash stack, ranked by overlap. Queried by DATE (json-pushes), NOT buildid->revision
+    (Buildhub is dead for that). Same KIND of seed as prod; like prod it won't surface an
+    OFF-stack regressor (whose files aren't on the stack), so the agent must still reach
+    those via the call graph. Frozen so the eval exercises the seed path, not cold."""
+    buildid = data.get("build")
+    channel = data.get("release_channel") or "nightly"
+    if not buildid:
+        return []
+    try:
+        end = utils.get_build_date(buildid)
+    except Exception:
+        return []
+    start = end - timedelta(days=config.get_ndays())
+    try:
+        chgsets = pushlog.pushlog(start, end, channel) or []
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("eval: pushlog %s..%s failed: %s", start, end, exc)
+        return []
+    stack_files = _stack_files(data)
+    cands = []
+    for cs in chgsets:
+        if cs.get("merge"):
+            continue
+        overlap = stack_files & {os.path.basename(f) for f in cs.get("files", [])}
+        if overlap:
+            cands.append({
+                "node": cs["node"], "bug": cs.get("bug"),
+                "backedout": cs.get("backedout"), "score": len(overlap),
+            })
+    cands.sort(key=lambda c: -c["score"])
+    return cands[:limit]
+
+
+def mine_regression_bugs(start_date, end_date, severities=("S1", "S2", "S3", "critical")):
     """INDEPENDENT ground truth: recent regression bugs (a ``regressed_by`` changeset +
     a crash signature), NOT restricted to the clouseau alias — used when that alias is
     empty, and non-circular (we don't score Clouseau on bugs Clouseau filed). Restricted
@@ -179,7 +252,8 @@ def freeze(records, corpus_dir=None):
             continue
         seen.add(uuid)
         data = inspector.get_crash_data(uuid)
-        if not data:
+        if not _is_target_crash(data):
+            logger.info("eval: skip non-target crash %s (%r)", uuid, sig[:60])
             continue
         case_dir = os.path.join(corpus_dir, uuid)
         os.makedirs(case_dir, exist_ok=True)
@@ -197,6 +271,7 @@ def freeze(records, corpus_dir=None):
             regressor_bugs=reg_bugs,
             crash_json_path=crash_path,
             seed_nodes=_seed_nodes(uuid),
+            candidates=_seed_candidates(data),
         )
         with open(os.path.join(case_dir, "case.json"), "w") as handle:
             handle.write(case.model_dump_json(indent=2))

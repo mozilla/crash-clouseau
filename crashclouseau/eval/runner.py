@@ -77,6 +77,9 @@ def _case_to_crash(case):
         "buildid": raw.get("build", ""),
         "version": raw.get("version", ""),
         "raw_crash": raw,
+        # Seed candidates frozen at mine time (approx build_seed) so the agent gets the
+        # same KIND of seed as prod instead of running cold.
+        "candidates": list(getattr(case, "candidates", None) or []),
     }
 
 

@@ -27,6 +27,10 @@ class CorpusCase(BaseModel):
     channel: str = "nightly"
     crash_json_path: str | None = None
     seed_nodes: list[str] = Field(default_factory=list)  # the stack-only candidate set
+    # Scored seed candidates (node/bug/backedout/score) frozen at mine time, so the eval
+    # rerun feeds the agent the same KIND of seed prod's build_seed does (closes the
+    # "no seed candidates" fidelity gap).
+    candidates: list[dict] = Field(default_factory=list)
     on_stack_label: bool | None = None  # filled by the labeler; None = unlabeled
 
 
