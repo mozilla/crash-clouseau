@@ -357,5 +357,37 @@ class TestRerunCorpus(unittest.TestCase):
         self.assertIn("abc123def456", triage._user_prompt(crash))
 
 
+class TestErroredBucketing(unittest.TestCase):
+    """A failed run (None result) buckets as ``errored_*`` and counts in ``n_errored`` —
+    it must NOT masquerade as a deliberate abstain (which would flatter the false-abstain
+    cell, the exact confound seen in the 2026-07-09 A/B)."""
+
+    def test_failed_run_is_errored_not_abstain(self):
+        cases = [
+            _case("u1", on_stack_label=False, seed_nodes=[]),    # unfindable
+            _case("u2", on_stack_label=True, seed_nodes=[REG]),  # findable
+        ]
+        conf = M.abstain_calibration(cases, {"u1": None, "u2": None})
+        self.assertEqual(conf["errored_unfindable"], 1)
+        self.assertEqual(conf["errored_findable"], 1)
+        self.assertEqual(conf["abstain_unfindable"], 0)   # NOT counted as abstain
+        self.assertEqual(conf["abstain_findable"], 0)
+
+    def test_compute_metrics_counts_errored(self):
+        cases = [_case("u1", on_stack_label=False), _case("u2", on_stack_label=False)]
+        m = M.compute_metrics(cases, {"u1": _result(node=REG, strong=True), "u2": None})
+        self.assertEqual(m.n_errored, 1)
+
+    def test_compare_surfaces_errored_delta(self):
+        cases = [_case("u1", on_stack_label=False, seed_nodes=[])]
+        m = M.compute_metrics(cases, {"u1": None})   # one failed run
+        with tempfile.TemporaryDirectory() as d:
+            base = os.path.join(d, "b.json")
+            with open(base, "w") as fh:
+                json.dump({"offstack_recall": 0.0, "evidence_precision": 0.0,
+                           "lead_precision": 0.0, "n_errored": 0}, fh)
+            self.assertEqual(M.compare_to_baseline(m, base)["info"]["n_errored"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,7 @@ class Metrics(BaseModel):
     n_offstack: int = 0
     n_strong: int = 0
     n_lead: int = 0
+    n_errored: int = 0  # runs that failed (max_turns/timeout/exception), NOT deliberate abstains
     # Cost/usage, aggregated across the re-run (per-case avg + total). Lets a sweep or a
     # prompt change weigh a quality delta against its cost delta (a drop to a cheaper
     # model, or a heavier prompt, both show up here).

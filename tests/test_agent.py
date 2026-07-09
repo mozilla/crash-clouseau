@@ -62,7 +62,7 @@ class TestBuildOptions(unittest.TestCase):
     def test_principal_tiering(self):
         o = self._opts()
         self.assertEqual(o.model, "claude-sonnet-5")  # config default; short "sonnet" -> full id
-        self.assertEqual(o.max_turns, 40)
+        self.assertEqual(o.max_turns, 60)  # raised 40->60: prod cases need more turns (curl-based history)
         self.assertEqual(getattr(o, "effort", None), "high")  # options-level
 
     def test_roles_registered_with_tiers(self):

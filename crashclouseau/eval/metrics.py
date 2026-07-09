@@ -197,20 +197,26 @@ def cost_summary(results):
 
 
 def abstain_calibration(cases, results):
-    """{strong, lead, abstain} x {findable, unfindable} confusion matrix. The cells that
-    matter for a prompt/threshold change: ``abstain_findable`` (false abstains — should
-    fall) and ``lead_unfindable`` (leads offered where even the seed missed the regressor
-    — the low-value-lead risk that should stay bounded)."""
+    """{strong, lead, abstain, errored} x {findable, unfindable} confusion matrix. The
+    cells that matter for a prompt/threshold change: ``abstain_findable`` (false abstains
+    — should fall) and ``lead_unfindable`` (leads offered where even the seed missed the
+    regressor — the low-value-lead risk that should stay bounded). ``errored_*`` is a run
+    that failed (max_turns/timeout/exception → a None result), bucketed apart so a crashed
+    run never masquerades as a deliberate abstain (which would silently flatter the
+    false-abstain cell)."""
     conf = {
         v + f: 0
-        for v in ("strong_", "lead_", "abstain_")
+        for v in ("strong_", "lead_", "abstain_", "errored_")
         for f in ("findable", "unfindable")
     }
     for case in cases:
-        dossier = _dossier(results, case.uuid)
-        verdict = "strong_" if _is_strong(dossier) else (
-            "lead_" if _is_lead(dossier) else "abstain_"
-        )
+        if results.get(case.uuid) is None:
+            verdict = "errored_"
+        else:
+            dossier = _dossier(results, case.uuid)
+            verdict = "strong_" if _is_strong(dossier) else (
+                "lead_" if _is_lead(dossier) else "abstain_"
+            )
         conf[verdict + ("findable" if _findable(case) else "unfindable")] += 1
     return conf
 
@@ -230,6 +236,7 @@ def compute_metrics(cases, results, sweep_config=None, corpus_hash="", diff_chec
         n_offstack=off["n_offstack"],
         n_strong=ev["n_strong"],
         n_lead=ld["n_lead"],
+        n_errored=sum(1 for c in cases if results.get(c.uuid) is None),
         mean_cost_usd=cost["mean_cost_usd"],
         total_cost_usd=cost["total_cost_usd"],
         mean_output_tokens=cost["mean_output_tokens"],
@@ -259,6 +266,7 @@ def compare_to_baseline(metrics, baseline_path):
     info = {
         "abstain_findable": (metrics.abstain_calibration.get("abstain_findable", 0)
                              - base_cal.get("abstain_findable", 0)),
+        "n_errored": metrics.n_errored - base.get("n_errored", 0),
         "mean_cost_usd": metrics.mean_cost_usd - base.get("mean_cost_usd", 0.0),
     }
     return {"status": "regress" if regressed else "pass", "deltas": deltas, "info": info}
