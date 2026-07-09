@@ -47,6 +47,8 @@ def main(argv=None):
     parser.add_argument("--sweep", default=None, help="path to a SweepConfig JSON")
     parser.add_argument("--baseline", default=None)
     parser.add_argument("--out", default="metrics.json")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="score only the first N cases (a cheap validation batch)")
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     args = parser.parse_args(argv)
@@ -63,6 +65,8 @@ def main(argv=None):
         corpus_mod.freeze(miner(start, end), corpus_dir)
 
     cases, corpus_hash = corpus_mod.load_corpus(corpus_dir)
+    if args.limit:
+        cases = cases[: args.limit]
 
     if args.cmd in ("label", "all"):
         for case in cases:
