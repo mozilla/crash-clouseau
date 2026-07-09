@@ -25,6 +25,10 @@ _SEARCHFOX = [
 # data-flow / skeptic read a candidate's diff in one fast call instead of
 # shelling out.
 _PATCH = ["mcp__patch__diff"]
+# hg.mozilla.org history/blame/changeset via libmozdata (our UA + retry, channel->repo),
+# so roles find & inspect regressors by what recently changed a file instead of shelling
+# out to curl/git-log (non-portable: the prod worker has no local checkout).
+_HISTORY = [f"mcp__history__{name}" for name in ("file_history", "blame", "changeset")]
 _BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
 
 _GROUND = (
@@ -36,6 +40,9 @@ _GROUND = (
     "claim, say so rather than guess. Whenever you quote code in prose — identifiers, "
     "function/type names, expressions, `file:line`, paths — wrap it in `backticks` so "
     "it renders as code; be consistent, don't backtick some and leave the rest bare."
+    " Never curl hg.mozilla.org or shell out to git/hg to read source or history "
+    "(there is no local checkout in production): use the searchfox tools for source, "
+    "and the `mcp__history__*` tools (file_history/blame/changeset) for history."
 )
 
 _ROLES: dict[str, dict] = {
@@ -78,15 +85,18 @@ _ROLES: dict[str, dict] = {
         "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}],\"from_stackpos\":0,"
         "\"to_symbol\":\"Readable::symbol\"}." + _GROUND,
-        "tools": [*_BUILTIN_READ, *_SEARCHFOX],
+        "tools": [*_BUILTIN_READ, *_SEARCHFOX, *_HISTORY],
     },
     "patch-scout": {
         "description": "Intersect the neighborhood with recent patches and summarize, "
         "in one cited line, what each candidate changed.",
         "prompt": "You are the patch scout. For each candidate changeset, call the "
         "`mcp__patch__diff` tool to get its parsed diff (changed files, hunks with "
-        "exact line numbers + content + enclosing function) — do NOT shell out with "
-        "git/hg. Match changed functions to the neighborhood and write a one-line, "
+        "exact line numbers + content + enclosing function). To find WHICH changeset is "
+        "the likely regressor use `mcp__history__file_history` (recent changes to the "
+        "crashing file/area) and `mcp__history__changeset` to inspect a candidate; "
+        "`mcp__history__blame` blames the crashing line. Do NOT shell out with "
+        "git/hg/curl. Match changed functions to the neighborhood and write a one-line, "
         "fully-cited semantic summary per candidate (cite the diff line and the "
         "searchfox symbol). Treat the provided seed list as a priority queue, not as "
         "proof that no off-stack candidate exists: if neighborhood files/functions "
@@ -103,7 +113,7 @@ _ROLES: dict[str, dict] = {
         "\"lines\":[],\"citations\":[{\"kind\":\"diff_line\",\"node\":\"<hg node>\","
         "\"filename\":\"...\",\"line\":42,\"side\":\"added|deleted|context\","
         "\"content\":\"exact tool line\"}]}]." + _GROUND,
-        "tools": [*_BUILTIN_READ, "mcp__patch__diff",
+        "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY,
                   "mcp__searchfox__define", "mcp__searchfox__search"],
     },
     "data-flow-tracer": {
@@ -124,7 +134,7 @@ _ROLES: dict[str, dict] = {
         "\"function\":\"...\",\"line\":0,\"node\":\"...\"},\"citations\":[{\"kind\":"
         "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}." + _GROUND,
-        "tools": [*_BUILTIN_READ, "mcp__patch__diff",
+        "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY,
                   "mcp__searchfox__define", "mcp__searchfox__search"],
     },
     "skeptic": {
@@ -140,7 +150,7 @@ _ROLES: dict[str, dict] = {
         "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\","
         "\"status\":\"pass|fail|unverifiable\",\"note\":\"...\",\"citations\":[...]}]"
         "." + _GROUND,
-        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff"],
+        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff", *_HISTORY],
     },
 }
 
@@ -151,6 +161,10 @@ def searchfox_tool_ids() -> list[str]:
 
 def patch_tool_ids() -> list[str]:
     return list(_PATCH)
+
+
+def history_tool_ids() -> list[str]:
+    return list(_HISTORY)
 
 
 def role_names() -> list[str]:

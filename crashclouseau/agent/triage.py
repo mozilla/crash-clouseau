@@ -35,8 +35,10 @@ from crashclouseau.agent import roles
 from crashclouseau.logger import logger
 from crashclouseau.agent.result import CrashTriageResult
 from crashclouseau.agent.schema import Decision, parse_and_validate
+from crashclouseau.agent.tools import history as history_tools
 from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
+from crashclouseau.agent.tools.history import HistoryCtx
 from crashclouseau.agent.tools.patch import PatchCtx
 from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
 from crashclouseau.searchfox import SearchfoxClient
@@ -294,13 +296,15 @@ def build_options(
         searchfox_client = SearchfoxClient()
     ctx = SearchfoxCtx(client=searchfox_client)
     patch_ctx = PatchCtx(channel=crash.get("channel", "nightly"))
+    history_ctx = HistoryCtx(channel=crash.get("channel", "nightly"))
     mcp_servers = {
         "searchfox": build_sdk_server("searchfox", ctx, searchfox_cg.TOOLS),
         "patch": build_sdk_server("patch", patch_ctx, patch_tools.TOOLS),
+        "history": build_sdk_server("history", history_ctx, history_tools.TOOLS),
     }
     allowed = [
         *_BUILTIN_TOOLS, "Task",
-        *roles.searchfox_tool_ids(), *roles.patch_tool_ids(),
+        *roles.searchfox_tool_ids(), *roles.patch_tool_ids(), *roles.history_tool_ids(),
     ]
 
     if recorder is not None:
