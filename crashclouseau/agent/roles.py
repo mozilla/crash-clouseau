@@ -171,16 +171,23 @@ def role_names() -> list[str]:
     return list(_ROLES)
 
 
-def make_role(name: str) -> AgentDefinition:
+def make_role(name: str, llm_cfg: dict | None = None) -> AgentDefinition:
     spec = _ROLES[name]
-    model = config.get_llm_role(name).get("model", "inherit")
-    return AgentDefinition(
+    # Prefer the (possibly swept) llm_cfg passed by build_options so a sweep's per-role
+    # model/effort actually reaches the subagent; fall back to the base config.
+    rcfg = ((llm_cfg or {}).get("roles") or {}).get(name)
+    if rcfg is None:
+        rcfg = config.get_llm_role(name)
+    kwargs = dict(
         description=spec["description"],
         prompt=spec["prompt"],
         tools=list(spec["tools"]),
-        model=model,
+        model=rcfg.get("model", "inherit"),
     )
+    if rcfg.get("effort"):
+        kwargs["effort"] = rcfg["effort"]
+    return AgentDefinition(**kwargs)
 
 
-def build_roles() -> dict[str, AgentDefinition]:
-    return {name: make_role(name) for name in _ROLES}
+def build_roles(llm_cfg: dict | None = None) -> dict[str, AgentDefinition]:
+    return {name: make_role(name, llm_cfg) for name in _ROLES}

@@ -23,18 +23,23 @@ from crashclouseau.logger import logger
 
 
 def _sweep_llm_cfg(sweep_config):
-    """Base ``agent.llm`` block with the sweep's role/principal overrides applied."""
+    """Base ``agent.llm`` block with the sweep's role/principal/effort overrides applied."""
     llm_cfg = dict(config.get_llm())
     if not sweep_config:
         return llm_cfg
     roles = {k: dict(v) for k, v in (llm_cfg.get("roles") or {}).items()}
     for role, model in (sweep_config.get("roles") or {}).items():
         roles.setdefault(role, {})["model"] = model
-    llm_cfg["roles"] = roles
+    principal = dict(llm_cfg.get("principal") or {})
     if sweep_config.get("principal_model"):
-        principal = dict(llm_cfg.get("principal") or {})
         principal["model"] = sweep_config["principal_model"]
-        llm_cfg["principal"] = principal
+    eff = sweep_config.get("effort")
+    if eff:  # apply one effort to the principal AND every role
+        principal["effort"] = eff
+        for r in roles.values():
+            r["effort"] = eff
+    llm_cfg["roles"] = roles
+    llm_cfg["principal"] = principal
     return llm_cfg
 
 

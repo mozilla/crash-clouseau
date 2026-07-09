@@ -41,6 +41,7 @@ class SweepConfig(BaseModel):
     name: str = "default"
     roles: dict[str, str] = Field(default_factory=dict)   # role -> model short name
     principal_model: str | None = None
+    effort: str | None = None  # applied to principal AND every role when set (e.g. "max")
     confidence_thresholds: dict[str, float] = Field(default_factory=dict)
 
 

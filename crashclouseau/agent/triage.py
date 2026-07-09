@@ -315,7 +315,7 @@ def build_options(
     kwargs = dict(
         system_prompt=_system_prompt(),
         mcp_servers=mcp_servers,
-        agents=roles.build_roles(),
+        agents=roles.build_roles(llm_cfg),
         allowed_tools=allowed,
         model=model,
         max_turns=max_turns,

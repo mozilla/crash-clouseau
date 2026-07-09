@@ -316,9 +316,25 @@ class TestRerunCorpus(unittest.TestCase):
         self.assertIsNone(results["boom"])  # failure degraded, not raised
 
     def test_sweep_overrides_llm_cfg(self):
-        cfg = R._sweep_llm_cfg({"roles": {"skeptic": "sonnet"}, "principal_model": "haiku"})
+        cfg = R._sweep_llm_cfg({"roles": {"skeptic": "sonnet"}, "principal_model": "haiku",
+                                "effort": "max"})
         self.assertEqual(cfg["roles"]["skeptic"]["model"], "sonnet")
         self.assertEqual(cfg["principal"]["model"], "haiku")
+        self.assertEqual(cfg["principal"]["effort"], "max")                      # -> principal
+        self.assertTrue(all(r.get("effort") == "max" for r in cfg["roles"].values()))  # -> every role
+
+    def test_sweep_model_and_effort_reach_subagents(self):
+        # Regression: build_roles must honor the swept llm_cfg, not the base config, so a
+        # sweep's per-role model/effort actually reaches the subagent AgentDefinition.
+        from crashclouseau.agent import roles
+        cfg = R._sweep_llm_cfg({"principal_model": "opus", "roles": {"skeptic": "opus"},
+                                "effort": "max"})
+        ad = roles.make_role("skeptic", cfg)
+        self.assertEqual(ad.model, "opus")
+        self.assertEqual(ad.effort, "max")
+        base = roles.make_role("skeptic")            # no llm_cfg -> base config tier, no effort
+        self.assertEqual(base.model, "haiku")
+        self.assertIsNone(base.effort)
 
     def test_case_to_crash_carries_raw_crash_for_facts(self):
         # The frozen processed crash must reach the prompt as raw_crash, else eval reruns
