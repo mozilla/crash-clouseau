@@ -67,7 +67,7 @@
         "enabled": true,
         "channels": ["nightly"],
         "queue": "agent",
-        "job_timeout": 5400,
+        "job_timeout": 1800,
         "skip_if_existing": true,
         "max_seed_frames": 40,
         "agent_version": 1,
@@ -114,14 +114,14 @@
         },
         "llm":
         {
-            "principal": {"model": "opus", "effort": "max", "max_turns": 60},
+            "principal": {"model": "sonnet", "effort": "high", "max_turns": 60},
             "roles":
             {
-                "crash-interpreter": {"model": "opus", "effort": "max"},
-                "call-graph-explorer": {"model": "opus", "effort": "max"},
-                "patch-scout": {"model": "opus", "effort": "max"},
-                "data-flow-tracer": {"model": "opus", "effort": "max"},
-                "skeptic": {"model": "opus", "effort": "max"}
+                "crash-interpreter": {"model": "haiku"},
+                "call-graph-explorer": {"model": "sonnet", "effort": "medium"},
+                "patch-scout": {"model": "haiku"},
+                "data-flow-tracer": {"model": "sonnet", "effort": "medium"},
+                "skeptic": {"model": "haiku"}
             },
             "pricing":
             {
@@ -130,7 +130,7 @@
                 "claude-opus-4-8": {"in": 5.0, "out": 25.0},
                 "claude-fable-5": {"in": 10.0, "out": 50.0}
             },
-            "max_cost_usd_per_crash": 20.0
+            "max_cost_usd_per_crash": 2.0
         }
     },
     "eval":
