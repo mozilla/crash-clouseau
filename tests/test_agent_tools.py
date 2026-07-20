@@ -12,6 +12,8 @@ from crashclouseau.agent.tools.patch import PatchCtx, diff
 from crashclouseau.searchfox import (
     CallEdge,
     CallGraph,
+    FieldEntry,
+    FieldLayout,
     SearchfoxInvocationError,
     SearchfoxNoResult,
     SymbolRef,
@@ -22,6 +24,7 @@ from crashclouseau.agent.tools.searchfox_cg import (
     calls_from,
     calls_to,
     define,
+    field_layout,
 )
 from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
 from crashclouseau.vendor.agent_tools.registry import ToolError
@@ -56,13 +59,26 @@ class _StubClient:
     def define(self, symbol, repo=None, rev_label=None):
         raise SearchfoxInvocationError("binary exploded")
 
+    def field_layout(self, class_name, repo=None, rev_label=None):
+        return FieldLayout(
+            class_name="mozilla::detail::nsTStringRepr",
+            size=16,
+            align=8,
+            fields=[
+                FieldEntry(offset=0, size=8, type="char16_t *", name="mData"),
+                FieldEntry(offset=8, size=4, type="...", name="mLength"),
+            ],
+            repo="mozilla-central",
+        )
+
 
 class TestRegistration(unittest.TestCase):
     def test_expected_tools_registered(self):
         names = {t.name for t in sfcg.TOOLS}
         self.assertEqual(
             names,
-            {"calls_from", "calls_to", "calls_between", "define", "lookup", "search"},
+            {"calls_from", "calls_to", "calls_between", "define", "lookup", "search",
+             "field_layout"},
         )
 
     def test_schema_excludes_ctx_and_lists_args(self):
@@ -91,6 +107,12 @@ class TestHandlers(unittest.TestCase):
     def test_hard_error_becomes_toolerror(self):
         with self.assertRaises(ToolError):
             asyncio.run(define(self.ctx, "Foo::Bar"))
+
+    def test_field_layout_renders_offsets_and_citation_shape(self):
+        out = asyncio.run(field_layout(self.ctx, "mozilla::detail::nsTStringRepr"))
+        self.assertIn("offset 8", out)
+        self.assertIn("mLength", out)
+        self.assertIn("struct_layout", out)  # tells the model the citation shape
 
 
 class TestSdkWiring(unittest.TestCase):

@@ -56,6 +56,12 @@ class Decision(str, Enum):
 class Confidence(str, Enum):
     low = "low"
     medium = "medium"
+    # ``probable`` sits between ``medium`` and ``high`` and is reserved for a lead that
+    # a DETERMINISTIC corroboration (computed outside the LLM — e.g. a fault-address ==
+    # struct-field-offset match) has raised above the bare-lead ceiling. The model may
+    # NOT self-assert it (``_consistency_rule`` clamps a model-emitted probable/high on
+    # a lead back to medium); only ``orchestrator._apply_corroboration_gate`` sets it.
+    probable = "probable"
     high = "high"
 
 
@@ -69,6 +75,7 @@ class CitationKind(str, Enum):
     searchfox = "searchfox"
     diff_line = "diff_line"
     stack_frame = "stack_frame"
+    struct_layout = "struct_layout"
 
 
 # Categorical confidence -> numeric, for the abstain_below_confidence floor.
@@ -80,6 +87,7 @@ class CitationKind(str, Enum):
 CONFIDENCE_SCORE: dict[Confidence, float] = {
     Confidence.low: 0.25,
     Confidence.medium: 0.5,
+    Confidence.probable: 0.70,
     Confidence.high: 0.85,
 }
 
@@ -114,8 +122,22 @@ class StackFrameCitation(BaseModel):
     node: str
 
 
+class StructLayoutCitation(BaseModel):
+    """A deterministic C++ memory-layout fact from ``mcp__searchfox__field_layout``:
+    field ``field`` of type ``type_name`` sits at byte ``offset``. Its purpose is to
+    make a null/small-address fault VERIFIABLE — the corroboration gate
+    (``orchestrator``) confirms ``offset`` equals the crash's fault address outside
+    the LLM, so this can raise a lead's confidence without trusting model prose."""
+
+    kind: Literal["struct_layout"] = "struct_layout"
+    type_name: str
+    field: str = ""
+    offset: int
+    repo: str = "mozilla-central"
+
+
 Citation = Annotated[
-    Union[SearchfoxCitation, DiffLineCitation, StackFrameCitation],
+    Union[SearchfoxCitation, DiffLineCitation, StackFrameCitation, StructLayoutCitation],
     Field(discriminator="kind"),
 ]
 
@@ -273,15 +295,18 @@ class Verdict(BaseModel):
             if self.consistency is None or not self.consistency.citations:
                 raise ValueError("strong-evidence requires a cited consistency claim")
         elif self.decision == Decision.lead:
-            # A lead is plausible-but-unverified: it must never wear a high-confidence
-            # badge, so clamp `high` down to `medium`. This is a fixed one-way clamp,
-            # independent of the tunable strong-evidence floor (keying on the floor
-            # would fail to clamp — or mis-clamp — if the floor is retuned). The
-            # cited-anchor requirement (a candidate/hunk/edge) is enforced at the
-            # Dossier level (``_skeptic_veto``), which can see those fields — it is
-            # deliberately NOT raised here: raising would trip parse_and_validate's
-            # salvage and drop an otherwise-useful lead.
-            if self.confidence == Confidence.high:
+            # A lead is plausible-but-unverified: the MODEL must never self-assert a
+            # confidence above `medium` (its own "high"/"probable" is exactly the
+            # over-claim we don't trust), so clamp both down to `medium`. `probable`
+            # (0.70) is reachable ONLY via ``orchestrator._apply_corroboration_gate``,
+            # which sets it AFTER validation from a deterministic corroboration (a
+            # fault-address == struct-field-offset match) — a signal the model cannot
+            # fabricate. This is a fixed one-way clamp, independent of the tunable
+            # strong-evidence floor. The cited-anchor requirement (a candidate/hunk/
+            # edge) is enforced at the Dossier level (``_skeptic_veto``), which can see
+            # those fields — deliberately NOT raised here: raising would trip
+            # parse_and_validate's salvage and drop an otherwise-useful lead.
+            if self.confidence in (Confidence.high, Confidence.probable):
                 self.confidence = Confidence.medium
         elif self.decision == Decision.abstain:
             if not self.abstain_reason:
@@ -300,6 +325,12 @@ class Dossier(BaseModel):
     data_flow: DataFlowHypothesis | None = None
     skeptic: list[SkepticResult] = Field(default_factory=list)
     area_experts: list[AreaExpert] = Field(default_factory=list)
+    # Deterministic corroboration flags computed OUTSIDE the LLM (in ``orchestrator``)
+    # from the crash + dossier — e.g. ``{"fault_address_offset_match": true,
+    # "fault_offset": 8, "fault_field": "mLength", "fault_type": "...nsTStringRepr"}``.
+    # Drives the corroboration gate (lead -> probable) and the UI chips. Not a Cited
+    # claim; rides any verdict. Empty on older dossiers (backward compatible).
+    corroborations: dict = Field(default_factory=dict)
     verdict: Verdict | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -435,6 +466,10 @@ _KIND_ALIASES = {
     "diff line": "diff_line",
     "stack_frame": "stack_frame", "stack-frame": "stack_frame",
     "stackframe": "stack_frame", "stack frame": "stack_frame",
+    "struct_layout": "struct_layout", "struct-layout": "struct_layout",
+    "structlayout": "struct_layout", "struct layout": "struct_layout",
+    "field_layout": "struct_layout", "field-layout": "struct_layout",
+    "fieldlayout": "struct_layout", "field layout": "struct_layout",
 }
 _SIDE_ALIASES = {
     "added": "added", "add": "added", "addition": "added",

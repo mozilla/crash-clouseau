@@ -223,6 +223,48 @@ class SearchHit(BaseModel):
     permalink: Optional[str] = None
 
 
+class FieldEntry(BaseModel):
+    """One field of a C++ class/struct layout: its byte ``offset``, ``size``,
+    C++ ``type`` and member ``name`` (from ``--field-layout``)."""
+
+    offset: int
+    size: Optional[int] = None
+    type: str = ""
+    name: str = ""
+
+
+class FieldLayout(BaseModel):
+    """The memory layout of a C++ class/struct (``searchfox-cli --field-layout``).
+
+    This is the deterministic evidence that turns a null/small-address fault into a
+    verifiable claim: e.g. a fault at ``0x8`` on an ``nsTStringRepr`` corroborates a
+    null-deref of ``mLength`` (offset 8). ``field_at(n)`` returns the member sitting
+    at byte offset ``n`` (or ``None``). There is no per-symbol permalink from the CLI,
+    so the class name + field + offset ARE the citation.
+    """
+
+    class_name: str
+    size: Optional[int] = None
+    align: Optional[int] = None
+    fields: List[FieldEntry] = []
+    repo: str
+    queried_tip: bool = True
+    rev_label: Optional[str] = None
+    raw_markdown: str = ""
+
+    def field_at(self, offset: int) -> Optional[FieldEntry]:
+        """The field exactly at byte ``offset`` (searchfox reports each field's
+        start offset), or ``None``. Prefers an exact start-offset match; falls back
+        to the field whose [offset, offset+size) range contains ``offset``."""
+        for f in self.fields:
+            if f.offset == offset:
+                return f
+        for f in self.fields:
+            if f.size and f.offset <= offset < f.offset + f.size:
+                return f
+        return None
+
+
 # --- error taxonomy ---------------------------------------------------------
 
 
@@ -636,6 +678,70 @@ def _parse_search(md, repo: Repo, rev_label=None) -> List[SearchHit]:
     return hits
 
 
+# ``--field-layout`` renders an ANSI-coloured box-drawing table; strip the colour
+# codes, read ``Size: N bytes, Alignment: M bytes``, then the ``│``-delimited rows.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_FL_SIZE_RE = re.compile(
+    r"Size:\s*(?P<size>\d+)\s*bytes?,\s*Alignment:\s*(?P<align>\d+)\s*bytes?",
+    re.IGNORECASE,
+)
+_FL_NAME_RE = re.compile(r"^Field Layout:\s*(?P<name>.+?)\s*$", re.MULTILINE)
+
+
+def _parse_field_layout(md, repo: Repo, symbol, rev_label=None) -> FieldLayout:
+    """Parse ``--field-layout`` markdown into a FieldLayout.
+
+    The CLI emits ``No field layout information found.`` (exit 0) for templates,
+    unknown types and non-class symbols -> :class:`SearchfoxNoResult` (abstain).
+    """
+    text = _ANSI_RE.sub("", md)
+    if "No field layout information found" in text or "Field Layout" not in text:
+        raise SearchfoxNoResult(
+            "no field layout for {!r}".format(symbol)
+        )
+    nm = _FL_NAME_RE.search(text)
+    class_name = nm.group("name") if nm else _clean_symbol(symbol)
+    sz = _FL_SIZE_RE.search(text)
+    size = int(sz.group("size")) if sz else None
+    align = int(sz.group("align")) if sz else None
+
+    fields: List[FieldEntry] = []
+    for raw in text.splitlines():
+        if "│" not in raw:  # the box-drawing column separator │
+            continue
+        cells = [c.strip() for c in raw.split("│")]
+        if len(cells) < 3:
+            continue
+        cells = cells[1:-1]  # drop the outer border empties
+        if len(cells) != 4:
+            continue
+        off, fsize, ftype, fname = cells
+        if not off.isdigit():  # skips the header row (offset|size|type|name)
+            continue
+        fields.append(
+            FieldEntry(
+                offset=int(off),
+                size=int(fsize) if fsize.isdigit() else None,
+                type=ftype,
+                name=fname,
+            )
+        )
+    if not fields:
+        raise SearchfoxParseError(
+            "no field rows in --field-layout output", raw=md
+        )
+    return FieldLayout(
+        class_name=class_name,
+        size=size,
+        align=align,
+        fields=fields,
+        repo=repo.value,
+        queried_tip=True,
+        rev_label=rev_label,
+        raw_markdown=md,
+    )
+
+
 # --- client -----------------------------------------------------------------
 
 
@@ -863,6 +969,20 @@ class SearchfoxClient:
         md = self._run(args, repo)
         return _parse_search(md, repo, rev_label)
 
+    def field_layout(self, class_name, repo=None, rev_label=None) -> FieldLayout:
+        """The byte-level memory layout of a C++ class/struct.
+
+        Use to corroborate a null/small-address fault: a fault at offset ``N`` on
+        type ``T`` is a null-deref of whichever field ``T`` places at offset ``N``.
+        ``--field-layout`` needs the **bare** class name (template args make it
+        return nothing), so the symbol is cleaned first. Raises
+        :class:`SearchfoxNoResult` for templates/unknown/non-class symbols.
+        """
+        repo = self._resolve_repo(repo)
+        sym = _clean_symbol(class_name)
+        md = self._run(["--field-layout", sym], repo)
+        return _parse_field_layout(md, repo, sym, rev_label)
+
     def clear_cache(self):
         """Drop the in-process result cache."""
         self._cache.clear()
@@ -893,7 +1013,7 @@ def _build_argparser():
         description="Typed wrapper around searchfox-cli (prints JSON).",
     )
     sub = p.add_subparsers(dest="verb", required=True)
-    for verb in ("calls-from", "calls-to", "define", "lookup", "search"):
+    for verb in ("calls-from", "calls-to", "define", "lookup", "search", "field-layout"):
         sp = sub.add_parser(verb, parents=[common])
         sp.add_argument("symbol")
     cb = sub.add_parser("calls-between", parents=[common])
@@ -917,6 +1037,8 @@ def main(argv=None):
             )
         elif args.verb == "define":
             res = client.define(args.symbol, repo=args.repo)
+        elif args.verb == "field-layout":
+            res = client.field_layout(args.symbol, repo=args.repo)
         elif args.verb == "lookup":
             res = client.lookup(args.symbol, repo=args.repo, limit=args.limit)
         else:  # search

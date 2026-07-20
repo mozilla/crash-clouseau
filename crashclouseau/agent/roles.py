@@ -19,7 +19,8 @@ from crashclouseau import config
 
 _SEARCHFOX = [
     f"mcp__searchfox__{name}"
-    for name in ("calls_from", "calls_to", "calls_between", "define", "lookup", "search")
+    for name in ("calls_from", "calls_to", "calls_between", "define", "lookup",
+                 "search", "field_layout")
 ]
 # Deterministic #14 patch-extraction, exposed as a tool so patch-scout /
 # data-flow / skeptic read a candidate's diff in one fast call instead of
@@ -114,7 +115,8 @@ _ROLES: dict[str, dict] = {
         "\"filename\":\"...\",\"line\":42,\"side\":\"added|deleted|context\","
         "\"content\":\"exact tool line\"}]}]." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY,
-                  "mcp__searchfox__define", "mcp__searchfox__search"],
+                  "mcp__searchfox__define", "mcp__searchfox__search",
+                  "mcp__searchfox__field_layout"],
     },
     "data-flow-tracer": {
         "description": "Read the function bodies along a call path and decide whether "
@@ -122,7 +124,12 @@ _ROLES: dict[str, dict] = {
         "prompt": "You are the data-flow tracer. For a (candidate patch, crash frame) "
         "pair, read the changed lines with `mcp__patch__diff` and the path bodies with "
         "define, then reason about whether the change can free/mutate/null/overrun the "
-        "value the crash site dereferences. Also consider Firefox-specific mechanisms: "
+        "value the crash site dereferences. For a null_deref (or any small faulting "
+        "address 0xN), CONFIRM the fault: call `mcp__searchfox__field_layout` on the "
+        "dereferenced C++ type and check whether byte offset N is a real field — if so, "
+        "the crash is a null-deref of THAT field; cite it as a `struct_layout` citation "
+        "(type_name/field/offset) so it verifies deterministically instead of being a "
+        "hand-waved offset. Also consider Firefox-specific mechanisms: "
         "refcount/lifetime changes, task dispatch ordering, IPC actor teardown, GC "
         "marking/tracing, shutdown ordering, assertion invariant changes, thread/race "
         "assumptions, Rust panic paths, and FFI boundary changes. Return a cited "
@@ -135,7 +142,8 @@ _ROLES: dict[str, dict] = {
         "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY,
-                  "mcp__searchfox__define", "mcp__searchfox__search"],
+                  "mcp__searchfox__define", "mcp__searchfox__search",
+                  "mcp__searchfox__field_layout"],
     },
     "skeptic": {
         "description": "Adversarially re-verify each assembled claim (edges, diff "
@@ -145,7 +153,15 @@ _ROLES: dict[str, dict] = {
         "cited diff line with `mcp__patch__diff` — and mark each pass/fail/"
         "unverifiable. Use fail for a contradiction or missing claimed evidence; use "
         "unverifiable for searchfox holes such as virtual/IPC/FFI/macro/template "
-        "edges. A claim without a fresh citation cannot pass. End with one fenced "
+        "edges. A claim without a fresh citation cannot pass. A fault-address↔field "
+        "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
+        "crashing type and mark it `pass` (with a `struct_layout` citation) when the "
+        "faulting offset is a real field, `fail` when it isn't — do not leave it "
+        "`unverifiable`. Remember searchfox indexes ~tip, not the crash build: a small "
+        "crash-line vs tip-line delta (or a symbol moved/renamed at tip) is revision "
+        "drift or inlining, NOT a contradiction — never `fail` a mechanism over a line "
+        "delta when the diff and field-layout confirm it; use `unverifiable` at most. "
+        "End with one fenced "
         "```json block holding a LIST with ONE object per claim you checked, shaped "
         "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\","
         "\"status\":\"pass|fail|unverifiable\",\"note\":\"...\",\"citations\":[...]}]"

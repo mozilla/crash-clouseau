@@ -18,9 +18,11 @@ from crashclouseau.agent.schema import (  # noqa: E402
     Candidate,
     Claim,
     Confidence,
+    DataFlowHypothesis,
     Decision,
     Dossier,
     SearchfoxCitation,
+    StructLayoutCitation,
     Verdict,
 )
 
@@ -98,6 +100,103 @@ async def _triage_transient(*, crash, tools_cfg=None, llm_cfg=None, recorder=Non
 
 async def _triage_must_not_run(**kwargs):
     raise AssertionError("run_crash_triage should not have been called")
+
+
+def _seed_with_fault(addr="0x0000000000000008"):
+    return {"raw_crash": {"json_dump": {"crash_info": {"address": addr}}}}
+
+
+def _lead_with_struct(offset=8):
+    return Dossier(
+        candidate=Candidate(node="abc123def456", bug=42),
+        data_flow=DataFlowHypothesis(
+            summary="null-deref of mLength",
+            operation="null",
+            citations=[
+                StructLayoutCitation(
+                    type_name="mozilla::detail::nsTStringRepr",
+                    field="mLength",
+                    offset=offset,
+                )
+            ],
+        ),
+        verdict=Verdict(
+            decision=Decision.lead,
+            confidence=Confidence.medium,
+            needinfo_draft="could you take a look?",
+        ),
+    )
+
+
+class TestCorroborationGate(unittest.TestCase):
+    def test_fault_address_parsing(self):
+        self.assertEqual(orch._fault_address(_seed_with_fault("0x8")["raw_crash"]), 8)
+        self.assertEqual(
+            orch._fault_address({"json_dump": {"crash_info": {"address": "0x10"}}}), 16
+        )
+        self.assertIsNone(orch._fault_address(None))
+        self.assertIsNone(orch._fault_address({"json_dump": {"crash_info": {}}}))
+
+    def test_gate_promotes_lead_to_probable_on_offset_match(self):
+        d = _lead_with_struct(offset=8)
+        flags = orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        self.assertTrue(flags["fault_address_offset_match"])
+        self.assertEqual(flags["fault_field"], "mLength")
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+        self.assertEqual(d.corroborations["fault_offset"], 8)
+
+    def test_verdict_row_maps_probable_to_70(self):
+        d = _lead_with_struct(offset=8)
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        row = orch._verdict_row(
+            CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=d)
+        )
+        self.assertEqual(row["verdict"], "lead")
+        self.assertEqual(row["confidence"], 70)
+
+    def test_no_promotion_when_offset_mismatches_fault(self):
+        d = _lead_with_struct(offset=12)  # cited field is at 12, fault is 0x8
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        self.assertNotIn("fault_address_offset_match", d.corroborations)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_no_promotion_on_zero_fault_address(self):
+        # 0x0 is the generic null pointer (ambiguous), not a pinpoint field offset.
+        d = _lead_with_struct(offset=0)
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x0"))
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_no_promotion_without_struct_citation(self):
+        d = Dossier(
+            candidate=Candidate(node="abc123def456", bug=42),
+            verdict=Verdict(
+                decision=Decision.lead,
+                confidence=Confidence.medium,
+                needinfo_draft="take a look?",
+            ),
+        )
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertFalse(d.corroborations.get("fault_address_offset_match"))
+
+    def test_strong_evidence_not_touched_by_gate(self):
+        d = _strong_result().dossier
+        d.data_flow = DataFlowHypothesis(
+            summary="x", operation="null",
+            citations=[StructLayoutCitation(
+                type_name="T", field="f", offset=8)],
+        )
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        # gate only promotes leads; a strong-evidence verdict is left alone
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+        self.assertEqual(d.verdict.confidence, Confidence.high)
+
+    def test_model_cannot_self_assert_probable_on_lead(self):
+        # A model-emitted lead+probable (or +high) is clamped to medium by the schema;
+        # only the deterministic gate can set probable.
+        v = Verdict(decision=Decision.lead, confidence=Confidence.probable,
+                    needinfo_draft="?")
+        self.assertEqual(v.confidence, Confidence.medium)
 
 
 class TestEnqueueGating(unittest.TestCase):
@@ -287,9 +386,51 @@ class TestBuildSeed(unittest.TestCase):
         self.assertEqual([c["node"] for c in cands], ["n2", "n1"])  # by score desc
         self.assertEqual(
             cands[0],
-            {"node": "n2", "score": 9, "bug": 222, "backedout": True, "noise": False},
+            {"node": "n2", "score": 9, "bug": 222, "backedout": True,
+             "pushdate": None, "noise": False},
         )
         self.assertEqual(cands[1]["score"], 5)  # n1 deduped to its max score across frames
+
+    def test_seed_surfaces_pushdate_and_inlines(self):
+        res = {"frames": [
+            {"stackpos": 4, "function": "nsGenericHTMLElement::AfterSetAttr",
+             "filename": "nsGenericHTMLElement.cpp", "line": 960,
+             "changesets": {"d86be929745b": {"score": 7, "bugid": 2053211,
+                                             "backedout": False,
+                                             "pushdate": "2026-07-10T12:00:00"}}},
+        ]}
+        raw = {"json_dump": {"crashing_thread": {"frames": [
+            {"frame": 4, "function": "nsGenericHTMLElement::AfterSetAttr",
+             "inlines": [{"function": "HashString"},
+                         {"function": "nsTStringRepr::Length"}]},
+        ]}}}
+        with mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, {})), \
+             mock.patch.object(orch.models.UUID, "get_info",
+                               return_value={"signature": "S", "channel": "nightly",
+                                             "product": "Firefox", "buildid": "x", "version": "1"}), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value=raw):
+            seed = orch.build_seed("u-1")
+        # pushdate is no longer dropped
+        self.assertEqual(seed["candidates"][0]["pushdate"], "2026-07-10T12:00:00")
+        # the inlined leaf functions (invisible before) reach the agent's stack text
+        self.assertIn("inlined: HashString, nsTStringRepr::Length", seed["stack"])
+
+    def test_inlines_by_stackpos_shapes_and_degradation(self):
+        # crashing_thread as a dict
+        raw = {"json_dump": {"crashing_thread": {"frames": [
+            {"frame": 0, "inlines": [{"function": "A"}]},
+            {"frame": 1},  # no inlines
+        ]}}}
+        self.assertEqual(orch._inlines_by_stackpos(raw), {0: ["A"]})
+        # threads[idx] shape
+        raw2 = {"json_dump": {"crashing_thread": 1, "threads": [
+            {"frames": []},
+            {"frames": [{"frame": 3, "inlines": [{"function": "B"}]}]},
+        ]}}
+        self.assertEqual(orch._inlines_by_stackpos(raw2), {3: ["B"]})
+        # garbage degrades to {}
+        self.assertEqual(orch._inlines_by_stackpos(None), {})
+        self.assertEqual(orch._inlines_by_stackpos({"json_dump": {}}), {})
 
     def test_seed_downranks_anchor_frame_only_candidate(self):
         # A candidate supported ONLY by a universal anchor frame is down-ranked below a

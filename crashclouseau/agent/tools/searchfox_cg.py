@@ -26,6 +26,7 @@ from typing import Annotated
 from crashclouseau.searchfox import (
     CallGraph,
     Definition,
+    FieldLayout,
     SearchfoxClient,
     SearchfoxError,
     SearchfoxNoResult,
@@ -90,6 +91,25 @@ def _fmt_refs(refs: list[SymbolRef]) -> str:
     return "\n".join(
         f"{r.pretty} {r.file}:{r.line} {r.permalink or ''}".rstrip() for r in refs
     )
+
+
+def _fmt_field_layout(fl: FieldLayout) -> str:
+    head = f"field-layout {fl.class_name} (repo {fl.repo}"
+    if fl.size is not None:
+        head += f", size {fl.size}B, align {fl.align}B"
+    head += "):"
+    lines = [head]
+    for f in fl.fields:
+        lines.append(
+            f"- offset {f.offset} (size {f.size}): {f.type} {f.name}".rstrip()
+        )
+    lines.append(
+        "To cite a fault-address match, emit a citation "
+        '{"kind":"struct_layout","type_name":"%s","field":"<name>",'
+        '"offset":<n>,"repo":"%s"} where <n> is the field offset that equals '
+        "the crash fault address." % (fl.class_name, fl.repo)
+    )
+    return "\n".join(lines)
 
 
 @tool
@@ -191,6 +211,22 @@ async def search(
     except SearchfoxError as exc:
         raise _sf_error(exc, "search") from exc
     return _fmt_hits(hits)
+
+
+@tool
+async def field_layout(
+    ctx: SearchfoxCtx,
+    class_name: Annotated[str, Field(description="Bare C++ class/struct name (no template <...> args), e.g. mozilla::detail::nsTStringRepr.")],
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+) -> str:
+    """Byte-level memory layout (offset/size/type/name of each field) of a C++ class/struct. Use to VERIFY a null/small-address fault: a fault at address 0xN on type T is a null-deref of whichever field T places at byte offset N — turning an otherwise 'unverifiable' offset claim into a citable `struct_layout` fact. Needs the bare class name (template args return nothing)."""
+    try:
+        fl = await asyncio.to_thread(ctx.client.field_layout, class_name, repo)
+    except SearchfoxNoResult:
+        return f"No field layout found for {class_name!r} (templates/non-class symbols have none)."
+    except SearchfoxError as exc:
+        raise _sf_error(exc, "field_layout") from exc
+    return _fmt_field_layout(fl)
 
 
 TOOLS = tools_in(__name__)

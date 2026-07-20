@@ -148,7 +148,23 @@ s.red {
 .confidence-badge.medium { background-color: #e6a700; color: #222; }
 .confidence-badge.low { background-color: #c05621; }
 .confidence-badge.lead { background-color: #d98a00; color: #222; }
+/* a lead a deterministic corroboration has lifted above the bare-lead ceiling */
+.confidence-badge.probable { background-color: #4c8c4a; }
 .confidence-badge.abstain { background-color: #777; }
+
+/* deterministic-corroboration chips (fault-address == struct-field-offset, ...) */
+.corrob-chips { margin: 0.4em 0; }
+.corrob-chip {
+    display: inline-block;
+    padding: 0.1em 0.6em;
+    margin: 0.15em 0.3em 0.15em 0;
+    border-radius: 0.8em;
+    font-size: 0.75em;
+    background-color: #e8f2e8;
+    border: 1px solid #4c8c4a;
+    color: #1e4620;
+}
+.corrob-chip::before { content: "\2713\00a0"; }  /* ✓ */
 
 .needinfo-draft {
     padding: 0.6em 0.8em;

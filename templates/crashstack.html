@@ -52,16 +52,18 @@
     {% set conf = evidence['confidence'] -%}
     {% set vd = d.get('verdict') -%}
     {% set is_lead = evidence['verdict'] == 'lead' -%}
-    {% set cclass = 'high' if (conf is not none and conf >= 85) else ('medium' if (conf is not none and conf >= 50) else 'low') -%}
+    {% set cclass = 'high' if (conf is not none and conf >= 85) else ('probable' if (conf is not none and conf >= 65) else ('medium' if (conf is not none and conf >= 50) else 'low')) -%}
     {% set cand = d.get('candidate') -%}
     {% set has_cand = cand and cand.get('node') -%}
+    {% set corrob = d.get('corroborations') or {} -%}
+    {% set is_probable = is_lead and conf is not none and conf >= 65 -%}
     <div class="evidence-panel">
       <h2>
         Clouseau evidence
         {% if evidence['verdict'] == 'culprit' -%}
         <span class="confidence-badge {{ cclass }}">{{ evidence['ui']['high_confidence_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% elif is_lead -%}
-        <span class="confidence-badge lead">{{ evidence['ui']['lead_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
+        <span class="confidence-badge {{ 'probable' if is_probable else 'lead' }}">{{ 'PROBABLE CAUSE' if is_probable else evidence['ui']['lead_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% else -%}
         <span class="confidence-badge abstain">ABSTAIN</span>
         {% endif -%}
@@ -73,8 +75,15 @@
       <p class="muted">Insufficient evidence &mdash; no culprit identified.{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
       {% endif -%}
 
+      {% if corrob.get('fault_address_offset_match') -%}
+      <div class="corrob-chips">
+        <span class="corrob-chip" title="The faulting address matches a struct field's byte offset (verified with searchfox field-layout) — a machine-checked null-deref of that field.">fault 0x{{ '%x'|format(corrob.get('fault_offset', 0)) }} == {{ corrob.get('fault_type','')|e }}::{{ corrob.get('fault_field','')|e }}</span>
+      </div>
+      {% endif -%}
       {% if is_lead -%}
-      {% if has_cand -%}
+      {% if is_probable -%}
+      <p class="muted">Probable cause &mdash; a related changeset was found <strong>and a deterministic signal corroborates the mechanism</strong> (see the check below), though the chain is not proven end&#8209;to&#8209;end. Stronger than a bare lead.</p>
+      {% elif has_cand -%}
       <p class="muted">Plausible lead &mdash; a possibly-related changeset was found, but the mechanism is <strong>not verified end&#8209;to&#8209;end</strong>. Worth a look by someone familiar with this code, who may not be the cause.</p>
       {% else -%}
       <p class="muted">Mechanism lead &mdash; a plausible crash mechanism was identified, but <strong>no specific regressing changeset</strong> could be pinned. Worth a look by someone familiar with this code.</p>

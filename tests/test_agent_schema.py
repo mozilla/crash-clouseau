@@ -18,6 +18,7 @@ from crashclouseau.agent.schema import (
     SearchfoxCitation,
     DiffLineCitation,
     StackFrameCitation,
+    StructLayoutCitation,
     _normalize_citations,
     dossier_from_db_json,
     dossier_to_db_json,
@@ -57,6 +58,16 @@ def _stack_frame():
         "function": "Foo::Bar",
         "line": 42,
         "node": "0123456789ab",
+    }
+
+
+def _struct_layout():
+    return {
+        "kind": "struct_layout",
+        "type_name": "mozilla::detail::nsTStringRepr",
+        "field": "mLength",
+        "offset": 8,
+        "repo": "mozilla-central",
     }
 
 
@@ -151,6 +162,7 @@ class TestCitationRoundTrip(unittest.TestCase):
             (_searchfox(), SearchfoxCitation, "searchfox"),
             (_diff_line(), DiffLineCitation, "diff_line"),
             (_stack_frame(), StackFrameCitation, "stack_frame"),
+            (_struct_layout(), StructLayoutCitation, "struct_layout"),
         ]
         for raw, cls, kind in cases:
             obj = adapter.validate_python(raw)
@@ -257,6 +269,16 @@ class TestCitationNormalization(unittest.TestCase):
         self.assertIsInstance(
             adapter.validate_python(_normalize_citations(raw)), StackFrameCitation
         )
+
+    def test_field_layout_alias_normalizes_to_struct_layout(self):
+        adapter = TypeAdapter(Citation)
+        for spelling in ("field-layout", "field_layout", "struct-layout"):
+            raw = _struct_layout()
+            raw["kind"] = spelling
+            self.assertIsInstance(
+                adapter.validate_python(_normalize_citations(raw)),
+                StructLayoutCitation,
+            )
 
     def test_lead_with_hyphen_and_removed_spellings_survives(self):
         # The exact live-run failure mode: a lead whose mechanism/consistency (and

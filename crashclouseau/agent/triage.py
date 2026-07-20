@@ -93,6 +93,15 @@ def _first_present(*values):
     return ""
 
 
+def _fmt_pushdate(value):
+    """A candidate's landing date as ``YYYY-MM-DD`` (a ``datetime`` or an ISO str);
+    falls back to ``str`` for anything else."""
+    try:
+        return value.strftime("%Y-%m-%d")
+    except AttributeError:
+        return str(value)[:10]
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
@@ -174,6 +183,9 @@ def _user_prompt(crash: dict) -> str:
                 parts.append("score={}".format(c["score"]))
             if c.get("bug"):
                 parts.append("bug={}".format(c["bug"]))
+            pushdate = c.get("pushdate")
+            if pushdate:
+                parts.append("landed={}".format(_fmt_pushdate(pushdate)))
             if c.get("backedout"):
                 parts.append("backed-out")
             if c.get("noise"):

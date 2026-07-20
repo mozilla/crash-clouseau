@@ -235,6 +235,28 @@ class ParserTest(unittest.TestCase):
         with self.assertRaises(sf.SearchfoxParseError):
             sf._parse_search(md, self.R)
 
+    def test_field_layout(self):
+        # ANSI colour codes + box-drawing table -> typed FieldLayout. This is the
+        # ab3238a5 corroboration: fault 0x8 on nsTStringRepr == mLength (offset 8).
+        fl = sf._parse_field_layout(
+            load("field_layout"), self.R, "mozilla::detail::nsTStringRepr"
+        )
+        self.assertEqual(fl.size, 16)
+        self.assertEqual(fl.align, 8)
+        self.assertEqual(fl.fields[0].offset, 0)
+        self.assertEqual(fl.fields[0].name, "mData")
+        eight = fl.field_at(8)
+        self.assertIsNotNone(eight)
+        self.assertEqual(eight.name, "mLength")
+        # a byte inside mData's [0,8) range resolves to mData
+        self.assertEqual(fl.field_at(4).name, "mData")
+
+    def test_field_layout_none_raises(self):
+        with self.assertRaises(sf.SearchfoxNoResult):
+            sf._parse_field_layout(
+                load("field_layout_none"), self.R, "nsTStringRepr<char>"
+            )
+
     def test_repo_tree_mapping(self):
         self.assertEqual(sf.Repo.CENTRAL.tree, "firefox-main")
         self.assertEqual(sf.Repo.BETA.tree, "firefox-beta")
@@ -331,6 +353,27 @@ class ClientTest(unittest.TestCase):
                 "mozilla-central",
             ],
         )
+
+    def test_field_layout_argv_and_result(self):
+        client, fake = self.make_client([_proc(0, load("field_layout"))])
+        # template args are stripped so the CLI accepts the bare class name
+        fl = client.field_layout("mozilla::detail::nsTStringRepr<char16_t>")
+        self.assertEqual(
+            fake.calls[0],
+            [
+                "/fake/searchfox-cli",
+                "--field-layout",
+                "mozilla::detail::nsTStringRepr",
+                "-R",
+                "mozilla-central",
+            ],
+        )
+        self.assertEqual(fl.field_at(8).name, "mLength")
+
+    def test_field_layout_no_result(self):
+        client, _ = self.make_client([_proc(0, load("field_layout_none"))])
+        with self.assertRaises(sf.SearchfoxNoResult):
+            client.field_layout("mozilla::detail::nsTStringRepr<char>")
 
     def test_calls_from_cleans_symbol_in_argv(self):
         client, fake = self.make_client([_proc(0, load("calls_from"))])

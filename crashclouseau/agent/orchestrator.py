@@ -22,7 +22,13 @@ from rq import Retry
 
 from crashclouseau import app, config, db, models, worker
 from crashclouseau.agent.experts import area_experts
-from crashclouseau.agent.schema import AreaExpert, CONFIDENCE_SCORE, Decision
+from crashclouseau.agent.schema import (
+    AreaExpert,
+    CONFIDENCE_SCORE,
+    Confidence,
+    Decision,
+    StructLayoutCitation,
+)
 from crashclouseau.logger import logger
 from crashclouseau.vendor.hackbot_runtime.actions.recorder import ActionsRecorder
 
@@ -80,6 +86,38 @@ def _seed_score(uuid):
     return row[0] if row else None
 
 
+def _inlines_by_stackpos(raw_crash):
+    """Map stackpos -> [inlined function names] from the processed crash's crashing
+    thread. The crash's real leaf functions are inlined and otherwise never reach the
+    agent. Best-effort across the Socorro shapes (``json_dump.crashing_thread`` or
+    ``json_dump.threads[crashing_thread]``); returns {} on any mismatch (never raises)."""
+    out: dict = {}
+    try:
+        dump = (raw_crash or {}).get("json_dump") or {}
+        thread = dump.get("crashing_thread")
+        if not isinstance(thread, dict):
+            idx = dump.get("crashing_thread")
+            threads = dump.get("threads")
+            if isinstance(idx, int) and isinstance(threads, list) and idx < len(threads):
+                thread = threads[idx]
+        if not isinstance(thread, dict):
+            return {}
+        for i, fr in enumerate(thread.get("frames") or []):
+            if not isinstance(fr, dict):
+                continue
+            pos = fr.get("frame", i)
+            names = [
+                il.get("function")
+                for il in (fr.get("inlines") or [])
+                if isinstance(il, dict) and il.get("function")
+            ]
+            if names:
+                out[pos] = names
+    except Exception:  # pragma: no cover - defensive; inlines are a nicety
+        return {}
+    return out
+
+
 def build_seed(uuid):
     """Assemble the ``crash=`` payload for ``run_crash_triage`` from the scored
     stack + processed crash. Returns None (logged) when nothing is scored to
@@ -108,12 +146,26 @@ def build_seed(uuid):
         logger.warning("agent: could not fetch processed crash for %s: %s", uuid, exc)
 
     frames = frames[: config.get_agent_max_seed_frames()]
-    stack_text = "\n".join(
-        "#{} {}  {}:{}".format(
+    # Per-frame inlined functions from the processed crash (the crash's real leaf
+    # functions — e.g. `nsTStringRepr::Length`/`HashString` — are inlined and otherwise
+    # invisible to the agent). Best-effort: no-op when the shape differs.
+    inlines = _inlines_by_stackpos(raw_crash)
+    if inlines:
+        for f in frames:
+            fi = inlines.get(f.get("stackpos"))
+            if fi:
+                f["inlines"] = fi
+
+    def _frame_line(f):
+        base = "#{} {}  {}:{}".format(
             f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
         )
-        for f in frames
-    )
+        fi = f.get("inlines")
+        if fi:
+            base += "  [inlined: {}]".format(", ".join(fi))
+        return base
+
+    stack_text = "\n".join(_frame_line(f) for f in frames)
     # The scored candidate changesets are already in the DB (frame.changesets); hand
     # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
     # instead of hunting for candidates with searchfox/Bash.
@@ -144,6 +196,10 @@ def build_seed(uuid):
                     "_eff": eff,
                     "bug": cs.get("bugid"),
                     "backedout": cs.get("backedout"),
+                    # Landing date (was previously dropped): lets the agent reason about
+                    # recency/regression-window proximity, and feeds future first-seen
+                    # corroboration. Per-node, so no max() needed on the merge branch.
+                    "pushdate": cs.get("pushdate"),
                     "_all_noise": fnoise,
                 }
             else:
@@ -201,6 +257,93 @@ def _gather_evidence(dossier):
             if claim:
                 cites += dump(claim.citations)
     return cites
+
+
+def _fault_address(raw_crash):
+    """Parse the numeric faulting address from the processed crash, or None."""
+    raw = raw_crash or {}
+    dump = raw.get("json_dump") or {}
+    info = dump.get("crash_info") or {}
+    addr = info.get("address")
+    if addr in (None, ""):
+        addr = raw.get("address")
+    if addr in (None, ""):
+        return None
+    s = str(addr).strip()
+    try:
+        return int(s, 16) if s.lower().startswith("0x") else int(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_dossier_citations(dossier):
+    """Yield every TYPED Citation attached to the dossier (call-path edges, hunks,
+    data-flow, verdict mechanism/consistency). Skeptic citations are untyped (dicts)
+    and skipped — the corroboration flag keys on the typed ones."""
+    if dossier is None:
+        return
+    if dossier.call_path:
+        for edge in dossier.call_path.edges:
+            yield from edge.citations
+    for hunk in dossier.hunks:
+        yield from hunk.citations
+    if dossier.data_flow:
+        yield from dossier.data_flow.citations
+    v = dossier.verdict
+    if v is not None:
+        for claim in (v.mechanism, v.consistency):
+            if claim:
+                yield from claim.citations
+
+
+# Only a small, NON-ZERO faulting address pinpoints a specific struct field beyond the
+# base pointer (0x8 = the field 8 bytes in). 0x0 is the generic null pointer (ambiguous)
+# and a large address is not a struct-field null-deref, so both are excluded. One page cap.
+_MAX_FIELD_FAULT = 0x1000
+
+
+def _corroborations(dossier, seed):
+    """Deterministic, non-LLM corroboration flags for a dossier. Currently the
+    fault-address<->struct-field-offset match: a NON-ZERO small faulting address N that
+    equals the byte offset of a field cited via a ``struct_layout`` citation is a
+    machine-verifiable null-deref of THAT field (the ab3238a5 0x8==mLength signal).
+    Never raises."""
+    flags: dict = {}
+    try:
+        fault = _fault_address((seed or {}).get("raw_crash"))
+        if fault is not None and 0 < fault <= _MAX_FIELD_FAULT:
+            for cit in _iter_dossier_citations(dossier):
+                if isinstance(cit, StructLayoutCitation) and cit.offset == fault:
+                    flags["fault_address_offset_match"] = True
+                    flags["fault_offset"] = fault
+                    flags["fault_field"] = cit.field
+                    flags["fault_type"] = cit.type_name
+                    break
+    except Exception:  # pragma: no cover - defensive; never break a run
+        logger.warning("agent: corroboration computation failed", exc_info=True)
+    return flags
+
+
+def _apply_corroboration_gate(dossier, seed):
+    """Attach deterministic corroboration flags to the dossier and, when a STRONG one
+    stands, raise a bare ``lead`` (medium/50%) to ``probable`` (0.70/70%) — the only
+    path to ``probable`` (the model can't self-assert it, ``_consistency_rule`` clamps
+    it). Strong-evidence/abstain are untouched; an uncorroborated lead stays at medium.
+    Returns the flags. Mutates ``dossier`` in place; never raises."""
+    if dossier is None:
+        return {}
+    flags = _corroborations(dossier, seed)
+    dossier.corroborations = flags
+    v = dossier.verdict
+    is_bare_lead = v is not None and v.decision == Decision.lead and v.confidence != Confidence.probable
+    if is_bare_lead and flags.get("fault_address_offset_match"):
+        dossier.verdict = v.model_copy(update={"confidence": Confidence.probable})
+        logger.info(
+            "agent: corroboration gate raised lead -> probable (fault 0x%x == %s.%s)",
+            flags.get("fault_offset", 0), flags.get("fault_type", "?"),
+            flags.get("fault_field", "?"),
+        )
+    return flags
 
 
 def _verdict_row(result):
@@ -297,6 +440,13 @@ def run_evidence_agent(uuid, force=False):
         # knowledgeable person is surfaced for ANY verdict (including abstain).
         if result.dossier is not None and seed.get("experts"):
             result.dossier.area_experts = [AreaExpert(**e) for e in seed["experts"]]
+
+        # Deterministic corroboration gate (#2): a fault-address<->struct-field-offset
+        # match raises a bare lead (medium/50%) to `probable` (70%) — computed OUTSIDE
+        # the LLM and stashed on the dossier for the UI chips. BEFORE model_dump +
+        # _verdict_row so both the persisted payload and the Verdict row reflect it.
+        if result.dossier is not None:
+            _apply_corroboration_gate(result.dossier, seed)
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already

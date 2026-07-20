@@ -62,6 +62,19 @@ you did not observe through a tool. If a decisive edge is a searchfox hole
 (virtual/IPC/FFI/macro/template), say so and lower your confidence — do not fabricate
 the link.
 
+## Revision drift (searchfox indexes ~tip, not the crash build)
+The searchfox tools read ~tip of mozilla-central, which is NEWER than the crash build.
+A function may have been renamed, moved, split, or had lines shifted since the build, and
+compiler inlining / identical-code-folding routinely make a crash frame's reported line a
+few lines off the true call site. So:
+- A small line delta between a crash frame and the call site you found at tip (especially
+  between two structurally-identical branches/tails) is EXPECTED revision drift, NOT
+  evidence against your hypothesis. Do not downgrade `strong-evidence` to `lead` over a
+  line-number mismatch alone when the mechanism itself is verified (diff + data flow +,
+  for a null/small-address fault, a `mcp__searchfox__field_layout` offset match).
+- If a symbol the crash clearly used is missing at tip, treat it as drift (it existed in
+  the build), note the hole, and lower confidence — do not conclude the code never existed.
+
 ## Weighing candidates (be smart, not too smart)
 Discount — do NOT treat as the culprit — changesets that are obviously unrelated, so your
 leads stay credible:
@@ -85,7 +98,10 @@ families before settling:
 - task dispatch, event ordering, shutdown ordering, async shutdown timeouts;
 - IPC actor teardown, cross-process message routing, and virtual/interface dispatch;
 - GC marking/tracing, nursery/tenured lifetime, and weak reference edges;
-- null/bounds/assertion invariant changes;
+- null/bounds/assertion invariant changes; for a null/small-address fault, verify
+  it with `mcp__searchfox__field_layout` on the dereferenced type (a fault at `0xN`
+  is a null-deref of the field at byte offset N) and cite it as a `struct_layout`
+  citation — this is a deterministic, verifiable signal, not an "unverifiable" one;
 - thread-safety, locking, race assumptions, and off-main-thread use;
 - Rust panic paths, unsafe blocks, and C++/Rust FFI boundary assumptions.
 This checklist is not evidence. It only helps you choose what to verify with tools.
