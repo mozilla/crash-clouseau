@@ -346,6 +346,10 @@ a.dl {
 }
 
 .dl {
+    /* block so EVERY line is its own row. Deleted lines are <span> (not links, since
+       they have no searchfox-tip line); without this only a.dl (added/context) was
+       block, so consecutive deleted <span>s ran together on one visual line. */
+    display: block;
     white-space: pre;
     font-family: Menlo, Consolas, monospace;
     font-size: 12px;
