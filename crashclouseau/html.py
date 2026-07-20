@@ -308,16 +308,21 @@ def _file_diff_lines(raw_diff, filename, cited):
             hm = _DIFF_HUNK_RE.match(ln)
             if hm:
                 old_ln, new_ln = int(hm.group(1)), int(hm.group(2))
-            out.append({"kind": "hunk", "ln": None, "content": ln, "hl": False})
+            out.append({"kind": "hunk", "ln": None, "old": None, "new": None,
+                        "content": ln, "hl": False})
         elif ln.startswith("+++") or ln.startswith("---"):
             continue  # file-header meta lines
         elif ln.startswith("+"):
-            out.append({"kind": "added", "ln": new_ln, "content": ln[1:],
-                        "hl": ("added", new_ln) in cited})
+            # ``old`` is None: an added line does NOT exist in the old file. Keeping the
+            # two numbers in separate columns (``old``/``new``) is what avoids the
+            # single-column collision where a deleted line's OLD number and an added
+            # line's NEW number both landed in one gutter and read as duplicated/backwards.
+            out.append({"kind": "added", "ln": new_ln, "old": None, "new": new_ln,
+                        "content": ln[1:], "hl": ("added", new_ln) in cited})
             new_ln += 1
         elif ln.startswith("-"):
-            out.append({"kind": "deleted", "ln": old_ln, "content": ln[1:],
-                        "hl": ("deleted", old_ln) in cited})
+            out.append({"kind": "deleted", "ln": old_ln, "old": old_ln, "new": None,
+                        "content": ln[1:], "hl": ("deleted", old_ln) in cited})
             old_ln += 1
         elif ln[:1] in ("d", "i", "n", "r", "c", "B", "G", "S") and (
             ln.startswith(("diff ", "index ", "new file", "deleted file",
@@ -326,7 +331,8 @@ def _file_diff_lines(raw_diff, filename, cited):
             continue  # inter-file / mode meta
         else:
             content = ln[1:] if ln.startswith(" ") else ln  # context (or blank)
-            out.append({"kind": "context", "ln": new_ln, "content": content, "hl": False})
+            out.append({"kind": "context", "ln": new_ln, "old": old_ln, "new": new_ln,
+                        "content": content, "hl": ("context", new_ln) in cited})
             old_ln += 1
             new_ln += 1
     return out

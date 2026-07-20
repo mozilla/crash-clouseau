@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=4">
+    <link rel="stylesheet" href="/clouseau.css?v=8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Code view &mdash; {{ filename }}</title>
   </head>
@@ -24,13 +24,17 @@
         <div class="pane-label">diff for this file{% if node %} &mdash; <code>{{ node[:12] }}</code>{% endif %} <span class="muted">(crash-relevant lines highlighted{% if file_diff %}; click an added/context line to open it in searchfox{% endif %})</span></div>
         {% if file_diff -%}
         <div class="diff">
+          {# Two line-number gutters (old | new), like a standard unified diff, so a
+             deleted line's OLD number and an added line's NEW number never collide in
+             one column (which read as duplicated/backwards). Added lines link to their
+             NEW line in searchfox tip; deleted lines have no tip line, so no link. #}
           {% for d in file_diff -%}
           {% if d['kind'] == 'hunk' -%}
-          <div class="dl dl-hunk">{{ d['content']|e }}</div>
-          {% elif d['kind'] in ('added', 'context') and d['ln'] -%}
-          <a class="dl dl-{{ d['kind'] }}{% if d['hl'] %} hl{% endif %}" href="{{ sf_base }}#line-{{ d['ln']|int }}" target="sf" title="Open line {{ d['ln'] }} in searchfox"><span class="ln">{{ d['ln'] }}</span><span class="mark">{% if d['kind'] == 'added' %}+{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</a>
+          <div class="dl dl-hunk"><span class="ln"></span><span class="ln"></span><span class="mark">&nbsp;</span>{{ d['content']|e }}</div>
+          {% elif d['kind'] in ('added', 'context') and d['new'] -%}
+          <a class="dl dl-{{ d['kind'] }}{% if d['hl'] %} hl{% endif %}" href="{{ sf_base }}#line-{{ d['new']|int }}" target="sf" title="Open line {{ d['new'] }} in searchfox"><span class="ln">{{ d['old'] or '' }}</span><span class="ln">{{ d['new'] }}</span><span class="mark">{% if d['kind'] == 'added' %}+{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</a>
           {% else -%}
-          <span class="dl dl-{{ d['kind'] }}{% if d['hl'] %} hl{% endif %}"><span class="ln">{{ d['ln'] or '' }}</span><span class="mark">{% if d['kind'] == 'deleted' %}-{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</span>
+          <span class="dl dl-{{ d['kind'] }}{% if d['hl'] %} hl{% endif %}"><span class="ln">{{ d['old'] or '' }}</span><span class="ln">{{ d['new'] or '' }}</span><span class="mark">{% if d['kind'] == 'deleted' %}-{% else %}&nbsp;{% endif %}</span>{{ d['content']|e }}</span>
           {% endif -%}
           {% endfor -%}
         </div>

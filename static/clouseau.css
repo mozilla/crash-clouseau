@@ -370,11 +370,17 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 
 .dl .ln {
     display: inline-block;
-    width: 4em;
-    margin-right: 0.6em;
+    width: 3em;
+    padding-right: 0.5em;
     color: #999;
     text-align: right;
     user-select: none;
+}
+/* the second gutter (new line #) is fenced off from the code for readability;
+   with two gutters (old | new) a deleted/added number never shares a column */
+.dl .ln + .ln {
+    border-right: 1px solid #e1e4e8;
+    margin-right: 0.6em;
 }
 
 .dl .mark {

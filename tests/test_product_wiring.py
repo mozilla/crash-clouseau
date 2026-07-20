@@ -712,6 +712,35 @@ class TestCodeview(unittest.TestCase):
         hl = [d for d in out if d["hl"]]
         self.assertEqual(len(hl), 1)                    # only the cited line
         self.assertEqual((hl[0]["content"], hl[0]["ln"]), ("delete mPtr;", 42))
+        # two-column (old|new) numbers: added lines have no OLD number, deleted lines
+        # have no NEW number, context has both (so the gutters never collide).
+        self.assertEqual([(d["old"], d["new"]) for d in added], [(None, 41), (None, 42)])
+        deleted = [d for d in out if d["kind"] == "deleted"]
+        self.assertEqual([(d["old"], d["new"]) for d in deleted], [(41, None)])
+        ctxA = next(d for d in out if d["content"] == "context line A")
+        self.assertEqual((ctxA["old"], ctxA["new"]), (40, 40))
+
+    def test_file_diff_lines_no_column_collision(self):
+        # Reproduces the GtkCompositorWidget case (2 deleted -> 1 added): the single
+        # column used to read 147,148,147,148 (old# of deletions colliding with new# of
+        # the addition + following context). With split gutters, deletions carry only an
+        # OLD number and the addition/context only a NEW number — no collision.
+        from crashclouseau import html
+        diff = (
+            "diff --git a/w/G.cpp b/w/G.cpp\n--- a/w/G.cpp\n+++ b/w/G.cpp\n"
+            "@@ -145,6 +145,5 @@ foo() {\n"
+            " ctx145\n ctx146\n"
+            "-  if (a && b &&\n-      c) {\n"
+            "+  if (a) {\n"
+            " ctx148\n"
+        )
+        out = html._file_diff_lines(diff, "w/G.cpp", set())
+        dels = [(d["old"], d["new"]) for d in out if d["kind"] == "deleted"]
+        adds = [(d["old"], d["new"]) for d in out if d["kind"] == "added"]
+        self.assertEqual(dels, [(147, None), (148, None)])   # old-file numbers only
+        self.assertEqual(adds, [(None, 147)])                # new-file number only
+        tail = [d for d in out if d["content"] == "ctx148"][0]
+        self.assertEqual((tail["old"], tail["new"]), (149, 148))  # new# monotonic: ...147(add),148(ctx)
 
     def test_codeview_full_file_diff_with_highlight(self):
         with mock.patch.object(bugzilla_apply, "build_evidence", return_value=_evidence()), \
