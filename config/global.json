@@ -70,6 +70,7 @@
         "job_timeout": 1800,
         "skip_if_existing": true,
         "max_seed_frames": 40,
+        "reap_max_attempts": 2,
         "agent_version": 1,
         "ui":
         {

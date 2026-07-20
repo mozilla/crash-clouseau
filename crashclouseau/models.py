@@ -1510,7 +1510,8 @@ class Dossier(db.Model):
         can re-claim it via the atomic ``claim_running`` -- ``done``/``error``/fresh
         ``running`` are otherwise not claimable. Routing the retrigger back through the
         same atomic claim is what collapses two concurrent retriggers of one uuid into a
-        single run (exactly one wins pending->running): no double-pay."""
+        single run (exactly one wins pending->running): no double-pay. Also clears the
+        reaper attempt counter so an operator retrigger earns a fresh give-up budget."""
         uuidid = UUID.get_id(uuid)
         if uuidid is None:
             return
@@ -1521,9 +1522,32 @@ class Dossier(db.Model):
         d.updated = datetime.now(timezone.utc)
         payload = dict(d.payload or {})
         payload.pop("job_id", None)
+        payload.pop("reap_attempts", None)
         d.payload = payload
         if commit:
             db.session.commit()
+
+    @staticmethod
+    def bump_reap_attempts(uuid, commit=True):
+        """Increment (in the JSONB ``payload``, no migration) the count of times the
+        reaper has re-enqueued this stuck dossier, and return the new count. Lets the
+        reaper GIVE UP on a crash that keeps orphaning (e.g. OOMs on every run) instead
+        of re-enqueuing it forever. Reset by ``reset_for_retrigger`` (an operator
+        retrigger earns a fresh budget). Returns 0 if the row is absent."""
+        uuidid = UUID.get_id(uuid)
+        if uuidid is None:
+            return 0
+        d = db.session.query(Dossier).filter(Dossier.uuidid == uuidid).first()
+        if d is None:
+            return 0
+        payload = dict(d.payload or {})
+        n = int(payload.get("reap_attempts", 0) or 0) + 1
+        payload["reap_attempts"] = n
+        d.payload = payload
+        d.updated = db.func.now()
+        if commit:
+            db.session.commit()
+        return n
 
     @staticmethod
     def add_usage(

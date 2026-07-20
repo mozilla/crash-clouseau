@@ -166,6 +166,14 @@ def get_agent_max_seed_frames():
     return get_agent().get("max_seed_frames", 40)
 
 
+def get_agent_reap_max_attempts():
+    """How many times the stale-job reaper may re-enqueue one orphaned dossier before
+    GIVING UP (marking it ``error``). Bounds the OOM re-enqueue loop: a crash that keeps
+    orphaning (e.g. OOMs on every run) fails visibly instead of burning tokens forever.
+    Default 2 (one transient blip is covered; a persistent failure gives up)."""
+    return get_agent().get("reap_max_attempts", 2)
+
+
 def get_agent_version():
     return get_agent().get("agent_version", 1)
 

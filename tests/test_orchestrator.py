@@ -285,6 +285,7 @@ class TestReaper(unittest.TestCase):
         with mock.patch.object(orch.models.Dossier, "get_stale_running",
                                return_value=["u1", "u2"]), \
              mock.patch.object(orch.models.Dossier, "get_stale_pending", return_value=[]), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=1), \
              mock.patch.object(orch.worker, "get_queue", return_value=q):
             n = orch.reap_stale_agent_jobs()
         self.assertEqual(n, 2)
@@ -301,11 +302,44 @@ class TestReaper(unittest.TestCase):
         with mock.patch.object(orch.models.Dossier, "get_stale_running", return_value=[]), \
              mock.patch.object(orch.models.Dossier, "get_stale_pending",
                                return_value=["p1"]), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=1), \
              mock.patch.object(orch.worker, "get_queue", return_value=q):
             n = orch.reap_stale_agent_jobs()
         self.assertEqual(n, 1)
         q.enqueue_call.assert_called_once()
         self.assertEqual(q.enqueue_call.call_args.kwargs["kwargs"], {"force": True})
+
+    def test_reap_gives_up_past_cap(self):
+        # A crash that keeps orphaning must be failed VISIBLY, not re-enqueued forever.
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                               return_value=["oomer"]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending", return_value=[]), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=3), \
+             mock.patch.object(orch.config, "get_agent_reap_max_attempts", return_value=2), \
+             mock.patch.object(orch.models.Dossier, "set_status") as set_status, \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 0)                 # nothing re-enqueued
+        q.enqueue_call.assert_not_called()     # gave up instead of re-running
+        set_status.assert_called_once()
+        self.assertEqual(set_status.call_args.args[0], "oomer")
+        self.assertEqual(set_status.call_args.args[1], "error")
+
+    def test_reap_still_reenqueues_within_cap(self):
+        # A one-off transient orphan (attempt within cap) is still retried.
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                               return_value=["blip"]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending", return_value=[]), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=2), \
+             mock.patch.object(orch.config, "get_agent_reap_max_attempts", return_value=2), \
+             mock.patch.object(orch.models.Dossier, "set_status") as set_status, \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 1)
+        q.enqueue_call.assert_called_once()
+        set_status.assert_not_called()
 
     def test_reap_noop_when_none(self):
         with mock.patch.object(orch.models.Dossier, "get_stale_running", return_value=[]), \

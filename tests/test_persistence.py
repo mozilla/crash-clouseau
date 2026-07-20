@@ -159,6 +159,19 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         self.assertEqual(d.input_tokens, 15)
         self.assertEqual(d.output_tokens, 4)
 
+    def test_bump_reap_attempts_and_reset(self):
+        # The reaper give-up counter lives in the JSONB payload (no migration). It
+        # increments per reap and is cleared by an operator retrigger.
+        Dossier.upsert(self.UUID, payload={"job_id": "j1"}, status="running")
+        self.assertEqual(Dossier.bump_reap_attempts(self.UUID), 1)
+        self.assertEqual(Dossier.bump_reap_attempts(self.UUID), 2)
+        self.assertEqual(Dossier.get_by_uuid(self.UUID).payload["reap_attempts"], 2)
+        Dossier.reset_for_retrigger(self.UUID)
+        d = Dossier.get_by_uuid(self.UUID)
+        self.assertEqual(d.status, "pending")
+        self.assertNotIn("reap_attempts", d.payload)   # fresh give-up budget
+        self.assertNotIn("job_id", d.payload)
+
     def test_verdict_set_get(self):
         Dossier.upsert(self.UUID, payload={})
         Verdict.set(self.UUID, "culprit", confidence=90, principal_model="claude-opus-4-8",

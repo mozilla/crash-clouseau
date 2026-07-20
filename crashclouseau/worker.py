@@ -29,7 +29,20 @@ def black_hole(job, *exc_info):
     args = job.args
     func = job.func_name
     logger.error(("Job for call {}{} failed").format(func, args))
-    job.cancel()
+    # Best-effort cleanup. RQ invokes this handler for ABANDONED jobs too (a worker
+    # SIGKILLed by an OOM leaves its job in StartedJobRegistry; registry maintenance on
+    # the next worker boot fails it and calls the exception handlers). Cancelling a job
+    # that RQ already moved to a terminal state raises InvalidJobOperation/NoSuchJobError
+    # — and that exception was escaping the worker's maintenance loop ("found an
+    # unhandled exception, quitting" -> Heroku restart -> same poison job -> crash-loop).
+    # Swallow it: cancelling is cleanup, never a reason to kill the worker.
+    try:
+        job.cancel()
+    except Exception:
+        logger.warning(
+            "black_hole: could not cancel job %s (already terminal/abandoned)",
+            getattr(job, "id", "?"),
+        )
     return False
 
 

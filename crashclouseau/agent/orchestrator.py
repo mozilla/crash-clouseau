@@ -544,29 +544,45 @@ def reap_stale_agent_jobs():
             if not stale_running and not stale_pending:
                 return 0
             queue = worker.get_queue(config.get_agent_queue())
+            cap = config.get_agent_reap_max_attempts()
+            reenqueued: list = []
+            gaveup: list = []
+
+            def _reap_one(uuid, force):
+                # GIVE-UP CAP: a crash that keeps orphaning (e.g. OOMs on every run)
+                # must not be re-enqueued forever (unbounded token burn). Count attempts
+                # in the dossier payload; past the cap, fail it VISIBLY (status=error +
+                # reason) instead of re-running — an operator can retrigger (which clears
+                # the counter). The cap (>=2) still covers a one-off transient orphan.
+                n = models.Dossier.bump_reap_attempts(uuid)
+                if n > cap:
+                    models.Dossier.set_status(
+                        uuid, "error",
+                        error="reaper gave up after {} re-enqueue attempts (likely OOM"
+                              "/stall on every run); retrigger to retry".format(cap),
+                    )
+                    gaveup.append(uuid)
+                    return
+                queue.enqueue_call(
+                    func=run_evidence_agent,
+                    args=(uuid,),
+                    kwargs={"force": force},
+                    result_ttl=0,
+                    timeout=config.get_agent_job_timeout(),
+                )
+                reenqueued.append(uuid)
+
             for uuid in stale_running:
-                queue.enqueue_call(
-                    func=run_evidence_agent,
-                    args=(uuid,),
-                    kwargs={"force": False},
-                    result_ttl=0,
-                    timeout=config.get_agent_job_timeout(),
-                )
-            for uuid in stale_pending:
-                queue.enqueue_call(
-                    func=run_evidence_agent,
-                    args=(uuid,),
-                    kwargs={"force": True},
-                    result_ttl=0,
-                    timeout=config.get_agent_job_timeout(),
-                )
+                _reap_one(uuid, False)
+            for uuid in stale_pending:  # from a retrigger reset; force past proto-dedup
+                _reap_one(uuid, True)
             logger.warning(
-                "agent: reaped %d orphaned (stale-running) + %d stuck (stale-pending) "
-                "triage(s): %s",
-                len(stale_running), len(stale_pending),
-                ", ".join(stale_running + stale_pending),
+                "agent: reaper re-enqueued %d, gave up on %d (cap=%d); reenq=[%s] "
+                "gaveup=[%s]",
+                len(reenqueued), len(gaveup), cap,
+                ", ".join(reenqueued), ", ".join(gaveup),
             )
-            return len(stale_running) + len(stale_pending)
+            return len(reenqueued)
     except Exception:  # pragma: no cover - defensive; never break the clock
         logger.error("agent: reap_stale_agent_jobs failed", exc_info=True)
         return 0
