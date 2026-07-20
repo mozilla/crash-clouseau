@@ -219,11 +219,18 @@ async def field_layout(
     class_name: Annotated[str, Field(description="Bare C++ class/struct name (no template <...> args), e.g. mozilla::detail::nsTStringRepr.")],
     repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
 ) -> str:
-    """Byte-level memory layout (offset/size/type/name of each field) of a C++ class/struct. Use to VERIFY a null/small-address fault: a fault at address 0xN on type T is a null-deref of whichever field T places at byte offset N — turning an otherwise 'unverifiable' offset claim into a citable `struct_layout` fact. Needs the bare class name (template args return nothing)."""
+    """Byte-level memory layout (offset/size/type/name of each field) of a C++ class/struct. Use to VERIFY a null/small-address fault: a fault at address 0xN on type T is a null-deref of whichever field T places at byte offset N — turning an otherwise 'unverifiable' offset claim into a citable `struct_layout` fact. Pass the FULLY-QUALIFIED class name WITH namespaces and WITHOUT template <...> args (e.g. `mozilla::detail::nsTStringRepr`, taken from the crash signature/frames); a bare or template-suffixed name returns nothing. Layout the CONTAINING object (whose field is at the fault offset), not a template accessor."""
     try:
         fl = await asyncio.to_thread(ctx.client.field_layout, class_name, repo)
     except SearchfoxNoResult:
-        return f"No field layout found for {class_name!r} (templates/non-class symbols have none)."
+        return (
+            f"No field layout found for {class_name!r}. field-layout needs the "
+            "FULLY-QUALIFIED class name WITH namespaces (and no template <...> args) — "
+            "e.g. `mozilla::detail::nsTStringRepr`, not `nsTStringRepr`. The crash "
+            "signature/frames usually contain the full qualification; copy it from "
+            "there. Also layout the CONTAINING object (the struct whose field sits at "
+            "the fault offset), not a template accessor from the crash frame."
+        )
     except SearchfoxError as exc:
         raise _sf_error(exc, "field_layout") from exc
     return _fmt_field_layout(fl)

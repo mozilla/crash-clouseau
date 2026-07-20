@@ -280,6 +280,36 @@ class TestCitationNormalization(unittest.TestCase):
                 StructLayoutCitation,
             )
 
+    def test_blame_side_normalizes_to_context(self):
+        # The live ab3238a5 false-abstain: the model labels a blame-sourced diff line's
+        # side "history_blame" (invalid), and one such citation in verdict.mechanism
+        # force-abstains an otherwise-correct lead via salvage. It must map to context.
+        adapter = TypeAdapter(Citation)
+        for spelling in ("history_blame", "history-blame", "blame", "history"):
+            raw = _diff_line()
+            raw["side"] = spelling
+            with self.assertRaises(ValidationError):  # invalid pre-normalize
+                adapter.validate_python(raw)
+            cit = adapter.validate_python(_normalize_citations(raw))
+            self.assertEqual(cit.side, "context")
+
+    def test_lead_with_blame_side_survives_as_lead(self):
+        # End-to-end: a lead whose mechanism cites a `history_blame` line must remain a
+        # lead through parse_and_validate, not get salvaged to abstain.
+        sf = _stack_frame()
+        dl = _diff_line()
+        dl["side"] = "history_blame"
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = {
+            "decision": "lead",
+            "confidence": "medium",
+            "needinfo_draft": "could you take a look?",
+            "mechanism": {"statement": "stale flag -> null deref", "citations": [sf, dl]},
+            "consistency": {"statement": "matches the crash path", "citations": [sf]},
+        }
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+
     def test_lead_with_hyphen_and_removed_spellings_survives(self):
         # The exact live-run failure mode: a lead whose mechanism/consistency (and
         # supporting evidence) cite "stack-frame"/"removed" must SURVIVE as a lead, not

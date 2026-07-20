@@ -99,9 +99,11 @@ families before settling:
 - IPC actor teardown, cross-process message routing, and virtual/interface dispatch;
 - GC marking/tracing, nursery/tenured lifetime, and weak reference edges;
 - null/bounds/assertion invariant changes; for a null/small-address fault, verify
-  it with `mcp__searchfox__field_layout` on the dereferenced type (a fault at `0xN`
-  is a null-deref of the field at byte offset N) and cite it as a `struct_layout`
-  citation — this is a deterministic, verifiable signal, not an "unverifiable" one;
+  it with `mcp__searchfox__field_layout` on the FULLY-QUALIFIED containing type (with
+  namespaces, no template `<...>` args — e.g. `mozilla::detail::nsTStringRepr`, copied
+  from the crash signature; a bare/template name returns nothing) and emit an actual
+  `struct_layout` citation object (a fault at `0xN` is a null-deref of the field at byte
+  offset N) — a deterministic, verifiable signal, not an "unverifiable" one;
 - thread-safety, locking, race assumptions, and off-main-thread use;
 - Rust panic paths, unsafe blocks, and C++/Rust FFI boundary assumptions.
 This checklist is not evidence. It only helps you choose what to verify with tools.

@@ -477,6 +477,14 @@ _SIDE_ALIASES = {
     "deletion": "deleted", "del": "deleted",
     "context": "context", "unchanged": "context", "ctx": "context",
     "unmodified": "context",
+    # A line the model pulled from the blame/history tools (not a diff) is an EXISTING
+    # source line, i.e. `context` in diff terms. The model routinely mislabels its
+    # `side` as "history_blame"/"blame"/"history"; left unmapped, one such citation in
+    # the verdict's mechanism force-abstains an otherwise-correct lead via salvage
+    # (observed live on ab3238a5). Mapping to `context` keeps it a valid, non-behavior-
+    # asserting pointer — it can't inflate the refactor-blame false positive.
+    "history_blame": "context", "blame": "context", "history": "context",
+    "history-blame": "context",
 }
 
 
