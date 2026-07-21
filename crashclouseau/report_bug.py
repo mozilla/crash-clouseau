@@ -130,7 +130,7 @@ async def get_info_helper(uuid, changeset, evidence_summary=None):
         "_facets_size": 100,
     }
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     f1 = loop.run_in_executor(None, functools.partial(net.get, cs))
     if bugid:
         f2 = loop.run_in_executor(
@@ -158,6 +158,6 @@ async def get_info_helper(uuid, changeset, evidence_summary=None):
 
 def get_info(uuid, changeset, evidence_summary=None):
     """Get the info (comment and Bugzilla stuff) to put in the bug report"""
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         get_info_helper(uuid, changeset, evidence_summary=evidence_summary)
     )
