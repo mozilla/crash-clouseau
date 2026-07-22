@@ -145,6 +145,30 @@ class TestBuildOptions(unittest.TestCase):
     def test_user_prompt_no_candidate_block_when_absent(self):
         self.assertNotIn("candidate changesets", triage._user_prompt(_CRASH))
 
+    def test_crash_facts_include_os_cpu_process_gpu(self):
+        crash = dict(_CRASH, raw_crash={
+            "os_name": "Windows NT", "os_version": "10.0.19045",
+            "os_pretty_version": "Windows 10", "cpu_arch": "amd64", "process_type": "gpu",
+            "adapter_vendor_id": "0x10de", "adapter_device_id": "0x2504",
+            "adapter_driver_version": "31.0.15.3141",
+            "json_dump": {"crash_info": {"type": "EXCEPTION_ACCESS_VIOLATION_READ"}},
+        })
+        facts = triage._crash_facts(crash)
+        blob = "\n".join(facts)
+        self.assertIn("OS: Windows 10", blob)
+        self.assertIn("CPU arch: amd64", blob)
+        self.assertIn("Process type: gpu", blob)
+        self.assertIn("GPU: NVIDIA device 0x2504 driver 31.0.15.3141", blob)  # vendor id mapped
+
+    def test_crash_facts_env_omitted_when_absent(self):
+        # a processed crash without env fields simply omits those facts (no crash)
+        facts = triage._crash_facts({"raw_crash": {"json_dump": {"crash_info": {"type": "x"}}}})
+        labels = [f.split(":")[0] for f in facts]
+        self.assertNotIn("OS", labels)
+        self.assertNotIn("GPU", labels)
+        self.assertEqual(triage._gpu_summary({}), "")
+        self.assertEqual(triage._gpu_summary({"adapter_vendor_id": "0xABCD"}), "0xABCD")  # unknown passes through
+
 
 class TestBuildResult(unittest.TestCase):
     def test_valid_handoff(self):

@@ -104,21 +104,59 @@ def _fmt_pushdate(value):
         return str(value)[:10]
 
 
+# PCI vendor id -> readable GPU vendor, so a graphics/driver crash's hardware is legible to
+# the agent (e.g. an NVIDIA-only regressor is likelier for an NVIDIA crash). Unknown ids
+# pass through unchanged.
+_GPU_VENDORS = {
+    "0x10de": "NVIDIA", "0x1002": "AMD/ATI", "0x8086": "Intel", "0x1414": "Microsoft",
+    "0x5143": "Qualcomm", "0x106b": "Apple", "0x13b5": "ARM", "0x15ad": "VMware",
+    "0x80ee": "VirtualBox", "0x1ab8": "Parallels",
+}
+
+
+def _gpu_summary(raw: dict) -> str:
+    """Readable GPU line from the processed crash's adapter fields, or "" when absent."""
+    vid = str(raw.get("adapter_vendor_id") or "").strip()
+    if not vid:
+        return ""
+    parts = [_GPU_VENDORS.get(vid.lower(), vid)]
+    for label, key in (("device", "adapter_device_id"), ("driver", "adapter_driver_version")):
+        v = str(raw.get(key) or "").strip()
+        if v:
+            parts.append("{} {}".format(label, v))
+    return " ".join(parts)
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
     The full Socorro payload can be large; expose the failure signals that help the
-    crash-interpreter classify the crash and the data-flow role pick mechanisms.
+    crash-interpreter classify the crash and the data-flow role pick mechanisms, plus the
+    environment facets (OS / CPU / process type / GPU) that let the agent disambiguate
+    candidates off-stack — e.g. a Windows-only or GPU-driver regressor for a Windows/GPU
+    crash (the RULES_REPORT bug-2014723 data gap).
     """
     raw = crash.get("raw_crash") or {}
     dump = raw.get("json_dump") or {}
     info = dump.get("crash_info") or {}
+    sysinfo = dump.get("system_info") or {}
     lines = []
 
     facts = [
         ("Product", _first_present(crash.get("product"), raw.get("product"))),
         ("Version", _first_present(crash.get("version"), raw.get("version"))),
         ("Build ID", _first_present(crash.get("buildid"), raw.get("build_id"))),
+        ("OS", _first_present(
+            raw.get("os_pretty_version"),
+            " ".join(v for v in (raw.get("os_name"), raw.get("os_version")) if v).strip(),
+            sysinfo.get("os"),
+        )),
+        ("CPU arch", _first_present(
+            raw.get("cpu_arch"), sysinfo.get("cpu_arch"),
+            raw.get("cpu_info"), sysinfo.get("cpu_info"),
+        )),
+        ("Process type", raw.get("process_type")),
+        ("GPU", _gpu_summary(raw)),
         ("Crash type", _first_present(info.get("type"), raw.get("reason"))),
         ("Fault address", _first_present(info.get("address"), raw.get("address"))),
         ("Crashing thread", _first_present(
