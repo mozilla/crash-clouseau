@@ -11,6 +11,11 @@ import logging
 import os
 import re
 from . import config
+# Import for its module-level side effect: stamps our allowlisted `crash-clouseau`
+# User-Agent onto libmozdata's hg Connection (which otherwise sends User-Agent: None and
+# gets 406-rate-limited). Imported here so the fix is applied on ANY `crashclouseau.*`
+# import, before the agent's hg-backed tools (blame/history/patch-diff) make a request.
+from . import net  # noqa: F401
 
 
 app = Flask(__name__, template_folder="../templates")

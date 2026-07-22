@@ -17,6 +17,8 @@ enqueue path / web dyno never pull ``claude-agent-sdk`` or spawn the bundled CLI
 from __future__ import annotations
 
 import asyncio
+import re
+from datetime import timedelta
 
 from rq import Retry
 
@@ -27,7 +29,10 @@ from crashclouseau.agent.schema import (
     CONFIDENCE_SCORE,
     Confidence,
     Decision,
+    FailureClass,
+    SearchfoxCitation,
     StructLayoutCitation,
+    Verdict,
 )
 from crashclouseau.logger import logger
 from crashclouseau.vendor.hackbot_runtime.actions.recorder import ActionsRecorder
@@ -118,16 +123,119 @@ def _inlines_by_stackpos(raw_crash):
     return out
 
 
+# Word + camelCase sub-word tokenizer for cheap signature<->description overlap ranking
+# of off-stack window candidates (no line-proximity score exists off-stack).
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+")
+_CAMEL_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|[0-9]+")
+_STOP_TOKENS = frozenset(
+    {"bug", "fix", "the", "and", "for", "with", "from", "this", "that", "not",
+     "add", "use", "get", "set", "new", "void", "int", "bool", "make", "remove"}
+)
+
+
+def _tokens(text):
+    """Lowercased word + camelCase sub-word tokens (len>=3, minus a tiny stoplist), so a
+    crash signature (camelCase symbols) and a commit description (prose) share a
+    comparable vocabulary — e.g. ``nsTStringRepr::Length`` -> {string, repr, length}."""
+    out: set = set()
+    for w in _WORD_RE.findall(text or ""):
+        for part in _CAMEL_RE.findall(w):
+            p = part.lower()
+            if len(p) >= 3 and p not in _STOP_TOKENS:
+                out.add(p)
+    return out
+
+
+def _offstack_candidates(uuid_info, offstack_cfg):
+    """P1: enumerate the crash's first-bad-build pushlog window as agent candidates when
+    NOTHING scored onto a stack frame (an off-stack regressor). Returns build_seed's
+    normal candidate shape (``{node, score, bug, backedout, pushdate, noise, desc}``) with
+    ``score=None`` (there is no line-proximity signal off-stack) and ``noise=False``,
+    lightly pre-ranked (signature<->desc token overlap, then recency; self-backouts last)
+    and capped to ``max_candidates``. Merges are dropped. Best-effort: returns [] on any
+    failure (the caller then abstains via a None seed) — never raises.
+
+    The window is bounded by the DB (``Build.get_two_last``) so it is migration-proof and
+    needs no dead Buildhub lookup; ``pushlog_for_revs`` is one ``json-pushes`` GET through
+    ``net.get`` (allowlisted UA). ``file_filter=lambda f: True`` DROPS the
+    interesting-extensions filter so a non-source-file regressor is still enumerated."""
+    from crashclouseau import pushlog
+
+    channel = uuid_info.get("channel")
+    product = uuid_info.get("product")
+    buildid = uuid_info.get("buildid")
+    build_node = uuid_info.get("node")
+    try:
+        two = models.Build.get_two_last(buildid, channel, product)
+        if len(two) == 2:
+            startrev = two[0]["revision"]
+            # Prefer the crash's own build node as tochange (it IS the first-bad build);
+            # fall back to get_two_last's newest entry if the uuid carries no node.
+            endrev = build_node or two[1]["revision"]
+            window = pushlog.pushlog_for_revs(
+                startrev, endrev, channel=channel, file_filter=lambda f: True
+            )
+        else:
+            # Predecessor build not ingested (fresh/partial DB): degrade to a date window
+            # mirroring update.put_report's nightly lookback so we still seed.
+            start = buildid - timedelta(days=config.get_ndays())
+            window = pushlog.pushlog(
+                start, buildid, channel=channel, file_filter=lambda f: True
+            )
+    except Exception as exc:
+        logger.warning(
+            "agent: off-stack window enumeration failed for %s: %s",
+            uuid_info.get("uuid"), exc,
+        )
+        return []
+
+    sig = _tokens(uuid_info.get("signature", ""))
+
+    def _key(c):
+        overlap = len(sig & _tokens(c.get("desc", ""))) if sig else 0
+        d = c.get("date")
+        recency = d.timestamp() if hasattr(d, "timestamp") else 0.0
+        # non-backout first, then signature-token overlap, then most recent.
+        return (0 if c.get("backedout") else 1, overlap, recency)
+
+    ranked = sorted((c for c in window if not c.get("merge")), key=_key, reverse=True)
+    out = []
+    for c in ranked[: offstack_cfg["max_candidates"]]:
+        bug = c.get("bug")
+        desc = (c.get("desc") or "").strip()
+        out.append(
+            {
+                "node": c.get("node"),
+                "score": None,
+                "bug": bug if isinstance(bug, int) and bug > 0 else None,
+                "backedout": bool(c.get("backedout")),
+                "pushdate": c.get("date"),
+                "noise": False,
+                "desc": desc.splitlines()[0][:200] if desc else "",
+            }
+        )
+    logger.info(
+        "agent: off-stack window for %s -> %d candidates (cap %d)",
+        uuid_info.get("uuid"), len(out), offstack_cfg["max_candidates"],
+    )
+    return out
+
+
 def build_seed(uuid):
     """Assemble the ``crash=`` payload for ``run_crash_triage`` from the scored
-    stack + processed crash. Returns None (logged) when nothing is scored to
-    reason about (unknown UUID, no frames, or no changesets on any frame)."""
+    stack + processed crash. Returns None (logged) when there is nothing to reason
+    about: an unknown UUID, no frames, or — for an OFF-STACK crash (no changeset scored
+    onto any frame) — only when the P1 off-stack path is disabled (the default). When
+    off-stack seeding is enabled, an off-stack crash instead seeds the FULL first-bad-build
+    pushlog window (``_offstack_candidates``) and runs pinned (see ``get_agent_offstack``)."""
     res, uuid_info = models.CrashStack.get_by_uuid(uuid)
     frames = res.get("frames") if res else None
     if not frames:
         logger.warning("agent: no crash stack for %s; skipping", uuid)
         return None
-    if not any(f.get("changesets") for f in frames):
+    offstack_cfg = config.get_agent_offstack()
+    is_offstack = not any(f.get("changesets") for f in frames)
+    if is_offstack and not offstack_cfg["enabled"]:
         logger.warning("agent: no scored changesets for %s; skipping", uuid)
         return None
 
@@ -166,55 +274,65 @@ def build_seed(uuid):
         return base
 
     stack_text = "\n".join(_frame_line(f) for f in frames)
-    # The scored candidate changesets are already in the DB (frame.changesets); hand
-    # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
-    # instead of hunting for candidates with searchfox/Bash.
-    # Down-rank (never drop) candidates whose only support is "noise": a universal
-    # bottom-of-stack anchor frame or a ubiquitous-primitive file (#15 phase 3). A
-    # candidate that also appears on a real frame keeps its real ranking via the max.
-    filters = config.get_agent_filters()
+    if is_offstack:
+        # P1: no changeset scored onto a stack frame — seed the full first-bad-build
+        # pushlog window (already ranked/capped, score=None) instead of skipping.
+        candidates = _offstack_candidates(uuid_info, offstack_cfg)
+        if not candidates:
+            # Window enumeration failed (no bounds / hg error): nothing to reason about,
+            # so abstain rather than run the agent on an empty candidate set.
+            logger.warning("agent: off-stack window empty for %s; skipping", uuid)
+            return None
+    else:
+        # The scored candidate changesets are already in the DB (frame.changesets); hand
+        # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
+        # instead of hunting for candidates with searchfox/Bash.
+        # Down-rank (never drop) candidates whose only support is "noise": a universal
+        # bottom-of-stack anchor frame or a ubiquitous-primitive file (#15 phase 3). A
+        # candidate that also appears on a real frame keeps its real ranking via the max.
+        filters = config.get_agent_filters()
 
-    def _frame_is_noise(fr):
-        fn, fname = fr.get("function") or "", fr.get("filename") or ""
-        return any(p in fn for p in filters["anchor_frame_patterns"]) or any(s in fn for s in filters["ubiquitous_symbols"]) or any(p in fname for p in filters["ubiquitous_paths"])
+        def _frame_is_noise(fr):
+            fn, fname = fr.get("function") or "", fr.get("filename") or ""
+            return any(p in fn for p in filters["anchor_frame_patterns"]) or any(s in fn for s in filters["ubiquitous_symbols"]) or any(p in fname for p in filters["ubiquitous_paths"])
 
-    # Per node: max raw score (display), max penalized score (ranking), and noise =
-    # ALL supporting frames are noise. A candidate that ALSO sits on a real code frame
-    # keeps its real ranking and is NOT tagged noise (so it still yields an expert).
-    cand: dict = {}
-    for f in frames:
-        fnoise = _frame_is_noise(f)
-        factor = filters["penalty"] if fnoise else 1.0
-        for node, cs in (f.get("changesets") or {}).items():
-            score = cs.get("score") or 0
-            eff = score * factor
-            prev = cand.get(node)
-            if prev is None:
-                cand[node] = {
-                    "node": node,
-                    "score": score,
-                    "_eff": eff,
-                    "bug": cs.get("bugid"),
-                    "backedout": cs.get("backedout"),
-                    # Landing date (was previously dropped): lets the agent reason about
-                    # recency/regression-window proximity, and feeds future first-seen
-                    # corroboration. Per-node, so no max() needed on the merge branch.
-                    "pushdate": cs.get("pushdate"),
-                    "_all_noise": fnoise,
-                }
-            else:
-                prev["score"] = max(prev["score"], score)
-                prev["_eff"] = max(prev["_eff"], eff)
-                prev["_all_noise"] = prev["_all_noise"] and fnoise
-    candidates = sorted(cand.values(), key=lambda c: -c["_eff"])
-    for c in candidates:
-        c["noise"] = c.pop("_all_noise")
-        c.pop("_eff", None)
+        # Per node: max raw score (display), max penalized score (ranking), and noise =
+        # ALL supporting frames are noise. A candidate that ALSO sits on a real code frame
+        # keeps its real ranking and is NOT tagged noise (so it still yields an expert).
+        cand: dict = {}
+        for f in frames:
+            fnoise = _frame_is_noise(f)
+            factor = filters["penalty"] if fnoise else 1.0
+            for node, cs in (f.get("changesets") or {}).items():
+                score = cs.get("score") or 0
+                eff = score * factor
+                prev = cand.get(node)
+                if prev is None:
+                    cand[node] = {
+                        "node": node,
+                        "score": score,
+                        "_eff": eff,
+                        "bug": cs.get("bugid"),
+                        "backedout": cs.get("backedout"),
+                        # Landing date (was previously dropped): lets the agent reason
+                        # about recency/regression-window proximity, and feeds future
+                        # first-seen corroboration. Per-node, so no max() on the merge.
+                        "pushdate": cs.get("pushdate"),
+                        "_all_noise": fnoise,
+                    }
+                else:
+                    prev["score"] = max(prev["score"], score)
+                    prev["_eff"] = max(prev["_eff"], eff)
+                    prev["_all_noise"] = prev["_all_noise"] and fnoise
+        candidates = sorted(cand.values(), key=lambda c: -c["_eff"])
+        for c in candidates:
+            c["noise"] = c.pop("_all_noise")
+            c.pop("_eff", None)
 
     # Area-experts (#15 phase 2): the authors of the top non-noise candidates — a
     # knowledgeable person to ask, computed from local data (migration-proof). Attached
     # to the dossier by run_evidence_agent regardless of the verdict.
-    channel = info.get("channel", "nightly")
+    channel = info.get("channel") or uuid_info.get("channel") or "nightly"
     experts = []
     try:
         authors = models.Node.authors_for([c["node"] for c in candidates[:10]], channel)
@@ -226,7 +344,7 @@ def build_seed(uuid):
         "uuid": uuid,
         "signature": info.get("signature", ""),
         "channel": channel,
-        "product": info.get("product", ""),
+        "product": info.get("product") or uuid_info.get("product", ""),
         "buildid": info.get("buildid"),
         "version": info.get("version"),
         "frames": frames,
@@ -234,6 +352,13 @@ def build_seed(uuid):
         "candidates": candidates,
         "experts": experts,
         "raw_crash": raw_crash,
+        # P1 off-stack markers, consumed downstream by triage (prompt framing + pinned
+        # tool ctx) and run_evidence_agent (SF-3 / exposer gates, observe-only, cost cap).
+        "is_offstack": is_offstack,
+        "build_node": uuid_info.get("node", ""),
+        # The rev pinned tools default to (blame/read AS OF the crash build, never tip).
+        # Set only for off-stack pinned runs; empty otherwise (on-stack keeps tip behavior).
+        "pin_rev": uuid_info.get("node", "") if (is_offstack and offstack_cfg["pinned"]) else "",
     }
 
 
@@ -333,7 +458,10 @@ def _apply_corroboration_gate(dossier, seed):
     if dossier is None:
         return {}
     flags = _corroborations(dossier, seed)
-    dossier.corroborations = flags
+    # MERGE, don't replace: the off-stack SF-3 / exposer gates run BEFORE this one and have
+    # already stashed flags on the dossier (call_path_verified / exposer_*). Overwriting
+    # dossier.corroborations here would silently drop them from the persisted payload/UI.
+    dossier.corroborations = {**(dossier.corroborations or {}), **flags}
     v = dossier.verdict
     is_bare_lead = v is not None and v.decision == Decision.lead and v.confidence != Confidence.probable
     if is_bare_lead and flags.get("fault_address_offset_match"):
@@ -344,6 +472,194 @@ def _apply_corroboration_gate(dossier, seed):
             flags.get("fault_field", "?"),
         )
     return flags
+
+
+def _has_verified_callpath(dossier) -> bool:
+    """True when the dossier carries a searchfox-grounded call path: at least one
+    ``call_path`` edge with a ``SearchfoxCitation``. This is the structural proof that a
+    candidate's code was shown to REACH a crash frame through the call graph, as opposed
+    to merely landing in the pushlog window. We key on the PRESENCE of a searchfox-cited
+    edge rather than string-matching candidate<->frame symbols: ``changed_functions`` is
+    not populated and frame/symbol spellings differ, so a match test would false-negative
+    and demote real culprits."""
+    cp = dossier.call_path if dossier is not None else None
+    if cp is None:
+        return False
+    return any(
+        any(isinstance(c, SearchfoxCitation) for c in edge.citations)
+        for edge in cp.edges
+    )
+
+
+def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason):
+    """Shared downgrade used by the off-stack precision gates: turn a
+    ``strong-evidence`` verdict into a soft ``lead`` when a cited anchor
+    (candidate/hunk/edge) still stands, else ``abstain``. Mirrors ``_skeptic_veto``'s
+    reconstruction (soft, non-accusatory draft). Mutates ``dossier`` in place."""
+    v = dossier.verdict
+    if dossier._has_lead_anchor():
+        dossier.verdict = Verdict(
+            decision=Decision.lead,
+            confidence=Confidence.medium,
+            needinfo_draft=dossier._soft_lead_draft(),
+            mechanism=v.mechanism,
+            consistency=v.consistency,
+        )
+        logger.info("agent: %s -> lead for %s", reason, (seed or {}).get("uuid"))
+    else:
+        dossier.verdict = Verdict(
+            decision=Decision.abstain,
+            confidence=Confidence.low,
+            abstain_reason=abstain_reason,
+        )
+        logger.info("agent: %s -> abstain for %s", reason, (seed or {}).get("uuid"))
+
+
+def _apply_callpath_gate(dossier, seed):
+    """SF-3 precision gate for OFF-STACK runs. An off-stack candidate has no on-stack
+    anchor and no proximity score, so a searchfox-verified call path connecting it to a
+    crash frame is the ONLY structural evidence it actually REACHES the crash. Require
+    that for ``strong-evidence``; without it, downgrade to ``lead`` (cited anchor stands)
+    or ``abstain``. This is what makes the study's near-0-FP off-stack precision reachable
+    (today nothing requires a verified call path — ``_consistency_rule`` only checks
+    confidence + cited mechanism/consistency). Mutates in place; never raises. MUST run
+    BEFORE ``_apply_corroboration_gate`` so a strong->lead downgrade here is still eligible
+    for a lead->probable bump on a fault-offset match."""
+    if dossier is None:
+        return
+    v = dossier.verdict
+    if v is None or v.decision != Decision.strong_evidence:
+        return
+    if _has_verified_callpath(dossier):
+        dossier.corroborations = {**(dossier.corroborations or {}), "call_path_verified": True}
+        return
+    _downgrade_to_lead_or_abstain(
+        dossier, seed,
+        "SF-3 gate: off-stack strong-evidence has no searchfox-verified call path",
+        "off-stack strong-evidence lacks a searchfox-verified call path to a crash "
+        "frame, and no cited candidate/hunk/edge anchor remains",
+    )
+
+
+# Freed / poisoned / uninitialized memory sentinel BYTES: jemalloc junk-on-free 0xe5 and
+# junk-on-alloc 0xe4/0x5a, MOZ/frame poison 0xdd, MSVC debug fills 0xcd/0xcc/0xfd/0xab,
+# ASan 0xbe/0xfb. A fault address that is (almost) a run of one of these is a
+# use-after-free / uninitialized read — a latent-bug pattern an off-stack candidate often
+# merely EXPOSES rather than introduces.
+_POISON_BYTES = frozenset({0xE5, 0xE4, 0x5A, 0xDD, 0xCD, 0xCC, 0xFD, 0xAB, 0xBE, 0xFB, 0xA5, 0x2B})
+
+
+def _looks_poison(fault) -> bool:
+    """True when the fault address looks like freed/poisoned/uninitialized memory: its
+    bytes are dominated by one known-poison byte (allowing one off-byte for an offset into
+    the poisoned object). Small addresses are handled by the field-offset corroboration,
+    so require > one page here."""
+    if fault is None or fault <= _MAX_FIELD_FAULT:
+        return False
+    parts = []
+    x = fault
+    while x:
+        parts.append(x & 0xFF)
+        x >>= 8
+    if len(parts) < 2:
+        return False
+    top = max(set(parts), key=parts.count)
+    # Require the poison byte to DOMINATE: allow one off-byte (an offset into the poisoned
+    # object) but demand >= 2 matching bytes, so a 2-byte address can't qualify on a single
+    # poison byte (e.g. 0xE512 is NOT poison — that would spuriously demote a real culprit).
+    return top in _POISON_BYTES and parts.count(top) >= max(2, len(parts) - 1)
+
+
+def _classify_exposer(dossier, seed):
+    """Flag — and, on a STRONG signal, softly downgrade — an 'exposer, not cause' verdict:
+    a changeset that EXPOSED a pre-existing latent bug (~30% of off-stack cases, the
+    systematic false-positive source) rather than introducing it. Only LIVE-computable
+    signals are used; the study's strongest discriminator ('fix diff disjoint from the
+    regressor diff') needs the LANDED FIX, which does not exist at triage time, so it is
+    deliberately kept OUT of here (offline eval only). Sets ``corroborations['exposer_*']``
+    for the UI on ANY verdict; downgrades ``strong-evidence`` -> ``lead`` ONLY on a strong
+    signal (a freed/poisoned fault address = a UAF the candidate most likely just exposed)
+    so a weak hint never demotes a genuine culprit. Mutates in place; never raises."""
+    if dossier is None:
+        return
+    try:
+        signals = []
+        strong = False
+        fault = _fault_address((seed or {}).get("raw_crash"))
+        if _looks_poison(fault):
+            signals.append("poison/freed-memory fault address 0x{:x}".format(fault))
+            strong = True
+        crash = dossier.crash
+        if crash is not None:
+            if getattr(crash, "failure_class", None) == FailureClass.uaf:
+                signals.append("failure_class=uaf")
+            if crash.phc_free_stack:
+                signals.append("PHC free stack present")
+        df = dossier.data_flow
+        if df is not None and (df.operation or "").lower() in (
+            "uaf", "use_after_free", "free", "double_free"
+        ):
+            signals.append("data-flow operation={}".format(df.operation))
+        if not signals:
+            return
+        dossier.corroborations = {
+            **(dossier.corroborations or {}),
+            "exposer_suspected": True,
+            "exposer_signals": signals,
+            "exposer_strong": strong,
+        }
+        v = dossier.verdict
+        if strong and v is not None and v.decision == Decision.strong_evidence:
+            _downgrade_to_lead_or_abstain(
+                dossier, seed,
+                "exposer classifier ({})".format("; ".join(signals)),
+                "off-stack crash looks like a pre-existing latent bug the candidate only "
+                "exposed (no cited anchor to hand over as a lead)",
+            )
+    except Exception:  # pragma: no cover - defensive; never break a run
+        logger.warning("agent: exposer classification failed", exc_info=True)
+
+
+def _reconcile_offstack_actions(result):
+    """After the off-stack gates may have DOWNGRADED the verdict (SF-3 / exposer:
+    strong-evidence -> lead or abstain), the needinfo action ``build_result`` synthesized
+    from the ORIGINAL (pre-gate) verdict is stale — it still carries the assertive
+    strong-evidence draft even though the verdict is now a soft lead (or abstain). Re-derive
+    the auto-bridged needinfo from the FINAL dossier so an apply-eligible action can never
+    contradict the verdict the gates settled on (this matters when observe-only is OFF — the
+    graduation config — since observe-only would otherwise clear the action anyway). Genuine
+    recorder-sourced actions (the agent calling the actions tool) are preserved; only the
+    auto-bridged needinfo is rebuilt. Never raises."""
+    try:
+        # triage is already imported by this point (run_crash_triage ran), so this is a
+        # cached re-import and pulls no extra SDK cost.
+        from crashclouseau.agent.triage import _needinfo_action
+
+        kept = [
+            a for a in result.actions
+            if "auto-drafted from the verdict" not in ((a or {}).get("reasoning") or "")
+        ]
+        fresh = _needinfo_action(result.dossier)
+        if fresh is not None:
+            kept.append(fresh)
+        result.actions = kept
+    except Exception:  # pragma: no cover - defensive; never break a run
+        logger.warning("agent: off-stack action reconcile failed", exc_info=True)
+
+
+def _apply_offstack_observe_only(result):
+    """OBSERVE-ONLY off-stack canary: keep the full dossier + logged verdict (so its
+    calibration can be watched), but SUPPRESS any outward action — drop the synthesized
+    needinfo so the human-confirmed apply UI has nothing to execute for an off-stack run.
+    Flags the dossier for the UI. The verdict itself is intentionally left as-is."""
+    dropped = len(result.actions)
+    result.actions = []
+    if result.dossier is not None:
+        result.dossier.corroborations = {
+            **(result.dossier.corroborations or {}),
+            "offstack_observe_only": True,
+        }
+    logger.info("agent: off-stack observe-only — suppressed %d action(s)", dropped)
 
 
 def _verdict_row(result):
@@ -427,7 +743,13 @@ def run_evidence_agent(uuid, force=False):
             )
         )
 
-        cap = llm_cfg.get("max_cost_usd_per_crash", _DEFAULT_COST_CAP)
+        # Off-stack runs feed a ~112-candidate window, so they get a higher (still
+        # log-only) cost ceiling than the scored-candidate default.
+        cap = (
+            config.get_agent_offstack_cost_cap()
+            if seed.get("is_offstack")
+            else llm_cfg.get("max_cost_usd_per_crash", _DEFAULT_COST_CAP)
+        )
         cost = result.total_cost_usd
         over_budget = cap is not None and cost is not None and cost > cap
         if over_budget:
@@ -441,12 +763,30 @@ def run_evidence_agent(uuid, force=False):
         if result.dossier is not None and seed.get("experts"):
             result.dossier.area_experts = [AreaExpert(**e) for e in seed["experts"]]
 
-        # Deterministic corroboration gate (#2): a fault-address<->struct-field-offset
-        # match raises a bare lead (medium/50%) to `probable` (70%) — computed OUTSIDE
-        # the LLM and stashed on the dossier for the UI chips. BEFORE model_dump +
-        # _verdict_row so both the persisted payload and the Verdict row reflect it.
+        # Deterministic gates, all computed OUTSIDE the LLM and reflected in BOTH the
+        # persisted payload and the Verdict row (they run BEFORE model_dump + _verdict_row).
+        offstack_cfg = config.get_agent_offstack() if seed.get("is_offstack") else None
         if result.dossier is not None:
+            # P1 off-stack precision gates run BEFORE the corroboration gate so a
+            # strong->lead downgrade here is still eligible for a lead->probable bump.
+            if offstack_cfg is not None:
+                if offstack_cfg["require_callpath_for_strong"]:
+                    _apply_callpath_gate(result.dossier, seed)
+                if offstack_cfg["exposer_classifier"]:
+                    _classify_exposer(result.dossier, seed)
+            # Corroboration gate (#2): a fault-address<->struct-field-offset match raises a
+            # bare lead (medium/50%) to `probable` (70%) — stashed on the dossier UI chips.
             _apply_corroboration_gate(result.dossier, seed)
+            if offstack_cfg is not None:
+                # Re-derive the auto-bridged needinfo from the FINAL (post-gate) verdict so a
+                # gate-downgraded verdict can't ship the original strong-evidence action —
+                # matters when observe-only is OFF (the graduation config).
+                _reconcile_offstack_actions(result)
+                # OBSERVE-ONLY canary: suppress outward actions entirely (drop the needinfo)
+                # BEFORE model_dump, so the payload carries nothing apply-eligible while the
+                # dossier/verdict stay visible. Runs last so nothing re-adds an action after.
+                if offstack_cfg["observe_only"]:
+                    _apply_offstack_observe_only(result)
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already

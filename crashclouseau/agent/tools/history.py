@@ -28,6 +28,7 @@ from pydantic import Field
 from libmozdata.hgmozilla import Annotate, FileInfo, Revision
 
 from crashclouseau import inspector
+from crashclouseau.agent.tools import pin_node
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
 _BUG_RE = re.compile(r"\bbug[ \t]*([0-9]+)", re.I)
@@ -39,9 +40,13 @@ _MAX_FILES = 40
 
 @dataclass
 class HistoryCtx:
-    """Per-run history context; ``channel`` selects the default hg repo."""
+    """Per-run history context; ``channel`` selects the default hg repo. ``build_rev``,
+    when set (P1 pinned/off-stack mode), is the crash BUILD revision that blame/history
+    reads default to instead of ``tip`` — reading at tip attributes the crashing line to
+    the FIX that landed after the build, the systematic off-stack precision killer."""
 
     channel: str = "nightly"
+    build_rev: str = ""
 
 
 def _short(node) -> str:
@@ -89,6 +94,14 @@ def _resolve(node: str) -> str:
         return node
 
 
+def _pin(ctx: HistoryCtx, node: str) -> str:
+    """Pinned-mode node selection (shared rule; see ``tools.pin_node``): when
+    ``ctx.build_rev`` is set (P1 off-stack), redirect the default/``tip``/``default`` to
+    the crash BUILD rev so a pinned run can never blame/read at tip (leaking the post-build
+    fix); an explicit non-tip node is honored."""
+    return pin_node(ctx.build_rev, node)
+
+
 @tool
 async def file_history(
     ctx: HistoryCtx,
@@ -103,7 +116,7 @@ async def file_history(
     flag, author, one-line description. Use to find the regressor -- what changed in the
     crashing file/area before the crash. Prefer this over `curl hg.mozilla.org` or `git log`."""
     ch = channel or ctx.channel
-    hg_node = _resolve(node)
+    hg_node = _resolve(_pin(ctx, node))
     try:
         data = await asyncio.to_thread(FileInfo.get, path, ch, hg_node)
     except Exception as exc:  # noqa: BLE001 - a tool must not raise into the agent loop
@@ -143,7 +156,7 @@ async def blame(
     author, description). Use on the crashing line to find which change last modified it.
     Prefer this over `curl .../json-annotate` or local `hg/git blame`."""
     ch = channel or ctx.channel
-    hg_node = _resolve(node)
+    hg_node = _resolve(_pin(ctx, node))
     start = max(1, int(line_start))
     end = int(line_end) if line_end and int(line_end) >= start else start
     end = min(end, start + _MAX_BLAME_LINES - 1)

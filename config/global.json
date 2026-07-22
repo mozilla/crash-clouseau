@@ -72,6 +72,15 @@
         "max_seed_frames": 40,
         "reap_max_attempts": 2,
         "agent_version": 1,
+        "offstack":
+        {
+            "enabled": false,
+            "max_candidates": 150,
+            "pinned": true,
+            "require_callpath_for_strong": true,
+            "exposer_classifier": true,
+            "observe_only": true
+        },
         "ui":
         {
             "show_abstain": false,
@@ -131,7 +140,8 @@
                 "claude-opus-4-8": {"in": 5.0, "out": 25.0},
                 "claude-fable-5": {"in": 10.0, "out": 50.0}
             },
-            "max_cost_usd_per_crash": 2.0
+            "max_cost_usd_per_crash": 2.0,
+            "max_cost_usd_per_crash_offstack": 4.0
         }
     },
     "eval":

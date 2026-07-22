@@ -234,5 +234,39 @@ def get_agent_filters():
     }
 
 
+def get_agent_offstack():
+    """P1 off-stack seeding knobs. ~29% of regressors are *off-stack* (touch no file on
+    the crash stack), so no changeset scores onto a frame and ``build_seed`` skips the
+    agent entirely. When ``enabled``, seed the agent with the FULL first-bad-build pushlog
+    window instead of skipping. Gated OFF by default; the two precision guards
+    (``require_callpath_for_strong``, ``exposer_classifier``) and ``observe_only`` default
+    ON, so turning off-stack ON can never produce a low-precision, action-emitting run
+    without an explicit second edit. Returned as one normalized dict so callers never
+    re-derive defaults and a future config edit can't silently flip a guard off.
+    ``OFFSTACK_ENABLED`` / ``OFFSTACK_PINNED`` / ``OFFSTACK_OBSERVE_ONLY`` are env canary
+    levers (like ``SHOW_ABSTAIN``) so the worker dyno flips them without editing tracked
+    JSON. Still layered UNDER ``get_agent_enabled`` and bounded by ``get_agent_channels``
+    (nightly-only) — this does NOT widen either."""
+    o = get_agent().get("offstack", {})
+    return {
+        "enabled": _env_bool("OFFSTACK_ENABLED", o.get("enabled", False)),
+        "max_candidates": o.get("max_candidates", 150),
+        "pinned": _env_bool("OFFSTACK_PINNED", o.get("pinned", True)),
+        "require_callpath_for_strong": o.get("require_callpath_for_strong", True),
+        "exposer_classifier": o.get("exposer_classifier", True),
+        "observe_only": _env_bool("OFFSTACK_OBSERVE_ONLY", o.get("observe_only", True)),
+    }
+
+
+def get_agent_offstack_cost_cap():
+    """Per-crash cost cap for an OFF-STACK run (a ~112-candidate window is pricier than a
+    handful of scored candidates). Falls back to the on-stack cap, then 4.0. Log-only,
+    like ``max_cost_usd_per_crash`` (orchestrator warns; it does not abort mid-run)."""
+    llm = get_llm()
+    return llm.get(
+        "max_cost_usd_per_crash_offstack", llm.get("max_cost_usd_per_crash", 4.0)
+    )
+
+
 def get_eval():
     return _get_global().get("eval", {})

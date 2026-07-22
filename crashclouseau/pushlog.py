@@ -48,6 +48,11 @@ def collect(data, file_filter):
                     "merge": len(chgset["parents"]) > 1,
                     "bug": get_bug(desc),
                     "author": hgauthors.analyze_author(author),
+                    # The changeset description (commit message). Kept because it is the
+                    # primary triage signal for the P1 off-stack path, where a candidate
+                    # has NO line-proximity score — the agent picks what to diff by desc
+                    # first. Harmless for existing callers (an extra dict key).
+                    "desc": desc,
                 }
             )
     return res

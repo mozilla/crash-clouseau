@@ -22,6 +22,24 @@ except Exception:  # pragma: no cover - config missing/broken -> still identify 
     USER_AGENT = "crash-clouseau"
 
 
+# libmozdata's own hg client (Annotate/FileInfo/Revision/RawRevision, all subclasses of
+# connection.Connection) never actually sets its User-Agent: connection.py's
+# ``if not self.USER_AGENT: config.get("User-Agent", "name", ...)`` fetches the configured
+# name but DISCARDS the return value, so every hg json-annotate / json-filelog / raw-rev
+# request goes out with User-Agent: None and is 406-rate-limited by hg.mozilla.org. The
+# `crash-clouseau` UA is allowlisted, so stamp it on the base class (no subclass overrides
+# USER_AGENT, verified) — this fixes the agent's pinned blame/history/patch-diff tools,
+# which lean on that client heavily during an off-stack run. Best-effort; libmozdata may
+# be absent in a stripped unit env.
+try:  # pragma: no cover - trivial global stamp, exercised via the hg tools
+    from libmozdata.connection import Connection as _LmdConnection
+
+    if not _LmdConnection.USER_AGENT:
+        _LmdConnection.USER_AGENT = USER_AGENT
+except Exception:
+    pass
+
+
 def _with_ua(kwargs):
     # Merge our UA into any caller-supplied headers without clobbering an explicit one.
     headers = dict(kwargs.pop("headers", None) or {})

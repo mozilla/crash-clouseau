@@ -38,9 +38,11 @@ from crashclouseau.agent.schema import Decision, parse_and_validate
 from crashclouseau.agent.tools import history as history_tools
 from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
+from crashclouseau.agent.tools import source as source_tools
 from crashclouseau.agent.tools.history import HistoryCtx
 from crashclouseau.agent.tools.patch import PatchCtx
 from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
+from crashclouseau.agent.tools.source import SourceCtx
 from crashclouseau.searchfox import SearchfoxClient
 from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
 from crashclouseau.vendor.hackbot_runtime.actions import ACTIONS_SERVER_NAME
@@ -168,16 +170,43 @@ def _user_prompt(crash: dict) -> str:
         lines += ["", "Stack:", str(stack)]
     candidates = crash.get("candidates") or []
     if candidates:
-        lines += [
-            "",
-            "Scored candidate changesets (already ranked by proximity to the crash — "
-            "read each with the mcp__patch__diff tool. Treat this seed list as a "
-            "priority queue, not as a closed world: use it first, but if the "
-            "call-graph neighborhood points at off-stack files/functions not covered "
-            "by these seeds, say so and treat that as a cited lead rather than "
-            "pretending the seed list is complete):",
-        ]
-        for c in candidates[:20]:
+        if crash.get("is_offstack"):
+            # P1 off-stack: no changeset landed on a crash-stack file, so this is the FULL
+            # first-bad-build pushlog window (lightly pre-ranked by signature/desc overlap,
+            # NOT by proximity). The regressor is somewhere in here. Triage by DESCRIPTION
+            # first and read only the promising few diffs; reads are PINNED to the build.
+            lines += [
+                "",
+                "Candidate changesets = the FULL pushlog window between the last-good "
+                "build and this crash's build (this crash is OFF-STACK: no candidate "
+                "touched a file on the stack, so there is NO proximity score — the list "
+                "is only lightly pre-ranked and the regressor may be anywhere in it). "
+                "Work it as a funnel: (1) scan the one-line descriptions and pick the few "
+                "whose area/subsystem best matches the crash signature + stack; (2) read "
+                "ONLY those with mcp__patch__diff; (3) use the searchfox call graph to "
+                "connect a candidate's changed function to a crash frame. IMPORTANT: your "
+                "blame/history/source reads are PINNED to the crash build revision (never "
+                "tip) — read source with mcp__source__raw_file, not searchfox define, when "
+                "exact build-time code matters. For strong-evidence you MUST show a "
+                "verified call path from the candidate to a crash frame (a window "
+                "membership alone is only a lead). Watch for an 'exposer, not cause' "
+                "changeset (it exposed a pre-existing UAF/latent bug rather than "
+                "introducing it) — prefer a lead + needinfo over accusing it:",
+            ]
+        else:
+            lines += [
+                "",
+                "Scored candidate changesets (already ranked by proximity to the crash — "
+                "read each with the mcp__patch__diff tool. Treat this seed list as a "
+                "priority queue, not as a closed world: use it first, but if the "
+                "call-graph neighborhood points at off-stack files/functions not covered "
+                "by these seeds, say so and treat that as a cited lead rather than "
+                "pretending the seed list is complete):",
+            ]
+        # Off-stack: the list is already capped to max_candidates in build_seed, so show
+        # it all (dropping any would risk hiding the regressor). On-stack: top 20.
+        limit = len(candidates) if crash.get("is_offstack") else 20
+        for c in candidates[:limit]:
             parts = [str(c.get("node", ""))]
             if c.get("score") is not None:
                 parts.append("score={}".format(c["score"]))
@@ -190,6 +219,9 @@ def _user_prompt(crash: dict) -> str:
                 parts.append("backed-out")
             if c.get("noise"):
                 parts.append("(likely-noise: down-rank)")
+            desc = c.get("desc")
+            if desc:
+                parts.append("| {}".format(desc))
             lines.append("- " + " ".join(parts))
     if extra:
         lines += ["", str(extra)]
@@ -306,17 +338,24 @@ def build_options(
 
     if searchfox_client is None:
         searchfox_client = SearchfoxClient()
+    channel = crash.get("channel", "nightly")
+    # P1 pinned mode: an off-stack run pins blame/source reads to the crash BUILD rev so a
+    # tip read can't leak the post-build fix. Empty for on-stack runs (tools keep tip).
+    pin_rev = crash.get("pin_rev", "")
     ctx = SearchfoxCtx(client=searchfox_client)
-    patch_ctx = PatchCtx(channel=crash.get("channel", "nightly"))
-    history_ctx = HistoryCtx(channel=crash.get("channel", "nightly"))
+    patch_ctx = PatchCtx(channel=channel)
+    history_ctx = HistoryCtx(channel=channel, build_rev=pin_rev)
+    source_ctx = SourceCtx(channel=channel, build_rev=pin_rev)
     mcp_servers = {
         "searchfox": build_sdk_server("searchfox", ctx, searchfox_cg.TOOLS),
         "patch": build_sdk_server("patch", patch_ctx, patch_tools.TOOLS),
         "history": build_sdk_server("history", history_ctx, history_tools.TOOLS),
+        "source": build_sdk_server("source", source_ctx, source_tools.TOOLS),
     }
     allowed = [
         *_BUILTIN_TOOLS, "Task",
-        *roles.searchfox_tool_ids(), *roles.patch_tool_ids(), *roles.history_tool_ids(),
+        *roles.searchfox_tool_ids(), *roles.patch_tool_ids(),
+        *roles.history_tool_ids(), *roles.source_tool_ids(),
     ]
 
     if recorder is not None:

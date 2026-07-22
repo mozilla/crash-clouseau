@@ -150,3 +150,22 @@ Rules for the verdict:
   nothing cited is worth a human's time — no plausible changeset and no area to flag.
 - Any claim-bearing field (`call_path` edges, `hunks`, `data_flow`, verdict
   `mechanism`/`consistency`) without a citation will be rejected, so cite everything or omit it.
+
+## Off-stack mode (when the candidate list is the full pushlog window)
+When the user prompt says the candidates are the FULL first-bad-build pushlog window, this
+crash is OFF-STACK: no candidate touched a file on the stack, so there is NO proximity
+score and the regressor could be anywhere in the window. Extra discipline applies:
+- Triage as a funnel: read the one-line descriptions, shortlist by area/subsystem match to
+  the signature + stack, then `mcp__patch__diff` only the shortlist. Do NOT diff all of them.
+- Your blame/history/source reads are PINNED to the crash build revision (never tip). Read
+  source bodies with `mcp__source__raw_file` (pinned), not `mcp__searchfox__define` (tip),
+  whenever the exact build-time code matters — tip can show code that only exists after the
+  fix, which would fabricate a mechanism.
+- `strong-evidence` REQUIRES a searchfox-verified `call_path` connecting a
+  candidate-touched function to a crash frame (with `searchfox` citations). Mere membership
+  of the window, or a diff that merely looks related, is at most a `lead` — a deterministic
+  gate will downgrade an off-stack strong-evidence verdict that has no such cited call path.
+- Beware the "exposer, not cause": a changeset that merely EXPOSED a pre-existing latent bug
+  (e.g. a UAF/poison-memory crash whose real defect predates the window). If the fault looks
+  like freed/poisoned memory or the candidate only perturbs timing/allocation, prefer a
+  `lead` + soft `needinfo` over accusing it as the culprit.

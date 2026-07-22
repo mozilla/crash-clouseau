@@ -30,6 +30,11 @@ _PATCH = ["mcp__patch__diff"]
 # so roles find & inspect regressors by what recently changed a file instead of shelling
 # out to curl/git-log (non-portable: the prod worker has no local checkout).
 _HISTORY = [f"mcp__history__{name}" for name in ("file_history", "blame", "changeset")]
+# Pinned source read: a source file's text AS OF the crash build rev (P1 off-stack). The
+# leak-free replacement for tip-only searchfox `define`/`search` when the exact build-time
+# source matters. On-stack (no pinned rev) it reads tip, same as searchfox, so it is safe
+# to grant broadly.
+_SOURCE = ["mcp__source__raw_file"]
 _BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
 
 _GROUND = (
@@ -44,6 +49,10 @@ _GROUND = (
     " Never curl hg.mozilla.org or shell out to git/hg to read source or history "
     "(there is no local checkout in production): use the searchfox tools for source, "
     "and the `mcp__history__*` tools (file_history/blame/changeset) for history."
+    " To read a source file AS OF the crash build revision (not tip), use "
+    "`mcp__source__raw_file` — prefer it over searchfox `define` whenever the exact "
+    "build-time source matters, because searchfox indexes ~tip and can show code that "
+    "only exists AFTER the fix landed."
 )
 
 _ROLES: dict[str, dict] = {
@@ -86,7 +95,7 @@ _ROLES: dict[str, dict] = {
         "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}],\"from_stackpos\":0,"
         "\"to_symbol\":\"Readable::symbol\"}." + _GROUND,
-        "tools": [*_BUILTIN_READ, *_SEARCHFOX, *_HISTORY],
+        "tools": [*_BUILTIN_READ, *_SEARCHFOX, *_HISTORY, *_SOURCE],
     },
     "patch-scout": {
         "description": "Intersect the neighborhood with recent patches and summarize, "
@@ -114,7 +123,7 @@ _ROLES: dict[str, dict] = {
         "\"lines\":[],\"citations\":[{\"kind\":\"diff_line\",\"node\":\"<hg node>\","
         "\"filename\":\"...\",\"line\":42,\"side\":\"added|deleted|context\","
         "\"content\":\"exact tool line\"}]}]." + _GROUND,
-        "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY,
+        "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY, *_SOURCE,
                   "mcp__searchfox__define", "mcp__searchfox__search",
                   "mcp__searchfox__field_layout"],
     },
@@ -146,7 +155,7 @@ _ROLES: dict[str, dict] = {
         "\"function\":\"...\",\"line\":0,\"node\":\"...\"},\"citations\":[{\"kind\":"
         "\"searchfox\",\"permalink\":\"https://searchfox.org/...\",\"symbol_id\":"
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}." + _GROUND,
-        "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY,
+        "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY, *_SOURCE,
                   "mcp__searchfox__define", "mcp__searchfox__search",
                   "mcp__searchfox__field_layout"],
     },
@@ -174,7 +183,7 @@ _ROLES: dict[str, dict] = {
         "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\","
         "\"status\":\"pass|fail|unverifiable\",\"note\":\"...\",\"citations\":[...]}]"
         "." + _GROUND,
-        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff", *_HISTORY],
+        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff", *_HISTORY, *_SOURCE],
     },
 }
 
@@ -189,6 +198,10 @@ def patch_tool_ids() -> list[str]:
 
 def history_tool_ids() -> list[str]:
     return list(_HISTORY)
+
+
+def source_tool_ids() -> list[str]:
+    return list(_SOURCE)
 
 
 def role_names() -> list[str]:
