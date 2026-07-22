@@ -191,6 +191,37 @@ def _tokens(text):
     return out
 
 
+# A changeset that ENABLES a feature/pref by default is a classic OFF-STACK regressor: it
+# turns ON a code path that then crashes while touching no stack file (bug 2056116: "Enable
+# Rust storage by default" -> a Rust/sqlite sync panic, found by mccr8 scanning the pushlog).
+# Detected from the description OR a touched pref/feature-manifest file. Tag + rank/prompt
+# hint only; the agent confirms the enabled area actually relates to the crash.
+_PREF_FLIP_DESC_RE = re.compile(
+    r"\benabl\w+\b.{0,40}\bby default\b"
+    r"|\bturn(?:ing)?\s+(?:\w+\s+)?on\b.{0,40}\bby default\b"
+    r"|\b(?:on|enabled)\s+by\s+default\b"
+    r"|\bflip\b.{0,20}\bpref"
+    r"|\bset\b.{0,20}\bpref\w*\b.{0,20}\b(?:on|true|enabled)\b"
+    r"|\bship\b.{0,30}\bby default\b"
+    r"|\benable\b.{0,30}\b(?:feature|pref)\b",
+    re.I,
+)
+_PREF_FILE_HINTS = (
+    "modules/libpref/init/", "staticpreflist", "/all.js", "prefs.js", "firefox.js",
+    "browser/app/profile/", "featuremanifest", "/nimbus/",
+)
+
+
+def _looks_pref_flip(desc, files):
+    """True when a changeset looks like a feature/pref FLIP — enabling something by default —
+    a classic OFF-STACK regressor. Keys on the full description OR a touched pref/
+    feature-manifest file. Tag + hint only; the agent confirms the enabled area matches the
+    crash (see the off-stack prompt / system.md rule and bug 2056116)."""
+    if desc and _PREF_FLIP_DESC_RE.search(desc):
+        return True
+    return any(any(h in str(f).lower() for h in _PREF_FILE_HINTS) for f in (files or []))
+
+
 def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
     """P1: enumerate the crash's first-bad-build pushlog window as agent candidates when
     NOTHING scored onto a stack frame (an off-stack regressor). Returns build_seed's
@@ -238,6 +269,10 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
         return []
 
     sig = _tokens(uuid_info.get("signature", ""))
+    nonmerge = [c for c in window if not c.get("merge")]
+    # Tag feature/pref flips once (from full desc + files) for ranking + the candidate dict.
+    for c in nonmerge:
+        c["_pref_flip"] = _looks_pref_flip(c.get("desc"), c.get("files"))
 
     def _prior_hit(c):
         b = c.get("bug")
@@ -247,10 +282,12 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
         overlap = len(sig & _tokens(c.get("desc", ""))) if sig else 0
         d = c.get("date")
         recency = d.timestamp() if hasattr(d, "timestamp") else 0.0
-        # prior-signature hit first, then non-backout, then sig-token overlap, then recent.
-        return (1 if _prior_hit(c) else 0, 0 if c.get("backedout") else 1, overlap, recency)
+        # prior-signature hit first, then non-backout, then feature/pref flip (a classic
+        # off-stack cause), then sig-token overlap, then recency.
+        return (1 if _prior_hit(c) else 0, 0 if c.get("backedout") else 1,
+                1 if c.get("_pref_flip") else 0, overlap, recency)
 
-    ranked = sorted((c for c in window if not c.get("merge")), key=_key, reverse=True)
+    ranked = sorted(nonmerge, key=_key, reverse=True)
     out = []
     for c in ranked[: offstack_cfg["max_candidates"]]:
         bug = c.get("bug")
@@ -265,6 +302,7 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
                 "noise": False,
                 "desc": desc.splitlines()[0][:200] if desc else "",
                 "prior_sig": _prior_hit(c),
+                "pref_flip": bool(c.get("_pref_flip")),
             }
         )
     logger.info(

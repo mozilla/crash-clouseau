@@ -193,6 +193,20 @@ def _user_prompt(crash: dict) -> str:
                 "changeset (it exposed a pre-existing UAF/latent bug rather than "
                 "introducing it) — prefer a lead + needinfo over accusing it:",
             ]
+            lines += [
+                "",
+                "LINKED-CAUSE SEARCH: the regressor touched NO file on the stack (expected "
+                "off-stack), so link it to the crash by what it ENABLES or its DOMAIN, not by "
+                "file overlap. The classic case is a FEATURE/PREF FLIP that turns ON the "
+                "crashing subsystem's code path (tagged 'feature-flip' below, e.g. 'Enable X "
+                "by default'): does a flip enable the exact feature/library named in the "
+                "signature or MOZ_CRASH reason? Also consider a change that sits in the "
+                "crashing component, shares its reviewers, or mentions its keywords. Bug "
+                "2056116 was found exactly this way — 'Enable Rust storage by default' caused "
+                "a Rust/sqlite `sync15` panic that touched none of its files. A flip is a "
+                "prior to VERIFY (confirm the enabled path reaches the crash), not an "
+                "automatic verdict.",
+            ]
             # Prior-signature (P4) hint: a prior FIXED bug with THIS crash's signature was
             # regressed by bug(s) X — a strong, stack-independent prior. Point the agent at
             # window candidates matching those bugs.
@@ -239,6 +253,9 @@ def _user_prompt(crash: dict) -> str:
                 parts.append("(likely-noise: down-rank)")
             if c.get("prior_sig"):
                 parts.append("[prior-sig: a prior sibling of this signature was regressed by this bug]")
+            if c.get("pref_flip"):
+                parts.append("[feature-flip: enables a feature/pref by default — a classic "
+                             "off-stack cause; check the enabled area vs the crash]")
             desc = c.get("desc")
             if desc:
                 parts.append("| {}".format(desc))

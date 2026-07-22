@@ -529,6 +529,56 @@ class TestUserPromptOffstack(unittest.TestCase):
         self.assertNotIn("n20", out)                # capped at 20 on-stack
 
 
+class TestPrefFlip(unittest.TestCase):
+    """Feature/pref-flip detection + off-stack ranking boost + candidate tag."""
+
+    def test_detects_from_desc(self):
+        f = orch._looks_pref_flip
+        self.assertTrue(f("Bug 2053724 - Enable Rust storage by default", None))  # real bug 2056116
+        self.assertTrue(f("Turn on the new layout engine by default", None))
+        self.assertTrue(f("flip pref network.foo to true", None))
+        self.assertTrue(f("Ship WebGPU by default", None))
+        self.assertFalse(f("Fix null deref in nsFoo::Bar", None))     # ordinary fix
+        self.assertFalse(f("Refactor the parser", None))
+
+    def test_detects_from_files(self):
+        f = orch._looks_pref_flip
+        self.assertTrue(f("update", ["modules/libpref/init/StaticPrefList_dom.yaml"]))
+        self.assertTrue(f("add feature", ["toolkit/components/nimbus/FeatureManifest.yaml"]))
+        self.assertFalse(f("tweak", ["dom/base/nsINode.cpp"]))
+        self.assertFalse(f("", []))
+
+    def test_ranking_boost_and_tag(self):
+        # a feature-flip floats above a plain candidate and is tagged pref_flip.
+        window = [
+            {"node": "plain", "bug": 10, "date": _dt(10), "backedout": False, "merge": False,
+             "desc": "Bug 10 - unrelated telemetry probe", "files": []},
+            {"node": "flip", "bug": 20, "date": _dt(1), "backedout": False, "merge": False,
+             "desc": "Bug 20 - Enable Rust storage by default", "files": []},
+        ]
+        ui = {"signature": "sync15 rust sqlite", "channel": "nightly", "product": "F",
+              "buildid": _dt(12), "node": "bn"}
+        with mock.patch.object(orch.models.Build, "get_two_last",
+                               return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
+             mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window):
+            cands = orch._offstack_candidates(ui, _offstack_cfg())
+        self.assertEqual(cands[0]["node"], "flip")     # pref-flip ranked above plain
+        self.assertTrue(cands[0]["pref_flip"])
+        self.assertFalse(cands[1]["pref_flip"])
+
+    def test_user_prompt_tags_and_rule(self):
+        from crashclouseau.agent import triage
+        crash = {"uuid": "u", "signature": "sync15", "channel": "nightly", "stack": "s",
+                 "is_offstack": True,
+                 "candidates": [{"node": "flip", "score": None, "bug": 20, "backedout": False,
+                                 "pushdate": None, "noise": False, "desc": "Enable Rust storage by default",
+                                 "prior_sig": False, "pref_flip": True}]}
+        out = triage._user_prompt(crash)
+        self.assertIn("LINKED-CAUSE", out)             # the search rule
+        self.assertIn("2056116", out)                  # the canonical example
+        self.assertIn("feature-flip", out)             # per-candidate tag
+
+
 class TestPriorSig(unittest.TestCase):
     """The prior-signature (P4) lookup + corroboration gate + ranking."""
 

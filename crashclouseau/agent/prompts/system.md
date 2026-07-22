@@ -157,6 +157,15 @@ crash is OFF-STACK: no candidate touched a file on the stack, so there is NO pro
 score and the regressor could be anywhere in the window. Extra discipline applies:
 - Triage as a funnel: read the one-line descriptions, shortlist by area/subsystem match to
   the signature + stack, then `mcp__patch__diff` only the shortlist. Do NOT diff all of them.
+- Link the regressor to the crash by what it ENABLES or its DOMAIN, not just file overlap
+  (there is none off-stack). The classic off-stack cause is a FEATURE/PREF FLIP that turns ON
+  the crashing subsystem's code path — a changeset like "Enable X by default" (tagged
+  `feature-flip` in the candidate list, or touching a pref/feature-manifest file). Ask: does a
+  flip enable the exact feature/library named in the signature or MOZ_CRASH reason? does a
+  candidate sit in the crashing component, share its reviewers, or mention its keywords?
+  (Bug 2056116: "Enable Rust storage by default" caused a Rust/sqlite `sync15` panic that
+  touched none of its own files.) A flip is a prior to VERIFY — confirm the enabled path
+  reaches the crash — never an automatic verdict.
 - Your blame/history/source reads are PINNED to the crash build revision (never tip). Read
   source bodies with `mcp__source__raw_file` (pinned), not `mcp__searchfox__define` (tip),
   whenever the exact build-time code matters — tip can show code that only exists after the
