@@ -529,6 +529,41 @@ class TestUserPromptOffstack(unittest.TestCase):
         self.assertNotIn("n20", out)                # capped at 20 on-stack
 
 
+class TestOffstackIngestion(unittest.TestCase):
+    """The ingestion gate: an off-stack crash (frames present, NO scored changeset) is
+    STORED + later enqueued only when OFFSTACK_ENABLED — otherwise it's dropped at ingestion
+    (no crashstack, useless=True, never enqueued) and build_seed's off-stack branch is
+    unreachable."""
+
+    def _data(self):
+        # a stack whose frames carry no source 'file' -> no candidate can score onto them
+        # (off-stack): amend() returns interesting=False.
+        return {"json_dump": {"crash_info": {"crashing_thread": 0},
+                              "threads": [{"frames": [
+                                  {"function": "Foo::Bar", "line": 10},
+                                  {"function": "Baz::Qux", "line": 20},
+                              ]}]}}
+
+    def _run(self):
+        from crashclouseau import inspector
+        return inspector.get_crash_info(
+            self._data(), "u-1", _dt(12), "nightly", _dt(9), "buildnode",
+            lambda *a, **k: {}, set())
+
+    def test_offstack_stack_dropped_when_disabled(self):
+        with mock.patch.object(config, "get_agent_offstack",
+                               return_value=_offstack_cfg(enabled=False)):
+            self.assertEqual(self._run(), {})   # not stored -> build_seed never sees it
+
+    def test_offstack_stack_stored_when_enabled(self):
+        with mock.patch.object(config, "get_agent_offstack",
+                               return_value=_offstack_cfg(enabled=True)):
+            res = self._run()
+        self.assertIn("nonjava", res)                 # stored -> put_report will enqueue it
+        self.assertTrue(res["nonjava"]["offstack"])    # flagged no-scored-changeset
+        self.assertEqual(len(res["nonjava"]["frames"]), 2)
+
+
 class TestPrefFlip(unittest.TestCase):
     """Feature/pref-flip detection + off-stack ranking boost + candidate tag."""
 

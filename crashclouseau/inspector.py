@@ -5,7 +5,7 @@
 from libmozdata import socorro
 from libmozdata.lando import LandoCommitMapAPI, LandoMissingCommit
 import re
-from . import java, tools, utils
+from . import config, java, tools, utils
 from .logger import logger
 
 
@@ -103,8 +103,20 @@ def get_crash_info(
         frames, files = inspect_stacktrace(data, chgset)
         if frames:
             files = filelog(files, mindate, buildid, channel)
-            if amend(frames, files, interesting_chgsets):
-                res["nonjava"] = {"frames": frames, "hash": get_simplified_hash(frames)}
+            interesting = amend(frames, files, interesting_chgsets)
+            # Store the stack when a candidate scored onto a frame (on-stack) OR — with the
+            # P1 off-stack path enabled — even when NONE did (off-stack): the frames MUST be
+            # persisted so build_seed can seed the first-bad-build pushlog window and the
+            # agent runs. Without this an off-stack crash is dropped right here (no
+            # crashstack, useless=True, never enqueued), leaving build_seed's off-stack
+            # branch unreachable. Gated by OFFSTACK_ENABLED so default ingestion is
+            # unchanged; ``offstack`` flags the no-scored-changeset case for downstream logs.
+            if interesting or config.get_agent_offstack()["enabled"]:
+                res["nonjava"] = {
+                    "frames": frames,
+                    "hash": get_simplified_hash(frames),
+                    "offstack": not interesting,
+                }
 
     return res
 
