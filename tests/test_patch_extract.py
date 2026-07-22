@@ -82,6 +82,45 @@ _PREPROC = """diff --git a/q.cpp b/q.cpp
 +#define MAX 20
 """
 
+# Extract-method refactor (the canary FP class, bug 2023670): a block is DELETED from the
+# caller (hunk 1, replaced by a call) and re-ADDED as a new function (hunk 2). Per-hunk it is
+# not cosmetic (add != delete within a hunk), but across the patch the lines are the same code
+# relocated -> code motion, very unlikely to be a regressor.
+_EXTRACT_METHOD = """diff --git a/e.cpp b/e.cpp
+--- a/e.cpp
++++ b/e.cpp
+@@ -10,5 +10,1 @@ void Caller::run()
+-  int x = compute(a, b);
+-  if (x > 0) { doThing(x); }
+-  logResult(x, name);
+-  total += finalize(x);
+-  helper(x, y, z);
++  runExtracted(a, b, name);
+@@ -40,0 +37,7 @@ void Caller::run()
++int Caller::runExtracted(int a, int b, Name name) {
++  int x = compute(a, b);
++  if (x > 0) { doThing(x); }
++  logResult(x, name);
++  total += finalize(x);
++  helper(x, y, z);
++}
+"""
+
+# A real behavior change touching the same area: only a couple of lines change and the added
+# lines are genuinely new logic (not relocated) -> NOT code motion.
+_REAL_CHANGE = """diff --git a/r.cpp b/r.cpp
+--- a/r.cpp
++++ b/r.cpp
+@@ -10,4 +10,6 @@ void Bar::Do()
+   Foo* ptr = Get();
+-  ptr->Use();
++  if (!ptr) { return NS_ERROR_FAILURE; }
++  ptr->Use();
++  ptr->Flush();
++  Cleanup(ptr);
+   Done();
+"""
+
 
 class TestRealFixture(unittest.TestCase):
     @classmethod
@@ -156,6 +195,30 @@ class TestDerivedSignals(unittest.TestCase):
         self.assertTrue(ext(_DOC).is_inert())            # doc-only
         self.assertFalse(ext(_NULLCHECK).is_inert())     # real logic change
         self.assertFalse(ext("").is_inert())             # empty is not "inert"
+
+    def test_is_refactor_code_motion(self):
+        def ext(raw):
+            return pe.PatchExtraction(node="n", channel="nightly", raw_diff="x",
+                                      files=pe.parse_hunks(raw))
+        # extract-method: across-hunk relocation -> refactor, but NOT cosmetic (per-hunk add
+        # != delete). This is the canary refactor-blame FP class we want to down-rank.
+        em = ext(_EXTRACT_METHOD)
+        self.assertTrue(em.is_refactor())
+        self.assertFalse(em.is_cosmetic())
+        # a real behavior change in the same area is NOT flagged as motion
+        self.assertFalse(ext(_REAL_CHANGE).is_refactor())
+        # a null-check add (a couple of new lines) is not motion either
+        self.assertFalse(ext(_NULLCHECK).is_refactor())
+        # tiny diffs never trip it
+        self.assertFalse(ext(_COSMETIC).is_refactor())
+
+    def test_refactor_note_surfaced_in_diff_tool(self):
+        from crashclouseau.agent.tools.patch import _fmt_patch
+        em = pe.PatchExtraction(node="n", channel="nightly", raw_diff="x",
+                                files=pe.parse_hunks(_EXTRACT_METHOD))
+        out = _fmt_patch(em, "n")
+        self.assertIn("code MOTION", out)          # refactor NOTE fires
+        self.assertNotIn("cosmetic-only", out)     # not mislabeled as cosmetic
 
     def test_logic_change_not_cosmetic_and_null_check_tag(self):
         files = pe.parse_hunks(_NULLCHECK)

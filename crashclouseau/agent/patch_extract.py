@@ -22,6 +22,7 @@ this module recomputes per run.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from libmozdata.hgmozilla import RawRevision
@@ -94,6 +95,16 @@ class PatchExtraction:
             file_is_cosmetic(f) or file_is_comment_only(f) or file_is_doc(f)
             for f in self.files
         )
+
+    def is_refactor(self):
+        """True when the patch is (almost) pure code MOTION — extract-method, inline, or a
+        relocated block — rather than a behavior change: the normalized added and deleted
+        lines are largely the SAME content moved around (high multiset overlap across the
+        whole patch), so it is very unlikely to be the regressor (the canary's known FPs:
+        extract-method 4cb85f483290/bug 2023670, file-move 1986107). A DOWN-RANK hint only
+        (an extract CAN still shift a lifetime/ordering) — never a hard drop. Distinct from
+        is_cosmetic, which is per-hunk whitespace reflow; motion is measured across files."""
+        return files_are_code_motion(self.files)
 
 
 # --------------------------------------------------------------------------- #
@@ -307,6 +318,32 @@ def is_cosmetic(hunk):
     add = [x for x in (_norm(t) for _, t in hunk.added_lines) if x and x not in _BRACES]
     dele = [x for x in (_norm(t) for _, t in hunk.deleted_lines) if x and x not in _BRACES]
     return sorted(add) == sorted(dele)
+
+
+# Fraction of ALL changed lines that must be shared (relocated) content for the whole patch
+# to read as code MOTION rather than a behavior change, plus a per-side floor so a tiny diff
+# can't trip it. We use a symmetric Dice-style ratio 2*shared/(added+deleted): high only when
+# BOTH sides are mostly the same lines moved around (extract-method's wrapper signature/call
+# lines are the small non-shared remainder), and it correctly rejects "delete 2, add 20 new".
+_MOTION_OVERLAP = 0.8
+_MOTION_MIN_LINES = 4
+
+
+def files_are_code_motion(files):
+    """True when the added and deleted lines across the WHOLE patch are largely the same
+    normalized content relocated: extract-method, inline, or a moved block. Measured as a
+    symmetric multiset overlap ``2*shared/(added+deleted) >= _MOTION_OVERLAP``; each side must
+    clear ``_MOTION_MIN_LINES`` so a tiny diff (or a small deletion whose lines happen to
+    reappear among many genuinely-new added lines) is never flagged. Down-rank hint, not a gate."""
+    added, deleted = [], []
+    for fd in files:
+        for h in fd.hunks:
+            added += [x for x in (_norm(t) for _, t in h.added_lines) if x and x not in _BRACES]
+            deleted += [x for x in (_norm(t) for _, t in h.deleted_lines) if x and x not in _BRACES]
+    if len(added) < _MOTION_MIN_LINES or len(deleted) < _MOTION_MIN_LINES:
+        return False
+    common = sum((Counter(added) & Counter(deleted)).values())
+    return (2 * common) >= _MOTION_OVERLAP * (len(added) + len(deleted))
 
 
 def file_is_cosmetic(file_diff):

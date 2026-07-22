@@ -53,6 +53,12 @@ def _fmt_patch(ext, node: str) -> str:
     elif ext.is_inert():
         out.append("  NOTE: comment/doc-only change — very unlikely to be the culprit; "
                    "down-rank unless the crash proves otherwise.")
+    elif ext.is_refactor():
+        out.append("  NOTE: looks like code MOTION / refactor (extract-method, inline, or a "
+                   "relocated block — the added and deleted lines are largely the same code "
+                   "moved around), which very rarely INTRODUCES a crash; down-rank unless the "
+                   "crash proves a real behavior change here (an extract CAN shift lifetime/"
+                   "ordering).")
     n = 0
     for f in ext.files:
         out.append("file {} ({})".format(f.filename, f.status))
