@@ -123,6 +123,51 @@ def _inlines_by_stackpos(raw_crash):
     return out
 
 
+# Generic abort/panic MACHINERY symbols that top the stack of every assertion/panic/OOM
+# crash and bury the real crashing frame. Substring match on the frame function; curated to
+# runtime-only names (no bare "abort") so a real crash site can't match. Used ONLY to tidy
+# the agent-facing stack TEXT (see _stack_text) — never the stored frames.
+_PROLOGUE_PATTERNS = (
+    "rust_begin_unwind", "rust_panic", "__rust_start_panic", "core::panicking",
+    "std::panicking", "panicking::panic", "panic_fmt", "panic_bounds_check",
+    "unwrap_failed", "expect_failed", "_Unwind_RaiseException", "_Unwind_Resume",
+    "MOZ_Crash", "RustMozCrash", "AnnotateMozCrashReason", "mozalloc_abort",
+    "mozalloc_handle_oom", "NS_ABORT_OOM", "NS_DebugBreak", "__assert_fail", "__assert_rtn",
+)
+
+
+def _stack_text(frames):
+    """Render the crash stack for the AGENT's prompt. PRESENTATION ONLY — it does NOT touch
+    the stored ``frames`` that feed candidate scoring and the stackpos-keyed dedup hash, so
+    nothing mechanical changes. It strips the LEADING run of generic abort/panic machinery
+    frames (rust_begin_unwind / panic_fmt / MOZ_Crash / ... — the same for every assertion/
+    panic crash) so the REAL crashing frame sits on top of what the model reads, keeping the
+    original stackpos numbers (a leading ``#3`` still tells the agent how deep it was). Never
+    strips so far that the stack goes empty."""
+    def line(f):
+        base = "#{} {}  {}:{}".format(
+            f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
+        )
+        fi = f.get("inlines")
+        if fi:
+            base += "  [inlined: {}]".format(", ".join(fi))
+        return base
+
+    lead = 0
+    for f in frames:
+        fn = f.get("function") or ""
+        if any(p in fn for p in _PROLOGUE_PATTERNS):
+            lead += 1
+        else:
+            break
+    shown = frames[lead:] if 0 < lead < len(frames) else frames
+    text = "\n".join(line(f) for f in shown)
+    if shown is not frames:
+        text = ("(#0-#{}: generic abort/panic machinery elided; the real crashing frame is "
+                "below)\n{}".format(lead - 1, text))
+    return text
+
+
 # Word + camelCase sub-word tokenizer for cheap signature<->description overlap ranking
 # of off-stack window candidates (no line-proximity score exists off-stack).
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+")
@@ -272,16 +317,7 @@ def build_seed(uuid):
             if fi:
                 f["inlines"] = fi
 
-    def _frame_line(f):
-        base = "#{} {}  {}:{}".format(
-            f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
-        )
-        fi = f.get("inlines")
-        if fi:
-            base += "  [inlined: {}]".format(", ".join(fi))
-        return base
-
-    stack_text = "\n".join(_frame_line(f) for f in frames)
+    stack_text = _stack_text(frames)
     prior_hints: list = []
     prior_bugs: set = set()
     if is_offstack:

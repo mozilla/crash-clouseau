@@ -770,5 +770,46 @@ class TestRetrigger(unittest.TestCase):
         self.assertEqual(out, {"uuid": "u-1", "cancelled": True})
 
 
+class TestStackText(unittest.TestCase):
+    """_stack_text: presentation-only panic-prologue stripping for the agent prompt."""
+
+    @staticmethod
+    def _f(pos, fn, filename="", line=-1):
+        return {"stackpos": pos, "function": fn, "filename": filename, "line": line}
+
+    def test_strips_leading_prologue_keeps_stackpos(self):
+        frames = [
+            self._f(0, "rust_begin_unwind"),
+            self._f(1, "core::panicking::panic_fmt"),
+            self._f(2, "core::option::unwrap_failed"),
+            self._f(3, "mozilla::dom::Foo::Process", "Foo.cpp", 42),
+            self._f(4, "nsThread::ProcessNextEvent", "nsThread.cpp", 1),
+        ]
+        before = [dict(f) for f in frames]
+        text = orch._stack_text(frames)
+        self.assertNotIn("rust_begin_unwind", text)          # prologue elided
+        self.assertIn("#3 mozilla::dom::Foo::Process", text)  # real frame, original stackpos
+        self.assertIn("elided", text)                         # note present
+        self.assertEqual(frames, before)                      # input NOT mutated (presentation-only)
+
+    def test_normal_stack_unchanged(self):
+        frames = [self._f(0, "mozilla::dom::Bar::Do", "Bar.cpp", 10),
+                  self._f(1, "Caller::run", "Caller.cpp", 5)]
+        text = orch._stack_text(frames)
+        self.assertTrue(text.startswith("#0 "))
+        self.assertNotIn("elided", text)
+
+    def test_all_prologue_not_emptied(self):
+        frames = [self._f(0, "rust_begin_unwind"), self._f(1, "MOZ_Crash")]
+        self.assertIn("rust_begin_unwind", orch._stack_text(frames))  # kept (would be empty)
+
+    def test_abort_adjacent_real_frame_not_stripped(self):
+        # a real crash in abort-adjacent code (AbortController) must survive — it's not a
+        # runtime machinery symbol.
+        frames = [self._f(0, "mozilla::dom::AbortController::Abort", "AbortController.cpp", 9),
+                  self._f(1, "x::y", "a.cpp", 1)]
+        self.assertTrue(orch._stack_text(frames).startswith("#0 "))
+
+
 if __name__ == "__main__":
     unittest.main()
