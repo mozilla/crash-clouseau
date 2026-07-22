@@ -193,6 +193,24 @@ def _user_prompt(crash: dict) -> str:
                 "changeset (it exposed a pre-existing UAF/latent bug rather than "
                 "introducing it) — prefer a lead + needinfo over accusing it:",
             ]
+            # Prior-signature (P4) hint: a prior FIXED bug with THIS crash's signature was
+            # regressed by bug(s) X — a strong, stack-independent prior. Point the agent at
+            # window candidates matching those bugs.
+            hints = crash.get("prior_hints") or []
+            if hints:
+                named = "; ".join(
+                    "bug {} (named by prior bug {})".format(h.get("regressor_bug"), h.get("prior_bug"))
+                    for h in hints[:5]
+                )
+                lines += [
+                    "",
+                    "PRIOR-SIGNATURE PRIOR: earlier FIXED crash bug(s) with this SAME "
+                    "signature were regressed by {}. Treat this as a strong prior: if any "
+                    "window candidate below belongs to one of these bugs (tagged "
+                    "'prior-sig'), investigate it FIRST — a repeat regression in the same "
+                    "signature is common. It is a prior to verify, not an automatic "
+                    "verdict.".format(named),
+                ]
         else:
             lines += [
                 "",
@@ -219,6 +237,8 @@ def _user_prompt(crash: dict) -> str:
                 parts.append("backed-out")
             if c.get("noise"):
                 parts.append("(likely-noise: down-rank)")
+            if c.get("prior_sig"):
+                parts.append("[prior-sig: a prior sibling of this signature was regressed by this bug]")
             desc = c.get("desc")
             if desc:
                 parts.append("| {}".format(desc))

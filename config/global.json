@@ -79,7 +79,8 @@
             "pinned": true,
             "require_callpath_for_strong": true,
             "exposer_classifier": true,
-            "observe_only": true
+            "observe_only": true,
+            "prior_signature": true
         },
         "ui":
         {

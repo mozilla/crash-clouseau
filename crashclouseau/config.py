@@ -255,6 +255,11 @@ def get_agent_offstack():
         "require_callpath_for_strong": o.get("require_callpath_for_strong", True),
         "exposer_classifier": o.get("exposer_classifier", True),
         "observe_only": _env_bool("OFFSTACK_OBSERVE_ONLY", o.get("observe_only", True)),
+        # Prior-signature (P4) corroboration: seed the agent with, and confidence-corroborate
+        # on, the regressor a prior FIXED sibling of this signature already names. ~10%
+        # off-stack reach (spike/PRIOR_SIGNATURE_REPORT). Adds one Socorro+Bugzilla lookup
+        # per off-stack seed; off by setting this false.
+        "prior_signature": o.get("prior_signature", True),
     }
 
 

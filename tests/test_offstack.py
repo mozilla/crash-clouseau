@@ -526,6 +526,141 @@ class TestUserPromptOffstack(unittest.TestCase):
         self.assertNotIn("n20", out)                # capped at 20 on-stack
 
 
+class TestPriorSig(unittest.TestCase):
+    """The prior-signature (P4) lookup + corroboration gate + ranking."""
+
+    def _fake_bugs(self):
+        return [
+            {"id": 100, "resolution": "FIXED", "regressed_by": [2011326], "summary": "sib A"},
+            {"id": 200, "resolution": "WONTFIX", "regressed_by": [777], "summary": "sib B"},  # not FIXED
+            {"id": 300, "resolution": "FIXED", "regressed_by": [555], "summary": "sib C"},
+        ]
+
+    def _patch_lookup(self, sig_to_ids):
+        from crashclouseau import priorsig as P
+        fake = self._fake_bugs()
+
+        class FakeBZ:
+            def __init__(self, bugids=None, include_fields=None, bughandler=None, bugdata=None):
+                for b in fake:
+                    if str(b["id"]) in (bugids or []):
+                        bughandler(b, bugdata)
+
+            def get_data(self):
+                return self
+
+            def wait(self):
+                return self
+
+        return (mock.patch.object(P.SocorroBugs, "get_bugs", return_value=sig_to_ids),
+                mock.patch.object(P, "Bugzilla", FakeBZ))
+
+    def test_hints_from_fixed_siblings(self):
+        from crashclouseau import priorsig as P
+        s, b = self._patch_lookup({"SIG": [100, 200, 300]})
+        with s, b:
+            hints = P.prior_regressor_hints(["SIG"])
+        regs = sorted(h["regressor_bug"] for h in hints)
+        self.assertEqual(regs, [555, 2011326])          # 200 (WONTFIX) excluded
+        self.assertEqual({h["regressor_bug"]: h["prior_bug"] for h in hints}[2011326], 100)
+
+    def test_exclude_bug_drops_self(self):
+        from crashclouseau import priorsig as P
+        s, b = self._patch_lookup({"SIG": [100, 300]})
+        with s, b:
+            hints = P.prior_regressor_hints(["SIG"], exclude_bug=300)
+        self.assertEqual([h["regressor_bug"] for h in hints], [2011326])   # 300 excluded
+
+    def test_empty_and_failure_are_graceful(self):
+        from crashclouseau import priorsig as P
+        self.assertEqual(P.prior_regressor_hints([]), [])
+        with mock.patch.object(P.SocorroBugs, "get_bugs", side_effect=RuntimeError("boom")):
+            self.assertEqual(P.prior_regressor_hints(["SIG"]), [])
+
+    def test_corroboration_flag_and_bump_single_in_window_prior(self):
+        # seed['prior_regressor_bugs'] is already window-intersected in build_seed; a SINGLE
+        # in-window prior matching the verdict candidate -> bump.
+        d = Dossier(candidate=Candidate(node="n1", bug=2011326),
+                    verdict=Verdict(decision=Decision.lead, confidence=Confidence.medium,
+                                    needinfo_draft="?"))
+        seed = {"raw_crash": {}, "prior_regressor_bugs": [2011326]}
+        flags = orch._corroborations(d, seed)
+        self.assertTrue(flags["prior_signature_match"])
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)   # bare lead -> probable
+        self.assertTrue(d.corroborations["prior_signature_match"])
+
+    def test_no_bump_when_ambiguous_multiple_in_window_priors(self):
+        # FOCUS GUARD (review): >1 in-window prior = ambiguous hot signature -> no bump,
+        # even though the candidate matches one of them.
+        d = Dossier(candidate=Candidate(node="n1", bug=2011326),
+                    verdict=Verdict(decision=Decision.lead, confidence=Confidence.medium,
+                                    needinfo_draft="?"))
+        seed = {"raw_crash": {}, "prior_regressor_bugs": [2011326, 999]}
+        flags = orch._corroborations(d, seed)
+        self.assertNotIn("prior_signature_match", flags)
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)     # ambiguous -> no bump
+
+    def test_no_bump_when_candidate_not_a_prior(self):
+        d = Dossier(candidate=Candidate(node="n1", bug=555),
+                    verdict=Verdict(decision=Decision.lead, confidence=Confidence.medium,
+                                    needinfo_draft="?"))
+        orch._apply_corroboration_gate(d, {"raw_crash": {}, "prior_regressor_bugs": [2011326]})
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_ranking_boosts_prior_sig_candidate(self):
+        window = [
+            {"node": "a", "bug": 100, "date": _dt(10), "backedout": False, "merge": False, "desc": "x"},
+            {"node": "b", "bug": 2011326, "date": _dt(1), "backedout": False, "merge": False, "desc": "y"},
+        ]
+        ui = {"signature": "S", "channel": "nightly", "product": "F", "buildid": _dt(12), "node": "bn"}
+        with mock.patch.object(orch.models.Build, "get_two_last",
+                               return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
+             mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window):
+            cands = orch._offstack_candidates(ui, _offstack_cfg(), prior_bugs={2011326})
+        self.assertEqual(cands[0]["node"], "b")       # prior-sig hit ranked first
+        self.assertTrue(cands[0]["prior_sig"])
+        self.assertFalse(cands[1]["prior_sig"])
+
+    def test_build_seed_attaches_prior_hints(self):
+        res = {"frames": [{"stackpos": 0, "function": "F", "filename": "a.cpp",
+                           "line": 1, "changesets": {}}]}
+        ui = {"uuid": "u-1", "id": 1, "signature": "S", "buildid": _dt(12),
+              "channel": "nightly", "product": "Firefox", "java": False, "node": "bn"}
+        window = [{"node": "w1", "bug": 2011326, "date": _dt(3), "backedout": False,
+                   "merge": False, "desc": "d"}]
+        with mock.patch.object(orch.config, "get_agent_offstack", return_value=_offstack_cfg()), \
+             mock.patch.object(orch.models.CrashStack, "get_by_uuid", return_value=(res, ui)), \
+             mock.patch.object(orch.models.UUID, "get_info", return_value={"signature": "S", "channel": "nightly"}), \
+             mock.patch.object(orch.models.Build, "get_two_last",
+                               return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
+             mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window), \
+             mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch("crashclouseau.priorsig.prior_regressor_hints",
+                        return_value=[{"regressor_bug": 2011326, "prior_bug": 900, "prior_summary": "x"},
+                                      {"regressor_bug": 8888, "prior_bug": 901, "prior_summary": "y"}]), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+            seed = orch.build_seed("u-1")
+        # 2011326 is a window candidate -> kept; 8888 is NOT in the window (dangling
+        # prior) -> dropped from both the corroboration set and the surfaced hints.
+        self.assertEqual(seed["prior_regressor_bugs"], [2011326])
+        self.assertEqual([h["regressor_bug"] for h in seed["prior_hints"]], [2011326])
+        self.assertTrue(seed["candidates"][0]["prior_sig"])          # window cand tagged
+
+    def test_user_prompt_surfaces_prior_hint(self):
+        from crashclouseau.agent import triage
+        crash = {"uuid": "u", "signature": "S", "channel": "nightly", "stack": "s",
+                 "is_offstack": True,
+                 "prior_hints": [{"regressor_bug": 2011326, "prior_bug": 900}],
+                 "candidates": [{"node": "w1", "score": None, "bug": 2011326, "backedout": False,
+                                 "pushdate": None, "noise": False, "desc": "d", "prior_sig": True}]}
+        out = triage._user_prompt(crash)
+        self.assertIn("PRIOR-SIGNATURE PRIOR", out)
+        self.assertIn("bug 2011326", out)
+        self.assertIn("prior-sig", out)                              # per-candidate tag
+
+
 class TestRunEvidenceAgentOffstack(unittest.TestCase):
     """End-to-end wiring of the off-stack gates + reconcile + observe-only through
     run_evidence_agent (run_crash_triage mocked; no SDK/DB/Redis)."""

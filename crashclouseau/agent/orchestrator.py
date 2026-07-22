@@ -146,14 +146,17 @@ def _tokens(text):
     return out
 
 
-def _offstack_candidates(uuid_info, offstack_cfg):
+def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
     """P1: enumerate the crash's first-bad-build pushlog window as agent candidates when
     NOTHING scored onto a stack frame (an off-stack regressor). Returns build_seed's
     normal candidate shape (``{node, score, bug, backedout, pushdate, noise, desc}``) with
     ``score=None`` (there is no line-proximity signal off-stack) and ``noise=False``,
-    lightly pre-ranked (signature<->desc token overlap, then recency; self-backouts last)
-    and capped to ``max_candidates``. Merges are dropped. Best-effort: returns [] on any
-    failure (the caller then abstains via a None seed) — never raises.
+    lightly pre-ranked and capped to ``max_candidates``. Ranking key, best first:
+    prior-signature hit (``bug`` in ``prior_bugs`` — a prior FIXED sibling named it as a
+    regressor, the strongest off-stack prior), then non-backout, then signature<->desc
+    token overlap, then recency. A prior-sig candidate is tagged ``prior_sig=True``. Merges
+    are dropped. Best-effort: returns [] on any failure (the caller then abstains) — never
+    raises.
 
     The window is bounded by the DB (``Build.get_two_last``) so it is migration-proof and
     needs no dead Buildhub lookup; ``pushlog_for_revs`` is one ``json-pushes`` GET through
@@ -191,12 +194,16 @@ def _offstack_candidates(uuid_info, offstack_cfg):
 
     sig = _tokens(uuid_info.get("signature", ""))
 
+    def _prior_hit(c):
+        b = c.get("bug")
+        return isinstance(b, int) and b > 0 and b in prior_bugs
+
     def _key(c):
         overlap = len(sig & _tokens(c.get("desc", ""))) if sig else 0
         d = c.get("date")
         recency = d.timestamp() if hasattr(d, "timestamp") else 0.0
-        # non-backout first, then signature-token overlap, then most recent.
-        return (0 if c.get("backedout") else 1, overlap, recency)
+        # prior-signature hit first, then non-backout, then sig-token overlap, then recent.
+        return (1 if _prior_hit(c) else 0, 0 if c.get("backedout") else 1, overlap, recency)
 
     ranked = sorted((c for c in window if not c.get("merge")), key=_key, reverse=True)
     out = []
@@ -212,6 +219,7 @@ def _offstack_candidates(uuid_info, offstack_cfg):
                 "pushdate": c.get("date"),
                 "noise": False,
                 "desc": desc.splitlines()[0][:200] if desc else "",
+                "prior_sig": _prior_hit(c),
             }
         )
     logger.info(
@@ -274,15 +282,41 @@ def build_seed(uuid):
         return base
 
     stack_text = "\n".join(_frame_line(f) for f in frames)
+    prior_hints: list = []
+    prior_bugs: set = set()
     if is_offstack:
+        # Prior-signature (P4) corroboration: a prior FIXED sibling of this crash's
+        # signature that already names a regressor is a strong off-stack prior. Fetch it
+        # once here so it can (a) rank/flag window candidates and (b) later corroborate the
+        # verdict — without a second network call. Best-effort; off via config.
+        if offstack_cfg.get("prior_signature", True):
+            try:
+                from crashclouseau import priorsig
+
+                sig = info.get("signature") or uuid_info.get("signature")
+                prior_hints = priorsig.prior_regressor_hints(
+                    [sig] if sig else [], exclude_bug=None
+                )
+                prior_bugs = {h["regressor_bug"] for h in prior_hints}
+            except Exception as exc:  # pragma: no cover - defensive; never break a seed
+                logger.warning("agent: prior-signature lookup failed for %s: %s", uuid, exc)
         # P1: no changeset scored onto a stack frame — seed the full first-bad-build
         # pushlog window (already ranked/capped, score=None) instead of skipping.
-        candidates = _offstack_candidates(uuid_info, offstack_cfg)
+        candidates = _offstack_candidates(uuid_info, offstack_cfg, prior_bugs)
         if not candidates:
             # Window enumeration failed (no bounds / hg error): nothing to reason about,
             # so abstain rather than run the agent on an empty candidate set.
             logger.warning("agent: off-stack window empty for %s; skipping", uuid)
             return None
+        # FP guard: restrict the prior-signature CORROBORATION to prior-named regressor bugs
+        # that ALSO landed in THIS crash's window. Window-membership is a model-INDEPENDENT
+        # 2nd axis (it is deterministic from the build, not something we hinted the model
+        # into), and it drops the dangling/after-the-build pointers a raw signature-sibling
+        # list can contain. The FULL hint set already ranked the window (recall); only the
+        # corroboration/prompt set is tightened here.
+        window_bugs = {c.get("bug") for c in candidates if c.get("bug")}
+        prior_bugs = {b for b in prior_bugs if b in window_bugs}
+        prior_hints = [h for h in prior_hints if h["regressor_bug"] in prior_bugs]
     else:
         # The scored candidate changesets are already in the DB (frame.changesets); hand
         # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
@@ -359,6 +393,10 @@ def build_seed(uuid):
         # The rev pinned tools default to (blame/read AS OF the crash build, never tip).
         # Set only for off-stack pinned runs; empty otherwise (on-stack keeps tip behavior).
         "pin_rev": uuid_info.get("node", "") if (is_offstack and offstack_cfg["pinned"]) else "",
+        # Prior-signature (P4) hints: regressor bugs a prior FIXED sibling of this signature
+        # named. Surfaced to the agent (prompt) and used by the corroboration gate.
+        "prior_regressor_bugs": sorted(prior_bugs),
+        "prior_hints": prior_hints,
     }
 
 
@@ -446,6 +484,23 @@ def _corroborations(dossier, seed):
                     break
     except Exception:  # pragma: no cover - defensive; never break a run
         logger.warning("agent: corroboration computation failed", exc_info=True)
+    # Prior-signature (P4) match: the verdict's candidate is the SAME bug a prior FIXED
+    # sibling of this crash's signature was regressed by. ``seed['prior_regressor_bugs']`` is
+    # already restricted (in build_seed) to bugs that ALSO landed in this crash's window, so
+    # the corroboration is genuinely two INDEPENDENT axes — history (a prior sibling names
+    # the bug) + a machine fact (the bug landed in this regression window) — not just "the
+    # model agreed with a hint we gave it". FOCUS GUARD: fire ONLY when there is a SINGLE
+    # such in-window prior; a hot/ambiguous signature that yields several in-window priors is
+    # not corroborative (it ranked candidates for recall, but must not inflate confidence).
+    # Never raises.
+    try:
+        pbugs = set((seed or {}).get("prior_regressor_bugs") or [])
+        cand = dossier.candidate if dossier is not None else None
+        if len(pbugs) == 1 and cand is not None and cand.bug in pbugs:
+            flags["prior_signature_match"] = True
+            flags["prior_regressor_bug"] = cand.bug
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("agent: prior-signature corroboration failed", exc_info=True)
     return flags
 
 
@@ -453,8 +508,10 @@ def _apply_corroboration_gate(dossier, seed):
     """Attach deterministic corroboration flags to the dossier and, when a STRONG one
     stands, raise a bare ``lead`` (medium/50%) to ``probable`` (0.70/70%) — the only
     path to ``probable`` (the model can't self-assert it, ``_consistency_rule`` clamps
-    it). Strong-evidence/abstain are untouched; an uncorroborated lead stays at medium.
-    Returns the flags. Mutates ``dossier`` in place; never raises."""
+    it). A strong corroboration is a fault-address<->struct-field-offset match OR a
+    prior-signature match (the candidate is a bug a prior FIXED sibling of this signature
+    was regressed by). Strong-evidence/abstain are untouched; an uncorroborated lead stays
+    at medium. Returns the flags. Mutates ``dossier`` in place; never raises."""
     if dossier is None:
         return {}
     flags = _corroborations(dossier, seed)
@@ -470,6 +527,13 @@ def _apply_corroboration_gate(dossier, seed):
             "agent: corroboration gate raised lead -> probable (fault 0x%x == %s.%s)",
             flags.get("fault_offset", 0), flags.get("fault_type", "?"),
             flags.get("fault_field", "?"),
+        )
+    elif is_bare_lead and flags.get("prior_signature_match"):
+        dossier.verdict = v.model_copy(update={"confidence": Confidence.probable})
+        logger.info(
+            "agent: corroboration gate raised lead -> probable (prior-signature: "
+            "candidate bug %s named by a prior FIXED sibling of this signature)",
+            flags.get("prior_regressor_bug", "?"),
         )
     return flags
 
