@@ -216,7 +216,8 @@ class TestBuildSeedOffstack(unittest.TestCase):
                                return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
              mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window), \
              mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
-             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}), \
+             mock.patch("crashclouseau.inspector.git2hg", return_value="hgbuildnode"):
             seed = orch.build_seed("u-1")
         self.assertTrue(seed["is_offstack"])
         self.assertEqual(seed["build_node"], "buildnode123")
@@ -252,8 +253,9 @@ class TestBuildSeedOffstack(unittest.TestCase):
              mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
             self.assertIsNone(orch.build_seed("u-1"))
 
-    def test_onstack_unaffected(self):
-        # a crash WITH scored changesets never enters the off-stack path, even if enabled
+    def test_onstack_candidates_unaffected_but_now_pinned(self):
+        # a crash WITH scored changesets never enters the off-stack candidate path, but its
+        # blame/source reads are now PINNED to the build rev (on-stack precision improvement).
         res = {"frames": [{"stackpos": 0, "function": "F", "filename": "a.cpp",
                            "line": 1, "changesets": {"abc": {"score": 3}}}]}
         with mock.patch.object(orch.config, "get_agent_offstack", return_value=_offstack_cfg()), \
@@ -262,10 +264,11 @@ class TestBuildSeedOffstack(unittest.TestCase):
                                return_value={"signature": "F", "channel": "nightly",
                                              "product": "Firefox", "buildid": "x", "version": "1"}), \
              mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
-             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}), \
+             mock.patch("crashclouseau.inspector.git2hg", return_value="hgbuildnode"):
             seed = orch.build_seed("u-1")
         self.assertFalse(seed["is_offstack"])
-        self.assertEqual(seed["pin_rev"], "")
+        self.assertEqual(seed["pin_rev"], "buildnode123")   # on-stack now pins to the build
         self.assertEqual(seed["candidates"][0]["node"], "abc")
 
 
@@ -471,7 +474,7 @@ class TestReconcileOffstackActions(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.lead)
         result = CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=d,
                                    actions=[self._action("ASSERTIVE: changeset X caused this")])
-        orch._reconcile_offstack_actions(result)
+        orch._reconcile_bridged_action(result)
         self.assertEqual(len(result.actions), 1)
         text = result.actions[0]["params"]["text"]
         self.assertNotIn("ASSERTIVE", text)               # stale assertive draft dropped
@@ -483,7 +486,7 @@ class TestReconcileOffstackActions(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.abstain)
         result = CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=d,
                                    actions=[self._action("ASSERTIVE")])
-        orch._reconcile_offstack_actions(result)
+        orch._reconcile_bridged_action(result)
         self.assertEqual(result.actions, [])              # abstain emits no action
 
     def test_preserves_genuine_recorder_action(self):
@@ -492,7 +495,7 @@ class TestReconcileOffstackActions(unittest.TestCase):
                         "reasoning": "agent recorded this directly"}
         result = CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=d,
                                    actions=[recorder_act, self._action("strong draft")])
-        orch._reconcile_offstack_actions(result)
+        orch._reconcile_bridged_action(result)
         # recorder action kept; the auto-bridged one re-derived (strong verdict unchanged)
         self.assertIn(recorder_act, result.actions)
 
@@ -640,7 +643,8 @@ class TestPriorSig(unittest.TestCase):
              mock.patch("crashclouseau.priorsig.prior_regressor_hints",
                         return_value=[{"regressor_bug": 2011326, "prior_bug": 900, "prior_summary": "x"},
                                       {"regressor_bug": 8888, "prior_bug": 901, "prior_summary": "y"}]), \
-             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}), \
+             mock.patch("crashclouseau.inspector.git2hg", return_value="hgbuildnode"):
             seed = orch.build_seed("u-1")
         # 2011326 is a window candidate -> kept; 8888 is NOT in the window (dangling
         # prior) -> dropped from both the corroboration set and the surfaced hints.
@@ -735,6 +739,30 @@ class TestRunEvidenceAgentOffstack(unittest.TestCase):
         text = payload["actions"][0]["params"]["text"]
         self.assertNotIn("ASSERTIVE", text)                               # stale draft gone
         self.assertIn("not an accusation", text)                          # soft draft shipped
+
+    def _seed_onstack(self):
+        s = self._seed()
+        s["is_offstack"] = False
+        s["raw_crash"] = {"json_dump": {"crash_info": {"address": "0xe5e5e5e5"}}}  # poison
+        return s
+
+    def test_onstack_exposer_runs_but_not_sf3_or_observe_only(self):
+        # On-stack (is_offstack False): the exposer classifier runs (poison fault -> downgrade
+        # strong->lead) even though SF-3 and observe-only are off-stack-only. The bridged
+        # action is reconciled to the SOFT lead draft and stays apply-eligible (on-stack
+        # verdicts are not observe-only).
+        seed = self._seed_onstack()
+        result = self._result(callpath_verified=True)   # strong + call path; exposer downgrades anyway
+        done, MVerd = self._run(seed, result, _offstack_cfg())  # offstack_cfg is unused for on-stack
+        self.assertIsNotNone(done)
+        payload = done.kwargs["payload"]
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "lead")   # exposer downgraded
+        corr = payload["dossier"]["corroborations"]
+        self.assertTrue(corr["exposer_suspected"])                        # exposer ran on-stack
+        self.assertNotIn("offstack_observe_only", corr)                   # on-stack NOT observe-only
+        self.assertNotIn("call_path_verified", corr)                      # SF-3 did NOT run on-stack
+        self.assertEqual(len(payload["actions"]), 1)                      # apply-eligible (not suppressed)
+        self.assertIn("not an accusation", payload["actions"][0]["params"]["text"])  # soft draft
 
 
 if __name__ == "__main__":

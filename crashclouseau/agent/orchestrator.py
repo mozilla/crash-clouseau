@@ -374,6 +374,24 @@ def build_seed(uuid):
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("agent: area-experts failed for %s: %s", uuid, exc)
 
+    # Pin blame/history/source reads to the crash BUILD rev (never tip). ON-STACK: always —
+    # reading the crashing line as-of the build is strictly more correct (tip can attribute
+    # it to the post-build fix or a later refactor). OFF-STACK: gated by OFFSTACK_PINNED.
+    # We pin ONLY when the (git, post-migration) build node actually resolves to an hg rev
+    # the hg endpoints accept; otherwise pin_rev stays "" and the tools read tip — a WORKING
+    # read — rather than 404-ing an unresolvable git hash. A transient git2hg/lando miss thus
+    # degrades that run to tip instead of breaking the agent's evidence tools.
+    pin_rev = ""
+    build_node = uuid_info.get("node", "")
+    if build_node and (not is_offstack or offstack_cfg["pinned"]):
+        try:
+            from crashclouseau import inspector
+
+            if inspector.git2hg(build_node):
+                pin_rev = build_node
+        except Exception:  # pragma: no cover - defensive; degrade to tip
+            pin_rev = ""
+
     return {
         "uuid": uuid,
         "signature": info.get("signature", ""),
@@ -389,10 +407,10 @@ def build_seed(uuid):
         # P1 off-stack markers, consumed downstream by triage (prompt framing + pinned
         # tool ctx) and run_evidence_agent (SF-3 / exposer gates, observe-only, cost cap).
         "is_offstack": is_offstack,
-        "build_node": uuid_info.get("node", ""),
-        # The rev pinned tools default to (blame/read AS OF the crash build, never tip).
-        # Set only for off-stack pinned runs; empty otherwise (on-stack keeps tip behavior).
-        "pin_rev": uuid_info.get("node", "") if (is_offstack and offstack_cfg["pinned"]) else "",
+        "build_node": build_node,
+        # See the pin_rev computation above: the build rev pinned tools default to (or "" =>
+        # tools read tip, both when pinning is off AND when the build node won't resolve).
+        "pin_rev": pin_rev,
         # Prior-signature (P4) hints: regressor bugs a prior FIXED sibling of this signature
         # named. Surfaced to the agent (prompt) and used by the corroboration gate.
         "prior_regressor_bugs": sorted(prior_bugs),
@@ -677,23 +695,23 @@ def _classify_exposer(dossier, seed):
             _downgrade_to_lead_or_abstain(
                 dossier, seed,
                 "exposer classifier ({})".format("; ".join(signals)),
-                "off-stack crash looks like a pre-existing latent bug the candidate only "
-                "exposed (no cited anchor to hand over as a lead)",
+                "crash looks like a pre-existing latent bug the candidate only exposed "
+                "(no cited anchor to hand over as a lead)",
             )
     except Exception:  # pragma: no cover - defensive; never break a run
         logger.warning("agent: exposer classification failed", exc_info=True)
 
 
-def _reconcile_offstack_actions(result):
-    """After the off-stack gates may have DOWNGRADED the verdict (SF-3 / exposer:
-    strong-evidence -> lead or abstain), the needinfo action ``build_result`` synthesized
-    from the ORIGINAL (pre-gate) verdict is stale — it still carries the assertive
-    strong-evidence draft even though the verdict is now a soft lead (or abstain). Re-derive
-    the auto-bridged needinfo from the FINAL dossier so an apply-eligible action can never
-    contradict the verdict the gates settled on (this matters when observe-only is OFF — the
-    graduation config — since observe-only would otherwise clear the action anyway). Genuine
-    recorder-sourced actions (the agent calling the actions tool) are preserved; only the
-    auto-bridged needinfo is rebuilt. Never raises."""
+def _reconcile_bridged_action(result):
+    """After a deterministic gate may have DOWNGRADED the verdict (SF-3 or the exposer
+    classifier: strong-evidence -> lead or abstain — the exposer now fires on-stack too), the
+    needinfo action ``build_result`` synthesized from the ORIGINAL (pre-gate) verdict is stale
+    — it still carries the assertive strong-evidence draft even though the verdict is now a
+    soft lead (or abstain). Re-derive the auto-bridged needinfo from the FINAL dossier so an
+    apply-eligible action can never contradict the verdict the gates settled on. Idempotent
+    when nothing downgraded (re-derives the same action). Genuine recorder-sourced actions
+    (the agent calling the actions tool) are preserved; only the auto-bridged needinfo is
+    rebuilt. Never raises."""
     try:
         # triage is already imported by this point (run_crash_triage ran), so this is a
         # cached re-import and pulls no extra SDK cost.
@@ -705,10 +723,16 @@ def _reconcile_offstack_actions(result):
         ]
         fresh = _needinfo_action(result.dossier)
         if fresh is not None:
-            kept.append(fresh)
+            # Dedup against a genuine recorder action with the same (type, bug_id, text),
+            # mirroring build_result — so we never re-introduce a duplicate the agent's own
+            # recorded comment already covers.
+            fp = fresh["params"]
+            dup = any(a.get("type") == fresh["type"] and (a.get("params") or {}).get("bug_id") == fp["bug_id"] and (a.get("params") or {}).get("text") == fp["text"] for a in kept)
+            if not dup:
+                kept.append(fresh)
         result.actions = kept
     except Exception:  # pragma: no cover - defensive; never break a run
-        logger.warning("agent: off-stack action reconcile failed", exc_info=True)
+        logger.warning("agent: action reconcile failed", exc_info=True)
 
 
 def _apply_offstack_observe_only(result):
@@ -831,26 +855,30 @@ def run_evidence_agent(uuid, force=False):
         # persisted payload and the Verdict row (they run BEFORE model_dump + _verdict_row).
         offstack_cfg = config.get_agent_offstack() if seed.get("is_offstack") else None
         if result.dossier is not None:
-            # P1 off-stack precision gates run BEFORE the corroboration gate so a
-            # strong->lead downgrade here is still eligible for a lead->probable bump.
-            if offstack_cfg is not None:
-                if offstack_cfg["require_callpath_for_strong"]:
-                    _apply_callpath_gate(result.dossier, seed)
-                if offstack_cfg["exposer_classifier"]:
-                    _classify_exposer(result.dossier, seed)
-            # Corroboration gate (#2): a fault-address<->struct-field-offset match raises a
-            # bare lead (medium/50%) to `probable` (70%) — stashed on the dossier UI chips.
+            # Deterministic gates run BEFORE the corroboration gate so a strong->lead
+            # downgrade here is still eligible for a lead->probable bump.
+            # SF-3 call-path gate is OFF-STACK ONLY: an on-stack candidate already has its
+            # stack-frame anchor, so requiring a searchfox call path would wrongly demote it.
+            if offstack_cfg is not None and offstack_cfg["require_callpath_for_strong"]:
+                _apply_callpath_gate(result.dossier, seed)
+            # Exposer classifier runs for ALL crashes: ~1-in-6 ON-stack line hits are exposers
+            # too, and its signals (poison fault address / UAF / PHC free stack) are
+            # stack-independent; it only downgrades strong-evidence->lead on a STRONG poison
+            # signal (a weak hint just sets a UI chip). Off-stack keeps its config knob.
+            if offstack_cfg is None or offstack_cfg["exposer_classifier"]:
+                _classify_exposer(result.dossier, seed)
+            # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
+            # match raises a bare lead (medium/50%) to `probable` (70%).
             _apply_corroboration_gate(result.dossier, seed)
-            if offstack_cfg is not None:
-                # Re-derive the auto-bridged needinfo from the FINAL (post-gate) verdict so a
-                # gate-downgraded verdict can't ship the original strong-evidence action —
-                # matters when observe-only is OFF (the graduation config).
-                _reconcile_offstack_actions(result)
-                # OBSERVE-ONLY canary: suppress outward actions entirely (drop the needinfo)
-                # BEFORE model_dump, so the payload carries nothing apply-eligible while the
-                # dossier/verdict stay visible. Runs last so nothing re-adds an action after.
-                if offstack_cfg["observe_only"]:
-                    _apply_offstack_observe_only(result)
+            # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
+            # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
+            # must not ship the original strong-evidence action. Idempotent when nothing
+            # downgraded (re-derives the same action).
+            _reconcile_bridged_action(result)
+            # OBSERVE-ONLY canary is OFF-STACK ONLY: on-stack verdicts stay apply-eligible
+            # (the established production behavior). Runs last so nothing re-adds an action.
+            if offstack_cfg is not None and offstack_cfg["observe_only"]:
+                _apply_offstack_observe_only(result)
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already
