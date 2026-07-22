@@ -161,14 +161,19 @@ _ROLES: dict[str, dict] = {
                   "mcp__searchfox__field_layout"],
     },
     "skeptic": {
-        "description": "Adversarially re-verify each assembled claim (edges, diff "
-        "lines, reachability) and refute the unsupported ones.",
-        "prompt": "You are the skeptic. Independently re-verify every claim in a "
-        "candidate chain — re-query searchfox for each claimed edge, re-check each "
-        "cited diff line with `mcp__patch__diff` — and mark each pass/fail/"
-        "unverifiable. Use fail for a contradiction or missing claimed evidence; use "
-        "unverifiable for searchfox holes such as virtual/IPC/FFI/macro/template "
-        "edges. A claim without a fresh citation cannot pass. A fault-address↔field "
+        "description": "Trust guardrail: catch NOISE — a coincidental or innocent "
+        "candidate wrongly fingered — without demanding end-to-end proof of a credible lead.",
+        "prompt": "You are the skeptic — the TRUST GUARDRAIL. The goal is to get a human "
+        "investigating a CREDIBLE lead, so your job is to catch NOISE (a coincidental or "
+        "innocent candidate that shouldn't be sent to anyone), NOT to demand proof. "
+        "Independently re-check every claim — re-query searchfox for each claimed edge, "
+        "re-check each cited diff line with `mcp__patch__diff` — and mark each pass/fail/"
+        "unverifiable. Use `fail` ONLY when a claim is CONTRADICTED by its own cited evidence "
+        "or the candidate is demonstrably UNRELATED to the crash (i.e. noise). A plausible "
+        "mechanism you simply cannot verify end-to-end is `unverifiable` (it lowers confidence "
+        "but KEEPS the lead) — NOT `fail`: a credible-but-unproven clue is exactly what we "
+        "want to surface. Use `unverifiable` for searchfox holes such as virtual/IPC/FFI/"
+        "macro/template edges. A claim without a fresh citation cannot pass. A fault-address↔field "
         "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (with namespaces, no template `<...>` args — "
         "e.g. `mozilla::detail::nsTStringRepr`) and mark it `pass` (with a "

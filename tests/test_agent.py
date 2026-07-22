@@ -109,7 +109,7 @@ class TestBuildOptions(unittest.TestCase):
         self.assertIn("bug=111", p)
         self.assertIn("mcp__patch__diff", p)   # steer to the tool, not shelling
         self.assertIn("backed-out", p)
-        self.assertIn("prefer a cited lead", p)
+        self.assertIn("worth a human's time", p)   # triage-worthiness mission framing
         self.assertIn("not as a closed world", p)
 
     def test_user_prompt_includes_compact_crash_facts(self):

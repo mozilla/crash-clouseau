@@ -190,12 +190,15 @@ def _user_prompt(crash: dict) -> str:
     stack = crash.get("stack") or crash.get("stack_text") or ""
     extra = crash.get("notes", "")
     lines = [
-        "Investigate this Firefox crash and identify the regressor changeset, "
-        "reaching off-stack functions through the call graph where needed. "
-        "Return strong-evidence only when the evidence chain is verified end to "
-        "end. Otherwise prefer a cited lead when a candidate changeset, hunk, or "
-        "call-path edge points a human at the right area. Abstain only when there "
-        "is no cited lead worth anyone's time.",
+        "Investigate this Firefox crash to get the RIGHT PERSON INVESTIGATING it — your job "
+        "is to surface the changeset/area most worth a human's time, not to prove a culprit. "
+        "Reach off-stack functions through the call graph where needed. Report a cited lead "
+        "whenever you have a CREDIBLE, SPECIFIC reason (a mechanism hypothesis, a domain / "
+        "what-it-enables link, or a corroborating signal) and score how worth-investigating "
+        "it is; use strong-evidence only for a chain verified end to end. ABSTAIN when the "
+        "best you have is noise (mere window-membership or a bare keyword match) — a confident "
+        "'nothing credible here' beats sending someone after noise and losing their trust in "
+        "every future finding.",
         "",
         f"UUID: {uuid}",
         f"Signature: {signature}",

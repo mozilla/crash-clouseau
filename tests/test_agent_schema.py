@@ -479,8 +479,10 @@ class TestVerdictRules(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.lead)
         self.assertEqual(d.verdict.needinfo_draft, "could you take a look at this crash?")
 
-    def test_lead_confidence_clamped_to_medium(self):
-        # A lead must never wear a high-confidence badge — clamp an over-claim.
+    def test_lead_high_clamped_to_probable(self):
+        # Worth-investigating pivot: a lead may self-assert up to `probable`; only `high`
+        # (a fully-verified/corroborated badge) is reserved, so a lead's high clamps one
+        # notch to probable (not all the way to medium).
         obj = copy.deepcopy(_dossier())
         obj["skeptic"] = []
         obj["verdict"] = {
@@ -489,11 +491,23 @@ class TestVerdictRules(unittest.TestCase):
         }
         d = validate_dossier(obj)
         self.assertEqual(d.verdict.decision, Decision.lead)
-        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
 
-    def test_lead_confidence_clamp_independent_of_floor(self):
-        # The clamp is a fixed 'never high' rule, not tied to the tunable floor: a
-        # retuned floor must not let a high-confidence lead through.
+    def test_lead_probable_is_allowed(self):
+        # A model-asserted lead+probable now STANDS (a strong worth-investigating estimate),
+        # rather than being clamped to medium.
+        obj = copy.deepcopy(_dossier())
+        obj["skeptic"] = []
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "probable",
+            "mechanism": {"statement": "maybe", "citations": [_diff_line()]},
+        }
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+
+    def test_lead_high_clamp_independent_of_floor(self):
+        # The lead 'high -> probable' clamp is fixed, not tied to the tunable strong-evidence
+        # floor: a retuned floor must not let a lead wear the reserved `high` badge.
         from unittest import mock
         obj = copy.deepcopy(_dossier())
         obj["skeptic"] = []
@@ -504,7 +518,7 @@ class TestVerdictRules(unittest.TestCase):
         with mock.patch("crashclouseau.config.get_abstain_below_confidence",
                         return_value=0.95):
             d = validate_dossier(obj)
-        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
 
     def test_lead_without_anchor_abstains(self):
         # A directly-emitted lead with NO cited candidate/hunk/edge is demoted to
@@ -522,6 +536,35 @@ class TestVerdictRules(unittest.TestCase):
         d = validate_dossier(obj)
         self.assertEqual(d.verdict.decision, Decision.abstain)
         self.assertIn("anchor", d.verdict.abstain_reason)
+
+    def test_skeptic_fail_on_lead_abstains(self):
+        # Worth-investigating pivot: the skeptic is the NOISE guardrail — a `fail` on a
+        # model-emitted lead demotes it to abstain, so we never push a lead the skeptic
+        # flagged as noise/unrelated (the teeth the reoriented skeptic needs on leads).
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "probable",
+            "needinfo_draft": "could you take a look?",
+            "mechanism": {"statement": "maybe", "citations": [_diff_line()]},
+        }
+        obj["skeptic"] = [{"claim_ref": "candidate", "status": "fail", "note": "unrelated"}]
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("noise", d.verdict.abstain_reason)
+
+    def test_skeptic_unverifiable_keeps_lead(self):
+        # `unverifiable` (a searchfox hole / cannot-confirm, NOT a contradiction) must NOT
+        # demote a lead — a credible-but-unproven clue is exactly what we want to surface.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = {
+            "decision": "lead", "confidence": "probable",
+            "needinfo_draft": "take a look?",
+            "mechanism": {"statement": "maybe", "citations": [_diff_line()]},
+        }
+        obj["skeptic"] = [{"claim_ref": "edge0", "status": "unverifiable", "note": "sf hole"}]
+        d = validate_dossier(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
 
     def test_area_experts_roundtrip(self):
         # #15 phase 2: area_experts is deterministic (not Cited) and survives the

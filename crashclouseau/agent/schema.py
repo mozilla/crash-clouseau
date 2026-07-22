@@ -56,11 +56,13 @@ class Decision(str, Enum):
 class Confidence(str, Enum):
     low = "low"
     medium = "medium"
-    # ``probable`` sits between ``medium`` and ``high`` and is reserved for a lead that
-    # a DETERMINISTIC corroboration (computed outside the LLM — e.g. a fault-address ==
-    # struct-field-offset match) has raised above the bare-lead ceiling. The model may
-    # NOT self-assert it (``_consistency_rule`` clamps a model-emitted probable/high on
-    # a lead back to medium); only ``orchestrator._apply_corroboration_gate`` sets it.
+    # ``probable`` sits between ``medium`` and ``high``. Under the worth-investigating pivot
+    # a lead MAY self-assert up to ``probable`` (a strong worth-investigating estimate for a
+    # coherent, well-linked clue), AND a deterministic corroboration (computed outside the
+    # LLM — e.g. a fault-address == struct-field-offset match, in
+    # ``orchestrator._apply_corroboration_gate``) also raises a bare lead to ``probable``.
+    # Only ``high`` stays reserved: reachable solely by a VERIFIED strong-evidence chain (a
+    # lead's ``high`` is clamped one notch to ``probable`` by ``_consistency_rule``).
     probable = "probable"
     high = "high"
 
@@ -295,19 +297,19 @@ class Verdict(BaseModel):
             if self.consistency is None or not self.consistency.citations:
                 raise ValueError("strong-evidence requires a cited consistency claim")
         elif self.decision == Decision.lead:
-            # A lead is plausible-but-unverified: the MODEL must never self-assert a
-            # confidence above `medium` (its own "high"/"probable" is exactly the
-            # over-claim we don't trust), so clamp both down to `medium`. `probable`
-            # (0.70) is reachable ONLY via ``orchestrator._apply_corroboration_gate``,
-            # which sets it AFTER validation from a deterministic corroboration (a
-            # fault-address == struct-field-offset match) — a signal the model cannot
-            # fabricate. This is a fixed one-way clamp, independent of the tunable
-            # strong-evidence floor. The cited-anchor requirement (a candidate/hunk/
-            # edge) is enforced at the Dossier level (``_skeptic_veto``), which can see
-            # those fields — deliberately NOT raised here: raising would trip
-            # parse_and_validate's salvage and drop an otherwise-useful lead.
-            if self.confidence in (Confidence.high, Confidence.probable):
-                self.confidence = Confidence.medium
+            # A lead's confidence is a WORTH-INVESTIGATING estimate (how likely this is a
+            # real clue worth a human's time), NOT a claim of proof — so the model MAY
+            # self-assert up to `probable` (0.70) for a coherent, cited, well-linked lead
+            # (e.g. a mechanism hypothesis + a domain/enablement link). Only `high` (0.85)
+            # stays reserved for a fully VERIFIED chain, i.e. `strong-evidence`; NO lead
+            # reaches `high` (``_apply_corroboration_gate`` raises a corroborated lead only to
+            # `probable`, not `high`), so a lead's `high` is clamped one notch to `probable`.
+            # The noise guard is NOT this clamp: it is the abstain decision + the
+            # (noise-focused) skeptic — a skeptic `fail` demotes a lead to abstain, and an
+            # anchorless lead is demoted too (``_skeptic_veto``) — which is what protects
+            # against sending people after noise.
+            if self.confidence == Confidence.high:
+                self.confidence = Confidence.probable
         elif self.decision == Decision.abstain:
             if not self.abstain_reason:
                 raise ValueError("abstain requires an abstain_reason")
@@ -370,40 +372,53 @@ class Dossier(BaseModel):
         — a raising validator would fall through ``parse_and_validate``'s salvage
         rebuild to a bare abstain and discard salvaged evidence.
 
-        (1) A skeptic ``fail`` refutes a strong-evidence *mechanism*, but a cited
+        (1) A skeptic ``fail`` on STRONG-EVIDENCE refutes the *mechanism*, but a cited
         candidate/hunk/edge may still be a useful LEAD — so a ``fail`` DOWNGRADES
         strong-evidence to ``lead`` when such an anchor stands (dropping the now-stale
         assertive draft for a SOFT one that doesn't restate the refuted mechanism), and
         only collapses to ``abstain`` when nothing cited remains. ``unverifiable`` is
         advisory (a searchfox hole), not a ``fail``.
 
-        (2) ANY lead — including one the model emits directly — must carry a cited
-        anchor; an anchorless lead is demoted to abstain (nothing to hand a human)."""
+        (1b) A skeptic ``fail`` on a MODEL-emitted LEAD demotes it to ABSTAIN. Under the
+        worth-investigating pivot the skeptic is the NOISE guardrail: ``fail`` means the
+        claim is contradicted or the candidate is demonstrably unrelated (noise), NOT merely
+        unproven (that is ``unverifiable``, which KEEPS the lead). We do not push a lead the
+        skeptic flagged as noise — this is the teeth the reoriented skeptic needs on leads.
+
+        (2) ANY surviving lead must carry a cited anchor; an anchorless lead is demoted to
+        abstain (nothing to hand a human)."""
         v = self.verdict
         if v is None:
             return self
+        failed = [s.claim_ref for s in self.skeptic
+                  if s.status == SkepticStatus.failed]
         # (1) Skeptic ladder on a strong-evidence verdict.
-        if v.decision == Decision.strong_evidence:
-            failed = [s.claim_ref for s in self.skeptic
-                      if s.status == SkepticStatus.failed]
-            if failed:
-                detail = "skeptic refuted the mechanism (failed: {})".format(
-                    ", ".join(failed) or "?"
+        if v.decision == Decision.strong_evidence and failed:
+            detail = "skeptic refuted the mechanism (failed: {})".format(
+                ", ".join(failed) or "?"
+            )
+            if self._has_lead_anchor():
+                self.verdict = Verdict(
+                    decision=Decision.lead,
+                    confidence=Confidence.medium,
+                    needinfo_draft=self._soft_lead_draft(),
+                    mechanism=v.mechanism,
+                    consistency=v.consistency,
                 )
-                if self._has_lead_anchor():
-                    self.verdict = Verdict(
-                        decision=Decision.lead,
-                        confidence=Confidence.medium,
-                        needinfo_draft=self._soft_lead_draft(),
-                        mechanism=v.mechanism,
-                        consistency=v.consistency,
-                    )
-                else:
-                    self.verdict = Verdict(
-                        decision=Decision.abstain,
-                        confidence=Confidence.low,
-                        abstain_reason=detail + "; no cited candidate/hunk/edge remains",
-                    )
+            else:
+                self.verdict = Verdict(
+                    decision=Decision.abstain,
+                    confidence=Confidence.low,
+                    abstain_reason=detail + "; no cited candidate/hunk/edge remains",
+                )
+        # (1b) A skeptic fail on a model-emitted lead = noise -> abstain (guardrail teeth).
+        elif v.decision == Decision.lead and failed:
+            self.verdict = Verdict(
+                decision=Decision.abstain,
+                confidence=Confidence.low,
+                abstain_reason="skeptic flagged this lead as noise / unrelated "
+                               "(failed: {})".format(", ".join(failed) or "?"),
+            )
         # (2) A lead (from the ladder OR emitted directly) needs a cited anchor.
         if self.verdict.decision == Decision.lead and not self._has_lead_anchor():
             self.verdict = Verdict(

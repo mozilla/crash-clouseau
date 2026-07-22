@@ -598,12 +598,13 @@ def _corroborations(dossier, seed):
 
 def _apply_corroboration_gate(dossier, seed):
     """Attach deterministic corroboration flags to the dossier and, when a STRONG one
-    stands, raise a bare ``lead`` (medium/50%) to ``probable`` (0.70/70%) — the only
-    path to ``probable`` (the model can't self-assert it, ``_consistency_rule`` clamps
-    it). A strong corroboration is a fault-address<->struct-field-offset match OR a
-    prior-signature match (the candidate is a bug a prior FIXED sibling of this signature
-    was regressed by). Strong-evidence/abstain are untouched; an uncorroborated lead stays
-    at medium. Returns the flags. Mutates ``dossier`` in place; never raises."""
+    stands, raise a ``lead`` below ``probable`` up to ``probable`` (0.70/70%). Since the
+    worth-investigating pivot the model may ALSO self-assert up to ``probable`` on a lead,
+    so this is no longer the only path there — but it is a DETERMINISTIC one (a signal the
+    model cannot fabricate). A strong corroboration is a fault-address<->struct-field-offset
+    match OR a prior-signature match (the candidate is a bug a prior FIXED sibling of this
+    signature was regressed by). Strong-evidence/abstain are untouched; a lead already at
+    ``probable`` is unchanged. Returns the flags. Mutates ``dossier`` in place; never raises."""
     if dossier is None:
         return {}
     flags = _corroborations(dossier, seed)

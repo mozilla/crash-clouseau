@@ -191,12 +191,18 @@ class TestCorroborationGate(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.strong_evidence)
         self.assertEqual(d.verdict.confidence, Confidence.high)
 
-    def test_model_cannot_self_assert_probable_on_lead(self):
-        # A model-emitted lead+probable (or +high) is clamped to medium by the schema;
-        # only the deterministic gate can set probable.
-        v = Verdict(decision=Decision.lead, confidence=Confidence.probable,
-                    needinfo_draft="?")
-        self.assertEqual(v.confidence, Confidence.medium)
+    def test_lead_may_self_assert_up_to_probable(self):
+        # Worth-investigating pivot: a lead MAY self-assert up to probable (a strong
+        # worth-investigating estimate); only `high` is reserved (clamped to probable).
+        self.assertEqual(
+            Verdict(decision=Decision.lead, confidence=Confidence.probable,
+                    needinfo_draft="?").confidence, Confidence.probable)
+        self.assertEqual(
+            Verdict(decision=Decision.lead, confidence=Confidence.high,
+                    needinfo_draft="?").confidence, Confidence.probable)
+        self.assertEqual(
+            Verdict(decision=Decision.lead, confidence=Confidence.medium,
+                    needinfo_draft="?").confidence, Confidence.medium)
 
 
 class TestEnqueueGating(unittest.TestCase):

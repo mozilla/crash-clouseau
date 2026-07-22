@@ -129,25 +129,51 @@ don't backtick some code and leave the rest bare. Shape:
 ```
 
 Rules for the verdict:
-- `decision: "strong-evidence"` REQUIRES a cited `mechanism`, a cited `consistency`
-  claim, and `confidence: "high"`. Use it only when the chain from the changeset to
-  the crash site is verified end to end.
-- `decision: "lead"` is the COMMON, valuable case: you have a plausible, cited related
-  changeset (a `candidate` and/or a cited `hunk`/`call_path` edge pointing at the
-  crashing area) but CANNOT verify the mechanism end to end. Prefer a lead over an
-  abstain whenever something cited would help a human investigate. Calibrate the
-  confidence: `"low"` when the only link is proximity/area (a change near the crash but
-  no mechanism), `"medium"` when a concrete mechanism is plausible but unverified. Use a
-  SOFT, non-accusatory `needinfo_draft`
-  ("this crash may relate to your recent work on X — could you help figure out what's
-  going wrong?"), NEVER an accusation.
-- Record the skeptic's re-verification of every claim in the `skeptic` array. If the
-  skeptic returns `fail` on a claim in the chain, DOWNGRADE: emit `lead` (not
-  `strong-evidence`) if a cited candidate/hunk/edge still stands, otherwise `abstain`.
-  A schema check enforces this downgrade. Mark a searchfox hole `unverifiable` (which
-  only lowers confidence), NOT `fail`.
-- Use `decision: "abstain"` (with an `abstain_reason` and NO `needinfo_draft`) only when
-  nothing cited is worth a human's time — no plausible changeset and no area to flag.
+
+Your goal is to get the RIGHT PERSON INVESTIGATING this crash — NOT to prove a culprit. A
+well-reasoned, non-noise lead that points a human at a likely changeset/area is a SUCCESS
+even without an end-to-end proof. BUT the whole value collapses if you send people after
+NOISE: one wrong "please investigate" and they stop trusting every finding, including the
+good ones. So make TWO decisions, in order:
+
+1. NOISE GATE (the decision that matters most). Is there a CREDIBLE, SPECIFIC reason to
+   suspect a candidate? Credible = a coherent mechanism hypothesis, a domain / reviewer /
+   "what this change enables" link, a deterministic corroborator (fault-address<->struct
+   field offset, prior-signature, a searchfox-verified call path), or a cited diff/edge that
+   plausibly reaches the crash. Window-membership or a shared keyword ALONE is NOT credible —
+   that is noise. If the best you have is noise, `abstain` (with an `abstain_reason`, NO
+   `needinfo_draft`). A confident "nothing credible here" is a GOOD, trust-preserving answer —
+   prefer it over a weak guess. Do NOT manufacture a lead just to name someone.
+
+2. If it IS credible, report it and SCORE how worth-investigating it is. `confidence` is a
+   WORTH-INVESTIGATING estimate (how likely this is worth a human's time), NOT a proof
+   strength:
+   - `"high"` — the chain is verified end to end OR a deterministic corroborator fired. Emit
+     `decision: "strong-evidence"` (REQUIRES a cited `mechanism` + a cited `consistency` +
+     `confidence: "high"`) ONLY in this case.
+   - `"probable"` — a coherent, cited mechanism hypothesis WITH a strong link (domain /
+     reviewers / what it enables); plausible but not proven end to end. `decision: "lead"`.
+   - `"medium"` — a coherent mechanism hypothesis, OR a SPECIFIC corroborating signal (a
+     strong line-proximity/blame hit on the crashing line, a domain / what-it-enables link,
+     or a deterministic corroborator): a real, specific clue worth someone's time.
+     `decision: "lead"`.
+   - `"low"` — a credible but weaker SPECIFIC clue (a suggestive diff you couldn't tie to
+     the crash, a thin but real link). `decision: "lead"`. A candidate that merely SITS in
+     the crashing file/area with no specific reason is NOT `low` — that is noise → `abstain`.
+     (`medium`+ is the push floor, so do not label bare area-membership `medium`.)
+   A `lead` may self-assert up to `probable`; `high` is reserved for a verified/corroborated
+   chain (a lead's `high` is clamped to `probable`). Use a SOFT, non-accusatory
+   `needinfo_draft` ("this crash may relate to your recent work on X — could you help figure
+   out what's going wrong?"), NEVER an accusation.
+
+- SKEPTIC (the trust guardrail): record the skeptic's check of each claim in the `skeptic`
+  array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to
+  demand proof. Mark `fail` only when a claim is CONTRADICTED by its cited evidence or the
+  candidate is demonstrably unrelated (noise); a plausible mechanism you cannot fully verify
+  is `unverifiable` (which only lowers confidence), NOT `fail`. A `fail` on the chain
+  downgrades `strong-evidence` to `lead` if a cited anchor stands, otherwise to `abstain`.
+- `abstain` (with an `abstain_reason`, NO `needinfo_draft`) is ONLY for genuine noise —
+  nothing credible to hand a human.
 - Any claim-bearing field (`call_path` edges, `hunks`, `data_flow`, verdict
   `mechanism`/`consistency`) without a citation will be rejected, so cite everything or omit it.
 
