@@ -347,8 +347,10 @@ def _bugzilla_nick(email):
             user_handler=handler,
             user_data=got,
         ).wait()
-    except Exception:
-        logger.warning("bug preview: bugzilla nick lookup failed for %s", email, exc_info=True)
+    except Exception as exc:
+        # An unresolvable author email is a routine 400 (user not found / not visible), so
+        # log it concisely rather than with a full traceback -- the nick just stays empty.
+        logger.info("bug preview: bugzilla nick lookup failed for %s: %s", email, exc)
     nick = got.get("nick", "")
     _NICK_CACHE[email] = nick
     return nick
