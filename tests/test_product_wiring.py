@@ -223,10 +223,13 @@ class TestCrashstackPanel(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
 
-    def _get(self, evidence):
+    def _get(self, evidence, pc=("Core", "DOM: Core & HTML")):
+        # The bug-preview product::component lookup is networked; mock it (the comment
+        # itself is recreated locally, so it renders for real from _stack()).
         with mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
                         return_value=(_stack(), _uuid_info())), \
-                mock.patch.object(bugzilla_apply, "build_evidence", return_value=evidence):
+                mock.patch.object(bugzilla_apply, "build_evidence", return_value=evidence), \
+                mock.patch.object(report_bug, "resolve_product_component", return_value=pc):
             return self.client.get("/crashstack.html?uuid=u-1")
 
     def test_unknown_uuid_404(self):
@@ -270,11 +273,37 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Recorded Bugzilla actions", html)
         self.assertIn("dev@moz.example", html)
         self.assertIn("share the evidence chain", html)
-        # apply control + selectable checkboxes for the two unapplied actions
+        # the "Draft a bug" button is gone (superseded by the informative preview)
+        self.assertNotIn("Draft a bug", html)
+        self.assertNotIn("draftBug", html)
+        # bug preview: title, resolved product::component, and the recreated stack comment
+        self.assertIn("Bug we", html)
+        self.assertIn("Crash in [@ Foo::bar]", html)
+        self.assertIn("Core :: DOM: Core &amp; HTML", html)
+        self.assertIn("Top 1 frames of crashing thread", html)
+        # apply control stays for the update_bug needinfo, but the add_comment action is
+        # now informative-only (no checkbox) -> exactly ONE checkbox (the update_bug one)
         self.assertIn("applyActionsBtn", html)
-        self.assertEqual(html.count('class="apply-cb"'), 2)
+        self.assertEqual(html.count('class="apply-cb"'), 1)
         # the already-applied action shows the applied marker, not a checkbox
         self.assertIn("applied 2026-07-01", html)
+
+    def test_add_comment_has_no_checkbox_and_no_dangling_apply(self):
+        # When the ONLY applicable action is an add_comment (the common lead case), it's
+        # informative-only: no checkbox and no dangling "Apply" button.
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["actions"] = [{
+            "type": "bugzilla.add_comment",
+            "params": {"bug_id": 99999, "text": "soft needinfo draft", "is_private": True},
+            "reasoning": "auto-drafted needinfo",
+        }]
+        ev["apply_indices"] = bugzilla_apply.applicable_indices(ev["actions"], ev["ui"])
+        ev["can_apply"] = True
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("soft needinfo draft", html)       # still shown (informative)
+        self.assertNotIn('class="apply-cb"', html)       # but not applyable
+        self.assertNotIn("applyActionsBtn", html)        # no dangling apply button
 
     def test_panel_tolerates_null_action_entry(self):
         # A null/dropped entry in payload["actions"] (schema drift) must not 500 the
@@ -306,6 +335,31 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("possibly-related changeset was found", html)
         self.assertIn("Possibly-related changeset", html)
         self.assertNotIn("Mechanism lead", html)
+
+    def test_worth_investigating_shown_for_culprit(self):
+        # Phase-2: a calibrated p_worth_investigating on the dossier verdict is surfaced as
+        # the person-level "worth investigating" %, REPLACING the raw (miscalibrated) rung %.
+        ev = _evidence()  # culprit, confidence=90
+        ev["dossier"]["verdict"]["p_worth_investigating"] = 0.9714
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("97% worth investigating", html)
+        self.assertNotIn("90%", html)   # raw rung replaced by the calibrated number
+
+    def test_worth_investigating_shown_for_lead(self):
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["verdict"]["p_worth_investigating"] = 0.8
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("80% worth investigating", html)
+
+    def test_worth_investigating_absent_falls_back_to_rung(self):
+        # No calibration table wired (or an older dossier) -> p_worth None -> the panel
+        # still shows the raw rung %, so nothing regresses before the table is deployed.
+        ev = _evidence()
+        ev["dossier"]["verdict"].pop("p_worth_investigating", None)
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("90%", html)
+        self.assertNotIn("worth investigating", html)
 
     def test_searchfox_permalink_scheme_allowlist(self):
         # A javascript: permalink must NOT become a clickable href (XSS guard).
@@ -957,3 +1011,94 @@ class TestReportsIndexBadges(unittest.TestCase):
     def test_lead_and_culprit_always_badged(self):
         self.assertIn(">lead</span>", self._render("lead", False))
         self.assertIn(">culprit</span>", self._render("culprit", False))
+
+
+class TestBugPreview(unittest.TestCase):
+    """report_bug.build_bug_preview & helpers: recreate the Socorro crash comment locally
+    and resolve the target product::component from the regressor (fallback = the author's
+    recent patches' most frequent P::C)."""
+
+    def _stack3(self):
+        return {"frames": [
+            {"stackpos": 0, "function": "Foo::bar", "filename": "dom/Foo.cpp", "line": 51},
+            {"stackpos": 1, "function": "os_unfair_lock", "filename": "", "line": 0,
+             "original": "os_unfair_lock (in libsystem_platform.dylib)"},
+            {"stackpos": 2, "function": "Baz::qux", "filename": "gfx/Baz.cpp", "line": -1},
+        ]}
+
+    def test_build_stack_comment_format(self):
+        c = report_bug.build_stack_comment("uuid-1", self._stack3())
+        self.assertIn("Crash report: https://crash-stats.mozilla.org/report/index/uuid-1", c)
+        self.assertIn("Top 3 frames of crashing thread:", c)
+        self.assertIn("0  Foo::bar  dom/Foo.cpp:51", c)
+        self.assertIn("1  os_unfair_lock", c)         # opaque frame: function only, no file
+        self.assertIn("2  Baz::qux  gfx/Baz.cpp", c)  # line -1 omitted, filename kept
+
+    def test_build_stack_comment_caps_frames(self):
+        c = report_bug.build_stack_comment("uuid-1", self._stack3(), max_frames=2)
+        self.assertIn("Top 2 frames of crashing thread:", c)
+        self.assertIn("1  os_unfair_lock", c)
+        self.assertNotIn("Baz::qux", c)
+
+    def test_resolve_pc_uses_regressor_bug(self):
+        with mock.patch.object(report_bug, "_bugs_product_component",
+                               return_value={123: ("Core", "DOM")}):
+            pc = report_bug.resolve_product_component({"bug": 123, "node": "n"}, "nightly")
+        self.assertEqual(pc, ("Core", "DOM"))
+
+    def test_resolve_pc_falls_back_to_author_patches(self):
+        # Regressor bug unreadable (security) -> most frequent P::C over the author's
+        # recent patches' bugs.
+        def fake_pc(bugids):
+            bugids = list(bugids)
+            if bugids == [123]:
+                return {}                       # regressor bug unreadable
+            return {1: ("Core", "X"), 2: ("Core", "X"), 3: ("Toolkit", "Y")}
+        with mock.patch.object(report_bug, "_bugs_product_component", side_effect=fake_pc), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
+                           return_value=[1, 2, 3]):
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly")
+        self.assertEqual(pc, ("Core", "X"))     # most frequent
+
+    def test_resolve_pc_fallback_tie_prefers_newest(self):
+        # A count tie in the author-patches fallback must deterministically pick the
+        # NEWEST patch's P::C, independent of _bugs_product_component's (cache-driven)
+        # dict order. Here _bugs_product_component returns older-bug-first (as it would if
+        # bug 100 were pre-cached), yet the newest bug (150) must win.
+        def fake_pc(bugids):
+            bugids = list(bugids)
+            if bugids == [123]:
+                return {}                                  # regressor unreadable
+            return {100: ("Core", "DOM"), 150: ("Toolkit", "Y")}  # older-first order
+        with mock.patch.object(report_bug, "_bugs_product_component", side_effect=fake_pc), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
+                           return_value=[150, 100]):        # newest-first
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly")
+        self.assertEqual(pc, ("Toolkit", "Y"))             # newest wins the tie
+
+    def test_resolve_pc_none_when_unresolvable(self):
+        with mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
+                           return_value=[]):
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n", "author": ""}, "nightly")
+        self.assertEqual(pc, (None, None))
+
+    def test_build_bug_preview_none_without_candidate(self):
+        ui = {"uuid": "u-1", "signature": "S", "channel": "nightly"}
+        self.assertIsNone(report_bug.build_bug_preview(ui, self._stack3(), None))
+        self.assertIsNone(report_bug.build_bug_preview(ui, self._stack3(), {"bug": 1}))
+
+    def test_build_bug_preview_shape(self):
+        ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly"}
+        with mock.patch.object(report_bug, "resolve_product_component",
+                               return_value=("Core", "DOM")):
+            prev = report_bug.build_bug_preview(ui, self._stack3(), {"node": "n", "bug": 1})
+        self.assertEqual(prev["title"], "Crash in [@ Foo::bar]")
+        self.assertEqual((prev["product"], prev["component"]), ("Core", "DOM"))
+        self.assertIn("Top 3 frames of crashing thread:", prev["comment"])

@@ -183,6 +183,28 @@ class Node(db.Model):
         return out
 
     @staticmethod
+    def recent_bugs_by_author(email, channel, limit=50):
+        """Distinct recent bug numbers from local changesets authored by ``email`` on
+        ``channel`` (the author's recent patches), newest first. DB-only (no network) —
+        used as the bug-preview product::component fallback when the regressor bug itself
+        is unreadable (e.g. a security bug). Empty when ``email`` is falsy or unknown."""
+        if not email:
+            return []
+        rows = (
+            db.session.query(Node.bug)
+            .join(HGAuthor, Node.hgauthor == HGAuthor.id)
+            .filter(Node.channel == channel, HGAuthor.email == email, Node.bug > 0)
+            .order_by(Node.pushdate.desc())
+            .limit(limit)
+            .all()
+        )
+        seen = []
+        for (bug,) in rows:
+            if bug not in seen:
+                seen.append(bug)
+        return seen
+
+    @staticmethod
     def get_min_date(channel):
         m = (
             db.session.query(db.func.min(Node.pushdate))

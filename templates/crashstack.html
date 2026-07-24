@@ -57,13 +57,21 @@
     {% set has_cand = cand and cand.get('node') -%}
     {% set corrob = d.get('corroborations') or {} -%}
     {% set is_probable = is_lead and conf is not none and conf >= 65 -%}
+    {# Phase-2: the CALIBRATED worth-investigating probability (payload.dossier.verdict),
+       fit at PERSON level against the 289-bug regressor study. This is the honest headline
+       number the pivot cares about ("get the right person looking"), distinct from the raw
+       confidence rung. None on old dossiers / when no calibration table is wired -> fall
+       back to the rung %. #}
+    {% set pw = vd.get('p_worth_investigating') if vd else None -%}
+    {% set pw_pct = (pw * 100)|round|int if pw is not none else None -%}
+    {% set worth_help = 'Calibrated probability this report is worth a human’s time — fit against the 289-bug regressor study at PERSON level (getting the right person to investigate, not necessarily the exact changeset). Distinct from the raw confidence rung.' -%}
     <div class="evidence-panel">
       <h2>
         Clouseau evidence
         {% if evidence['verdict'] == 'culprit' -%}
-        <span class="confidence-badge {{ cclass }}">{{ evidence['ui']['high_confidence_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
+        <span class="confidence-badge {{ cclass }}">{{ evidence['ui']['high_confidence_label'] }}{% if pw_pct is not none %} &middot; <span class="worth" title="{{ worth_help }}">{{ pw_pct }}% worth investigating</span>{% elif conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% elif is_lead -%}
-        <span class="confidence-badge {{ 'probable' if is_probable else 'lead' }}">{{ 'PROBABLE CAUSE' if is_probable else evidence['ui']['lead_label'] }}{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
+        <span class="confidence-badge {{ 'probable' if is_probable else 'lead' }}">{{ 'PROBABLE CAUSE' if is_probable else evidence['ui']['lead_label'] }}{% if pw_pct is not none %} &middot; <span class="worth" title="{{ worth_help }}">{{ pw_pct }}% worth investigating</span>{% elif conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% else -%}
         <span class="confidence-badge abstain">ABSTAIN</span>
         {% endif -%}
@@ -133,7 +141,24 @@
         {% if cand.get('changed_functions') -%}
         <p class="muted">Changed functions: <code>{{ cand['changed_functions']|join(', ')|e }}</code></p>
         {% endif -%}
-        <p><button type="button" data-node="{{ cand['node'] }}" onclick="draftBug(this.dataset.node)">Draft a bug for this changeset</button></p>
+      </div>
+      {% endif -%}
+
+      {# Informative preview of the bug Clouseau would file for this regressor (title +
+         recreated crash comment + resolved product::component). The eventual flow files
+         it, posts the comment, and needinfos the area-expert automatically. #}
+      {% if bug_preview -%}
+      <div class="evidence-section bug-preview">
+        <h3>Bug we&rsquo;ll file <span class="muted">(preview &mdash; filed automatically when enabled)</span></h3>
+        <p><strong>Product :: Component:</strong>
+        {% if bug_preview.get('product') and bug_preview.get('component') -%}
+        {{ bug_preview['product']|e }} :: {{ bug_preview['component']|e }}
+        {% else -%}
+        <span class="muted">could not be resolved from the regressor</span>
+        {% endif -%}
+        </p>
+        <p><strong>Summary:</strong> {{ bug_preview['title']|e }}</p>
+        <pre class="action-body">{{ bug_preview['comment']|e }}</pre>
       </div>
       {% endif -%}
 
@@ -202,13 +227,18 @@
       {% if evidence['actions'] -%}
       <div class="evidence-section audit-trail">
         <h3>Recorded Bugzilla actions <span class="muted">(recorded by the agent &mdash; nothing is posted without your click)</span></h3>
+        {% set ns_apply = namespace(checkable=false) -%}
         {% for a in evidence['actions'] -%}
         {% if a is mapping -%}
         {% set p = a.get('params') or {} -%}
         {% set atype = a.get('type') -%}
+        {# The drafted comment is now surfaced in the bug preview above, so add_comment is
+           informative-only here (no apply checkbox); other action types stay confirmable. #}
+        {% set show_cb = evidence['can_apply'] and loop.index0 in evidence['apply_indices'] and not a.get('applied_at') and atype != 'bugzilla.add_comment' -%}
+        {% if show_cb %}{% set ns_apply.checkable = true %}{% endif -%}
         <div class="audit-action{% if a.get('applied_at') %} applied{% endif %}">
           <div class="audit-head">
-            {% if evidence['can_apply'] and loop.index0 in evidence['apply_indices'] and not a.get('applied_at') -%}
+            {% if show_cb -%}
             <label><input type="checkbox" class="apply-cb" value="{{ loop.index0 }}" checked> </label>
             {% endif -%}
             <span class="action-type">{{ atype }}</span>
@@ -231,13 +261,11 @@
         </div>
         {% endif -%}
         {% endfor -%}
-        {% if evidence['can_apply'] -%}
+        {% if evidence['can_apply'] and ns_apply.checkable -%}
         <p>
           <button type="button" id="applyActionsBtn" onclick="applyActions()">{% if is_lead %}Send needinfo to a knowledgeable person&hellip;{% else %}Apply selected recorded actions to Bugzilla&hellip;{% endif %}</button>
         </p>
         <div id="apply-results"></div>
-        {% elif evidence['apply_indices'] -%}
-        <p class="muted">The apply control is offered only once the confidence clears the threshold (a high-confidence culprit, or a lead at/above the lead threshold).</p>
         {% endif -%}
       </div>
       {% endif -%}

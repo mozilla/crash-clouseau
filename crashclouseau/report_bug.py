@@ -4,12 +4,16 @@
 
 import asyncio
 import functools
+import re
+from collections import Counter
 from jinja2 import Environment, FileSystemLoader
 import libmozdata.config
+from libmozdata.bugzilla import Bugzilla
 from libmozdata.hgmozilla import Mercurial
 from . import net
 from urllib.parse import parse_qs, urlencode, urlparse
 from . import buginfo, models, utils
+from .logger import logger
 
 
 def findall(p, s):
@@ -161,3 +165,150 @@ def get_info(uuid, changeset, evidence_summary=None):
     return asyncio.run(
         get_info_helper(uuid, changeset, evidence_summary=evidence_summary)
     )
+
+
+# --------------------------------------------------------------------------- #
+# Local bug preview (#12, evaluation phase). The eventual flow files a bug (with the
+# stack), posts the Clouseau comment, and needinfos the area-expert AUTOMATICALLY, so the
+# UI is only informative. This recreates the crash-report comment WITHOUT the Socorro
+# round-trip (we already have the stack + signature) and resolves the target
+# product::component from the regressor. All best-effort — never raises into the caller.
+# --------------------------------------------------------------------------- #
+_MAX_PREVIEW_FRAMES = 10
+_EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
+# Process cache: product::component of a bug is stable, and the preview is a hot render
+# path. bug_id -> (product, component) | None (None = looked up, unreadable/absent).
+_PC_CACHE: dict = {}
+
+
+def build_stack_comment(uuid, stack, max_frames=_MAX_PREVIEW_FRAMES):
+    """Recreate, locally (no network), the crash-report comment Socorro pre-fills into its
+    'report a bug' link: the crash-report URL followed by the top ``max_frames`` frames of
+    the crashing thread. Sourced from the frames we already hold
+    (``models.CrashStack.get_by_uuid``), so it matches the Socorro format without the
+    round-trip."""
+    frames = (stack or {}).get("frames") or []
+    top = frames[:max_frames]
+    lines = [
+        "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
+        "",
+        "Top {} frames of crashing thread:".format(len(top)),
+        "",
+    ]
+    for f in top:
+        fn = (f.get("function") or "").strip()
+        fname = (f.get("filename") or "").strip()
+        line = f.get("line")
+        loc = "{}:{}".format(fname, line) if (fname and line and line > 0) else fname
+        desc = "  ".join(x for x in (fn, loc) if x) or (f.get("original") or "").strip()
+        lines.append("{}  {}".format(f.get("stackpos"), desc).rstrip())
+    return "\n".join(lines)
+
+
+def _bugs_product_component(bugids):
+    """``{bug_id (int) -> (product, component)}`` for the READABLE bugs among ``bugids``.
+    A security bug the token can't read is simply absent (Bugzilla returns no
+    product/component for it), which is what triggers the author-patches fallback below.
+    Cached + best-effort (never raises)."""
+    want, out = [], {}
+    for b in bugids:
+        try:
+            bid = int(b)
+        except (TypeError, ValueError):
+            continue
+        if bid in _PC_CACHE:
+            if _PC_CACHE[bid]:
+                out[bid] = _PC_CACHE[bid]
+        elif bid not in want:
+            want.append(bid)
+    if not want:
+        return out
+    got: dict = {}
+
+    def handler(bug, data):
+        data[int(bug["id"])] = bug
+
+    try:
+        Bugzilla(
+            bugids=[str(b) for b in want],
+            include_fields=["id", "product", "component"],
+            bughandler=handler,
+            bugdata=got,
+        ).get_data().wait()
+    except Exception:
+        logger.warning("bug preview: product/component lookup failed", exc_info=True)
+        return out
+    for bid in want:
+        bug = got.get(bid) or {}
+        pc = (bug.get("product"), bug.get("component"))
+        pc = pc if (pc[0] and pc[1]) else None
+        _PC_CACHE[bid] = pc
+        if pc:
+            out[bid] = pc
+    return out
+
+
+def _first_email(author):
+    """Best-effort email from an ``hg`` author display string (``Real Name <email>`` or a
+    bare address)."""
+    if not author:
+        return ""
+    m = _EMAIL_RE.search(author)
+    if m:
+        return m.group(1)
+    author = author.strip()
+    return author if ("@" in author and " " not in author) else ""
+
+
+def resolve_product_component(candidate, channel):
+    """``(product, component)`` for the bug we would file, best-effort + never raises:
+
+    1. the REGRESSOR bug's own product::component;
+    2. if that bug is unreadable (e.g. a security regressor bug), the MOST FREQUENT
+       product::component across the regressor author's recent patches' bugs;
+    3. ``(None, None)`` when neither resolves.
+    """
+    if not candidate:
+        return None, None
+    try:
+        bug = candidate.get("bug")
+        if bug:
+            pc = _bugs_product_component([bug]).get(int(bug))
+            if pc:
+                return pc
+        node = candidate.get("node")
+        info = models.Node.authors_for([node], channel).get(node, {}) if node else {}
+        email = info.get("email") or _first_email(candidate.get("author"))
+        if email:
+            bugs = models.Node.recent_bugs_by_author(email, channel)
+            pcs = _bugs_product_component(bugs)
+            if pcs:
+                # Tally in recent_bugs_by_author's NEWEST-FIRST order (not _PC_CACHE's
+                # cache-hits-first dict order): Counter.most_common breaks a count tie by
+                # first-seen, so this deterministically favours the author's most RECENT
+                # patch, independent of unrelated prior cache state.
+                ordered = [pcs[b] for b in bugs if b in pcs]
+                return Counter(ordered).most_common(1)[0][0]
+    except Exception:
+        logger.warning("bug preview: could not resolve product/component", exc_info=True)
+    return None, None
+
+
+def build_bug_preview(uuid_info, stack, candidate):
+    """The informative "bug we'd file" preview for the crashstack panel:
+    ``{title, comment, product, component}``. The comment is recreated locally
+    (``build_stack_comment``); product/component are best-effort from the regressor
+    (``resolve_product_component``). Returns ``None`` when there is no candidate regressor
+    to file a bug against (nothing to preview)."""
+    if not candidate or not candidate.get("node"):
+        return None
+    product, component = resolve_product_component(candidate, uuid_info.get("channel"))
+    return {
+        # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
+        # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
+        # these bugs searchable/dedupable alongside Socorro-filed ones.
+        "title": "Crash in [@ {}]".format((uuid_info.get("signature") or "").strip()),
+        "comment": build_stack_comment(uuid_info.get("uuid", ""), stack),
+        "product": product,
+        "component": component,
+    }

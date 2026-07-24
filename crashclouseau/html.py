@@ -43,6 +43,16 @@ def crashstack():
         show_evidence = bool(evidence and (
             vt == "culprit" or (vt == "lead" and ui.get("show_lead", True)) or (has_experts and ui.get("show_experts", True)) or (vt == "abstain" and ui.get("show_abstain"))
         ))
+        # Informative "bug we'd file" preview (eval phase): only when the agent found a
+        # regressor to file against (culprit/lead). Best-effort — a lookup failure must
+        # never 500 the page.
+        bug_preview = None
+        if show_evidence and vt in ("culprit", "lead"):
+            candidate = (evidence.get("dossier") or {}).get("candidate")
+            try:
+                bug_preview = report_bug.build_bug_preview(uuid_info, stack, candidate)
+            except Exception:
+                logger.error("crashstack bug preview failed for %s", uuid, exc_info=True)
         return render_template(
             "crashstack.html",
             uuid_info=uuid_info,
@@ -54,6 +64,7 @@ def crashstack():
             sgn_url=sgn_url,
             evidence=evidence,
             show_evidence=show_evidence,
+            bug_preview=bug_preview,
         )
     abort(404)
 
