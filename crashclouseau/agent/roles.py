@@ -35,6 +35,12 @@ _HISTORY = [f"mcp__history__{name}" for name in ("file_history", "blame", "chang
 # source matters. On-stack (no pinned rev) it reads tip, same as searchfox, so it is safe
 # to grant broadly.
 _SOURCE = ["mcp__source__raw_file"]
+# Scoped Mozilla-data tools for the blind second-opinion agent (#SO): one Bugzilla bug /
+# signature lookup and one crash-stats (Socorro SuperSearch) signature query. Both are
+# signature/bug-scoped by construction, so they cannot be turned into a pushlog or
+# arbitrary-query tool even without a shell.
+_BUGZILLA = [f"mcp__bugzilla__{name}" for name in ("bug", "signature_bugs")]
+_SOCORRO = ["mcp__socorro__crash_stats"]
 _BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
 
 _GROUND = (
@@ -208,6 +214,14 @@ def history_tool_ids() -> list[str]:
 
 def source_tool_ids() -> list[str]:
     return list(_SOURCE)
+
+
+def bugzilla_tool_ids() -> list[str]:
+    return list(_BUGZILLA)
+
+
+def socorro_tool_ids() -> list[str]:
+    return list(_SOCORRO)
 
 
 def role_names() -> list[str]:
