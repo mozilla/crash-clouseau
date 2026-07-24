@@ -224,11 +224,14 @@ class TestCrashstackPanel(unittest.TestCase):
         self.client = app.test_client()
 
     def _get(self, evidence, pc=("Core", "DOM: Core & HTML")):
-        # The bug-preview product::component lookup is networked; mock it (the comment
-        # itself is recreated locally, so it renders for real from _stack()).
+        # The bug-preview product::component lookup is networked and the needinfo nick is a
+        # DB lookup; mock both (the comment itself is recreated locally, so it renders for
+        # real from _stack()). authors_for -> {} makes needinfo fall back to the candidate
+        # author display deterministically.
         with mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
                         return_value=(_stack(), _uuid_info())), \
                 mock.patch.object(bugzilla_apply, "build_evidence", return_value=evidence), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
                 mock.patch.object(report_bug, "resolve_product_component", return_value=pc):
             return self.client.get("/crashstack.html?uuid=u-1")
 
@@ -245,12 +248,7 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertNotIn("evidence-panel", html)
 
     def test_culprit_panel_full(self):
-        ev = _evidence()
-        ev["dossier"]["area_experts"] = [
-            {"name": "Dev Two", "email": "dev2@moz.example", "nick": "dev2",
-             "node": "culpritnode1", "bug": 99999, "reason": "authored candidate culpritnode1"},
-        ]
-        rv = self._get(ev)
+        rv = self._get(_evidence())
         self.assertEqual(rv.status_code, 200)
         html = rv.get_data(as_text=True)
         self.assertIn("evidence-panel", html)
@@ -289,7 +287,9 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Top 1 frames of crashing thread", html)
         self.assertIn("Clouseau analysis", html)
         self.assertIn("Suspected regressor: culpritnode1", html)
-        self.assertIn(":dev2, can you have a look please?", html)
+        # needinfo targets the REGRESSOR author (candidate.author); with authors_for mocked
+        # to {} it falls back to the display name.
+        self.assertIn("Dev One, can you have a look please?", html)
 
     def test_recorded_actions_ui_removed(self):
         # The whole "Recorded Bugzilla actions" apply UI is removed (informative-only
@@ -1100,25 +1100,41 @@ class TestBugPreview(unittest.TestCase):
             "verdict": {"confidence": "high",
                         "mechanism": {"statement": "UAF of mFoo"},
                         "consistency": {"statement": "matches the crash"}},
-            "area_experts": [{"nick": "expert", "name": "Ex Pert", "email": "e@x.com"}],
         }
+        # The needinfo targets the regressor author, resolving the nick from the hgauthor
+        # record of the candidate node.
         with mock.patch.object(report_bug, "resolve_product_component",
-                               return_value=("Core", "DOM")):
+                               return_value=("Core", "DOM")), \
+                mock.patch("crashclouseau.models.Node.authors_for",
+                           return_value={"n": {"nick": "devnick", "real": "Dev",
+                                               "email": "dev@x.com"}}):
             prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
         self.assertEqual(prev["title"], "Crash in [@ Foo::bar]")
         self.assertEqual((prev["product"], prev["component"]), ("Core", "DOM"))
         self.assertIn("Top 3 frames of crashing thread:", prev["comment"])
         self.assertIn("UAF of mFoo", prev["explanation"])
         self.assertIn("Suspected regressor: n (bug 1)", prev["explanation"])
-        self.assertEqual(prev["needinfo"], ":expert, can you have a look please?")
+        self.assertEqual(prev["needinfo"], ":devnick, can you have a look please?")
+
+    def test_needinfo_person_prefers_db_nick_then_author(self):
+        # DB hgauthor record -> IRC nick.
+        with mock.patch("crashclouseau.models.Node.authors_for",
+                        return_value={"n": {"nick": "devnick", "real": "Dev", "email": "d@x"}}):
+            p = report_bug._needinfo_person({"node": "n", "author": "Ignored <i@x>"}, "nightly")
+        self.assertEqual(p["nick"], "devnick")
+        # No DB record -> fall back to the candidate author display string.
+        with mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+            p = report_bug._needinfo_person(
+                {"node": "n", "author": "Real Name <real@x.com>"}, "nightly")
+        self.assertEqual((p["nick"], p["name"], p["email"]), ("", "Real Name", "real@x.com"))
 
     def test_needinfo_line_prefers_nick_then_name(self):
-        self.assertEqual(report_bug._needinfo_line([{"nick": "foo"}]),
+        self.assertEqual(report_bug._needinfo_line({"nick": "foo"}),
                          ":foo, can you have a look please?")
-        self.assertEqual(report_bug._needinfo_line([{"nick": "", "name": "Foo Bar"}]),
+        self.assertEqual(report_bug._needinfo_line({"nick": "", "name": "Foo Bar"}),
                          "Foo Bar, can you have a look please?")
-        self.assertIsNone(report_bug._needinfo_line([]))
-        self.assertIsNone(report_bug._needinfo_line([{"nick": "", "name": "", "email": ""}]))
+        self.assertIsNone(report_bug._needinfo_line({}))
+        self.assertIsNone(report_bug._needinfo_line({"nick": "", "name": "", "email": ""}))
 
     def test_explanation_comment_regressor_only(self):
         # No mechanism -> still names the suspected regressor; nothing at all -> None.

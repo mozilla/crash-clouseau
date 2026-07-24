@@ -320,17 +320,38 @@ def _explanation_comment(verdict, candidate):
     return "\n\n".join(lines) if lines else None
 
 
-def _needinfo_line(area_experts):
-    """The needinfo we'd request -- ``:nick, can you have a look please?`` -- targeting the
-    top area-expert (prefer the IRC nick; fall back to name/email). ``None`` when no usable
-    expert identity is available."""
-    for x in (area_experts or []):
-        nick = (x.get("nick") or "").strip()
-        if nick:
-            return ":{}, can you have a look please?".format(nick)
-        who = (x.get("name") or x.get("email") or "").strip()
-        if who:
-            return "{}, can you have a look please?".format(who)
+def _needinfo_person(candidate, channel):
+    """The person to needinfo for the suspected regressor: its AUTHOR. Prefer the local
+    hgauthor record for the candidate node (it carries the IRC nick), else fall back to the
+    candidate's author display string (``Real Name <email>``). ``{}`` when unknown."""
+    c = candidate or {}
+    node = c.get("node")
+    if node:
+        try:
+            info = models.Node.authors_for([node], channel).get(node) or {}
+        except Exception:
+            info = {}
+        if info.get("nick") or info.get("real") or info.get("email"):
+            return {"nick": info.get("nick", ""), "name": info.get("real", ""),
+                    "email": info.get("email", "")}
+    author = (c.get("author") or "").strip()
+    if author:
+        return {"nick": "", "name": author.split("<", 1)[0].strip(),
+                "email": _first_email(author)}
+    return {}
+
+
+def _needinfo_line(person):
+    """The needinfo we'd request -- ``:nick, can you have a look please?`` -- for ``person``
+    (a ``{nick, name, email}`` dict). Prefer the IRC nick, then the name, then the email.
+    ``None`` when no usable identity is available."""
+    person = person or {}
+    nick = (person.get("nick") or "").strip()
+    if nick:
+        return ":{}, can you have a look please?".format(nick)
+    who = (person.get("name") or person.get("email") or "").strip()
+    if who:
+        return "{}, can you have a look please?".format(who)
     return None
 
 
@@ -338,15 +359,16 @@ def build_bug_preview(uuid_info, stack, dossier):
     """The informative "bug we'd file" preview for the crashstack panel:
     ``{title, comment, product, component, explanation, needinfo}`` -- the full sequence
     the eventual auto-flow performs (file a bug with the stack, post the analysis comment,
-    needinfo the area-expert). The stack comment is recreated locally
+    needinfo the suspected regressor's author). The stack comment is recreated locally
     (``build_stack_comment``); product/component are best-effort from the regressor
-    (``resolve_product_component``); the explanation + needinfo come from the dossier.
+    (``resolve_product_component``); the explanation comes from the dossier verdict.
     Returns ``None`` when there is no candidate regressor to file a bug against."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     if not candidate or not candidate.get("node"):
         return None
-    product, component = resolve_product_component(candidate, uuid_info.get("channel"))
+    channel = uuid_info.get("channel")
+    product, component = resolve_product_component(candidate, channel)
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -356,5 +378,5 @@ def build_bug_preview(uuid_info, stack, dossier):
         "product": product,
         "component": component,
         "explanation": _explanation_comment(dossier.get("verdict"), candidate),
-        "needinfo": _needinfo_line(dossier.get("area_experts")),
+        "needinfo": _needinfo_line(_needinfo_person(candidate, channel)),
     }
