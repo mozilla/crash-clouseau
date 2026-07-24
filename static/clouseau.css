@@ -166,6 +166,14 @@ s.red {
 }
 .corrob-chip::before { content: "\2713\00a0"; }  /* ✓ */
 
+/* a confident independent refutation — caution, not a corroboration (✗, amber) */
+.corrob-chip.refute {
+    background-color: #fff3e0;
+    border-color: #c05621;
+    color: #7a3312;
+}
+.corrob-chip.refute::before { content: "\2717\00a0"; }  /* ✗ */
+
 .needinfo-draft {
     padding: 0.6em 0.8em;
     border-left: 3px solid #d98a00;

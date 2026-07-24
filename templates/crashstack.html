@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=7">
+    <link rel="stylesheet" href="/clouseau.css?v=8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script src="/clouseau.js"></script>
@@ -86,6 +86,15 @@
       {% if corrob.get('fault_address_offset_match') -%}
       <div class="corrob-chips">
         <span class="corrob-chip" title="The faulting address matches a struct field's byte offset (verified with searchfox field-layout) — a machine-checked null-deref of that field.">fault 0x{{ '%x'|format(corrob.get('fault_offset', 0)) }} == {{ corrob.get('fault_type','')|e }}::{{ corrob.get('fault_field','')|e }}</span>
+      </div>
+      {% endif -%}
+      {% if corrob.get('second_opinion_corroborated') -%}
+      <div class="corrob-chips">
+        <span class="corrob-chip" title="An independent blind re-analysis — given none of the reasoning above — agreed the candidate can plausibly cause this crash. Two blind analyses agreeing is a stronger worth-investigating signal.">independently confirmed</span>
+      </div>
+      {% elif corrob.get('second_opinion_refuted') -%}
+      <div class="corrob-chips">
+        <span class="corrob-chip refute" title="An independent blind re-analysis confidently found the candidate cannot explain this crash. The lead is kept (never dropped on one blind disagreement) but not promoted — its confidence is lowered where it can be. See the independent second opinion below.">independent review disputes this</span>
       </div>
       {% endif -%}
       {% if is_lead -%}
@@ -183,6 +192,33 @@
         <h3>{% if is_lead %}Why it may be related{% else %}Consistency with the crash{% endif %}</h3>
         <p>{{ vd['consistency']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
+      </div>
+      {% endif -%}
+
+      {# Blind second opinion (#SO): a fresh Opus-4.8 agent re-analysed the crash given NONE
+         of the reasoning above — an independent plausibility read. In verify mode it judged
+         the candidate; in mechanism mode (no candidate) it proposed its own mechanism. #}
+      {% set so = d.get('second_opinion') -%}
+      {% if so and so.get('mode') -%}
+      <div class="evidence-section second-opinion">
+        <h3>Independent second opinion <span class="muted">(a fresh blind re-analysis &mdash; no context from the above)</span></h3>
+        {% if so.get('mode') == 'verify' -%}
+          {% if so.get('corroborates') == true -%}
+          <p><strong>Agrees</strong> the candidate can plausibly cause this crash. <span class="muted">(its own confidence: {{ so.get('confidence', 'low')|e }})</span></p>
+          {% elif so.get('corroborates') == false -%}
+          <p><strong>Disputes</strong> the candidate &mdash; it concluded the changeset cannot explain this crash. <span class="muted">(its own confidence: {{ so.get('confidence', 'low')|e }})</span></p>
+          {% else -%}
+          <p><strong>Unsure</strong> whether the candidate causes this crash. <span class="muted">(its own confidence: {{ so.get('confidence', 'low')|e }})</span></p>
+          {% endif -%}
+        {% else -%}
+          <p class="muted">An independent mechanism for this crash <span class="muted">(its own confidence: {{ so.get('confidence', 'low')|e }})</span>:</p>
+        {% endif -%}
+        {% if so.get('mechanism') -%}
+        <p>{{ so['mechanism']|linkify(repo_url) }}</p>
+        {% endif -%}
+        {% if so.get('refutation') -%}
+        <p class="muted">Why it may not be the cause: {{ so['refutation']|linkify(repo_url) }}</p>
+        {% endif -%}
       </div>
       {% endif -%}
 

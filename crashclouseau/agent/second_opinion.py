@@ -23,11 +23,10 @@ not the multi-agent pipeline the blanket effort=max OOM/no-gain finding was abou
 from __future__ import annotations
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
-from pydantic import BaseModel
 
 from crashclouseau import config
 from crashclouseau.agent import roles, triage
-from crashclouseau.agent.schema import _extract_last_json_block
+from crashclouseau.agent.schema import SecondOpinion, _extract_last_json_block
 from crashclouseau.agent.tools import bugzilla as bugzilla_tools
 from crashclouseau.agent.tools import history as history_tools
 from crashclouseau.agent.tools import patch as patch_tools
@@ -44,16 +43,6 @@ from crashclouseau.logger import logger
 from crashclouseau.searchfox import SearchfoxClient
 from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
 from crashclouseau.vendor.hackbot_runtime.claude import Reporter
-
-
-class SecondOpinion(BaseModel):
-    """The blind agent's independent conclusion (parsed from its trailing ```json block)."""
-
-    mode: str = ""                    # "verify" (had a candidate) | "mechanism" (no candidate)
-    corroborates: bool | None = None  # verify: does the candidate plausibly cause the crash?
-    confidence: str = "low"           # the agent's confidence in ITS OWN conclusion
-    mechanism: str = ""               # its independent mechanism / reasoning (concise)
-    refutation: str = ""              # verify: the concrete reason the candidate can't be it
 
 
 _SYSTEM = (
@@ -201,4 +190,10 @@ async def run_second_opinion(crash: dict, candidate: dict | None = None) -> Seco
         return None
     if result_msg is None or getattr(result_msg, "is_error", False):
         return None
-    return parse_second_opinion(result_msg.result or "", candidate)
+    so = parse_second_opinion(result_msg.result or "", candidate)
+    if so is not None:
+        # Record THIS pass's own cost (from the terminal ResultMessage) so a validation run
+        # can price the second opinion separately from the primary triage. Set here, not in
+        # parse_second_opinion, because the cost is not part of the agent's JSON contract.
+        so.cost_usd = getattr(result_msg, "total_cost_usd", None)
+    return so

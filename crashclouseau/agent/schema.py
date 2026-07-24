@@ -287,6 +287,29 @@ class AreaExpert(BaseModel):
     reason: str = ""
 
 
+class SecondOpinion(BaseModel):
+    """A blind second reviewer's INDEPENDENT conclusion (#SO).
+
+    Produced by ``agent.second_opinion.run_second_opinion`` — a fresh Opus-4.8 agent
+    given the crash (and, in verify mode, only the candidate changeset) with NONE of the
+    first pipeline's reasoning, so its read is an unbiased plausibility signal. It is set
+    programmatically on the dossier by ``orchestrator._fold_second_opinion`` (NOT parsed
+    from a claim block, so it is not a ``Cited`` model and carries no citations); it rides
+    the dossier JSONB payload and is additive + backward compatible (older dossiers omit it
+    and validate to ``None``). ``mode`` is ``"verify"`` when a candidate was given (then
+    ``corroborates`` is the boost/refute signal) and ``"mechanism"`` otherwise (an
+    independent mechanism for a candidate-less lead; ``corroborates`` stays ``None``)."""
+
+    mode: str = ""                    # "verify" (had a candidate) | "mechanism" (no candidate)
+    corroborates: bool | None = None  # verify: does the candidate plausibly cause the crash?
+    confidence: str = "low"           # the agent's confidence in ITS OWN conclusion
+    mechanism: str = ""               # its independent mechanism / reasoning (concise)
+    refutation: str = ""              # verify: the concrete reason the candidate can't be it
+    # This pass's own API cost, set programmatically (NOT from the agent's JSON) so the
+    # validation run can measure the SO's price separately from the primary triage cost.
+    cost_usd: float | None = None
+
+
 class Verdict(BaseModel):
     decision: Decision
     confidence: Confidence = Confidence.low
@@ -355,6 +378,11 @@ class Dossier(BaseModel):
     # claim; rides any verdict. Empty on older dossiers (backward compatible).
     corroborations: dict = Field(default_factory=dict)
     verdict: Verdict | None = None
+    # Blind second-opinion re-analysis (#SO), attached programmatically by
+    # ``orchestrator._fold_second_opinion`` for a REPORTED lead when the pass is enabled.
+    # Additive + backward compatible: older persisted dossiers omit it and validate to
+    # ``None``; it rides the dossier JSONB payload, so surfacing it needs no DB migration.
+    second_opinion: SecondOpinion | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def _has_lead_anchor(self) -> bool:
@@ -642,6 +670,16 @@ def parse_and_validate(result: str | dict) -> Dossier:
     obj = result if isinstance(result, dict) else _extract_last_json_block(result)
     if obj is None:
         return _abstain("no parseable ```json block in the agent result")
+    # Strip the fields that are computed OUTSIDE the LLM — ``corroborations`` (deterministic
+    # gate flags set in ``orchestrator``) and ``second_opinion`` (set by the blind-SO fold) —
+    # so the primary model can NEVER populate them from its own handoff JSON. Left in, an
+    # injected value would spoof a deterministic corroboration chip, suppress the SO boost via
+    # a fake ``downgraded_from_strong``, or masquerade as an independent second opinion. The
+    # orchestrator overwrites both post-parse; this makes the strict path match the salvage
+    # path (which never copies them) and preserves the blind-independent guarantee.
+    if isinstance(obj, dict):
+        obj.pop("corroborations", None)
+        obj.pop("second_opinion", None)
     # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
     # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
     # place, so the ``_salvage`` fallback below sees the normalized citations too.
