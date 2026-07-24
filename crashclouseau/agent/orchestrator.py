@@ -312,6 +312,67 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
     return out
 
 
+_AREA_EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
+_AREA_BUG_RE = re.compile(r"\bbug\s*(\d+)", re.I)
+
+
+def _crashing_area_experts(frames, channel, node, *, max_experts=3, max_files=4):
+    """OFF-STACK area-experts done right: BLAME the crashing lines (the crash-frame
+    file:line pairs), as-of the build rev when it resolves, and surface the DISTINCT non-bot
+    authors who WROTE that code — the people who genuinely worked on the crashing code,
+    unlike the undifferentiated pushlog-window authors. Network (hg ``json-annotate``),
+    best-effort: returns ``[]`` on any failure. ``node`` should be the pinned build rev so
+    the crash line numbers line up with the blamed file (falls back to ``tip``)."""
+    from crashclouseau.agent.experts import _is_bot
+
+    targets, files = [], []
+    for f in frames or []:
+        fn = (f.get("filename") or "").strip()
+        line = f.get("line")
+        if not fn or not isinstance(line, int) or line <= 0:
+            continue
+        targets.append((fn, line))
+        if fn not in files:
+            files.append(fn)
+    files = files[:max_files]
+    if not files:
+        return []
+    try:
+        from libmozdata.hgmozilla import Annotate
+        blamed = Annotate.get(files, channel=channel, node=node or "tip")
+    except Exception as exc:  # pragma: no cover - network/defensive
+        logger.warning("agent: crashing-area blame failed: %s", exc)
+        return []
+
+    experts, seen = [], set()
+    for fn, line in targets:
+        if len(experts) >= max_experts or fn not in files:
+            continue
+        ann = (blamed.get(fn) or {}).get("annotate") or []
+        # hg json-annotate lists lines in CURRENT-file order, so line N is entry index N-1.
+        if not 0 < line <= len(ann):
+            continue
+        entry = ann[line - 1]
+        author = (entry.get("author") or "").strip()
+        m = _AREA_EMAIL_RE.search(author)
+        email = m.group(1) if m else ""
+        name = author.split("<", 1)[0].strip()
+        ident = (email or name).lower()
+        if not ident or ident in seen or _is_bot(email, name, ""):
+            continue
+        seen.add(ident)
+        mb = _AREA_BUG_RE.search(entry.get("desc") or "")
+        experts.append({
+            "name": name,
+            "email": email,
+            "nick": "",
+            "node": (entry.get("node") or "")[:12],
+            "bug": int(mb.group(1)) if mb else None,
+            "reason": "wrote {}:{}".format(fn, line),
+        })
+    return experts
+
+
 def build_seed(uuid):
     """Assemble the ``crash=`` payload for ``run_crash_triage`` from the scored
     stack + processed crash. Returns None (logged) when there is nothing to reason
@@ -441,13 +502,13 @@ def build_seed(uuid):
     # knowledgeable person to ask, computed from local data (migration-proof). Attached
     # to the dossier by run_evidence_agent regardless of the verdict.
     #
-    # ON-STACK ONLY: on-stack candidates are changesets that SCORED onto the crash frames,
-    # so their authors genuinely worked near the crash. OFF-STACK candidates are the
-    # undifferentiated first-bad-build pushlog window, ranked mostly by recency when nothing
-    # matches the signature — their authors merely "landed a patch near this build", NOT
-    # people who worked in the crashing area, so surfacing them under "recently worked in
-    # this area" is misleading noise. Suppress off-stack until a real crashing-file owner
-    # lookup replaces it.
+    # ON-STACK: candidates are changesets that SCORED onto the crash frames, so their
+    # authors genuinely worked near the crash. OFF-STACK candidates are the undifferentiated
+    # first-bad-build pushlog window, ranked mostly by recency when nothing matches the
+    # signature — their authors merely "landed a patch near this build", NOT people who
+    # worked in the crashing area. So off-stack we instead BLAME the crashing lines
+    # (``_crashing_area_experts``, below, once pin_rev is known) to surface who actually
+    # wrote the crashing code.
     channel = info.get("channel") or uuid_info.get("channel") or "nightly"
     experts = []
     if not is_offstack:
@@ -474,6 +535,12 @@ def build_seed(uuid):
                 pin_rev = build_node
         except Exception:  # pragma: no cover - defensive; degrade to tip
             pin_rev = ""
+
+    # Off-stack area-experts: blame the crashing lines (pinned to the build rev when it
+    # resolves) so "recently worked in this area" names who actually wrote the crashing
+    # code, not the pushlog-window authors.
+    if is_offstack:
+        experts = _crashing_area_experts(frames, channel, pin_rev)
 
     return {
         "uuid": uuid,

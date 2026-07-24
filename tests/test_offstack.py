@@ -205,6 +205,8 @@ class TestBuildSeedOffstack(unittest.TestCase):
     def test_enabled_seeds_window(self):
         window = [{"node": "w1", "date": _dt(3), "backedout": False, "merge": False,
                    "bug": 555, "desc": "Bug 555 - touch nsTStringRepr"}]
+        blame_expert = [{"name": "Gfx Dev", "email": "gfx@moz.org", "nick": "",
+                         "node": "n0", "bug": 1, "reason": "wrote a.cpp:1"}]
         with mock.patch.object(orch.config, "get_agent_offstack", return_value=_offstack_cfg()), \
              mock.patch.object(orch.models.CrashStack, "get_by_uuid",
                                return_value=(self._RES, self._UI)), \
@@ -216,6 +218,7 @@ class TestBuildSeedOffstack(unittest.TestCase):
                                return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
              mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window), \
              mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch.object(orch, "_crashing_area_experts", return_value=blame_expert), \
              mock.patch("crashclouseau.inspector.get_crash_data", return_value={}), \
              mock.patch("crashclouseau.inspector.git2hg", return_value="hgbuildnode"):
             seed = orch.build_seed("u-1")
@@ -225,9 +228,9 @@ class TestBuildSeedOffstack(unittest.TestCase):
         self.assertEqual([c["node"] for c in seed["candidates"]], ["w1"])
         self.assertIsNone(seed["candidates"][0]["score"])
         self.assertIn("nsTStringRepr", seed["candidates"][0]["desc"])
-        # Off-stack: NO area-experts — the pushlog-window authors didn't work in the
-        # crashing area, so "recently worked in this area" would be misleading.
-        self.assertEqual(seed["experts"], [])
+        # Off-stack area-experts come from BLAMING the crashing lines (who wrote the
+        # crashing code), not the pushlog-window authors.
+        self.assertEqual(seed["experts"], blame_expert)
 
     def test_pin_rev_empty_when_pinning_off(self):
         window = [{"node": "w1", "date": _dt(3), "backedout": False, "merge": False,
@@ -241,6 +244,7 @@ class TestBuildSeedOffstack(unittest.TestCase):
                                return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
              mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window), \
              mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch.object(orch, "_crashing_area_experts", return_value=[]), \
              mock.patch("crashclouseau.inspector.get_crash_data", return_value={}):
             seed = orch.build_seed("u-1")
         self.assertTrue(seed["is_offstack"])
@@ -728,6 +732,7 @@ class TestPriorSig(unittest.TestCase):
                                return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
              mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window), \
              mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch.object(orch, "_crashing_area_experts", return_value=[]), \
              mock.patch("crashclouseau.priorsig.prior_regressor_hints",
                         return_value=[{"regressor_bug": 2011326, "prior_bug": 900, "prior_summary": "x"},
                                       {"regressor_bug": 8888, "prior_bug": 901, "prior_summary": "y"}]), \
@@ -851,6 +856,71 @@ class TestRunEvidenceAgentOffstack(unittest.TestCase):
         self.assertNotIn("call_path_verified", corr)                      # SF-3 did NOT run on-stack
         self.assertEqual(len(payload["actions"]), 1)                      # apply-eligible (not suppressed)
         self.assertIn("not an accusation", payload["actions"][0]["params"]["text"])  # soft draft
+
+
+class TestCrashingAreaExperts(unittest.TestCase):
+    """Off-stack area-experts = BLAME the crashing lines (who wrote the crashing code),
+    not the pushlog-window authors. json-annotate lists lines in current-file order, so
+    crash line N is entry index N-1."""
+
+    def _frames(self):
+        return [
+            {"stackpos": 0, "function": "SetColor", "filename": "gfx/A.cpp", "line": 2},
+            {"stackpos": 1, "function": "Sample", "filename": "gfx/B.cpp", "line": 1},
+        ]
+
+    def test_blames_crash_lines(self):
+        def fake_get(paths, channel="nightly", node="tip"):
+            return {
+                "gfx/A.cpp": {"annotate": [
+                    {"author": "Line1 <l1@x>", "node": "n1n1n1n1n1n1", "desc": "bug 111 - x"},
+                    {"author": "Hiroyuki Ikezoe <hikezoe@moz>", "node": "abcdef1234567",
+                     "desc": "Bug 222 - SetColor"},
+                ]},
+                "gfx/B.cpp": {"annotate": [
+                    {"author": "Boris Chiou <boris@x>", "node": "bbbbbbbbbbbb", "desc": "Bug 333"},
+                ]},
+            }
+        with mock.patch("libmozdata.hgmozilla.Annotate.get", side_effect=fake_get):
+            experts = orch._crashing_area_experts(self._frames(), "nightly", "pinrev")
+        self.assertEqual(len(experts), 2)
+        self.assertEqual(experts[0]["name"], "Hiroyuki Ikezoe")   # gfx/A.cpp line 2 == index 1
+        self.assertEqual(experts[0]["email"], "hikezoe@moz")
+        self.assertEqual(experts[0]["bug"], 222)
+        self.assertEqual(experts[0]["node"], "abcdef123456")      # short-rev'd to 12 chars
+        self.assertIn("wrote gfx/A.cpp:2", experts[0]["reason"])
+        self.assertEqual(experts[1]["name"], "Boris Chiou")       # gfx/B.cpp line 1 == index 0
+
+    def test_dedupes_and_filters_bots(self):
+        def fake_get(paths, channel="nightly", node="tip"):
+            return {"gfx/A.cpp": {"annotate": [
+                {"author": "ffxbld <ffxbld@moz>", "node": "x", "desc": ""},   # bot -> skipped
+                {"author": "Dev <d@x>", "node": "y", "desc": ""},
+                {"author": "Dev <d@x>", "node": "z", "desc": ""},             # dup -> skipped
+            ]}}
+        frames = [{"filename": "gfx/A.cpp", "line": n} for n in (1, 2, 3)]
+        with mock.patch("libmozdata.hgmozilla.Annotate.get", side_effect=fake_get):
+            experts = orch._crashing_area_experts(frames, "nightly", "")
+        self.assertEqual([e["name"] for e in experts], ["Dev"])
+
+    def test_no_source_lines_skips_network(self):
+        frames = [{"function": "F", "filename": "", "line": 0}]
+        with mock.patch("libmozdata.hgmozilla.Annotate.get",
+                        side_effect=AssertionError("should not be called")):
+            self.assertEqual(orch._crashing_area_experts(frames, "nightly", "r"), [])
+
+    def test_blame_failure_is_graceful(self):
+        with mock.patch("libmozdata.hgmozilla.Annotate.get", side_effect=RuntimeError("boom")):
+            self.assertEqual(orch._crashing_area_experts(self._frames(), "nightly", "r"), [])
+
+    def test_caps_at_max_experts(self):
+        def fake_get(paths, channel="nightly", node="tip"):
+            return {"gfx/A.cpp": {"annotate": [{"author": "%s <%s@x>" % (c, c)}
+                                               for c in ("A", "B", "C", "D")]}}
+        frames = [{"filename": "gfx/A.cpp", "line": n} for n in (1, 2, 3, 4)]
+        with mock.patch("libmozdata.hgmozilla.Annotate.get", side_effect=fake_get):
+            experts = orch._crashing_area_experts(frames, "nightly", "r", max_experts=3)
+        self.assertEqual(len(experts), 3)
 
 
 if __name__ == "__main__":
