@@ -223,15 +223,16 @@ class TestCrashstackPanel(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
 
-    def _get(self, evidence, pc=("Core", "DOM: Core & HTML")):
-        # The bug-preview product::component lookup is networked and the needinfo nick is a
-        # DB lookup; mock both (the comment itself is recreated locally, so it renders for
-        # real from _stack()). authors_for -> {} makes needinfo fall back to the candidate
+    def _get(self, evidence, pc=("Core", "DOM: Core & HTML"), nick="stransky"):
+        # The bug-preview product::component + Bugzilla-nick lookups are networked; mock
+        # both (the comment itself is recreated locally, so it renders for real from
+        # _stack()). authors_for -> {} makes the needinfo email come from the candidate
         # author display deterministically.
         with mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
                         return_value=(_stack(), _uuid_info())), \
                 mock.patch.object(bugzilla_apply, "build_evidence", return_value=evidence), \
                 mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch.object(report_bug, "_bugzilla_nick", return_value=nick), \
                 mock.patch.object(report_bug, "resolve_product_component", return_value=pc):
             return self.client.get("/crashstack.html?uuid=u-1")
 
@@ -287,9 +288,8 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Top 1 frames of crashing thread", html)
         self.assertIn("Clouseau analysis", html)
         self.assertIn("Suspected regressor: culpritnode1", html)
-        # needinfo targets the REGRESSOR author (candidate.author); with authors_for mocked
-        # to {} it falls back to the display name.
-        self.assertIn("Dev One, can you have a look please?", html)
+        # needinfo targets the REGRESSOR author by their BUGZILLA nick (mocked to stransky)
+        self.assertIn(":stransky, can you have a look please?", html)
 
     def test_recorded_actions_ui_removed(self):
         # The whole "Recorded Bugzilla actions" apply UI is removed (informative-only
@@ -1101,32 +1101,65 @@ class TestBugPreview(unittest.TestCase):
                         "mechanism": {"statement": "UAF of mFoo"},
                         "consistency": {"statement": "matches the crash"}},
         }
-        # The needinfo targets the regressor author, resolving the nick from the hgauthor
-        # record of the candidate node.
+        # The needinfo targets the regressor author by their BUGZILLA nick, looked up from
+        # the author email (here sourced from the hgauthor record of the candidate node).
         with mock.patch.object(report_bug, "resolve_product_component",
                                return_value=("Core", "DOM")), \
                 mock.patch("crashclouseau.models.Node.authors_for",
-                           return_value={"n": {"nick": "devnick", "real": "Dev",
-                                               "email": "dev@x.com"}}):
+                           return_value={"n": {"nick": "hgnick", "real": "Dev",
+                                               "email": "dev@x.com"}}), \
+                mock.patch.object(report_bug, "_bugzilla_nick", return_value="bznick") as bz:
             prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
         self.assertEqual(prev["title"], "Crash in [@ Foo::bar]")
         self.assertEqual((prev["product"], prev["component"]), ("Core", "DOM"))
         self.assertIn("Top 3 frames of crashing thread:", prev["comment"])
         self.assertIn("UAF of mFoo", prev["explanation"])
         self.assertIn("Suspected regressor: n (bug 1)", prev["explanation"])
-        self.assertEqual(prev["needinfo"], ":devnick, can you have a look please?")
+        # the Bugzilla nick wins over the hg nick, and it's looked up from the email
+        self.assertEqual(prev["needinfo"], ":bznick, can you have a look please?")
+        bz.assert_called_once_with("dev@x.com")
 
-    def test_needinfo_person_prefers_db_nick_then_author(self):
-        # DB hgauthor record -> IRC nick.
+    def test_needinfo_person_uses_bugzilla_nick(self):
+        # email/name from the hgauthor record, nick from the Bugzilla user API.
         with mock.patch("crashclouseau.models.Node.authors_for",
-                        return_value={"n": {"nick": "devnick", "real": "Dev", "email": "d@x"}}):
+                        return_value={"n": {"nick": "hgnick", "real": "Dev", "email": "d@x"}}), \
+                mock.patch.object(report_bug, "_bugzilla_nick", return_value="stransky") as bz:
             p = report_bug._needinfo_person({"node": "n", "author": "Ignored <i@x>"}, "nightly")
-        self.assertEqual(p["nick"], "devnick")
-        # No DB record -> fall back to the candidate author display string.
-        with mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+        self.assertEqual(p["nick"], "stransky")   # bugzilla nick, NOT the hg "hgnick"
+        bz.assert_called_once_with("d@x")
+        # no DB record + no bugzilla nick -> name/email from the author display string
+        with mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch.object(report_bug, "_bugzilla_nick", return_value=""):
             p = report_bug._needinfo_person(
                 {"node": "n", "author": "Real Name <real@x.com>"}, "nightly")
         self.assertEqual((p["nick"], p["name"], p["email"]), ("", "Real Name", "real@x.com"))
+
+    def test_bugzilla_nick_lookup(self):
+        report_bug._NICK_CACHE.clear()
+        captured = {"constructions": 0}
+
+        # Faithful to the real libmozdata API: BugzillaUser has NO get_data(); the query is
+        # fired in the constructor and the handler runs when wait() drains it.
+        class FakeBZUser:
+            def __init__(self, user_names=None, include_fields=None,
+                         user_handler=None, user_data=None, **kw):
+                captured["names"] = user_names
+                captured["constructions"] += 1
+                self._handler, self._data = user_handler, user_data
+
+            def wait(self):
+                self._handler({"name": "stransky@x.com", "nick": "stransky"}, self._data)
+                return self
+
+        with mock.patch.object(report_bug, "BugzillaUser", FakeBZUser):
+            nick = report_bug._bugzilla_nick("stransky@x.com")
+            nick2 = report_bug._bugzilla_nick("stransky@x.com")   # served from cache
+        self.assertEqual(nick, "stransky")
+        self.assertEqual(nick2, "stransky")
+        self.assertEqual(captured["names"], ["stransky@x.com"])
+        self.assertEqual(captured["constructions"], 1)            # cached: only one lookup
+        self.assertEqual(report_bug._bugzilla_nick(""), "")
+        report_bug._NICK_CACHE.clear()
 
     def test_needinfo_line_prefers_nick_then_name(self):
         self.assertEqual(report_bug._needinfo_line({"nick": "foo"}),

@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from jinja2 import Environment, FileSystemLoader
 import libmozdata.config
-from libmozdata.bugzilla import Bugzilla
+from libmozdata.bugzilla import Bugzilla, BugzillaUser
 from libmozdata.hgmozilla import Mercurial
 from . import net
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -320,25 +320,64 @@ def _explanation_comment(verdict, candidate):
     return "\n\n".join(lines) if lines else None
 
 
+_NICK_CACHE: dict = {}   # email -> Bugzilla nick ("" = looked up, none/unresolvable)
+
+
+def _bugzilla_nick(email):
+    """The BUGZILLA IRC nick for a user (e.g. ``stransky``), looked up by login/email via
+    the Bugzilla user API (``/rest/user``). This is the Bugzilla handle -- distinct from the
+    hg-commit nick -- so a ``:nick`` needinfo actually reaches the right account. ``""`` when
+    unknown/unresolvable. Cached + best-effort (never raises)."""
+    if not email:
+        return ""
+    if email in _NICK_CACHE:
+        return _NICK_CACHE[email]
+    got: dict = {}
+
+    def handler(user, data):
+        data["nick"] = (user.get("nick") or "").strip()
+
+    try:
+        # NB: BugzillaUser fires the query in its constructor (Connection.exec_queries) and
+        # is drained by .wait() -- it has NO get_data() (that lives on the sibling Bugzilla
+        # class). The handler runs during wait() and fills ``got``.
+        BugzillaUser(
+            user_names=[email],
+            include_fields=["name", "nick"],
+            user_handler=handler,
+            user_data=got,
+        ).wait()
+    except Exception:
+        logger.warning("bug preview: bugzilla nick lookup failed for %s", email, exc_info=True)
+    nick = got.get("nick", "")
+    _NICK_CACHE[email] = nick
+    return nick
+
+
 def _needinfo_person(candidate, channel):
-    """The person to needinfo for the suspected regressor: its AUTHOR. Prefer the local
-    hgauthor record for the candidate node (it carries the IRC nick), else fall back to the
-    candidate's author display string (``Real Name <email>``). ``{}`` when unknown."""
+    """The person to needinfo for the suspected regressor: its AUTHOR, identified by their
+    BUGZILLA nick (e.g. ``:stransky``) looked up from the author's email via the Bugzilla
+    user API. The email/name come from the local hgauthor record for the candidate node,
+    else the candidate's author display string (``Real Name <email>``). Falls back to the
+    name/email when no Bugzilla nick resolves. ``{}`` when the author is unknown."""
     c = candidate or {}
+    email = name = ""
     node = c.get("node")
     if node:
         try:
             info = models.Node.authors_for([node], channel).get(node) or {}
         except Exception:
             info = {}
-        if info.get("nick") or info.get("real") or info.get("email"):
-            return {"nick": info.get("nick", ""), "name": info.get("real", ""),
-                    "email": info.get("email", "")}
+        email = (info.get("email") or "").strip()
+        name = (info.get("real") or "").strip()
     author = (c.get("author") or "").strip()
-    if author:
-        return {"nick": "", "name": author.split("<", 1)[0].strip(),
-                "email": _first_email(author)}
-    return {}
+    if not email:
+        email = _first_email(author)
+    if not name and author:
+        name = author.split("<", 1)[0].strip()
+    if not (email or name):
+        return {}
+    return {"nick": _bugzilla_nick(email), "name": name, "email": email}
 
 
 def _needinfo_line(person):
