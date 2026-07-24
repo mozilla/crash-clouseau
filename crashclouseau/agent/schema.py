@@ -28,6 +28,7 @@ from pydantic import (
     Field,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -173,6 +174,17 @@ class CrashFrame(BaseModel):
     inlines: list[str] = Field(default_factory=list)
     trust: str | None = None
 
+    @field_validator("function", "filename", "node", mode="before")
+    @classmethod
+    def _none_to_empty(cls, v):
+        """Symbolication can emit a null ``function``/``filename`` for an opaque frame
+        (e.g. macOS ``os_unfair_lock``, JIT/stub frames). These are ``str`` fields, so a
+        literal ``None`` would fail validation and — since ``CrashBrief.frames`` is
+        validated as a whole in ``_salvage`` — drop the ENTIRE crash brief (every frame)
+        and force a false abstain. Coerce ``None`` -> ``""`` so a single opaque frame is
+        kept (empty) instead of discarding the crash context."""
+        return "" if v is None else v
+
 
 class CrashBrief(BaseModel):
     uuid: str
@@ -278,6 +290,15 @@ class AreaExpert(BaseModel):
 class Verdict(BaseModel):
     decision: Decision
     confidence: Confidence = Confidence.low
+    # Phase-2 calibration: the empirical, calibrated probability this reported verdict is
+    # WORTH INVESTIGATING (i.e. a lead a human should pick up), read off the fitted
+    # rung -> P table (``eval.calibrate``) by ``orchestrator.apply_deterministic_gates`` AFTER
+    # all gates settle the FINAL confidence rung. ``None`` when no calibration table is
+    # configured (the pre-calibration default) or on an abstain — so the raw ``confidence``
+    # rung stays the only signal until a table is fit + wired. Additive + backward compatible:
+    # older persisted dossiers omit it and validate to ``None``; it rides the dossier JSONB
+    # payload, so surfacing it needs no DB migration.
+    p_worth_investigating: float | None = None
     needinfo_draft: str | None = None
     abstain_reason: str | None = None
     mechanism: Claim | None = None
@@ -492,6 +513,14 @@ _SIDE_ALIASES = {
     "deletion": "deleted", "del": "deleted",
     "context": "context", "unchanged": "context", "ctx": "context",
     "unmodified": "context",
+    # A hunk-header / structural diff line: the model labels a ``@@ ... @@`` header (or an
+    # otherwise non-line citation) with ``side:"meta"``/"header"/"hunk", none of which is a
+    # real added/deleted/context source line. Map to `context` (a valid, non-behavior-
+    # asserting pointer, same rationale as blame/history) so ONE such citation in a
+    # verdict's mechanism/consistency claim can't force-abstain an otherwise-correct lead
+    # via `_salvage` (observed as a false abstain during canary validation).
+    "meta": "context", "header": "context", "hunk": "context",
+    "hunk_header": "context", "hunk-header": "context",
     # A line the model pulled from the blame/history tools (not a diff) is an EXISTING
     # source line, i.e. `context` in diff terms. The model routinely mislabels its
     # `side` as "history_blame"/"blame"/"history"; left unmapped, one such citation in

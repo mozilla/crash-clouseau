@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
 from datetime import datetime, timezone
 
 from dateutil.relativedelta import relativedelta
 
 from crashclouseau import config
+from crashclouseau.eval import authors as authors_mod
 from crashclouseau.eval import corpus as corpus_mod
 from crashclouseau.eval import labels as labels_mod
 from crashclouseau.eval import metrics as metrics_mod
@@ -51,6 +54,8 @@ def main(argv=None):
                         help="score only the first N cases (a cheap validation batch)")
     parser.add_argument("--offset", type=int, default=0,
                         help="skip the first N cases (with --limit: scores cases[offset:offset+limit])")
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="parallel cases (overrides eval.max_concurrency); the wall-clock lever")
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     args = parser.parse_args(argv)
@@ -78,9 +83,26 @@ def main(argv=None):
             corpus_mod.save_case(case, corpus_dir)
 
     if args.cmd in ("rerun", "score", "all"):
-        results = asyncio.run(runner_mod.rerun_corpus(cases, sweep))
+        results = asyncio.run(runner_mod.rerun_corpus(cases, sweep, concurrency=args.concurrency))
+        # Score at PERSON level (the pivoted goal) via the cached hg author resolver — but ONLY
+        # when the corpus carries regressor authors (the study-fixture corpus does; the legacy
+        # A/B corpus does not, so the hg lookups there are pure overhead — person_hit can never
+        # match without a ground-truth author set).
+        author_of = (authors_mod.author_of
+                     if any(getattr(c, "regressor_authors", None) for c in cases)
+                     else None)
+        # Persist per-case labeled rows (score, hit, is_negative, person_hit, worth, ...) so
+        # calibration/re-thresholding — and a person-level refit — never re-run the (expensive)
+        # agent. This is the gap that previously made every refit a full re-run: run.py wrote only
+        # the aggregate metrics.
+        rows = metrics_mod.per_case_rows(cases, results, author_of=author_of)
+        results_path = os.path.join(corpus_dir, "results.jsonl")
+        with open(results_path, "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, default=str) + "\n")
+        logger.info("eval: wrote %s (%d rows)", results_path, len(rows))
         metrics = metrics_mod.compute_metrics(
-            cases, results, sweep_config=sweep, corpus_hash=corpus_hash
+            cases, results, sweep_config=sweep, corpus_hash=corpus_hash, author_of=author_of,
         )
         with open(args.out, "w") as handle:
             handle.write(metrics.model_dump_json(indent=2))

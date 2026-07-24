@@ -72,6 +72,10 @@
         "max_seed_frames": 40,
         "reap_max_attempts": 2,
         "agent_version": 1,
+        "calibration":
+        {
+            "table": {"25": 0.5, "50": 0.8, "70": 0.9714, "85": 0.9714}
+        },
         "offstack":
         {
             "enabled": false,

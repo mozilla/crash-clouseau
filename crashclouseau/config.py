@@ -273,5 +273,53 @@ def get_agent_offstack_cost_cap():
     )
 
 
+def _normalize_calibration_table(raw):
+    """Coerce a rung -> P map to ``{int rung score: float P}``; drop non-numeric entries.
+    Accepts either the flat map or ``eval.calibrate``'s wrapper (a ``calibration_table`` key)."""
+    if isinstance(raw, dict) and "calibration_table" in raw:
+        raw = raw["calibration_table"]
+    table = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                table[int(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return table
+
+
+__CALIBRATION_CACHE = {}
+
+
+def get_agent_calibration():
+    """The fitted worth-investigating calibration table (Phase-2): ``{rung score (int) ->
+    P(worth-investigating)}`` mapping a verdict's confidence rung (``CONFIDENCE_SCORE`` * 100)
+    to its empirical calibrated probability. Sourced from ``agent.calibration.table`` (an inline
+    map) or ``agent.calibration.path`` (a ``calibration_table.json`` written by
+    ``eval.calibrate`` — its ``calibration_table`` sub-key is used). Empty ``{}`` until a paid
+    calibration run has been fit + wired, so ``Verdict.p_worth_investigating`` stays ``None`` in
+    prod until then. A path is re-read only when its mtime changes."""
+    cal = get_agent().get("calibration", {})
+    if cal.get("table") is not None:
+        return _normalize_calibration_table(cal["table"])
+    path = cal.get("path")
+    if not path:
+        return {}
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    cached = __CALIBRATION_CACHE.get(path)
+    if cached is None or cached[0] != mtime:
+        try:
+            with open(path, "r") as handle:
+                table = _normalize_calibration_table(json.load(handle))
+        except (OSError, ValueError):
+            return {}
+        __CALIBRATION_CACHE[path] = (mtime, table)
+        return table
+    return cached[1]
+
+
 def get_eval():
     return _get_global().get("eval", {})

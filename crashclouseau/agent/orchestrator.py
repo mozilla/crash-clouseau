@@ -849,6 +849,80 @@ def _verdict_row(result):
             "evidence": _gather_evidence(dossier)}
 
 
+def _apply_worth_investigating(dossier):
+    """Populate ``Verdict.p_worth_investigating`` from the fitted calibration table (Phase-2):
+    map the FINAL verdict's confidence rung (after every gate has settled it) to its empirical
+    calibrated probability. No-op — leaves ``None`` — when no table is configured (the
+    pre-calibration default), the verdict abstains (an abstain isn't reported, so it has no
+    worth-investigating probability), or the rung isn't in the table. Runs LAST so it reads the
+    shipped rung, not a pre-downgrade one."""
+    if dossier is None or dossier.verdict is None:
+        return
+    v = dossier.verdict
+    if v.decision == Decision.abstain or v.confidence is None:
+        return
+    table = config.get_agent_calibration()
+    if not table:
+        return
+    score = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
+    p = table.get(score)
+    if p is not None:
+        dossier.verdict = v.model_copy(update={"p_worth_investigating": float(p)})
+
+
+def apply_deterministic_gates(result, seed):
+    """Reshape the RAW agent verdict into the SHIPPED verdict with the deterministic,
+    outside-the-LLM gates: attach area-experts, then the SF-3 call-path gate (off-stack
+    only), the exposer classifier (all crashes), and the corroboration gate (fault-offset /
+    prior-signature lead->probable bump); re-derive the bridged needinfo from the FINAL
+    verdict; and apply off-stack observe-only last. Mutates ``result`` / ``result.dossier``
+    in place and returns it.
+
+    Extracted so the OFFLINE eval runner applies the exact same post-verdict reshaping as
+    ``run_evidence_agent`` — the calibration must score the pipeline we SHIP, not the raw
+    model output (a strong->lead downgrade or a lead->probable bump changes the confidence
+    rung the calibration keys on). ``seed`` is the ``build_seed`` crash dict (needs
+    ``is_offstack``, ``experts``, ``raw_crash``, ``candidates``, ``prior_*``)."""
+    # Attach deterministic area-experts (#15 phase 2) to the dossier so a
+    # knowledgeable person is surfaced for ANY verdict (including abstain).
+    if result.dossier is not None and seed.get("experts"):
+        result.dossier.area_experts = [AreaExpert(**e) for e in seed["experts"]]
+
+    # Deterministic gates, all computed OUTSIDE the LLM and reflected in BOTH the
+    # persisted payload and the Verdict row (they run BEFORE model_dump + _verdict_row).
+    offstack_cfg = config.get_agent_offstack() if seed.get("is_offstack") else None
+    if result.dossier is not None:
+        # Deterministic gates run BEFORE the corroboration gate so a strong->lead
+        # downgrade here is still eligible for a lead->probable bump.
+        # SF-3 call-path gate is OFF-STACK ONLY: an on-stack candidate already has its
+        # stack-frame anchor, so requiring a searchfox call path would wrongly demote it.
+        if offstack_cfg is not None and offstack_cfg["require_callpath_for_strong"]:
+            _apply_callpath_gate(result.dossier, seed)
+        # Exposer classifier runs for ALL crashes: ~1-in-6 ON-stack line hits are exposers
+        # too, and its signals (poison fault address / UAF / PHC free stack) are
+        # stack-independent; it only downgrades strong-evidence->lead on a STRONG poison
+        # signal (a weak hint just sets a UI chip). Off-stack keeps its config knob.
+        if offstack_cfg is None or offstack_cfg["exposer_classifier"]:
+            _classify_exposer(result.dossier, seed)
+        # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
+        # match raises a bare lead (medium/50%) to `probable` (70%).
+        _apply_corroboration_gate(result.dossier, seed)
+        # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
+        # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
+        # must not ship the original strong-evidence action. Idempotent when nothing
+        # downgraded (re-derives the same action).
+        _reconcile_bridged_action(result)
+        # OBSERVE-ONLY canary is OFF-STACK ONLY: on-stack verdicts stay apply-eligible
+        # (the established production behavior). Runs last so nothing re-adds an action.
+        if offstack_cfg is not None and offstack_cfg["observe_only"]:
+            _apply_offstack_observe_only(result)
+    # Calibrated worth-investigating probability, from the FINAL (post-gate) rung. Additive;
+    # ``None`` until a calibration table is fit + wired. Runs after every gate so it reads the
+    # shipped verdict, and outside the offstack-guarded block so on-stack runs get it too.
+    _apply_worth_investigating(result.dossier)
+    return result
+
+
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     On failure it records the reason (dossier ``payload['error']``) and marks status; a
@@ -921,39 +995,10 @@ def run_evidence_agent(uuid, force=False):
                 uuid, result.total_cost_usd, cap,
             )
 
-        # Attach deterministic area-experts (#15 phase 2) to the dossier so a
-        # knowledgeable person is surfaced for ANY verdict (including abstain).
-        if result.dossier is not None and seed.get("experts"):
-            result.dossier.area_experts = [AreaExpert(**e) for e in seed["experts"]]
-
-        # Deterministic gates, all computed OUTSIDE the LLM and reflected in BOTH the
-        # persisted payload and the Verdict row (they run BEFORE model_dump + _verdict_row).
-        offstack_cfg = config.get_agent_offstack() if seed.get("is_offstack") else None
-        if result.dossier is not None:
-            # Deterministic gates run BEFORE the corroboration gate so a strong->lead
-            # downgrade here is still eligible for a lead->probable bump.
-            # SF-3 call-path gate is OFF-STACK ONLY: an on-stack candidate already has its
-            # stack-frame anchor, so requiring a searchfox call path would wrongly demote it.
-            if offstack_cfg is not None and offstack_cfg["require_callpath_for_strong"]:
-                _apply_callpath_gate(result.dossier, seed)
-            # Exposer classifier runs for ALL crashes: ~1-in-6 ON-stack line hits are exposers
-            # too, and its signals (poison fault address / UAF / PHC free stack) are
-            # stack-independent; it only downgrades strong-evidence->lead on a STRONG poison
-            # signal (a weak hint just sets a UI chip). Off-stack keeps its config knob.
-            if offstack_cfg is None or offstack_cfg["exposer_classifier"]:
-                _classify_exposer(result.dossier, seed)
-            # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
-            # match raises a bare lead (medium/50%) to `probable` (70%).
-            _apply_corroboration_gate(result.dossier, seed)
-            # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
-            # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
-            # must not ship the original strong-evidence action. Idempotent when nothing
-            # downgraded (re-derives the same action).
-            _reconcile_bridged_action(result)
-            # OBSERVE-ONLY canary is OFF-STACK ONLY: on-stack verdicts stay apply-eligible
-            # (the established production behavior). Runs last so nothing re-adds an action.
-            if offstack_cfg is not None and offstack_cfg["observe_only"]:
-                _apply_offstack_observe_only(result)
+        # Reshape the raw agent verdict into the shipped verdict (area-experts + the
+        # callpath/exposer/corroboration gates + needinfo reconcile + observe-only). Shared
+        # with the offline eval runner so calibration scores the pipeline we ship.
+        apply_deterministic_gates(result, seed)
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already

@@ -24,6 +24,10 @@ class CorpusCase(BaseModel):
     regressor_bug: int | None = None                        # first regressor bug (compat)
     regressor_bugs: list[int] = Field(default_factory=list)   # regressed_by (authoritative)
     regressor_author: str = ""
+    # All authors of the true regressor's changesets — for the PERSON-LEVEL ("silver nugget")
+    # metric: a lead that blames the wrong changeset but the same author as the true regressor
+    # is still a good needinfo target (the pivoted goal = get the right person investigating).
+    regressor_authors: list[str] = Field(default_factory=list)
     channel: str = "nightly"
     crash_json_path: str | None = None
     seed_nodes: list[str] = Field(default_factory=list)  # the stack-only candidate set
@@ -32,16 +36,30 @@ class CorpusCase(BaseModel):
     # "no seed candidates" fidelity gap).
     candidates: list[dict] = Field(default_factory=list)
     on_stack_label: bool | None = None  # filled by the labeler; None = unlabeled
+    # Phase-2 calibration (study-fixture corpus). ``is_offstack`` is the leak-free RUN-time
+    # split (no candidate touched a stack file), computed by the adapter to mirror
+    # ``build_seed`` — distinct from ``on_stack_label`` (ground truth, metrics-only).
+    # ``is_negative`` marks a culprit-absent window (regressor removed): any non-abstain on it
+    # is a FALSE-INVESTIGATE, and its regressor sets are empty so ``_hit`` is always False.
+    # ``pin_rev`` pins blame/source reads to the crash build rev (leak-free).
+    is_offstack: bool | None = None
+    is_negative: bool = False
+    pin_rev: str = ""
 
 
 class SweepConfig(BaseModel):
     """A tuning sweep: role->model overrides layered onto the base agent.llm block,
-    plus optional confidence thresholds. Empty = use the configured defaults."""
+    plus an optional report-threshold policy. Empty = use the configured defaults."""
 
     name: str = "default"
     roles: dict[str, str] = Field(default_factory=dict)   # role -> model short name
     principal_model: str | None = None
     effort: str | None = None  # applied to principal AND every role when set (e.g. "max")
+    # Report-THRESHOLD policy applied by the eval runner (``runner._apply_report_thresholds``):
+    # ``{decision -> min 0-100 rung score}`` — a reported verdict scoring below its minimum is
+    # downgraded to abstain, so a sweep can measure a report threshold (recall / false-investigate
+    # / person-precision) without re-running the agent. Keys: ``"lead"`` / ``"strong-evidence"``,
+    # with ``"report"`` as the fallback for any reported verdict. Empty = report everything.
     confidence_thresholds: dict[str, float] = Field(default_factory=dict)
 
 
@@ -56,6 +74,18 @@ class Metrics(BaseModel):
     n_strong: int = 0
     n_lead: int = 0
     n_errored: int = 0  # runs that failed (max_turns/timeout/exception), NOT deliberate abstains
+    # Precision-first (Phase-2): over the culprit-absent NEGATIVE arm, share reported as a
+    # lead/strong (a false-investigate). The metric the report threshold must keep near ~0.
+    false_investigate_rate: float = 0.0
+    n_negative: int = 0
+    n_false_investigate: int = 0
+    # Person-level scoring (Phase-2 pivot: "get the right person investigating"). Over reported
+    # (lead/strong) cases, the share reaching the true regressor's AUTHOR — by the exact
+    # changeset/bug OR the same-author 'silver nugget'. 0 unless the eval was scored with an
+    # author resolver (offline test runs leave these at their defaults).
+    person_precision: float = 0.0
+    n_person_hit: int = 0
+    n_reported: int = 0
     # Cost/usage, aggregated across the re-run (per-case avg + total). Lets a sweep or a
     # prompt change weigh a quality delta against its cost delta (a drop to a cheaper
     # model, or a heavier prompt, both show up here).

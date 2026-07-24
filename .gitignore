@@ -11,3 +11,14 @@ local.json
 # Fetched at build time by bin/post_compile (Heroku); never commit these.
 bin/searchfox-cli
 .profile.d/searchfox-cli.sh
+
+# Research artifact from spike/collect_regressor_dataset.py (54 MB, regenerable).
+spike/regressor_dataset/
+spike/regressor_dataset_compact/
+spike/regressor_dataset_cache/
+spike/regressor_dataset_blind/
+
+# Phase-2 calibration eval artifacts (regenerable via eval.study_corpus / eval.calibrate).
+corpus_*/
+metrics_*.json
+spike/prior_sig_cache/

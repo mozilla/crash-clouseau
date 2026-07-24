@@ -13,6 +13,8 @@ from pydantic import TypeAdapter, ValidationError
 from crashclouseau.agent.schema import (
     Citation,
     Confidence,
+    CrashBrief,
+    CrashFrame,
     Decision,
     SkepticStatus,
     SearchfoxCitation,
@@ -677,6 +679,76 @@ class TestDataFlowOperationFreeform(unittest.TestCase):
         obj["data_flow"]["operation"] = "double_free"
         d = validate_dossier(obj)
         self.assertEqual(d.data_flow.operation, "double_free")
+
+
+class TestHunkHeaderSideNormalizes(unittest.TestCase):
+    """A hunk-header / structural diff line is labelled ``side:"meta"`` (also
+    "header"/"hunk") by the model. That is not a valid added/deleted/context token, so one
+    such citation in a verdict's mechanism/consistency would force-abstain an otherwise
+    correct lead via ``_salvage`` (a schema false-abstain seen during canary validation).
+    It must normalize to ``context`` (a valid, non-behavior-asserting pointer)."""
+
+    def test_meta_side_normalizes_to_context(self):
+        adapter = TypeAdapter(Citation)
+        for spelling in ("meta", "header", "hunk", "hunk_header", "hunk-header", "META"):
+            raw = _diff_line()
+            raw["side"] = spelling
+            with self.assertRaises(ValidationError):  # invalid pre-normalize
+                adapter.validate_python(raw)
+            cit = adapter.validate_python(_normalize_citations(raw))
+            self.assertEqual(cit.side, "context")
+
+    def test_lead_with_meta_side_survives_as_lead(self):
+        # End-to-end: a lead whose mechanism cites a `side:"meta"` hunk-header line must
+        # stay a lead through parse_and_validate, not be salvaged to a false abstain.
+        sf = _stack_frame()
+        dl = _diff_line()
+        dl["side"] = "meta"
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"] = {
+            "decision": "lead",
+            "confidence": "medium",
+            "needinfo_draft": "could you take a look?",
+            "mechanism": {"statement": "hunk touches the faulting field",
+                          "citations": [sf, dl]},
+            "consistency": {"statement": "matches the crash path", "citations": [sf]},
+        }
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+
+
+class TestOpaqueFrameNoneCoercion(unittest.TestCase):
+    """Symbolication can emit a ``null`` function/filename for an opaque frame (macOS
+    ``os_unfair_lock``, JIT/stub frames). Those are ``str`` fields, so a literal ``None``
+    would fail validation and — because ``CrashBrief.frames`` validates as a whole in
+    ``_salvage`` — drop the ENTIRE crash brief and force a false abstain. ``None`` must
+    coerce to ``""`` so the frame is kept (empty) and the crash context survives."""
+
+    def test_crashframe_none_fields_coerce_to_empty(self):
+        f = CrashFrame(stackpos=3, function=None, filename=None, node=None)
+        self.assertEqual((f.function, f.filename, f.node), ("", "", ""))
+
+    def test_crashbrief_with_opaque_null_frame_validates(self):
+        brief = CrashBrief.model_validate({
+            "uuid": "u-1",
+            "frames": [
+                {"stackpos": 0, "function": "Foo::Bar", "filename": "foo.cpp", "line": 4},
+                {"stackpos": 1, "function": "os_unfair_lock", "filename": None},
+            ],
+        })
+        self.assertEqual(len(brief.frames), 2)
+        self.assertEqual(brief.frames[1].filename, "")
+
+    def test_dossier_with_opaque_null_frame_keeps_crash(self):
+        # Before the coercion this null-filename frame made CrashBrief.model_validate
+        # raise, so _salvage dropped the whole `crash` sub-object. It must survive now.
+        obj = copy.deepcopy(_dossier())
+        obj["crash"]["frames"] = [
+            {"stackpos": 0, "function": "os_unfair_lock", "filename": None},
+        ]
+        d = validate_dossier(obj)
+        self.assertIsNotNone(d.crash)
+        self.assertEqual(d.crash.frames[0].filename, "")
 
 
 if __name__ == "__main__":
