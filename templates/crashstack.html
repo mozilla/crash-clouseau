@@ -144,9 +144,10 @@
       </div>
       {% endif -%}
 
-      {# Informative preview of the bug Clouseau would file for this regressor (title +
-         recreated crash comment + resolved product::component). The eventual flow files
-         it, posts the comment, and needinfos the area-expert automatically. #}
+      {# Informative preview of what Clouseau would do for this regressor, in order: file a
+         bug (title + recreated crash comment + resolved product::component), post the
+         analysis comment, then needinfo the area-expert. The eventual flow does all this
+         automatically. #}
       {% if bug_preview -%}
       <div class="evidence-section bug-preview">
         <h3>Bug we&rsquo;ll file <span class="muted">(preview &mdash; filed automatically when enabled)</span></h3>
@@ -158,7 +159,15 @@
         {% endif -%}
         </p>
         <p><strong>Summary:</strong> {{ bug_preview['title']|e }}</p>
+        <p><strong>Description:</strong></p>
         <pre class="action-body">{{ bug_preview['comment']|e }}</pre>
+        {% if bug_preview.get('explanation') -%}
+        <p><strong>Comment:</strong></p>
+        <pre class="action-body">{{ bug_preview['explanation']|linkify(repo_url) }}</pre>
+        {% endif -%}
+        {% if bug_preview.get('needinfo') -%}
+        <p><strong>Needinfo:</strong> <span class="needinfo-draft">{{ bug_preview['needinfo']|e }}</span></p>
+        {% endif -%}
       </div>
       {% endif -%}
 
@@ -221,52 +230,6 @@
           <li class="skeptic-{{ s['status'] }}"><span class="skeptic-status">{{ s['status'] }}</span> {{ s.get('claim_ref')|e }}{% if s.get('note') %} &mdash; {{ s['note']|linkify(repo_url) }}{% endif %}</li>
           {% endfor -%}
         </ul>
-      </div>
-      {% endif -%}
-
-      {% if evidence['actions'] -%}
-      <div class="evidence-section audit-trail">
-        <h3>Recorded Bugzilla actions <span class="muted">(recorded by the agent &mdash; nothing is posted without your click)</span></h3>
-        {% set ns_apply = namespace(checkable=false) -%}
-        {% for a in evidence['actions'] -%}
-        {% if a is mapping -%}
-        {% set p = a.get('params') or {} -%}
-        {% set atype = a.get('type') -%}
-        {# The drafted comment is now surfaced in the bug preview above, so add_comment is
-           informative-only here (no apply checkbox); other action types stay confirmable. #}
-        {% set show_cb = evidence['can_apply'] and loop.index0 in evidence['apply_indices'] and not a.get('applied_at') and atype != 'bugzilla.add_comment' -%}
-        {% if show_cb %}{% set ns_apply.checkable = true %}{% endif -%}
-        <div class="audit-action{% if a.get('applied_at') %} applied{% endif %}">
-          <div class="audit-head">
-            {% if show_cb -%}
-            <label><input type="checkbox" class="apply-cb" value="{{ loop.index0 }}" checked> </label>
-            {% endif -%}
-            <span class="action-type">{{ atype }}</span>
-            {% if p.get('bug_id') %}&rarr; <a href="https://bugzilla.mozilla.org/{{ p['bug_id'] }}">bug {{ p['bug_id'] }}</a>{% endif %}
-            {% if a.get('applied_at') %}<span class="applied-mark">applied {{ a['applied_at'] }}{% if a.get('result_id') %} (#{{ a['result_id'] }}){% endif %}</span>{% endif %}
-          </div>
-          {% if atype == 'bugzilla.add_comment' -%}
-          <pre class="action-body">{{ p.get('text', '')|e }}</pre>
-          {% elif atype == 'bugzilla.update_bug' -%}
-          {% set flags = (p.get('changes') or {}).get('flags') or [] -%}
-          {% set nis = flags|selectattr('name', 'equalto', 'needinfo')|list -%}
-          {% if nis -%}
-          <p class="action-change">needinfo{% for f in nis %} <strong>{{ f.get('requestee', '?')|e }}</strong>{% endfor %}</p>
-          {% endif -%}
-          <pre class="action-body">{{ (p.get('changes') or {})|tojson(indent=2)|e }}</pre>
-          {% else -%}
-          <pre class="action-body">{{ p|tojson(indent=2)|e }}</pre>
-          {% endif -%}
-          {% if a.get('reasoning') %}<p class="reasoning"><em>{{ a['reasoning']|linkify(repo_url) }}</em></p>{% endif %}
-        </div>
-        {% endif -%}
-        {% endfor -%}
-        {% if evidence['can_apply'] and ns_apply.checkable -%}
-        <p>
-          <button type="button" id="applyActionsBtn" onclick="applyActions()">{% if is_lead %}Send needinfo to a knowledgeable person&hellip;{% else %}Apply selected recorded actions to Bugzilla&hellip;{% endif %}</button>
-        </p>
-        <div id="apply-results"></div>
-        {% endif -%}
       </div>
       {% endif -%}
     </div>

@@ -245,7 +245,12 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertNotIn("evidence-panel", html)
 
     def test_culprit_panel_full(self):
-        rv = self._get(_evidence())
+        ev = _evidence()
+        ev["dossier"]["area_experts"] = [
+            {"name": "Dev Two", "email": "dev2@moz.example", "nick": "dev2",
+             "node": "culpritnode1", "bug": 99999, "reason": "authored candidate culpritnode1"},
+        ]
+        rv = self._get(ev)
         self.assertEqual(rv.status_code, 200)
         html = rv.get_data(as_text=True)
         self.assertIn("evidence-panel", html)
@@ -269,51 +274,43 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("A::run", html)
         self.assertIn("use-after-free of mPtr", html)
         self.assertIn("skeptic-fail", html)
-        # audit trail
-        self.assertIn("Recorded Bugzilla actions", html)
-        self.assertIn("dev@moz.example", html)
-        self.assertIn("share the evidence chain", html)
+        # the "Recorded Bugzilla actions" apply UI is fully removed (informative-only now)
+        self.assertNotIn("Recorded Bugzilla actions", html)
+        self.assertNotIn("applyActionsBtn", html)
+        self.assertNotIn('class="apply-cb"', html)
         # the "Draft a bug" button is gone (superseded by the informative preview)
         self.assertNotIn("Draft a bug", html)
         self.assertNotIn("draftBug", html)
-        # bug preview: title, resolved product::component, and the recreated stack comment
+        # bug preview: product::component, Socorro-format title, recreated stack comment,
+        # the analysis comment, and the needinfo targeting the area-expert nick
         self.assertIn("Bug we", html)
         self.assertIn("Crash in [@ Foo::bar]", html)
         self.assertIn("Core :: DOM: Core &amp; HTML", html)
         self.assertIn("Top 1 frames of crashing thread", html)
-        # apply control stays for the update_bug needinfo, but the add_comment action is
-        # now informative-only (no checkbox) -> exactly ONE checkbox (the update_bug one)
-        self.assertIn("applyActionsBtn", html)
-        self.assertEqual(html.count('class="apply-cb"'), 1)
-        # the already-applied action shows the applied marker, not a checkbox
-        self.assertIn("applied 2026-07-01", html)
+        self.assertIn("Clouseau analysis", html)
+        self.assertIn("Suspected regressor: culpritnode1", html)
+        self.assertIn(":dev2, can you have a look please?", html)
 
-    def test_add_comment_has_no_checkbox_and_no_dangling_apply(self):
-        # When the ONLY applicable action is an add_comment (the common lead case), it's
-        # informative-only: no checkbox and no dangling "Apply" button.
+    def test_recorded_actions_ui_removed(self):
+        # The whole "Recorded Bugzilla actions" apply UI is removed (informative-only
+        # phase); a lead with recorded actions shows the preview, not an apply trail.
         ev = _evidence(verdict="lead", confidence=50)
         ev["ui"]["lead_label"] = "LEAD"
-        ev["actions"] = [{
-            "type": "bugzilla.add_comment",
-            "params": {"bug_id": 99999, "text": "soft needinfo draft", "is_private": True},
-            "reasoning": "auto-drafted needinfo",
-        }]
-        ev["apply_indices"] = bugzilla_apply.applicable_indices(ev["actions"], ev["ui"])
-        ev["can_apply"] = True
         html = self._get(ev).get_data(as_text=True)
-        self.assertIn("soft needinfo draft", html)       # still shown (informative)
-        self.assertNotIn('class="apply-cb"', html)       # but not applyable
-        self.assertNotIn("applyActionsBtn", html)        # no dangling apply button
+        self.assertNotIn("Recorded Bugzilla actions", html)
+        self.assertNotIn('class="apply-cb"', html)
+        self.assertNotIn("applyActionsBtn", html)
+        self.assertIn("Bug we", html)   # replaced by the informative preview
 
     def test_panel_tolerates_null_action_entry(self):
-        # A null/dropped entry in payload["actions"] (schema drift) must not 500 the
-        # whole page; the apply path guards it, and so must the template.
+        # A null/dropped entry in payload["actions"] (schema drift) must not 500 the whole
+        # page; the needinfo-draft de-dup loop still iterates actions, so it must be guarded.
         ev = _evidence()
         ev["actions"] = [None] + _actions()
         ev["apply_indices"] = bugzilla_apply.applicable_indices(ev["actions"], ev["ui"])
         rv = self._get(ev)
         self.assertEqual(rv.status_code, 200)
-        self.assertIn("Recorded Bugzilla actions", rv.get_data(as_text=True))
+        self.assertIn("evidence-panel", rv.get_data(as_text=True))
 
     def test_mechanism_lead_without_candidate(self):
         # A lead with no pinned changeset (candidate=None) is a "mechanism lead"; the
@@ -1092,13 +1089,39 @@ class TestBugPreview(unittest.TestCase):
     def test_build_bug_preview_none_without_candidate(self):
         ui = {"uuid": "u-1", "signature": "S", "channel": "nightly"}
         self.assertIsNone(report_bug.build_bug_preview(ui, self._stack3(), None))
-        self.assertIsNone(report_bug.build_bug_preview(ui, self._stack3(), {"bug": 1}))
+        self.assertIsNone(report_bug.build_bug_preview(ui, self._stack3(), {"candidate": None}))
+        self.assertIsNone(
+            report_bug.build_bug_preview(ui, self._stack3(), {"candidate": {"bug": 1}}))
 
     def test_build_bug_preview_shape(self):
         ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly"}
+        dossier = {
+            "candidate": {"node": "n", "bug": 1, "author": "Dev <dev@x.com>"},
+            "verdict": {"confidence": "high",
+                        "mechanism": {"statement": "UAF of mFoo"},
+                        "consistency": {"statement": "matches the crash"}},
+            "area_experts": [{"nick": "expert", "name": "Ex Pert", "email": "e@x.com"}],
+        }
         with mock.patch.object(report_bug, "resolve_product_component",
                                return_value=("Core", "DOM")):
-            prev = report_bug.build_bug_preview(ui, self._stack3(), {"node": "n", "bug": 1})
+            prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
         self.assertEqual(prev["title"], "Crash in [@ Foo::bar]")
         self.assertEqual((prev["product"], prev["component"]), ("Core", "DOM"))
         self.assertIn("Top 3 frames of crashing thread:", prev["comment"])
+        self.assertIn("UAF of mFoo", prev["explanation"])
+        self.assertIn("Suspected regressor: n (bug 1)", prev["explanation"])
+        self.assertEqual(prev["needinfo"], ":expert, can you have a look please?")
+
+    def test_needinfo_line_prefers_nick_then_name(self):
+        self.assertEqual(report_bug._needinfo_line([{"nick": "foo"}]),
+                         ":foo, can you have a look please?")
+        self.assertEqual(report_bug._needinfo_line([{"nick": "", "name": "Foo Bar"}]),
+                         "Foo Bar, can you have a look please?")
+        self.assertIsNone(report_bug._needinfo_line([]))
+        self.assertIsNone(report_bug._needinfo_line([{"nick": "", "name": "", "email": ""}]))
+
+    def test_explanation_comment_regressor_only(self):
+        # No mechanism -> still names the suspected regressor; nothing at all -> None.
+        exp = report_bug._explanation_comment({}, {"node": "abc", "bug": 7})
+        self.assertIn("Suspected regressor: abc (bug 7)", exp)
+        self.assertIsNone(report_bug._explanation_comment({}, {}))

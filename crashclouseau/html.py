@@ -48,9 +48,10 @@ def crashstack():
         # never 500 the page.
         bug_preview = None
         if show_evidence and vt in ("culprit", "lead"):
-            candidate = (evidence.get("dossier") or {}).get("candidate")
             try:
-                bug_preview = report_bug.build_bug_preview(uuid_info, stack, candidate)
+                bug_preview = report_bug.build_bug_preview(
+                    uuid_info, stack, evidence.get("dossier") or {}
+                )
             except Exception:
                 logger.error("crashstack bug preview failed for %s", uuid, exc_info=True)
         return render_template(

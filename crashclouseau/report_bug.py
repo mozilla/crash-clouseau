@@ -294,12 +294,56 @@ def resolve_product_component(candidate, channel):
     return None, None
 
 
-def build_bug_preview(uuid_info, stack, candidate):
+def _explanation_comment(verdict, candidate):
+    """The Clouseau analysis comment we'd post to the filed bug: the crash mechanism (and,
+    when present, why it is consistent with the crash) plus the suspected regressor.
+    ``None`` when there is nothing substantive to say."""
+    verdict = verdict or {}
+    lines = []
+    mech = ((verdict.get("mechanism") or {}).get("statement") or "").strip()
+    cons = ((verdict.get("consistency") or {}).get("statement") or "").strip()
+    conf = verdict.get("confidence") or ""
+    if mech:
+        lines.append("Clouseau analysis{}: {}".format(
+            " (confidence {})".format(conf) if conf else "", mech))
+    if cons:
+        lines.append(cons)
+    c = candidate or {}
+    if c.get("node"):
+        detail = "Suspected regressor: {}".format(c["node"])
+        if c.get("bug"):
+            detail += " (bug {})".format(c["bug"])
+        author = (c.get("author") or "").strip()
+        if author:
+            detail += " by {}".format(author)
+        lines.append(detail + ".")
+    return "\n\n".join(lines) if lines else None
+
+
+def _needinfo_line(area_experts):
+    """The needinfo we'd request -- ``:nick, can you have a look please?`` -- targeting the
+    top area-expert (prefer the IRC nick; fall back to name/email). ``None`` when no usable
+    expert identity is available."""
+    for x in (area_experts or []):
+        nick = (x.get("nick") or "").strip()
+        if nick:
+            return ":{}, can you have a look please?".format(nick)
+        who = (x.get("name") or x.get("email") or "").strip()
+        if who:
+            return "{}, can you have a look please?".format(who)
+    return None
+
+
+def build_bug_preview(uuid_info, stack, dossier):
     """The informative "bug we'd file" preview for the crashstack panel:
-    ``{title, comment, product, component}``. The comment is recreated locally
+    ``{title, comment, product, component, explanation, needinfo}`` -- the full sequence
+    the eventual auto-flow performs (file a bug with the stack, post the analysis comment,
+    needinfo the area-expert). The stack comment is recreated locally
     (``build_stack_comment``); product/component are best-effort from the regressor
-    (``resolve_product_component``). Returns ``None`` when there is no candidate regressor
-    to file a bug against (nothing to preview)."""
+    (``resolve_product_component``); the explanation + needinfo come from the dossier.
+    Returns ``None`` when there is no candidate regressor to file a bug against."""
+    dossier = dossier or {}
+    candidate = dossier.get("candidate")
     if not candidate or not candidate.get("node"):
         return None
     product, component = resolve_product_component(candidate, uuid_info.get("channel"))
@@ -311,4 +355,6 @@ def build_bug_preview(uuid_info, stack, candidate):
         "comment": build_stack_comment(uuid_info.get("uuid", ""), stack),
         "product": product,
         "component": component,
+        "explanation": _explanation_comment(dossier.get("verdict"), candidate),
+        "needinfo": _needinfo_line(dossier.get("area_experts")),
     }
