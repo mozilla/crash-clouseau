@@ -273,6 +273,26 @@ def get_agent_offstack_cost_cap():
     )
 
 
+def get_agent_second_opinion():
+    """Blind second-opinion pass knobs (#SO). For a REPORTED lead whose confidence rung is
+    at/above ``min_confidence`` (0-100), a fresh independent agent re-analyses the crash with
+    NO context from the first pipeline (verifier if we have a candidate, mechanism-generator
+    if not). Returned as one normalized dict so callers never re-derive defaults. Gated OFF
+    by default; ``SECOND_OPINION_ENABLED`` is the env canary lever (like ``OFFSTACK_ENABLED``).
+    A strong model (opus/effort=max) is deliberate: this is a rare, single-shot, no-context
+    call — the blanket effort=max OOM/no-gain finding was about the full multi-agent pipeline,
+    not one blind call."""
+    o = get_agent().get("second_opinion", {})
+    return {
+        "enabled": _env_bool("SECOND_OPINION_ENABLED", o.get("enabled", False)),
+        "model": o.get("model", "opus"),
+        "effort": o.get("effort", "max"),
+        "max_turns": o.get("max_turns", 20),
+        # Report threshold: every reported lead (rung >= 50) gets a second opinion by default.
+        "min_confidence": o.get("min_confidence", 50),
+    }
+
+
 def _normalize_calibration_table(raw):
     """Coerce a rung -> P map to ``{int rung score: float P}``; drop non-numeric entries.
     Accepts either the flat map or ``eval.calibrate``'s wrapper (a ``calibration_table`` key)."""
