@@ -225,6 +225,9 @@ class TestBuildSeedOffstack(unittest.TestCase):
         self.assertEqual([c["node"] for c in seed["candidates"]], ["w1"])
         self.assertIsNone(seed["candidates"][0]["score"])
         self.assertIn("nsTStringRepr", seed["candidates"][0]["desc"])
+        # Off-stack: NO area-experts — the pushlog-window authors didn't work in the
+        # crashing area, so "recently worked in this area" would be misleading.
+        self.assertEqual(seed["experts"], [])
 
     def test_pin_rev_empty_when_pinning_off(self):
         window = [{"node": "w1", "date": _dt(3), "backedout": False, "merge": False,

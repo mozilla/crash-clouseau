@@ -440,13 +440,22 @@ def build_seed(uuid):
     # Area-experts (#15 phase 2): the authors of the top non-noise candidates — a
     # knowledgeable person to ask, computed from local data (migration-proof). Attached
     # to the dossier by run_evidence_agent regardless of the verdict.
+    #
+    # ON-STACK ONLY: on-stack candidates are changesets that SCORED onto the crash frames,
+    # so their authors genuinely worked near the crash. OFF-STACK candidates are the
+    # undifferentiated first-bad-build pushlog window, ranked mostly by recency when nothing
+    # matches the signature — their authors merely "landed a patch near this build", NOT
+    # people who worked in the crashing area, so surfacing them under "recently worked in
+    # this area" is misleading noise. Suppress off-stack until a real crashing-file owner
+    # lookup replaces it.
     channel = info.get("channel") or uuid_info.get("channel") or "nightly"
     experts = []
-    try:
-        authors = models.Node.authors_for([c["node"] for c in candidates[:10]], channel)
-        experts = area_experts(candidates, authors, max_experts=3)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("agent: area-experts failed for %s: %s", uuid, exc)
+    if not is_offstack:
+        try:
+            authors = models.Node.authors_for([c["node"] for c in candidates[:10]], channel)
+            experts = area_experts(candidates, authors, max_experts=3)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("agent: area-experts failed for %s: %s", uuid, exc)
 
     # Pin blame/history/source reads to the crash BUILD rev (never tip). ON-STACK: always —
     # reading the crashing line as-of the build is strictly more correct (tip can attribute
