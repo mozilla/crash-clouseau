@@ -45,6 +45,11 @@ class CorpusCase(BaseModel):
     is_offstack: bool | None = None
     is_negative: bool = False
     pin_rev: str = ""
+    # Landings that were RESOLVED for the regressor bug(s) but rejected as labels, with the
+    # reason (landed after the crash build / auto-format / wrong bug / not on hg). Kept so a
+    # surprising label is explainable and so the labeller's own accuracy stays auditable — an
+    # audit of corpus_ship found 27% of resolved landing nodes unusable.
+    label_rejects: list[dict] = Field(default_factory=list)
 
 
 class SweepConfig(BaseModel):

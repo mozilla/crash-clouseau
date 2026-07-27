@@ -19,7 +19,9 @@
    current build's pushlog window for a signature that has existed for a median **~6 months**.
    **10 of 10** high-confidence refutations rest on this, and all 10 verify with free arithmetic.
 5. Chasing that down turned up an unrelated problem: **23% of `corpus_ship`'s regressor labels are
-   wrong** — and that corpus is what the Phase-2 calibration table was fit on.
+   wrong** (27% of individual landing nodes). It does **not** corrupt the calibration — verified,
+   0 tainted hits — but it did corrupt this report's own §3 measurement, and the labeller that
+   produced it is now fixed.
 6. Cost: **67% of spend goes to signatures that were not new** when we triaged them. The
    second opinion is only ~4% of spend and is not the problem.
 
@@ -156,9 +158,35 @@ Auditing all 64 labelled positives in `corpus_ship` with arithmetic + hg only:
 **Root cause:** `crashclouseau/eval/corpus.py::_regressor_nodes(bug_ids)` resolves a bug to its
 landing node without checking that node against the crash's own build.
 
-**Why it matters:** this corpus is what the Phase-2 calibration table was fit on, so the shipped
-`p_worth_investigating` numbers carry this noise — and a ~23% noise floor is enough on its own to
-explain the earlier inconclusive prompt A/B.
+**CORRECTION — this does NOT corrupt the calibration.** I claimed above that it did; checking
+rather than assuming shows otherwise (`spike/audit_all_regressor_nodes.py`). `metrics._hit` is
+`case_nodes & dossier_nodes` OR `case_bugs & dossier_bugs`, where `case_nodes` is the PLURAL
+`regressor_nodes` list and `case_bugs` comes straight from Bugzilla `regressed_by` — untouched by
+node resolution. So a case can carry a broken `regressor_node` while `regressor_nodes` still holds
+the correct changeset. Auditing every node rather than just the singular field:
+
+| | |
+|---|---|
+| individual nodes audited | 385 |
+| junk nodes | 103 (26.8%) |
+| positive hits recorded | 54 |
+| hits via a cited node in `regressor_nodes` | 50 |
+| hits via bug match only | 4 |
+| **hits where the matched node was junk** | **1** — and that case still has a clean node |
+| **TAINTED hits (no clean node remains)** | **0** |
+
+Every recorded `hit` is legitimate, so **a refit would be a no-op** and the shipped
+`p_worth_investigating` table stands. What the noise did corrupt is `regressor_node` (singular),
+which §3 fed as "the" candidate — already corrected there (sensitivity 0.72 → 0.93). The earlier
+speculation that this explains the inconclusive prompt A/B is therefore withdrawn too.
+
+**Still worth fixing, and fixed:** the labeller is genuinely buggy, so future corpora would repeat
+this. `regressor_node` was `sorted(nodes)[0]` — ordered by hash, i.e. picked at random — and nodes
+were pooled across bugs so `regressor_bug` could describe a different changeset than
+`regressor_node`. Both fixed, plus validation that rejects a landing which postdates the crash
+build, is an auto-format/backout/revert/merge/tagging push, or belongs to another bug; survivors
+are ordered earliest-first and rejects are kept on the case (`label_rejects`) so a surprising
+label is explainable.
 
 Unlike §2's first-seen argument, "a regressor must land before the build that crashes" has **no
 caveat** — no signature-reuse confound — so it is safe as a hard filter in the labeller.
@@ -216,9 +244,9 @@ all fixed and re-verified).
 2. **Consider it at ingestion too.** 67% of spend is on not-new signatures. Gating there is the
    single biggest cost lever, but it trades away volume-regression recall, so it needs a decision
    rather than a default.
-3. **Fix `_regressor_nodes()`** to reject a node that postdates the crash build, plus auto-format
-   and backout commits — then **refit the calibration table**, which is currently fit on 23%-noisy
-   labels.
+3. ~~Fix `_regressor_nodes()` and refit the calibration table.~~ **DONE (labeller), and the refit
+   turned out to be unnecessary** — see §4's correction: 0 of 54 recorded hits are tainted, so the
+   shipped table stands.
 4. **Keep the second opinion on.** At ~4% of spend and sens 0.93 / spec 1.00 it is the cheapest
    correct signal in the pipeline. Its main current value is as a *measurement*; once (1) lands,
    re-measure, because much of what it catches should be caught for free.

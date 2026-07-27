@@ -1,0 +1,4025 @@
+{
+  "summary": {
+    "n_positives": 64,
+    "n_node_pairs": 385,
+    "n_junk_nodes": 103,
+    "pct_junk_nodes": 26.8,
+    "n_positive_hits": 54,
+    "hit_via_cited_node": 50,
+    "hit_via_bug_match_only": 4,
+    "hit_where_cited_node_is_junk": 1,
+    "  of_those_case_still_has_a_clean_node": 1,
+    "TAINTED_HITS_no_clean_node_remains": 0,
+    "tainted": []
+  },
+  "nodes": [
+    {
+      "uuid": "03a04efd-945e-479a-addc-263fd0251015",
+      "node": "068ddb3652ea",
+      "problems": [],
+      "desc": "Bug 1933181 - Same for other two tests I missed.",
+      "pushdate": "2025-10-14T21:15:57+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1933181
+    },
+    {
+      "uuid": "03a04efd-945e-479a-addc-263fd0251015",
+      "node": "111e68144f88",
+      "problems": [
+        "IMPOSSIBLE: landed 0.5d after the crash build"
+      ],
+      "desc": "Bug 1933181 - Same for other two tests I missed.",
+      "pushdate": "2025-10-15T09:50:22+00:00",
+      "backedout": false,
+      "days_after_build": 0.5,
+      "bug_in_desc": 1933181
+    },
+    {
+      "uuid": "03a04efd-945e-479a-addc-263fd0251015",
+      "node": "78a64826662b",
+      "problems": [],
+      "desc": "Bug 1933181 - Skip two translations tests that fail on wayland opt.",
+      "pushdate": "2025-10-14T21:14:46+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1933181
+    },
+    {
+      "uuid": "03a04efd-945e-479a-addc-263fd0251015",
+      "node": "832b10027e3b",
+      "problems": [],
+      "desc": "Bug 1933181 - Stop using nsView for popups. r=layout-reviewers,tnikkel",
+      "pushdate": "2025-10-14T21:14:46+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1933181
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "009ece72f8eb",
+      "problems": [
+        "IMPOSSIBLE: landed 33.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - MOZ/GTK - Prefs, packaging, configure, and GTK platform hooks for Vulkan video. r=stransky",
+      "pushdate": "2026-04-29T20:34:45+00:00",
+      "backedout": false,
+      "days_after_build": 33.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "48ec5bb6bfe4",
+      "problems": [
+        "IMPOSSIBLE: landed 69.7d after the crash build"
+      ],
+      "desc": "Bug 2021722 - Sandbox - RDD sandbox policy for Vulkan video. r=jld",
+      "pushdate": "2026-06-05T01:25:45+00:00",
+      "backedout": false,
+      "days_after_build": 69.7,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "6b1114cb4a97",
+      "problems": [
+        "IMPOSSIBLE: landed 71.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - DOM Media - Replace MOZ_VULKAN_ENABLE_DIRECT_DECODE_EXPORT with pref. r=stransky,alwu",
+      "pushdate": "2026-06-06T21:33:47+00:00",
+      "backedout": false,
+      "days_after_build": 71.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "76a2b61208b6",
+      "problems": [],
+      "desc": "Bug 2021722 - Added hwcontext_vulkan.h and updated ve rsion.h header. r=stransky",
+      "pushdate": "2026-03-27T09:23:54+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "7f6ff9672f44",
+      "problems": [
+        "IMPOSSIBLE: landed 46.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - DOM Media - FFmpeg Vulkan Video decode in RDD. r=stransky,alwu",
+      "pushdate": "2026-05-12T21:26:23+00:00",
+      "backedout": false,
+      "days_after_build": 46.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "b62491de1ada",
+      "problems": [
+        "IMPOSSIBLE: landed 3.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - Added (vendored) Khronos Vulkan-Headers (vulkan-sdk-1.4.341.0) under third_party. r=stransky",
+      "pushdate": "2026-03-30T21:36:24+00:00",
+      "backedout": false,
+      "days_after_build": 3.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "node": "f6affd94efbc",
+      "problems": [
+        "IMPOSSIBLE: landed 33.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - GFX - GL/EGL, layers, and compositor IPC for Vulkan video. r=stransky,lsalzman",
+      "pushdate": "2026-04-29T20:34:45+00:00",
+      "backedout": false,
+      "days_after_build": 33.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "bug1997896",
+      "node": "2681c388b866",
+      "problems": [],
+      "desc": "Bug 1994871 - Part 1: Simplify error handling for SparseBitmap by handling OOM in the caller r=sfink",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1994871
+    },
+    {
+      "uuid": "bug1997896",
+      "node": "6fe7a496f6a8",
+      "problems": [
+        "NO-OP COMMIT: test-only"
+      ],
+      "desc": "Bug 1994871 - Part 4: Add tests for gray symbols r=sfink",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1994871
+    },
+    {
+      "uuid": "bug1997896",
+      "node": "7cde21140d5b",
+      "problems": [],
+      "desc": "Bug 1994871 - Part 3: Make the atom marking bitmaps handle gray state becoming invalid r=sfink",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1994871
+    },
+    {
+      "uuid": "bug1997896",
+      "node": "7f884686f5b8",
+      "problems": [],
+      "desc": "Bug 1994871 - Part 2: Allow symbols and prop maps to be gray r=sfink",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1994871
+    },
+    {
+      "uuid": "bug1997896",
+      "node": "dddacb4706b5",
+      "problems": [],
+      "desc": "Bug 1994871 - Part 5: Add symbols to the CC graph r=mccr8",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1994871
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "010afe1fcabb",
+      "problems": [],
+      "desc": "Bug 1971158 - Patch out static ctors in llama.cpp. r=atossou",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "0b4dbcbb8909",
+      "problems": [],
+      "desc": "Bug 1971158 - Do not compile llama.cpp on Android. r=tarek",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "142950f7cc02",
+      "problems": [],
+      "desc": "Bug 1971158 - Do not run our Sprintf Literal Checker clang plugin on third party code. r=marco",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "216f4b30b0c0",
+      "problems": [],
+      "desc": "Bug 1971158 - Do not compile llama.cpp on Android. r=tarek",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "232bc92d24e2",
+      "problems": [],
+      "desc": "Bug 1971158 - ruff pass r=padenot",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "295143572cc2",
+      "problems": [],
+      "desc": "Bug 1971158 - Patch llama.cpp to allow loading a model from a fd or a buffer. r=atossou",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "347c59ae0bce",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 1971158, 1973711, 1976784, 1978748: apply code formatting via Lando",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "46b935061409",
+      "problems": [],
+      "desc": "Bug 1971158 - Don't crash in llama.cpp when an exception is caught for control flow and not error handling. r=atossou",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "47e0ba3acc33",
+      "problems": [],
+      "desc": "Bug 1971158 - Vendor llama.cpp. r=glandium",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "4c630ff1b325",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 1971158, 1973711, 1976784, 1978748: apply code formatting via Lando",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "4efe072f5aa1",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Revert \"Bug 1971158, 1973711, 1976784, 1978748: apply code formatting via Lando\" for causing Hazard bustages.",
+      "pushdate": "2025-08-24T11:12:31+00:00",
+      "backedout": false,
+      "days_after_build": -10.9,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "545c3770cabf",
+      "problems": [],
+      "desc": "Bug 1971158 - Do not run our Sprintf Literal Checker clang plugin on third party code. r=marco",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "6a6ff28c88f1",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Revert \"Bug 1971158, 1973711, 1976784, 1978748: apply code formatting via Lando\" for causing Hazard bustages.",
+      "pushdate": "2025-08-23T21:57:06+00:00",
+      "backedout": false,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "755c877677b5",
+      "problems": [],
+      "desc": "Bug 1971158 - Compile llama.cpp w/ AVX2 on x86_64, allow knowing if we can use it via js. r=atossou",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "9fc97ed64612",
+      "problems": [],
+      "desc": "Bug 1971158  - Copy and extend cmakeparser.py from libaom. r=padenot",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "a6b5919847a1",
+      "problems": [],
+      "desc": "Bug 1971158 - Vendor llama.cpp. r=glandium",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "b50b606e99d4",
+      "problems": [],
+      "desc": "Bug 1971158 - ruff pass r=padenot",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "b56c81cb2ba2",
+      "problems": [],
+      "desc": "Bug 1971158 - skip telemetry and engine test in verify r=tarek",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "b915f51df79a",
+      "problems": [],
+      "desc": "Bug 1971158  - Copy and extend cmakeparser.py from libaom. r=padenot",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "cbc06957aed3",
+      "problems": [],
+      "desc": "Bug 1971158 - Patch llama.cpp to allow loading a model from a fd or a buffer. r=atossou",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "cd6daec6e4ae",
+      "problems": [],
+      "desc": "Bug 1971158 - Compile llama.cpp w/ AVX2 on x86_64, allow knowing if we can use it via js. r=atossou",
+      "pushdate": "2025-09-04T09:21:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "node": "d725386721e4",
+      "problems": [],
+      "desc": "Bug 1971158 - Don't crash in llama.cpp when an exception is caught for control flow and not error handling. r=atossou",
+      "pushdate": "2025-08-23T21:34:07+00:00",
+      "backedout": true,
+      "days_after_build": -11.5,
+      "bug_in_desc": 1971158
+    },
+    {
+      "uuid": "d069e9f8-2768-4c74-8077-a27770251114",
+      "node": "13d65a94e4cf",
+      "problems": [],
+      "desc": "Bug 1997192 - Enable JS MicroTaskQueue by default r=smaug",
+      "pushdate": "2025-11-14T09:46:37+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1997192
+    },
+    {
+      "uuid": "d069e9f8-2768-4c74-8077-a27770251114",
+      "node": "f564813850eb",
+      "problems": [
+        "IMPOSSIBLE: landed 18.0d after the crash build"
+      ],
+      "desc": "Bug 1997192 - Enable JS MicroTaskQueue by default r=smaug",
+      "pushdate": "2025-12-02T09:45:58+00:00",
+      "backedout": false,
+      "days_after_build": 18.0,
+      "bug_in_desc": 1997192
+    },
+    {
+      "uuid": "cb0886af-2f8f-434a-a81a-8a3aa0251205",
+      "node": "5f9e366c17fc",
+      "problems": [],
+      "desc": "Bug 543435 - Make initial about:blank not get overwritten by an async about:blank load. r=sessionstore-reviewers,sfoster",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "cb0886af-2f8f-434a-a81a-8a3aa0251205",
+      "node": "86c4f03a4305",
+      "problems": [],
+      "desc": "Bug 543435 - Only reuse inner window for uncommitted initial documents. r=smaug,asuth,credential-management-reviewers,we",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "cb0886af-2f8f-434a-a81a-8a3aa0251205",
+      "node": "8972ceeb1559",
+      "problems": [],
+      "desc": "Bug 543435 - Ensure the initial about:blank SH entry is replaced. r=smaug",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "009ece72f8eb",
+      "problems": [
+        "IMPOSSIBLE: landed 33.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - MOZ/GTK - Prefs, packaging, configure, and GTK platform hooks for Vulkan video. r=stransky",
+      "pushdate": "2026-04-29T20:34:45+00:00",
+      "backedout": false,
+      "days_after_build": 33.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "48ec5bb6bfe4",
+      "problems": [
+        "IMPOSSIBLE: landed 69.7d after the crash build"
+      ],
+      "desc": "Bug 2021722 - Sandbox - RDD sandbox policy for Vulkan video. r=jld",
+      "pushdate": "2026-06-05T01:25:45+00:00",
+      "backedout": false,
+      "days_after_build": 69.7,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "6b1114cb4a97",
+      "problems": [
+        "IMPOSSIBLE: landed 71.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - DOM Media - Replace MOZ_VULKAN_ENABLE_DIRECT_DECODE_EXPORT with pref. r=stransky,alwu",
+      "pushdate": "2026-06-06T21:33:47+00:00",
+      "backedout": false,
+      "days_after_build": 71.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "76a2b61208b6",
+      "problems": [],
+      "desc": "Bug 2021722 - Added hwcontext_vulkan.h and updated ve rsion.h header. r=stransky",
+      "pushdate": "2026-03-27T09:23:54+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "7f6ff9672f44",
+      "problems": [
+        "IMPOSSIBLE: landed 46.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - DOM Media - FFmpeg Vulkan Video decode in RDD. r=stransky,alwu",
+      "pushdate": "2026-05-12T21:26:23+00:00",
+      "backedout": false,
+      "days_after_build": 46.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "b62491de1ada",
+      "problems": [
+        "IMPOSSIBLE: landed 3.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - Added (vendored) Khronos Vulkan-Headers (vulkan-sdk-1.4.341.0) under third_party. r=stransky",
+      "pushdate": "2026-03-30T21:36:24+00:00",
+      "backedout": false,
+      "days_after_build": 3.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "node": "f6affd94efbc",
+      "problems": [
+        "IMPOSSIBLE: landed 33.5d after the crash build"
+      ],
+      "desc": "Bug 2021722 - GFX - GL/EGL, layers, and compositor IPC for Vulkan video. r=stransky,lsalzman",
+      "pushdate": "2026-04-29T20:34:45+00:00",
+      "backedout": false,
+      "days_after_build": 33.5,
+      "bug_in_desc": 2021722
+    },
+    {
+      "uuid": "bug2002687",
+      "node": "63aa400ac35b",
+      "problems": [],
+      "desc": "Bug 2001618 - Retry once if H3 backup timer is active when a transaction closes, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-26T20:32:39+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2001618
+    },
+    {
+      "uuid": "bug2016312",
+      "node": "09756bcb255e",
+      "problems": [],
+      "desc": "Bug 1979253 part 2: Use HyperTextAccessible for video elements. r=morgan",
+      "pushdate": "2025-08-06T09:56:56+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1979253
+    },
+    {
+      "uuid": "bug2016312",
+      "node": "38e961cebb16",
+      "problems": [],
+      "desc": "Bug 1979253 part 1: Add an accessibility tree test for video with WebVTT captions. r=morgan",
+      "pushdate": "2025-08-06T09:56:56+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1979253
+    },
+    {
+      "uuid": "bug2016312",
+      "node": "4c2b07b78ce9",
+      "problems": [
+        "IMPOSSIBLE: landed 258.8d after the crash build"
+      ],
+      "desc": "Bug 1979253 - Use HyperTextAccessible for all containers that may have TextLeafAccessible children. r=accessibility-plat",
+      "pushdate": "2026-04-22T04:21:07+00:00",
+      "backedout": false,
+      "days_after_build": 258.8,
+      "bug_in_desc": 1979253
+    },
+    {
+      "uuid": "bug2016312",
+      "node": "5f898af2a599",
+      "problems": [
+        "IMPOSSIBLE: landed 258.8d after the crash build"
+      ],
+      "desc": "Bug 1979253 - Skip DocAccessible for the transient about:blank in printing BCs. r=accessibility-platform-reviewers,eeeja",
+      "pushdate": "2026-04-22T04:21:07+00:00",
+      "backedout": false,
+      "days_after_build": 258.8,
+      "bug_in_desc": 1979253
+    },
+    {
+      "uuid": "bug2016312",
+      "node": "638d545ac16b",
+      "problems": [
+        "IMPOSSIBLE: landed 190.0d after the crash build"
+      ],
+      "desc": "Bug 1979253 - Don't create remote XUL accessibles. r=Jamie",
+      "pushdate": "2026-02-12T09:52:31+00:00",
+      "backedout": false,
+      "days_after_build": 190.0,
+      "bug_in_desc": 1979253
+    },
+    {
+      "uuid": "bug2016312",
+      "node": "d18fc99fd893",
+      "problems": [
+        "IMPOSSIBLE: landed 258.8d after the crash build"
+      ],
+      "desc": "Bug 1979253 - Fix pre-existing Android accessibility crashtest failures. r=accessibility-platform-reviewers,eeejay",
+      "pushdate": "2026-04-22T04:21:07+00:00",
+      "backedout": false,
+      "days_after_build": 258.8,
+      "bug_in_desc": 1979253
+    },
+    {
+      "uuid": "bug1993379",
+      "node": "c4911116c376",
+      "problems": [],
+      "desc": "Bug 1991689 - Cache a PropertyProvider in SVGTextFrame so that we don't have to create a fresh one for every call to the",
+      "pushdate": "2025-10-05T21:03:00+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1991689
+    },
+    {
+      "uuid": "bug1993379",
+      "node": "d39196d22690",
+      "problems": [],
+      "desc": "Bug 1991689 - Cache advances of text ranges measured by TextRenderedRun::GetClipEdges in the root SVGTextFrame to accele",
+      "pushdate": "2025-10-05T21:03:00+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1991689
+    },
+    {
+      "uuid": "ab943b20-a33f-466a-a087-042a70260122",
+      "node": "75de582fbae9",
+      "problems": [],
+      "desc": "Bug 2005294: Audit ron 0.12.0, delta from 0.11.0. r=supply-chain-reviewers",
+      "pushdate": "2025-12-20T09:30:50+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2005294
+    },
+    {
+      "uuid": "ab943b20-a33f-466a-a087-042a70260122",
+      "node": "9387e2360a1e",
+      "problems": [],
+      "desc": "Bug 2005294: Trust `typeid` as published by dtolnay. r=supply-chain-reviewers",
+      "pushdate": "2025-12-20T09:30:50+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2005294
+    },
+    {
+      "uuid": "ab943b20-a33f-466a-a087-042a70260122",
+      "node": "96c4d9e3c03e",
+      "problems": [
+        "IMPOSSIBLE: landed 3.5d after the crash build"
+      ],
+      "desc": "Bug 2005294: Update wgpu to upstream 3f02781b (2025-12-16) r=webgpu-reviewers,supply-chain-reviewers,nical,aleiserson",
+      "pushdate": "2025-12-23T21:50:30+00:00",
+      "backedout": false,
+      "days_after_build": 3.5,
+      "bug_in_desc": 2005294
+    },
+    {
+      "uuid": "73cbfd08-a9c5-41ed-81a7-1108b0251127",
+      "node": "a3a13413c12c",
+      "problems": [],
+      "desc": "Bug 1851870 - Collect profiler logs on GMP process shutdown. r=media-playback-reviewers,alwu",
+      "pushdate": "2023-09-13T20:53:35+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851870
+    },
+    {
+      "uuid": "bug2000587",
+      "node": "13d65a94e4cf",
+      "problems": [],
+      "desc": "Bug 1997192 - Enable JS MicroTaskQueue by default r=smaug",
+      "pushdate": "2025-11-14T09:46:37+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1997192
+    },
+    {
+      "uuid": "bug2000587",
+      "node": "f564813850eb",
+      "problems": [
+        "IMPOSSIBLE: landed 18.0d after the crash build"
+      ],
+      "desc": "Bug 1997192 - Enable JS MicroTaskQueue by default r=smaug",
+      "pushdate": "2025-12-02T09:45:58+00:00",
+      "backedout": false,
+      "days_after_build": 18.0,
+      "bug_in_desc": 1997192
+    },
+    {
+      "uuid": "5a444e22-41c4-4078-a904-efd220250724",
+      "node": "47d8d7840ccb",
+      "problems": [
+        "BUG MISMATCH: desc says bug 1971400"
+      ],
+      "desc": "Revert \"Bug 1971400 - Part 4 - Remove Bottom-sheet related UI tests and fix test breakages in CollectionTest.kt and Home",
+      "pushdate": "2025-07-22T09:34:26+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1971400
+    },
+    {
+      "uuid": "5a444e22-41c4-4078-a904-efd220250724",
+      "node": "c11e7594c36d",
+      "problems": [],
+      "desc": "Bug 1972649 - Add fast-path for Acceleralated Canvas2D to WebGL copies. r=aosmond",
+      "pushdate": "2025-07-22T04:26:57+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1972649
+    },
+    {
+      "uuid": "bug2052825",
+      "node": "32128d7896d3",
+      "problems": [],
+      "desc": "Bug 1943059 - xpcshell coverage for the signature-verification IPC bridge r=calixte",
+      "pushdate": "2026-07-08T22:00:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1943059
+    },
+    {
+      "uuid": "bug2052825",
+      "node": "852e44997cb5",
+      "problems": [],
+      "desc": "Bug 1943059 - browser-mochitest coverage for the Digital Signature Properties panel r=calixte",
+      "pushdate": "2026-07-08T22:00:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1943059
+    },
+    {
+      "uuid": "bug2052825",
+      "node": "95953135b6fd",
+      "problems": [],
+      "desc": "Bug 1943059 - Wire pdf.js viewer to NSS for signature verification r=nkulatova",
+      "pushdate": "2026-07-08T22:00:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1943059
+    },
+    {
+      "uuid": "fca48200-78f1-4090-bee5-cc4600250901",
+      "node": "b0ef844bc744",
+      "problems": [],
+      "desc": "Bug 1893966 - Tests for supporting currentcolor in relative color syntax r=emilio,layout-reviewers",
+      "pushdate": "2024-10-16T21:44:37+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1893966
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "0f1d823ebe02",
+      "problems": [],
+      "desc": "Bug 1932150 - ContentSubtreeIterator #1: Make the end container related logic in ContentSubtreeIterator more robust r=jj",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "29195ee87cf4",
+      "problems": [],
+      "desc": "Bug 1932150 - Allow using flat tree order for point comparing in selection r=jjaschke,smaug,dom-core",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "3a6a79710d7e",
+      "problems": [],
+      "desc": "Bug 1932150 - Add new test cases for selection in flat tree r=smaug",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "4669801f1342",
+      "problems": [],
+      "desc": "Bug 1932150 - ContentSubtreeIterator #2: Allow ContentSubtreeIterator to iterate nodes in flattened tree r=jjaschke",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "4ee2d1219a0a",
+      "problems": [],
+      "desc": "Bug 1932150 - Update ranges to correctly set and update nodes for flattened selection r=jjaschke,smaug,dom-core",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "91dc57f7033c",
+      "problems": [],
+      "desc": "Bug 1932150 - Make selection code to correctly iterate flattened tree r=smaug",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "a86c7713f936",
+      "problems": [],
+      "desc": "Bug 1932150 - Fix some inconsistency about indicating whether the selection is allowed to cross the shadow boundary r=jj",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "node": "dda3f21e993c",
+      "problems": [],
+      "desc": "Bug 1932150 - ContentSubtreeIterator #3: Fix a bug in ContentSubtreeIterator where the end container is in the light DOM",
+      "pushdate": "2025-05-10T09:29:34+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1932150
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "node": "0b168428809a",
+      "problems": [
+        "IMPOSSIBLE: landed 0.3d after the crash build"
+      ],
+      "desc": "Bug 2002687 - CancelAllTransactions: drain queues before closing transactions, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-27T21:35:32+00:00",
+      "backedout": false,
+      "days_after_build": 0.3,
+      "bug_in_desc": 2002687
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "node": "39b491fb5202",
+      "problems": [
+        "IMPOSSIBLE: landed 0.3d after the crash build"
+      ],
+      "desc": "Bug 2002687 - Don't retry transaction when it's cancelled, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-27T21:35:32+00:00",
+      "backedout": false,
+      "days_after_build": 0.3,
+      "bug_in_desc": 2002687
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "node": "995fd06d9ae5",
+      "problems": [
+        "IMPOSSIBLE: landed 0.3d after the crash build"
+      ],
+      "desc": "Bug 2002687 - Don't retry transaction during shutdown, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-27T21:35:32+00:00",
+      "backedout": false,
+      "days_after_build": 0.3,
+      "bug_in_desc": 2002687
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "node": "a368fd92a379",
+      "problems": [],
+      "desc": "Bug 2002687 - Don't retry transaction when it's cancelled, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-27T14:59:49+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 2002687
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "node": "a7e5bfa46961",
+      "problems": [],
+      "desc": "Bug 2002687 - Don't retry transaction during shutdown, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-27T15:04:45+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2002687
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "node": "abf90655ae82",
+      "problems": [],
+      "desc": "Bug 2002687 - CancelAllTransactions: drain queues before closing transactions, r=necko-reviewers,valentin",
+      "pushdate": "2025-11-27T15:02:27+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 2002687
+    },
+    {
+      "uuid": "f4974bfb-5d01-41d3-8a0c-613760260409",
+      "node": "755a6eaeec23",
+      "problems": [
+        "IMPOSSIBLE: landed 57.3d after the crash build"
+      ],
+      "desc": "Bug 2013420 - re-enable Compression Dictionaries on Nightly r=jesup",
+      "pushdate": "2026-04-01T16:01:13+00:00",
+      "backedout": false,
+      "days_after_build": 57.3,
+      "bug_in_desc": 2013420
+    },
+    {
+      "uuid": "f4974bfb-5d01-41d3-8a0c-613760260409",
+      "node": "9e5adc8cb034",
+      "problems": [],
+      "desc": "Bug 2013420: re-enable Compression Dictionaries r=necko-reviewers,valentin",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2013420
+    },
+    {
+      "uuid": "0bef6df0-0db4-43ae-a6b2-27f400260330",
+      "node": "91bfadad8e0a",
+      "problems": [],
+      "desc": "Bug 2023381 [Linux] Keep wake lock type for inhibit and uninhibit r=emilio",
+      "pushdate": "2026-03-30T09:33:32+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2023381
+    },
+    {
+      "uuid": "bug2007139",
+      "node": "a820a22bd5f6",
+      "problems": [],
+      "desc": "Bug 2005748 - MaxAge attribute for CookieStore API r=webidl,cookie-reviewers,smaug,bvandersloot",
+      "pushdate": "2025-12-14T21:25:15+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2005748
+    },
+    {
+      "uuid": "c2a3a956-6db6-4ed4-a41a-a3d100250723",
+      "node": "1c5835148de5",
+      "problems": [],
+      "desc": "Bug 1959645 [Linux] Use DMABufDeviceLock to make DMABufDevice thread safe r=emilio",
+      "pushdate": "2025-06-02T21:11:30+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1959645
+    },
+    {
+      "uuid": "8de80740-8df8-49fb-87f0-e9d560251205",
+      "node": "c542d5f7eb5f",
+      "problems": [],
+      "desc": "Bug 1966023 - Call parseHTML/Unsafe on document. r=emilio",
+      "pushdate": "2025-05-13T21:47:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1966023
+    },
+    {
+      "uuid": "e7611b64-6166-4f6f-9d1d-3a50e0250804",
+      "node": "95103f20248f",
+      "problems": [],
+      "desc": "Bug 599980 - Use ConcurrentConnection for favicon protocol handlers. r=mak",
+      "pushdate": "2025-08-01T04:30:50+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 599980
+    },
+    {
+      "uuid": "ffa8c3ea-861a-4336-85f4-b39cb0260115",
+      "node": "2e66c6575c26",
+      "problems": [],
+      "desc": "Bug 1994942 - Don't use views for subdocs. r=tnikkel,jwatt",
+      "pushdate": "2025-11-11T16:32:58+00:00",
+      "backedout": true,
+      "days_after_build": -0.7,
+      "bug_in_desc": 1994942
+    },
+    {
+      "uuid": "ffa8c3ea-861a-4336-85f4-b39cb0260115",
+      "node": "44c360717358",
+      "problems": [],
+      "desc": "Bug 1994942 - Fix typo when window.print()-ing a page with an iframe.",
+      "pushdate": "2025-11-11T16:32:58+00:00",
+      "backedout": true,
+      "days_after_build": -0.7,
+      "bug_in_desc": 1994942
+    },
+    {
+      "uuid": "ffa8c3ea-861a-4336-85f4-b39cb0260115",
+      "node": "6327748c3d3d",
+      "problems": [],
+      "desc": "Bug 1994942 - Don't use views for subdocs. r=tnikkel,jwatt",
+      "pushdate": "2025-11-12T00:16:15+00:00",
+      "backedout": false,
+      "days_after_build": -0.4,
+      "bug_in_desc": 1994942
+    },
+    {
+      "uuid": "ffa8c3ea-861a-4336-85f4-b39cb0260115",
+      "node": "83ed52ad40f5",
+      "problems": [],
+      "desc": "Bug 1994942 - Fix typo when window.print()-ing a page with an iframe.",
+      "pushdate": "2025-11-12T00:16:15+00:00",
+      "backedout": false,
+      "days_after_build": -0.4,
+      "bug_in_desc": 1994942
+    },
+    {
+      "uuid": "ffa8c3ea-861a-4336-85f4-b39cb0260115",
+      "node": "b22ec0ce576b",
+      "problems": [],
+      "desc": "Bug 1994942 - Use FrameToWidgetOffset more and remove TranslateViewToWidget(). r=tnikkel,layout-reviewers",
+      "pushdate": "2025-11-12T00:21:17+00:00",
+      "backedout": false,
+      "days_after_build": -0.4,
+      "bug_in_desc": 1994942
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "00a94805df47",
+      "problems": [],
+      "desc": "Bug 1749047 - Allow diffing and producing a configuration change list between two encoder configuration. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "029f5470314e",
+      "problems": [],
+      "desc": "Bug 1749047 - Add VideoFrame::ToString. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "0595d51073c6",
+      "problems": [],
+      "desc": "Bug 1749047 - sRGB and BT709 use the same primaries. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "05a066dcfb52",
+      "problems": [],
+      "desc": "Bug 1749047 - Adjust WPT expectations. r=chunmin,media-playback-reviewers",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "0e68a1cc5f26",
+      "problems": [],
+      "desc": "Bug 1749047 - Ask ffmpeg to pass duration through. r=media-playback-reviewers,alwu",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "12768abca8ac",
+      "problems": [],
+      "desc": "Bug 1749047 - Properly handle reconfiguration and configuration changes. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "2214654fd856",
+      "problems": [],
+      "desc": "Bug 1749047 - Improve logging around encoder output callbacks. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "23a3b0995f32",
+      "problems": [],
+      "desc": "Bug 1749047 - Switch EncoderAgent::StateChange to Verbose logging. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "26c23ac47959",
+      "problems": [],
+      "desc": "Bug 1749047 - Add a logging statement when outputing video frames, with the timestamp. r=pehrsons",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "272ecdefa3db",
+      "problems": [],
+      "desc": "Bug 1749047 - Handle h264 bitstream format in WebCodecs. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "279a5522919a",
+      "problems": [],
+      "desc": "Bug 1749047 - Add the ability to print a VideoInfo and a VideoDecoderConfigInternal. r=chunmin,media-playback-reviewers",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "2d5bc871fb9e",
+      "problems": [],
+      "desc": "Bug 1749047 - Add a way to print VideoData object for debugging. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "2e334c8a1160",
+      "problems": [],
+      "desc": "Bug 1749047 - Allow printing a VideoDecoderConfig and a VideoDecoderConfigInternal. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "306ad5c722c8",
+      "problems": [],
+      "desc": "Bug 1749047 - Remove extra empty line in EncoderTraits.cpp r=padenot",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "3695862104e5",
+      "problems": [],
+      "desc": "Bug 1749047 - Add IsClosed on VideoFrame. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "3ce5091256fd",
+      "problems": [],
+      "desc": "Bug 1749047 - Implement encoder reconfiguration. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "44fac5680126",
+      "problems": [],
+      "desc": "Bug 1749047 - Remove unused function to avoid breaking the build. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "4d35297ae4bb",
+      "problems": [],
+      "desc": "Bug 1749047 - Consolidate some codec-specific checks from PEMs and add more checks for VP8 and VP9.r r=media-playback-re",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "51dc14d395c6",
+      "problems": [],
+      "desc": "Bug 1749047 - Use FFMPEG_PIX_FMT_YUV420P for D196109 pixel format changes r=media-playback-reviewers,padenot",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "53c348265bb8",
+      "problems": [],
+      "desc": "Bug 1749047 - Validate H264 profile right after parsing. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "5a2cef0729cc",
+      "problems": [],
+      "desc": "Bug 1749047 - Add an EncoderTemplate. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "6ecbca91effe",
+      "problems": [],
+      "desc": "Bug 1749047 - Use FFMPEG_PIX_FMT_YUV420P for D196477 pixel-format changes r=media-playback-reviewers,padenot",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "700cb49e7c8a",
+      "problems": [],
+      "desc": "Bug 1749047 - Allow comparing video config and colorspace objects. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "7a47354c58c4",
+      "problems": [],
+      "desc": "Bug 1749047 - Resize at the input of the decoder if the source video frame is different from the resolution given to the",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "7cbc5704562d",
+      "problems": [],
+      "desc": "Bug 1749047 - Don't leak AVPacket. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "8436bfea59b9",
+      "problems": [],
+      "desc": "Bug 1749047 - Include ImageContainer.h in VideoEncoder.cpp r=padenot",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "88d92a0509cd",
+      "problems": [],
+      "desc": "Bug 1749047 - Fix enable constant bitrate mode on an AppleVTEncoder. r=jolin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "9430aed8659c",
+      "problems": [],
+      "desc": "Bug 1749047 - Make Clone const on VideoFrame. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "98d2ecb3f476",
+      "problems": [],
+      "desc": "Bug 1749047 - Bring GetExtraData back to ToMediaRawData r=media-playback-reviewers,padenot",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "a65dfea63fc7",
+      "problems": [],
+      "desc": "Bug 1749047 - Add EncoderTraits. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "a78bb8799ef4",
+      "problems": [],
+      "desc": "Bug 1749047 - Set the color spaces in more cases on VideoFrame. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "b1577155be1c",
+      "problems": [],
+      "desc": "Bug 1749047 - harzar fix. CLOSED TREE",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "b32edc2659a6",
+      "problems": [],
+      "desc": "Bug 1749047 - Teach the AppleEncoderModule to encode in h264 High profile. r=jolin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "b6d97ebd3dda",
+      "problems": [],
+      "desc": "Bug 1749047 - Add BitrateMode to MediaRecorder.webidl. r=webidl,smaug",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "b7d997c42167",
+      "problems": [],
+      "desc": "Bug 1749047 - Set colorspace information on VideoFrame constructed from a GPUImage. r=pehrsons",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "b9234a7fb938",
+      "problems": [],
+      "desc": "Bug 1749047 - The encoders behind the new FFmpegVideoEncoder only support YUV420 input, convert. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "bc4f18f14bd3",
+      "problems": [],
+      "desc": "Bug 1749047 - Implement the boilerplate for VideoEncoder. r=chunmin,webidl,smaug,saschanaz",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "bcb45500ba22",
+      "problems": [],
+      "desc": "Bug 1749047 - Wire up more codecs from VideoEncoder to the new FFmpeg PEM. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "be191f9ac293",
+      "problems": [],
+      "desc": "Bug 1749047 - Simply use microseconds in FFmpegVideoEncoder.cpp. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "c781f30e5605",
+      "problems": [],
+      "desc": "Bug 1749047 - Allow some decoder to take their color info from the codec string. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "cc1b04d5f70e",
+      "problems": [],
+      "desc": "Bug 1749047 - Clear out the colorspace member of a VideoFrame when closing it. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "ce3fa8ca07ec",
+      "problems": [],
+      "desc": "Bug 1749047 - Attach color space information to decoded video frame going over IPC. r=pehrsons",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "d3c7d90b2150",
+      "problems": [],
+      "desc": "Bug 1749047 - Use a typical time base in FFmpegVideoEncoder if the framerate isn't known. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "d43f0c82f214",
+      "problems": [],
+      "desc": "Bug 1749047 - Guess more colorspace information when missing, based on the information present. r=pehrsons",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "d8501e23246c",
+      "problems": [],
+      "desc": "Bug 1749047 - Allow forcing AVCC format in the AppleVTEncoder. r=jolin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "da42eb3f9664",
+      "problems": [],
+      "desc": "Bug 1749047 - Convert from MediaRawData to EncodedVideoChunk one by one. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "db7a0f8d337d",
+      "problems": [],
+      "desc": "Bug 1749047 - Take EncoderConfig in EncoderAgent::Configure r=padenot",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "e3395cf67e5c",
+      "problems": [],
+      "desc": "Bug 1749047 - Allow converting VideoEncoderConfigInternal to something a PEM can understand. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "e59a8dc5add5",
+      "problems": [],
+      "desc": "Bug 1749047 - Implement an EncoderAgent to bridge Web Codecs and the PEM. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "e903ac081227",
+      "problems": [],
+      "desc": "Bug 1749047 - Move and deduplicate some utility functions to WebCodecUtils. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "e99c66838796",
+      "problems": [],
+      "desc": "Bug 1749047 - Handle encoders having been reset while outputing encoded data. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "ea4d0db67f89",
+      "problems": [],
+      "desc": "Bug 1749047 - Implement plumbing for SVC. r=chunmin,webidl,smaug",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "ee31e639b046",
+      "problems": [],
+      "desc": "Bug 1749047 - Introduce the encoder types for the video side. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "f0ac27321cf8",
+      "problems": [],
+      "desc": "Bug 1749047 - Tell FFmpegVideoEncoder that it can encode AV1. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "node": "f55b735f283a",
+      "problems": [],
+      "desc": "Bug 1749047 - Clearly mark the Reconfigure method for FFmpegVideoEncoder as not implemented. r=chunmin",
+      "pushdate": "2023-12-23T09:52:03+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1749047
+    },
+    {
+      "uuid": "131d1004-6fbb-4c45-8477-cbbda0251203",
+      "node": "5f9e366c17fc",
+      "problems": [],
+      "desc": "Bug 543435 - Make initial about:blank not get overwritten by an async about:blank load. r=sessionstore-reviewers,sfoster",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "131d1004-6fbb-4c45-8477-cbbda0251203",
+      "node": "86c4f03a4305",
+      "problems": [],
+      "desc": "Bug 543435 - Only reuse inner window for uncommitted initial documents. r=smaug,asuth,credential-management-reviewers,we",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "131d1004-6fbb-4c45-8477-cbbda0251203",
+      "node": "8972ceeb1559",
+      "problems": [],
+      "desc": "Bug 543435 - Ensure the initial about:blank SH entry is replaced. r=smaug",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "0bef0a15df9b",
+      "problems": [],
+      "desc": "Bug 2021892 - Part 2: Fix test to wait for permission status r=jjaschke",
+      "pushdate": "2026-03-13T21:31:58+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2021892
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "2ba2b5d45fa0",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "40098e1b94b1",
+      "problems": [
+        "IMPOSSIBLE: landed 26.3d after the crash build"
+      ],
+      "desc": "Bug 2021892 - Part 3: Add crashtest for permission query r=jjaschke",
+      "pushdate": "2026-04-09T04:09:43+00:00",
+      "backedout": false,
+      "days_after_build": 26.3,
+      "bug_in_desc": 2021892
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "449b238627e4",
+      "problems": [],
+      "desc": "Bug 2021892 - Part 1: Make `navigator.permissions.query` aware of platform geolocation permission r=jjaschke",
+      "pushdate": "2026-03-13T21:31:58+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2021892
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "8641863e8aa2",
+      "problems": [
+        "IMPOSSIBLE: landed 26.3d after the crash build"
+      ],
+      "desc": "Bug 2021892 - Part 2: Fix test to wait for permission status r=jjaschke",
+      "pushdate": "2026-04-09T04:09:43+00:00",
+      "backedout": false,
+      "days_after_build": 26.3,
+      "bug_in_desc": 2021892
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "a0c82e98a369",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "a4bcc25118ab",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "node": "e8a04d7e8811",
+      "problems": [
+        "IMPOSSIBLE: landed 26.3d after the crash build"
+      ],
+      "desc": "Bug 2021892 - Part 1: Make `navigator.permissions.query` aware of platform geolocation permission r=jjaschke",
+      "pushdate": "2026-04-09T04:09:43+00:00",
+      "backedout": false,
+      "days_after_build": 26.3,
+      "bug_in_desc": 2021892
+    },
+    {
+      "uuid": "48da4669-b770-44b3-a561-63c040260106",
+      "node": "58c224b2e5ff",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "48da4669-b770-44b3-a561-63c040260106",
+      "node": "9e35905d83a8",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 2003843, 2004833: apply code formatting via Lando",
+      "pushdate": "2025-12-12T09:17:29+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2003843
+    },
+    {
+      "uuid": "48da4669-b770-44b3-a561-63c040260106",
+      "node": "f82e7952380c",
+      "problems": [],
+      "desc": "Bug 2003843. Handle the transform case and one-axis case of async scrolling with CSS anchor pos. r=hiro,layout-reviewers",
+      "pushdate": "2025-12-12T09:17:29+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2003843
+    },
+    {
+      "uuid": "48da4669-b770-44b3-a561-63c040260106",
+      "node": "ffcf05014fca",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "0c2657e75214",
+      "problems": [],
+      "desc": "Bug 1977511 - Introduce nsLayoutUtils::UseOverlayScrollbars and use it in proper places instead of nsPresContext::UseOve",
+      "pushdate": "2026-03-25T21:21:51+00:00",
+      "backedout": true,
+      "days_after_build": -2.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "1085ddb446f8",
+      "problems": [],
+      "desc": "Bug 1977511 - Use ScrollContainerFrame::UseOverlayScrollbars in ResizeObserver and ScrollbarAreaToExcludeFromComposition",
+      "pushdate": "2026-03-27T21:42:19+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "2ead425234a5",
+      "problems": [],
+      "desc": "Bug 1977511 - Use ScrollContainerFrame::UseOverlayScrollbars in ResizeObserver and ScrollbarAreaToExcludeFromComposition",
+      "pushdate": "2026-03-25T21:21:51+00:00",
+      "backedout": true,
+      "days_after_build": -2.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "305f77cef750",
+      "problems": [],
+      "desc": "Revert \"Bug 1977511 - Handle `::-webkit-scrollbar { display:none }` as if it's `scrollbar-width: none`. r=layout-reviewe",
+      "pushdate": "2026-03-26T08:06:30+00:00",
+      "backedout": false,
+      "days_after_build": -1.6,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "365ed3302c3c",
+      "problems": [],
+      "desc": "Bug 1977511 - Add reftests for ::-webkit-scrollbar. r=layout-reviewers,emilio",
+      "pushdate": "2026-03-25T21:21:51+00:00",
+      "backedout": true,
+      "days_after_build": -2.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "3981bcd36b50",
+      "problems": [],
+      "desc": "Bug 1977511 - Handle `::-webkit-scrollbar { display:none }` as if it's `scrollbar-width: none`. r=layout-reviewers,firef",
+      "pushdate": "2026-03-25T21:21:51+00:00",
+      "backedout": true,
+      "days_after_build": -2.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "535df2422590",
+      "problems": [],
+      "desc": "Bug 1977511 - Disable overlay scrollbars if there's any non-zero width and height defined in ::-webkit-scrollbar. r=layo",
+      "pushdate": "2026-03-25T21:21:51+00:00",
+      "backedout": true,
+      "days_after_build": -2.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "542767479d68",
+      "problems": [],
+      "desc": "Bug 1977511 - Resolve ::-webkit-scrollbar pseudo element styles soon after the scroll container style was set. r=layout-",
+      "pushdate": "2026-03-25T21:21:51+00:00",
+      "backedout": true,
+      "days_after_build": -2.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "58196de66b55",
+      "problems": [],
+      "desc": "Bug 1977511 - Introduce nsLayoutUtils::UseOverlayScrollbars and use it in proper places instead of nsPresContext::UseOve",
+      "pushdate": "2026-03-27T21:42:19+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "9defa83e4762",
+      "problems": [],
+      "desc": "Bug 1977511 - Resolve ::-webkit-scrollbar pseudo element styles soon after the scroll container style was set. r=layout-",
+      "pushdate": "2026-03-27T21:42:19+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "d0f87d0f2b6a",
+      "problems": [],
+      "desc": "Bug 1977511 - Disable overlay scrollbars if there's any non-zero width and height defined in ::-webkit-scrollbar. r=layo",
+      "pushdate": "2026-03-27T21:42:19+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "decda03a4596",
+      "problems": [],
+      "desc": "Bug 1977511 - Handle `::-webkit-scrollbar { display:none }` as if it's `scrollbar-width: none`. r=layout-reviewers,firef",
+      "pushdate": "2026-03-27T21:42:19+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "node": "e40a4b5768d0",
+      "problems": [],
+      "desc": "Bug 1977511 - Add reftests for ::-webkit-scrollbar. r=layout-reviewers,emilio",
+      "pushdate": "2026-03-27T21:42:19+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1977511
+    },
+    {
+      "uuid": "bug1978822",
+      "node": "965eb6e57341",
+      "problems": [],
+      "desc": "Bug 1978299 - Upgrade time crate to 0.3.41 r=supply-chain-reviewers,necko-reviewers,jesup,kershaw",
+      "pushdate": "2025-07-23T15:49:37+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1978299
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "062dfceb3e44",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 3: Port locale-sensitive case conversion methods to C++. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "13ef9e23c963",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 6: Add a runtime fuse for default casing. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "529b0c195178",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 4: Remove unnecessary temp register from GuardFuse. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "5757b09207b3",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 5: Add GuardRuntimeFuse CacheIR instruction. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "e41cfb05070e",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 2: Port CanonicalizeLocaleList to C++. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "eda99fc0116a",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 1: Add IndexToId with uint64_t argument. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "bug1994989",
+      "node": "eec08d30cbb0",
+      "problems": [],
+      "desc": "Bug 1990248 - Part 7: Add inlining support for locale-sensitive case conversion. r=spidermonkey-reviewers,jandem",
+      "pushdate": "2025-10-14T04:41:28+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1990248
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "02a2d43e0850",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 8: Make `nsContentUtils::ComparePoints` handle `TreeKind::Flat` and `TreeKind::FlatForSelecti",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "051838fac5ac",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 5: Delete the default template parameter of `nsContentUtils::ComparePoints` and relatives r=smaug,dom",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "0c4f7a86de79",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 4: Make `nsContentUtils` use `nsIContent` for taking a child node as a parameter r=smaug\"",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "0e5a8997b3d2",
+      "problems": [],
+      "desc": "Bug 2012637 - part 7: Make `RangeUtils::CompareNodeToRangeBoundaries()` use `nsContentUtils::ComparePoints` with valid p",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "1d951faabf72",
+      "problems": [],
+      "desc": "Bug 2012797 - Make `CompareToRangeStart()` and `CompareToRangeEnd()` use `nsContentUtils::ComparePoints` with correspond",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012797
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "1f2338660c01",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 6: Make `nsRange::CutContents()` convert the range boundaries to the ones in the DOM before comparing",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "24cd1f22aab4",
+      "problems": [],
+      "desc": "Bug 2012637 - part 6: Make `nsRange::CutContents()` convert the range boundaries to the ones in the DOM before comparing",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "25967aa3c23a",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 2: Add `TreeKind::FlatForSelection` and change the template parameter of `ChildIteratorBase` to `Tree",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "2827a925d7c9",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012797 - Make `CompareToRangeStart()` and `CompareToRangeEnd()` use `nsContentUtils::ComparePoints` with correspond",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012797
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "298029559df0",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 1: Make `ChildIterBase` template class to re-implement `FlattenedChildIterator` for DOM, Flat and Fla",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "4406f8052ac8",
+      "problems": [
+        "IMPOSSIBLE: landed 0.7d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 9: Add a Firefox Source Docs documentation page for `TreeKind` and notable issues r=smaug,dom",
+      "pushdate": "2026-03-13T02:53:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.7,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "47cd3f64922f",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 6: Make `nsRange::CutContents()` convert the range boundaries to the ones in the DOM before c",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "5b0132e04c75",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 3: Add template `nsINode` API which can switch to call API from `TreeKind` r=smaug,dom-core-r",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "6b57e393bf62",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 4: Make `nsContentUtils` use `nsIContent` for taking a child node as a parameter r=smaug",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "6f5740706bff",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 9: Add a Firefox Source Docs documentation page for `TreeKind` and notable issues r=smaug,dom-core-re",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "7a2dd0fae638",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 5: Delete the default template parameter of `nsContentUtils::ComparePoints` and relatives r=smaug,dom",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "7f44566e282c",
+      "problems": [],
+      "desc": "Bug 2012637 - part 2: Add `TreeKind::FlatForSelection` and change the template parameter of `ChildIteratorBase` to `Tree",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "80f9babffc27",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 3: Add template `nsINode` API which can switch to call API from `TreeKind` r=smaug,dom-core-reviewers",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "84e2985a237e",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 3: Add template `nsINode` API which can switch to call API from `TreeKind` r=smaug,dom-core-reviewers",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "852d3ab675d3",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 8: Make `nsContentUtils::ComparePoints` handle `TreeKind::Flat` and `TreeKind::FlatForSelection` corr",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "8883303930db",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 8: Make `nsContentUtils::ComparePoints` handle `TreeKind::Flat` and `TreeKind::FlatForSelection` corr",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "8e75724401f3",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 2: Add `TreeKind::FlatForSelection` and change the template parameter of `ChildIteratorBase` to `Tree",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "8e993d000f6d",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 7: Make `RangeUtils::CompareNodeToRangeBoundaries()` use `nsContentUtils::ComparePoints` with valid p",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "922aaa316c66",
+      "problems": [],
+      "desc": "Bug 2012637 - part 5: Delete the default template parameter of `nsContentUtils::ComparePoints` and relatives r=smaug,dom",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "94c0787c8bbe",
+      "problems": [],
+      "desc": "Bug 2012637 - part 8: Make `nsContentUtils::ComparePoints` handle `TreeKind::Flat` and `TreeKind::FlatForSelection` corr",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "94f71b82eff7",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012797 - Make `CompareToRangeStart()` and `CompareToRangeEnd()` use `nsContentUtils::ComparePoints` with co",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012797
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "a2644919365f",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 6: Make `nsRange::CutContents()` convert the range boundaries to the ones in the DOM before comparing",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "b76dd54922ff",
+      "problems": [],
+      "desc": "Bug 2012637 - part 9: Add a Firefox Source Docs documentation page for `TreeKind` and notable issues r=smaug,dom-core",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "b97f2493ae98",
+      "problems": [],
+      "desc": "Bug 2012637 - part 1: Make `ChildIterBase` template class to re-implement `FlattenedChildIterator` for DOM, Flat and Fla",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "c2ab97e30695",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 1: Make `ChildIterBase` template class to re-implement `FlattenedChildIterator` for DOM, Flat",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "c3ed0446f16c",
+      "problems": [
+        "IMPOSSIBLE: landed 0.7d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012797 - Make `CompareToRangeStart()` and `CompareToRangeEnd()` use `nsContentUtils::ComparePoints` with co",
+      "pushdate": "2026-03-13T02:53:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.7,
+      "bug_in_desc": 2012797
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "c577c2d92016",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 5: Delete the default template parameter of `nsContentUtils::ComparePoints` and relatives r=s",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "cc0408a56487",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "d208dde3b1bd",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 2: Add `TreeKind::FlatForSelection` and change the template parameter of `ChildIteratorBase` ",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "d53c10447206",
+      "problems": [],
+      "desc": "Bug 2012637 - part 4: Make `nsContentUtils` use `nsIContent` for taking a child node as a parameter r=smaug",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "dabfa0128bc7",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 4: Make `nsContentUtils` use `nsIContent` for taking a child node as a parameter r=smaug",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "e1ad0083f911",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "e53e8074aa3a",
+      "problems": [
+        "IMPOSSIBLE: landed 116.0d after the crash build"
+      ],
+      "desc": "Bug 2012797 - Make `CompareToRangeStart()` and `CompareToRangeEnd()` use `nsContentUtils::ComparePoints` with correspond",
+      "pushdate": "2026-07-06T09:41:32+00:00",
+      "backedout": false,
+      "days_after_build": 116.0,
+      "bug_in_desc": 2012797
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "e7d7df1b7b40",
+      "problems": [],
+      "desc": "Bug 2012637 - part 3: Add template `nsINode` API which can switch to call API from `TreeKind` r=smaug,dom-core,webidl",
+      "pushdate": "2026-03-12T09:47:48+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "ead1834de5ef",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "ed6edd904e1f",
+      "problems": [
+        "IMPOSSIBLE: landed 111.4d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2012637 - part 7: Make `RangeUtils::CompareNodeToRangeBoundaries()` use `nsContentUtils::ComparePoints` with",
+      "pushdate": "2026-07-01T19:29:17+00:00",
+      "backedout": false,
+      "days_after_build": 111.4,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "node": "f917f61a9597",
+      "problems": [
+        "IMPOSSIBLE: landed 111.0d after the crash build"
+      ],
+      "desc": "Bug 2012637 - part 7: Make `RangeUtils::CompareNodeToRangeBoundaries()` use `nsContentUtils::ComparePoints` with valid p",
+      "pushdate": "2026-07-01T09:27:14+00:00",
+      "backedout": false,
+      "days_after_build": 111.0,
+      "bug_in_desc": 2012637
+    },
+    {
+      "uuid": "ad51f65a-a760-49ca-97e3-4ee920250723",
+      "node": "09616085d8ef",
+      "problems": [],
+      "desc": "Bug 1978235 - Text Fragments: Ensure that start and end terms are always non-empty. r=mccr8,dom-core",
+      "pushdate": "2025-07-22T09:32:06+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1978235
+    },
+    {
+      "uuid": "f1a71902-c82a-4bda-8fea-c402e0260226",
+      "node": "13d768fdb8a4",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build",
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 1661106: apply code formatting via Lando",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "f1a71902-c82a-4bda-8fea-c402e0260226",
+      "node": "3b7e82679e2a",
+      "problems": [
+        "BUG MISMATCH: desc says bug 1655580"
+      ],
+      "desc": "Bug 1655580 - Stop leaking surfaces that were captured with RequestScreenPixels. r=geckoview-reviewers,agi",
+      "pushdate": "2020-08-01T09:48:10+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1655580
+    },
+    {
+      "uuid": "f1a71902-c82a-4bda-8fea-c402e0260226",
+      "node": "53d3c6cf423d",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build"
+      ],
+      "desc": "Bug 1661106 - Make UiCompositorBridgeParent::RecvRequestScreenPixels a bit more asynchronous. r=gfx-reviewers,geckoview-",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "f1a71902-c82a-4bda-8fea-c402e0260226",
+      "node": "90d692633c9e",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build"
+      ],
+      "desc": "Bug 1661106 - Add ScopedGLHelper for creating EGL Image from Android HardwareBuffer. r=gfx-reviewers,lsalzman",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "f1a71902-c82a-4bda-8fea-c402e0260226",
+      "node": "e5f84ed277c7",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build"
+      ],
+      "desc": "Bug 1661106 - Capture screen pixels by blitting into HardwareBuffer. r=gfx-reviewers,geckoview-reviewers,lsalzman,ohall",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "007298d99ba4",
+      "problems": [],
+      "desc": "Bug 1980056 - pt 2. Remove the sub-page size class r=glandium",
+      "pushdate": "2026-01-15T09:21:08+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "48be5ff02dcf",
+      "problems": [
+        "IMPOSSIBLE: landed 19.0d after the crash build"
+      ],
+      "desc": "Bug 1980056 - pt 3. Use gRealPageSize to qualify huge in-place realloc r=glandium",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 19.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "4b4fb5fd1f38",
+      "problems": [],
+      "desc": "Bug 1980056 - pt 1. Limit logical page size to 4KiB r=glandium",
+      "pushdate": "2026-01-15T09:21:08+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "4d3ec02a3564",
+      "problems": [
+        "IMPOSSIBLE: landed 19.0d after the crash build"
+      ],
+      "desc": "Bug 1980056 - pt 2. Use real page size in one of the jemalloc tests r=glandium",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 19.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "664ac9f557d1",
+      "problems": [
+        "IMPOSSIBLE: landed 19.0d after the crash build"
+      ],
+      "desc": "Bug 1980056 - pt 6. Remove the sub-page size class r=glandium",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 19.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "94615f8bf640",
+      "problems": [
+        "IMPOSSIBLE: landed 19.0d after the crash build"
+      ],
+      "desc": "Bug 1980056 - pt 1. Use REAL_PAGE_CEILING in malloc_good_size r=glandium",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 19.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "97bf4a05fb87",
+      "problems": [
+        "IMPOSSIBLE: landed 19.0d after the crash build"
+      ],
+      "desc": "Bug 1980056 - pt 5. Limit logical page size to 4KiB r=glandium",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 19.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "c88c117b2663",
+      "problems": [
+        "IMPOSSIBLE: landed 19.0d after the crash build"
+      ],
+      "desc": "Bug 1980056 - pt 4. Make sure that madvised pages are aligned with real pages r=glandium",
+      "pushdate": "2026-02-03T09:28:03+00:00",
+      "backedout": false,
+      "days_after_build": 19.0,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "node": "cdf9cf902cdd",
+      "problems": [
+        "IMPOSSIBLE: landed 0.8d after the crash build"
+      ],
+      "desc": "Revert \"Bug 1980056 - pt 2. Remove the sub-page size class r=glandium\" for causing Bug 2010505.",
+      "pushdate": "2026-01-16T04:57:32+00:00",
+      "backedout": false,
+      "days_after_build": 0.8,
+      "bug_in_desc": 1980056
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "38c40d735ab7",
+      "problems": [],
+      "desc": "Bug 1851992 - implement nsIThreadRetargetableStreamListener::OnDataFinished to send OMT data stop notification to thread",
+      "pushdate": "2023-10-24T09:38:27+00:00",
+      "backedout": true,
+      "days_after_build": -3.5,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "3ceaf46f8f55",
+      "problems": [],
+      "desc": "Bug 1851992 - move assignment of mTransferSize,mEncodedBodySize from HttpChannelChild::OnStopRequest to HttpChannelChild",
+      "pushdate": "2023-10-24T09:38:27+00:00",
+      "backedout": true,
+      "days_after_build": -3.5,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "4471b2edc794",
+      "problems": [],
+      "desc": "Bug 1851992 - send onDataFinished notifications from nsInputStreamPump. r=necko-reviewers,jesup",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "4517b343b411",
+      "problems": [],
+      "desc": "Bug 1851992 - implement nsIThreadRetargetableStreamListener::OnDataFinished to send OMT data stop notification to thread",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "46e18c56dd39",
+      "problems": [],
+      "desc": "Bug 1851992 - implement nsIThreadRetargetableStreamListener::OnDataFinished to multiple listeners. r=necko-reviewers,ext",
+      "pushdate": "2023-10-24T09:38:27+00:00",
+      "backedout": true,
+      "days_after_build": -3.5,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "673df3f83249",
+      "problems": [],
+      "desc": "Bug 1851992 - send onDataFinished notifications from nsInputStreamPump. r=necko-reviewers,jesup",
+      "pushdate": "2023-10-24T09:38:27+00:00",
+      "backedout": true,
+      "days_after_build": -3.5,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "c9d322362e22",
+      "problems": [],
+      "desc": "Bug 1851992 - implement empty nsIThreadRetargetableStreamListener::OnDataFinished for stream loader. r=emilio",
+      "pushdate": "2023-10-24T09:38:27+00:00",
+      "backedout": true,
+      "days_after_build": -3.5,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "d2e0fddb380e",
+      "problems": [],
+      "desc": "Bug 1851992 - implement empty nsIThreadRetargetableStreamListener::OnDataFinished for stream loader. r=emilio",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "e480891bbd3b",
+      "problems": [],
+      "desc": "Bug 1851992 - ensure all of the OnProgress updates are sent before triggering OnDataFinished in HttpChannelChild. r=neck",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "f21cf0e9ff8e",
+      "problems": [],
+      "desc": "Bug 1851992 - move assignment of mTransferSize,mEncodedBodySize from HttpChannelChild::OnStopRequest to HttpChannelChild",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "f7fe117ca37d",
+      "problems": [],
+      "desc": "Bug 1851992 - moving html5 stream parser's OnStopRequest off main thread. r=necko-reviewers,edgul,jesup,valentin,hsivone",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "f9f9143ac713",
+      "problems": [],
+      "desc": "Bug 1851992 - moving html5 stream parser's OnStopRequest off main thread. r=necko-reviewers,edgul,jesup,valentin,hsivone",
+      "pushdate": "2023-10-24T09:38:27+00:00",
+      "backedout": true,
+      "days_after_build": -3.5,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "node": "fcb29a7d62eb",
+      "problems": [],
+      "desc": "Bug 1851992 - implement nsIThreadRetargetableStreamListener::OnDataFinished to multiple listeners. r=necko-reviewers,ext",
+      "pushdate": "2023-10-27T21:13:43+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1851992
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "031e42166831",
+      "problems": [],
+      "desc": "Bug 1286945 - Update CalculateDesiredSize for resizeMode. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "05a226d5261c",
+      "problems": [],
+      "desc": "Bug 1286945 - Update mozilla-specific video capture scaling WPT for resizeMode. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "0d7ae4c7f831",
+      "problems": [],
+      "desc": "Bug 1286945 - Only overwrite MediaEnginePrefs::mResizeMode when the pref was read. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "15595e54cf98",
+      "problems": [],
+      "desc": "Bug 1286945 - Always use 2 for minimum size capability. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "285eedeaaebe",
+      "problems": [],
+      "desc": "Bug 1286945 - Add support for resizeMode to MediaEngineFake for platform-independent tests. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "3839f25f9631",
+      "problems": [],
+      "desc": "Bug 1286945 - In MediaTrackConstraints use std::clamp. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "4179c7da3556",
+      "problems": [],
+      "desc": "Bug 1286945 - Remove main thread settings update from MERVS::Start. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "6aaa9b6ff41c",
+      "problems": [],
+      "desc": "Bug 1286945 - Fix some grammar in MediaStreamError. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "71bd1c5d7772",
+      "problems": [],
+      "desc": "Bug 1286945 - Fix some includes. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "8649de9603d2",
+      "problems": [],
+      "desc": "Bug 1286945 - Pass NormalizedConstraints to StartCapture through IPC. r=jib,ipc-reviewers,mccr8",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "89f0b923ad07",
+      "problems": [],
+      "desc": "Bug 1286945 - Fix settings update on Reconfigure to use correct input size. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "8d48747e0414",
+      "problems": [],
+      "desc": "Bug 1286945 - Drop frames based on constraints in CamerasParent to avoid unnecessary IPC traffic and video frame copies.",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "96da62c1c969",
+      "problems": [],
+      "desc": "Bug 1286945 - Floor gDM framerate with resizeMode:none at 60 fps. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "9c430aa474ad",
+      "problems": [],
+      "desc": "Bug 1286945 - Update crop-and-scale WPT to differentiate captures that happen to be native vs downscaling actually in ef",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "a8a4e536ef6f",
+      "problems": [],
+      "desc": "Bug 1286945 - Simplify Construct() calls when assigning settings. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "b270990e890d",
+      "problems": [],
+      "desc": "Bug 1286945 - Break out StartCapture() from MERVS::Start() and move MERVS::Reconfigure to use it directly. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "bb08dcd4ac87",
+      "problems": [],
+      "desc": "Bug 1286945 - Use \"real\" fake camera in MediaStreamTrack-applyConstraints.https.html. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "d68ee861218e",
+      "problems": [],
+      "desc": "Bug 1286945 - Update comments and naming to clarify some MERVS members. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "e2aea0877661",
+      "problems": [],
+      "desc": "Bug 1286945 - Refactor DeviceListener::ApplyConstraints away from MediaManager::Dispatch. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "e9801354817f",
+      "problems": [],
+      "desc": "Bug 1286945 - Enable the resizeMode constraint and make the default value \"crop-and-scale\". r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "eb2c55de9ce7",
+      "problems": [],
+      "desc": "Bug 1286945 - Move GetResizeMode to MediaConstraintsHelper and use Nothing() to denote when it's disabled by pref. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug1991494",
+      "node": "f1f078b25343",
+      "problems": [],
+      "desc": "Bug 1286945 - Improve casting and fix some warnings in MediaEngineRemoteVideoSource. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "b2ef1937-361d-4802-a0b7-bd3ca0251130",
+      "node": "5f9e366c17fc",
+      "problems": [],
+      "desc": "Bug 543435 - Make initial about:blank not get overwritten by an async about:blank load. r=sessionstore-reviewers,sfoster",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "b2ef1937-361d-4802-a0b7-bd3ca0251130",
+      "node": "86c4f03a4305",
+      "problems": [],
+      "desc": "Bug 543435 - Only reuse inner window for uncommitted initial documents. r=smaug,asuth,credential-management-reviewers,we",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "b2ef1937-361d-4802-a0b7-bd3ca0251130",
+      "node": "8972ceeb1559",
+      "problems": [],
+      "desc": "Bug 543435 - Ensure the initial about:blank SH entry is replaced. r=smaug",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "cfd929cf-421b-4c69-845f-4879b0260513",
+      "node": "7072472357dd",
+      "problems": [],
+      "desc": "Bug 2037809 - Measure memory used by the Glean object (and its database) r=TravisLong",
+      "pushdate": "2026-05-12T04:17:16+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 2037809
+    },
+    {
+      "uuid": "86954bbf-f157-4cd1-a587-e70270260205",
+      "node": "13d768fdb8a4",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build",
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 1661106: apply code formatting via Lando",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "86954bbf-f157-4cd1-a587-e70270260205",
+      "node": "3b7e82679e2a",
+      "problems": [
+        "BUG MISMATCH: desc says bug 1655580"
+      ],
+      "desc": "Bug 1655580 - Stop leaking surfaces that were captured with RequestScreenPixels. r=geckoview-reviewers,agi",
+      "pushdate": "2020-08-01T09:48:10+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1655580
+    },
+    {
+      "uuid": "86954bbf-f157-4cd1-a587-e70270260205",
+      "node": "53d3c6cf423d",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build"
+      ],
+      "desc": "Bug 1661106 - Make UiCompositorBridgeParent::RecvRequestScreenPixels a bit more asynchronous. r=gfx-reviewers,geckoview-",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "86954bbf-f157-4cd1-a587-e70270260205",
+      "node": "90d692633c9e",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build"
+      ],
+      "desc": "Bug 1661106 - Add ScopedGLHelper for creating EGL Image from Android HardwareBuffer. r=gfx-reviewers,lsalzman",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "86954bbf-f157-4cd1-a587-e70270260205",
+      "node": "e5f84ed277c7",
+      "problems": [
+        "IMPOSSIBLE: landed 2013.5d after the crash build"
+      ],
+      "desc": "Bug 1661106 - Capture screen pixels by blitting into HardwareBuffer. r=gfx-reviewers,geckoview-reviewers,lsalzman,ohall",
+      "pushdate": "2026-02-04T21:44:33+00:00",
+      "backedout": false,
+      "days_after_build": 2013.5,
+      "bug_in_desc": 1661106
+    },
+    {
+      "uuid": "bug2007047",
+      "node": "909b52c7e865",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "bug2007047",
+      "node": "f879d6b36ae6",
+      "problems": [],
+      "desc": "Bug 2004443 - Don't mark symbols gray in zones that are not being marked r=sfink",
+      "pushdate": "2025-12-16T17:08:48+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 2004443
+    },
+    {
+      "uuid": "bug1987624",
+      "node": "2a6dadcd0a1e",
+      "problems": [],
+      "desc": "Bug 1931407 - wasm: Disallow shared memory for buffer compilation methods. r=yury",
+      "pushdate": "2025-03-14T21:11:55+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1931407
+    },
+    {
+      "uuid": "bug1987624",
+      "node": "68e60c65b23f",
+      "problems": [
+        "IMPOSSIBLE: landed 10.3d after the crash build"
+      ],
+      "desc": "Bug 1931407 - wasm: Rework bytecode handling for compilation to avoid copies. r=yury",
+      "pushdate": "2025-03-25T04:32:21+00:00",
+      "backedout": false,
+      "days_after_build": 10.3,
+      "bug_in_desc": 1931407
+    },
+    {
+      "uuid": "bug1987624",
+      "node": "699385bf3e07",
+      "problems": [],
+      "desc": "Bug 1931407 - wasm: Rework bytecode handling for compilation to avoid copies. r=yury",
+      "pushdate": "2025-03-14T21:11:55+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1931407
+    },
+    {
+      "uuid": "bug1987624",
+      "node": "726d5bb29819",
+      "problems": [
+        "IMPOSSIBLE: landed 1.3d after the crash build"
+      ],
+      "desc": "Backed out 2 changesets (bug 1931407) as requested by @diannasmith for causing bug 1954246. a=backout",
+      "pushdate": "2025-03-16T04:06:36+00:00",
+      "backedout": false,
+      "days_after_build": 1.3,
+      "bug_in_desc": 1931407
+    },
+    {
+      "uuid": "bug1987624",
+      "node": "a7073f2be4d9",
+      "problems": [
+        "IMPOSSIBLE: landed 10.3d after the crash build"
+      ],
+      "desc": "Bug 1931407 - wasm: Disallow shared memory for buffer compilation methods. r=yury",
+      "pushdate": "2025-03-25T04:32:21+00:00",
+      "backedout": false,
+      "days_after_build": 10.3,
+      "bug_in_desc": 1931407
+    },
+    {
+      "uuid": "bug1998521",
+      "node": "3ffe8bc716ed",
+      "problems": [],
+      "desc": "Bug 1993939 Part 2 - Fix text-decoration-trim on line breaks when the nsTextFrame is not inside inline frames. r=layout-",
+      "pushdate": "2025-10-26T20:42:57+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1993939
+    },
+    {
+      "uuid": "bug1998521",
+      "node": "6c0561746f9b",
+      "problems": [],
+      "desc": "Bug 1993939 Part 3 - Use geometric structs to compute offsets in ComputeDecorationTrim r=layout-reviewers,layout-jp-mark",
+      "pushdate": "2025-10-26T20:42:57+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1993939
+    },
+    {
+      "uuid": "bug1998521",
+      "node": "baae10f282ed",
+      "problems": [],
+      "desc": "Bug 1993939 followup - Do ComputeDecorationTrim()'s frame-geometry work in appUnits, before converting to device pixels ",
+      "pushdate": "2025-10-26T20:42:57+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1993939
+    },
+    {
+      "uuid": "bug1998521",
+      "node": "ea2814fa651f",
+      "problems": [],
+      "desc": "Bug 1993939 Part 4 - Account for text indent in text-decoration-trim. r=layout-reviewers,layout-jp-market-reviewers,jfkt",
+      "pushdate": "2025-10-26T20:42:57+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1993939
+    },
+    {
+      "uuid": "bug1998521",
+      "node": "fdf746352e71",
+      "problems": [],
+      "desc": "Bug 1993939 Part 1 - Fix text-decoration-trim direction for sideways-left text in a block frame r=layout-reviewers,layou",
+      "pushdate": "2025-10-26T20:42:57+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1993939
+    },
+    {
+      "uuid": "82b660f6-5b6f-415f-be8f-1d4ed0251005",
+      "node": "3f167f8b3137",
+      "problems": [],
+      "desc": "Bug 1991551 - build(webgpu): update WGPU to 8c4aebc0c1b75e3f7412dfc180745a0717fc30ec r=webgpu-reviewers,supply-chain-rev",
+      "pushdate": "2025-10-04T09:37:58+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1991551
+    },
+    {
+      "uuid": "82b660f6-5b6f-415f-be8f-1d4ed0251005",
+      "node": "79dca0a5f19e",
+      "problems": [],
+      "desc": "Bug 1991551 - test(webgpu): accept observed intermittents in tier 3 r=webgpu-reviewers,teoxoy,jimb",
+      "pushdate": "2025-10-04T09:37:58+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1991551
+    },
+    {
+      "uuid": "bug2049044",
+      "node": "d3da2cef414d",
+      "problems": [],
+      "desc": "Bug 2031575 - Disable IME when selection is in non-editable node. r=masayuki",
+      "pushdate": "2026-05-21T21:15:59+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2031575
+    },
+    {
+      "uuid": "d039cffb-4b1c-489b-ad90-0a9c10260122",
+      "node": "cf8c80aba5be",
+      "problems": [],
+      "desc": "Bug 2008850 - Add timing_distribution to EXTRA_ARGS_TYPES_ALLOWLIST r=home-newtab-reviewers,mconley",
+      "pushdate": "2026-01-09T09:54:29+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2008850
+    },
+    {
+      "uuid": "18abf671-908b-46c0-a641-8dab50251015",
+      "node": "b5d6bfc12f00",
+      "problems": [],
+      "desc": "Bug 1966326 - use rust logins: vendor rust and generate uniffi r=supply-chain-reviewers,markh",
+      "pushdate": "2025-10-07T21:39:23+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1966326
+    },
+    {
+      "uuid": "18abf671-908b-46c0-a641-8dab50251015",
+      "node": "dcb61b95a5b3",
+      "problems": [],
+      "desc": "Bug 1966326 - use rust logins: setup r=markh,nss-reviewers,bbeurdouche",
+      "pushdate": "2025-10-07T21:39:23+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1966326
+    },
+    {
+      "uuid": "85a0b761-5b54-45e6-8b11-dafd30251104",
+      "node": "2a8d531e3aab",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 1992198, 672103: apply code formatting via Lando",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1992198
+    },
+    {
+      "uuid": "85a0b761-5b54-45e6-8b11-dafd30251104",
+      "node": "7ff1bc834ea6",
+      "problems": [],
+      "desc": "Bug 1992198 [Linux] Use logical (widget) coordinates to calculate widget size/positions/boundaries r=emilio,layout-revie",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1992198
+    },
+    {
+      "uuid": "85a0b761-5b54-45e6-8b11-dafd30251104",
+      "node": "bf62697ae7ea",
+      "problems": [],
+      "desc": "Bug 1992198 [Linux] Remove workaround for Bug 672103 r=emilio",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1992198
+    },
+    {
+      "uuid": "85a0b761-5b54-45e6-8b11-dafd30251104",
+      "node": "d51bf7d6db72",
+      "problems": [],
+      "desc": "Bug 1992198 - Fix a typo introduced by a rebase",
+      "pushdate": "2025-11-01T16:43:25+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1992198
+    },
+    {
+      "uuid": "a4ff4dfa-900c-434a-83cf-24daa0260507",
+      "node": "37f3be8ded6a",
+      "problems": [],
+      "desc": "Bug 2026686 - Use nsAutoLowPriorityIO for startup cache writes r=mccr8,xpcom-reviewers",
+      "pushdate": "2026-04-28T21:44:21+00:00",
+      "backedout": true,
+      "days_after_build": -1.0,
+      "bug_in_desc": 2026686
+    },
+    {
+      "uuid": "a4ff4dfa-900c-434a-83cf-24daa0260507",
+      "node": "4517ae69c1c6",
+      "problems": [],
+      "desc": "Bug 2026686 - Extend nsAutoLowPriorityIO to Linux/Android r=jrmuizel",
+      "pushdate": "2026-04-28T21:44:21+00:00",
+      "backedout": true,
+      "days_after_build": -1.0,
+      "bug_in_desc": 2026686
+    },
+    {
+      "uuid": "a4ff4dfa-900c-434a-83cf-24daa0260507",
+      "node": "714abf62cbaf",
+      "problems": [],
+      "desc": "Bug 2026686 - Extend nsAutoLowPriorityIO to Linux r=jrmuizel",
+      "pushdate": "2026-04-29T20:34:45+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2026686
+    },
+    {
+      "uuid": "a4ff4dfa-900c-434a-83cf-24daa0260507",
+      "node": "7f8782af86b7",
+      "problems": [
+        "IMPOSSIBLE: landed 0.3d after the crash build"
+      ],
+      "desc": "Bug 2026686 - Use nsAutoLowPriorityIO for startup cache writes r=mccr8,xpcom-reviewers",
+      "pushdate": "2026-04-30T04:12:26+00:00",
+      "backedout": false,
+      "days_after_build": 0.3,
+      "bug_in_desc": 2026686
+    },
+    {
+      "uuid": "a4ff4dfa-900c-434a-83cf-24daa0260507",
+      "node": "a890cef72566",
+      "problems": [],
+      "desc": "Revert \"Bug 2026686 - Use nsAutoLowPriorityIO for startup cache writes r=mccr8,xpcom-reviewers\" as requested by @ryanvm ",
+      "pushdate": "2026-04-29T00:18:26+00:00",
+      "backedout": false,
+      "days_after_build": -0.8,
+      "bug_in_desc": 2026686
+    },
+    {
+      "uuid": "bug2002128",
+      "node": "5f9e366c17fc",
+      "problems": [],
+      "desc": "Bug 543435 - Make initial about:blank not get overwritten by an async about:blank load. r=sessionstore-reviewers,sfoster",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "bug2002128",
+      "node": "86c4f03a4305",
+      "problems": [],
+      "desc": "Bug 543435 - Only reuse inner window for uncommitted initial documents. r=smaug,asuth,credential-management-reviewers,we",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "bug2002128",
+      "node": "8972ceeb1559",
+      "problems": [],
+      "desc": "Bug 543435 - Ensure the initial about:blank SH entry is replaced. r=smaug",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "7d355a41-cb38-473f-a855-12fa10251122",
+      "node": "5c68d5d90db2",
+      "problems": [
+        "IMPOSSIBLE: landed 4.3d after the crash build"
+      ],
+      "desc": "Bug 1999645 - Avoid synchronous GPUChild::SendGetDeviceStatus after GPU process channel is connected asynchronously. r=a",
+      "pushdate": "2025-11-19T04:26:50+00:00",
+      "backedout": false,
+      "days_after_build": 4.3,
+      "bug_in_desc": 1999645
+    },
+    {
+      "uuid": "7d355a41-cb38-473f-a855-12fa10251122",
+      "node": "a1de03def1b9",
+      "problems": [
+        "IMPOSSIBLE: landed 4.3d after the crash build"
+      ],
+      "desc": "Bug 1999645 - Use live token instead of ipc::TaskFactory in GPUProcessHost. r=aosmond",
+      "pushdate": "2025-11-19T04:26:50+00:00",
+      "backedout": false,
+      "days_after_build": 4.3,
+      "bug_in_desc": 1999645
+    },
+    {
+      "uuid": "7d355a41-cb38-473f-a855-12fa10251122",
+      "node": "b6a51dc24ebf",
+      "problems": [],
+      "desc": "Bug 1999645 - Avoid synchronous GPUChild::SendGetDeviceStatus after GPU process channel is connected asynchronously. r=a",
+      "pushdate": "2025-11-14T21:48:33+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1999645
+    },
+    {
+      "uuid": "7d355a41-cb38-473f-a855-12fa10251122",
+      "node": "b8685016e9a6",
+      "problems": [],
+      "desc": "Bug 1999645 - Use live token instead of ipc::TaskFactory in GPUProcessHost. r=aosmond",
+      "pushdate": "2025-11-14T21:48:33+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1999645
+    },
+    {
+      "uuid": "bug2014136",
+      "node": "2eacf57b65a4",
+      "problems": [],
+      "desc": "Bug 1968987 - Part 1 - Add Source to ToggleEvent, no longer generate. r=smaug,dom-core,webidl,saschanaz",
+      "pushdate": "2025-10-01T04:35:23+00:00",
+      "backedout": false,
+      "days_after_build": -0.1,
+      "bug_in_desc": 1968987
+    },
+    {
+      "uuid": "bug2014136",
+      "node": "470c3081db4a",
+      "problems": [],
+      "desc": "Bug 1968987 - Part 2 - Set ToggleEvent source on Popover/Dialog r=smaug,dom-core",
+      "pushdate": "2025-10-01T04:35:23+00:00",
+      "backedout": false,
+      "days_after_build": -0.1,
+      "bug_in_desc": 1968987
+    },
+    {
+      "uuid": "bug2014136",
+      "node": "850c85b7faf1",
+      "problems": [
+        "NO-OP COMMIT: lando auto-format"
+      ],
+      "desc": "Bug 1968987: apply code formatting via Lando",
+      "pushdate": "2025-10-01T04:35:23+00:00",
+      "backedout": false,
+      "days_after_build": -0.1,
+      "bug_in_desc": 1968987
+    },
+    {
+      "uuid": "1321d4ad-967b-43b8-a76c-979500260521",
+      "node": "50641796ae6e",
+      "problems": [
+        "IMPOSSIBLE: landed 5.5d after the crash build"
+      ],
+      "desc": "Bug 2039555 - Enable HEv3 for nightly, r=necko-reviewers,valentin",
+      "pushdate": "2026-05-20T09:17:19+00:00",
+      "backedout": false,
+      "days_after_build": 5.5,
+      "bug_in_desc": 2039555
+    },
+    {
+      "uuid": "1321d4ad-967b-43b8-a76c-979500260521",
+      "node": "556bd8a235db",
+      "problems": [],
+      "desc": "Bug 2039555 - Enable HEv3 for nightly, r=necko-reviewers,valentin",
+      "pushdate": "2026-05-14T20:32:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 2039555
+    },
+    {
+      "uuid": "1321d4ad-967b-43b8-a76c-979500260521",
+      "node": "59b3ec728b22",
+      "problems": [
+        "IMPOSSIBLE: landed 1.0d after the crash build"
+      ],
+      "desc": "Revert \"Bug 2039555 - Enable HEv3 for nightly, r=necko-reviewers,valentin\" on devs request",
+      "pushdate": "2026-05-15T21:18:51+00:00",
+      "backedout": false,
+      "days_after_build": 1.0,
+      "bug_in_desc": 2039555
+    },
+    {
+      "uuid": "45a2cb7f-5a9f-4608-a842-93ba80251225",
+      "node": "75de582fbae9",
+      "problems": [],
+      "desc": "Bug 2005294: Audit ron 0.12.0, delta from 0.11.0. r=supply-chain-reviewers",
+      "pushdate": "2025-12-20T09:30:50+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2005294
+    },
+    {
+      "uuid": "45a2cb7f-5a9f-4608-a842-93ba80251225",
+      "node": "9387e2360a1e",
+      "problems": [],
+      "desc": "Bug 2005294: Trust `typeid` as published by dtolnay. r=supply-chain-reviewers",
+      "pushdate": "2025-12-20T09:30:50+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 2005294
+    },
+    {
+      "uuid": "45a2cb7f-5a9f-4608-a842-93ba80251225",
+      "node": "96c4d9e3c03e",
+      "problems": [
+        "IMPOSSIBLE: landed 3.5d after the crash build"
+      ],
+      "desc": "Bug 2005294: Update wgpu to upstream 3f02781b (2025-12-16) r=webgpu-reviewers,supply-chain-reviewers,nical,aleiserson",
+      "pushdate": "2025-12-23T21:50:30+00:00",
+      "backedout": false,
+      "days_after_build": 3.5,
+      "bug_in_desc": 2005294
+    },
+    {
+      "uuid": "68ae34ad-496e-4822-a5d6-6a4170250825",
+      "node": "c640bfafa636",
+      "problems": [],
+      "desc": "Bug 1979075 - Collect Glean data directory info before init.r=chutten",
+      "pushdate": "2025-08-08T21:23:04+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1979075
+    },
+    {
+      "uuid": "797d30ca-a17d-4f96-89a7-59be60260331",
+      "node": "6828a42b3856",
+      "problems": [],
+      "desc": "Bug 2000120 - Added an isGlobal value for stripRules, renamed topLevelSites to origins. r=manuel",
+      "pushdate": "2026-01-22T04:21:38+00:00",
+      "backedout": false,
+      "days_after_build": -0.1,
+      "bug_in_desc": 2000120
+    },
+    {
+      "uuid": "d024ccf6-9ba3-4c60-82fa-6193d0250814",
+      "node": "32b9defcc9f1",
+      "problems": [],
+      "desc": "Bug 1950759 - Enable view transitions on nightly. r=view-transitions-reviewers,boris,webidl,smaug",
+      "pushdate": "2025-04-25T21:24:24+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1950759
+    },
+    {
+      "uuid": "23bd9278-e713-469b-a683-ab0390250807",
+      "node": "13735d3c75cb",
+      "problems": [],
+      "desc": "Bug 1971450 - Remove internal appearance values for meter / progress / range thumb / chunk. r=dshin",
+      "pushdate": "2025-06-17T09:24:05+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1971450
+    },
+    {
+      "uuid": "40dd68fe-e2b6-4450-b359-4ea030260126",
+      "node": "3c99a43d1d94",
+      "problems": [
+        "IMPOSSIBLE: landed 42.8d after the crash build"
+      ],
+      "desc": "Bug 2003244 - Don't crash when failing to initialize docshell. r=dom-core,mccr8,smaug",
+      "pushdate": "2026-01-06T16:24:21+00:00",
+      "backedout": false,
+      "days_after_build": 42.8,
+      "bug_in_desc": 2003244
+    },
+    {
+      "uuid": "40dd68fe-e2b6-4450-b359-4ea030260126",
+      "node": "5f9e366c17fc",
+      "problems": [],
+      "desc": "Bug 543435 - Make initial about:blank not get overwritten by an async about:blank load. r=sessionstore-reviewers,sfoster",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "40dd68fe-e2b6-4450-b359-4ea030260126",
+      "node": "71ae26400a95",
+      "problems": [
+        "IMPOSSIBLE: landed 14.0d after the crash build"
+      ],
+      "desc": "Bug 2003244 - Defer the notification for the global creation for the initial about:blank. r=smaug",
+      "pushdate": "2025-12-08T22:02:32+00:00",
+      "backedout": false,
+      "days_after_build": 14.0,
+      "bug_in_desc": 2003244
+    },
+    {
+      "uuid": "40dd68fe-e2b6-4450-b359-4ea030260126",
+      "node": "86c4f03a4305",
+      "problems": [],
+      "desc": "Bug 543435 - Only reuse inner window for uncommitted initial documents. r=smaug,asuth,credential-management-reviewers,we",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "40dd68fe-e2b6-4450-b359-4ea030260126",
+      "node": "8972ceeb1559",
+      "problems": [],
+      "desc": "Bug 543435 - Ensure the initial about:blank SH entry is replaced. r=smaug",
+      "pushdate": "2025-11-24T16:51:41+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 543435
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "031e42166831",
+      "problems": [],
+      "desc": "Bug 1286945 - Update CalculateDesiredSize for resizeMode. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "05a226d5261c",
+      "problems": [],
+      "desc": "Bug 1286945 - Update mozilla-specific video capture scaling WPT for resizeMode. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "0d7ae4c7f831",
+      "problems": [],
+      "desc": "Bug 1286945 - Only overwrite MediaEnginePrefs::mResizeMode when the pref was read. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "15595e54cf98",
+      "problems": [],
+      "desc": "Bug 1286945 - Always use 2 for minimum size capability. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "285eedeaaebe",
+      "problems": [],
+      "desc": "Bug 1286945 - Add support for resizeMode to MediaEngineFake for platform-independent tests. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "3839f25f9631",
+      "problems": [],
+      "desc": "Bug 1286945 - In MediaTrackConstraints use std::clamp. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "4179c7da3556",
+      "problems": [],
+      "desc": "Bug 1286945 - Remove main thread settings update from MERVS::Start. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "6aaa9b6ff41c",
+      "problems": [],
+      "desc": "Bug 1286945 - Fix some grammar in MediaStreamError. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "71bd1c5d7772",
+      "problems": [],
+      "desc": "Bug 1286945 - Fix some includes. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "8649de9603d2",
+      "problems": [],
+      "desc": "Bug 1286945 - Pass NormalizedConstraints to StartCapture through IPC. r=jib,ipc-reviewers,mccr8",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "89f0b923ad07",
+      "problems": [],
+      "desc": "Bug 1286945 - Fix settings update on Reconfigure to use correct input size. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "8d48747e0414",
+      "problems": [],
+      "desc": "Bug 1286945 - Drop frames based on constraints in CamerasParent to avoid unnecessary IPC traffic and video frame copies.",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "96da62c1c969",
+      "problems": [],
+      "desc": "Bug 1286945 - Floor gDM framerate with resizeMode:none at 60 fps. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "9c430aa474ad",
+      "problems": [],
+      "desc": "Bug 1286945 - Update crop-and-scale WPT to differentiate captures that happen to be native vs downscaling actually in ef",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "a8a4e536ef6f",
+      "problems": [],
+      "desc": "Bug 1286945 - Simplify Construct() calls when assigning settings. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "b270990e890d",
+      "problems": [],
+      "desc": "Bug 1286945 - Break out StartCapture() from MERVS::Start() and move MERVS::Reconfigure to use it directly. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "bb08dcd4ac87",
+      "problems": [],
+      "desc": "Bug 1286945 - Use \"real\" fake camera in MediaStreamTrack-applyConstraints.https.html. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "d68ee861218e",
+      "problems": [],
+      "desc": "Bug 1286945 - Update comments and naming to clarify some MERVS members. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "e2aea0877661",
+      "problems": [],
+      "desc": "Bug 1286945 - Refactor DeviceListener::ApplyConstraints away from MediaManager::Dispatch. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "e9801354817f",
+      "problems": [],
+      "desc": "Bug 1286945 - Enable the resizeMode constraint and make the default value \"crop-and-scale\". r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "eb2c55de9ce7",
+      "problems": [],
+      "desc": "Bug 1286945 - Move GetResizeMode to MediaConstraintsHelper and use Nothing() to denote when it's disabled by pref. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2009411",
+      "node": "f1f078b25343",
+      "problems": [],
+      "desc": "Bug 1286945 - Improve casting and fix some warnings in MediaEngineRemoteVideoSource. r=jib",
+      "pushdate": "2025-08-29T21:19:36+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1286945
+    },
+    {
+      "uuid": "bug2012631",
+      "node": "60dabe0a1071",
+      "problems": [],
+      "desc": "Bug 1997846 - Normandy.uninit should wait for init and not remove the UI_AVAILABLE_NOTIFICATION observer.  r=nimbus-revi",
+      "pushdate": "2026-01-26T21:39:06+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1997846
+    },
+    {
+      "uuid": "bug2012631",
+      "node": "e6e124f289fb",
+      "problems": [],
+      "desc": "Bug 1997846 - Check MOZ_NORMANDY also for Normandy.uninit. r=nimbus-reviewers,beth",
+      "pushdate": "2026-01-26T21:39:06+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1997846
+    },
+    {
+      "uuid": "8363739b-b3eb-4345-a5c6-a59c40250722",
+      "node": "cb4f6a9c197c",
+      "problems": [
+        "node not found on hg"
+      ]
+    },
+    {
+      "uuid": "8363739b-b3eb-4345-a5c6-a59c40250722",
+      "node": "f73e0c41c92c",
+      "problems": [],
+      "desc": "Bug 1964605 - Use nsIGlobalObject::GetTimeoutManager for AbortSignal.timeout r=aiunusov",
+      "pushdate": "2025-07-16T21:45:35+00:00",
+      "backedout": false,
+      "days_after_build": 0.0,
+      "bug_in_desc": 1964605
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "2c97e4069615",
+      "problems": [],
+      "desc": "Bug 1503132 create offline graph thread on receipt of the first message r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "3eca90e1af07",
+      "problems": [],
+      "desc": "Bug 1503132 remove unnecessary monitor notify for AudioCallbackDriver r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "3fb0c8f6d6e2",
+      "problems": [],
+      "desc": "Bug 1503132 remove unused MediaStreamGraphImpl::Running() r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "543cac7034fe",
+      "problems": [],
+      "desc": "Bug 1503132 add wait/wake-up support to OfflineAudioContext r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "5744145e9c7e",
+      "problems": [],
+      "desc": "Bug 1503132 remove unused HasAudioOutput() r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "61d08765489c",
+      "problems": [],
+      "desc": "Bug 1503132 do not shut down graph thread on completion of offline rendering r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "7889d20e3a29",
+      "problems": [],
+      "desc": "Bug 1503132 remove unnecessary SystemClockDriver::mWaitState r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "7e9935a07eaf",
+      "problems": [],
+      "desc": "Bug 1503132 when graph time has not advanced, only ensure another iteration if rendering r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "821b04c10c0d",
+      "problems": [],
+      "desc": "Bug 1503132 delay creation of offline graph and stream that may not be required r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "89480ab36714",
+      "problems": [],
+      "desc": "Bug 1503132 don't add audio output to offline streams r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "90a9506812f6",
+      "problems": [],
+      "desc": "Bug 1503132 remove mNonRealtimeProcessing r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "981f31de3924",
+      "problems": [],
+      "desc": "Bug 1503132 remove unused MediaStream::ConsumerCount() r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "9c23717ddc50",
+      "problems": [],
+      "desc": "Bug 1503132 remove unused function finish() r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "a1573c156ba1",
+      "problems": [],
+      "desc": "Bug 1503132 make RoundUpToEndOfAudioBlock() a static member r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "ba172f2b086a",
+      "problems": [],
+      "desc": "Bug 1503132 initialize mEndTime to zero for offline graphs r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "d9eda2382bd9",
+      "problems": [],
+      "desc": "Bug 1503132 remove unused ProcessedMediaStream::QueueFinish() r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "de7f45d6f032",
+      "problems": [],
+      "desc": "Bug 1503132 update offline main thread state when there is no pending iteration r=padenot",
+      "pushdate": "2018-10-31T05:07:31+00:00",
+      "backedout": false,
+      "days_after_build": -0.2,
+      "bug_in_desc": 1503132
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "node": "ec0336b4a1bf",
+      "problems": [],
+      "desc": "Bug 1503132 remove special-case sync dispatch for not-started offline RunAfterPendingUpdates() r=padenot",
+      "pushdate": "2018-10-31T09:42:54+00:00",
+      "backedout": false,
+      "days_after_build": -0.0,
+      "bug_in_desc": 1503132
+    }
+  ]
+}

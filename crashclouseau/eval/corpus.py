@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
 from libmozdata.bugzilla import Bugzilla
+from libmozdata.hgmozilla import Revision
 
 from crashclouseau import config, inspector, models, pushlog, utils
 from crashclouseau.eval.models import CorpusCase
@@ -179,13 +180,33 @@ def resolve_uuids(signature, channel="nightly", limit=3):
 _BACKOUT_RE = re.compile(r"back(?:ed)?\s*out", re.I)
 
 
-def _regressor_nodes(bug_ids, channels=("nightly", "beta", "release")):
-    """Landing changeset short-revs for the regressor bug(s) — the changesets that
-    INTRODUCED the regression, parsed from their Bugzilla landing comments via
-    libmozdata (backout comments skipped). This is the ACTUAL ground-truth regressor:
-    ``regressed_by`` is a list of bug IDs, NOT changesets, so the crash bug's own id is
-    useless here. Best-effort — a bug whose landings don't parse (e.g. a git-only landing
-    comment) just contributes no nodes, and bug-id matching still carries the eval."""
+# Changeset descriptions that cannot themselves introduce a crash, so they must never be
+# labelled as the regressor. An audit of corpus_ship found 103 of 385 resolved landing nodes
+# (27%) unusable, "apply code formatting via Lando" prominent among them: a reformat is
+# mentioned in a bug's landing comments like any other push, so it gets resolved as a landing.
+_NOOP_DESC_PATTERNS = (
+    (r"apply code formatting via lando", "lando auto-format"),
+    (r"\bno bug\b.*\b(reformat|format|clang-format|rustfmt|prettier)", "auto-format"),
+    (r"^backed out changeset", "backout"),
+    (r"^revert \"", "revert"),
+    (r"^merge (mozilla-central|autoland|inbound|beta|release)", "merge"),
+    (r"^no bug - tagging", "release tagging"),
+    (r"^test-only", "test-only"),
+)
+
+
+def _regressor_landings(bug_ids, channels=("nightly", "beta", "release")):
+    """``[{"node": <12-char rev>, "bug": <int>}]`` for the regressor bug(s) — the changesets
+    that INTRODUCED the regression, parsed from their Bugzilla landing comments via libmozdata
+    (backout comments skipped). ``regressed_by`` is a list of bug IDs, NOT changesets, so the
+    crash bug's own id is useless here.
+
+    Each node keeps its OWN bug. Pooling them into one set (as this used to) let
+    ``regressor_bug`` describe a different changeset than ``regressor_node`` whenever a crash had
+    several regressor bugs — one of the label defects the corpus audit turned up.
+
+    Best-effort: a bug whose landings don't parse (e.g. a git-only landing comment) contributes
+    no nodes, and bug-id matching still carries the eval."""
     if not bug_ids:
         return []
     comments: dict = {}
@@ -201,13 +222,95 @@ def _regressor_nodes(bug_ids, channels=("nightly", "beta", "release")):
         logger.warning("eval: could not fetch regressor comments for %s: %s", bug_ids, exc)
         return []
 
-    nodes = set()
-    for cmts in comments.values():
-        for landing in Bugzilla.get_landing_comments(cmts, list(channels)):
-            if _BACKOUT_RE.search(landing["comment"].get("text", "")):
+    landings = []
+    seen = set()
+    # Iterate bug_ids in their given order so the primary bug's landings come first.
+    for bug in bug_ids:
+        for cmts in (comments.get(bug), comments.get(str(bug))):
+            if not cmts:
                 continue
-            nodes.add(landing["revision"][:12])
-    return sorted(nodes)
+            for landing in Bugzilla.get_landing_comments(cmts, list(channels)):
+                if _BACKOUT_RE.search(landing["comment"].get("text", "")):
+                    continue
+                node = landing["revision"][:12]
+                if node in seen:
+                    continue
+                seen.add(node)
+                landings.append({"node": node, "bug": int(bug)})
+    return landings
+
+
+def _build_date(buildid):
+    """The crash build's date, or ``None``. ``utils.get_build_date`` raises on anything that is
+    not a well-formed buildid, and a missing/odd build must not abort a freeze."""
+    if not buildid:
+        return None
+    try:
+        return utils.get_build_date(buildid)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _reject_reason(node, channel, build_dt, bug):
+    """Why ``node`` cannot be the regressor of a crash from build ``build_dt``, or ``None`` when
+    it is usable. Returns ``(reason, pushdate)`` so the caller can order what survives.
+
+    Checks, in order of how conclusive they are:
+
+    1. **Landed AFTER the crashing build.** Causally impossible, no judgement needed and no
+       confound — unlike a signature-first-seen argument, which signature reuse can muddy. 10 of
+       64 corpus positives were labelled with such a node (median 42.8 days after the build).
+    2. **Cannot introduce a crash** — an auto-format, backout, revert, merge or tagging push.
+    3. **Backed out.** It may still have caused the crash before being backed out, so this is
+       only ever a tie-breaker, never a rejection.
+    4. **Belongs to a different bug** than the one claiming it.
+    """
+    try:
+        rev = Revision.get_revision(channel or "nightly", node) or {}
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("eval: could not resolve landing %s: %s", node, exc)
+        return "unresolvable", None
+    if not rev.get("node"):
+        return "not found on hg", None
+    desc = (rev.get("desc") or "").strip()
+    pushdate = rev.get("pushdate") or rev.get("date")
+    if isinstance(pushdate, (list, tuple)):
+        pushdate = pushdate[0] if pushdate else None
+    try:
+        pushed = datetime.fromtimestamp(float(pushdate), tz=timezone.utc)
+    except (TypeError, ValueError):
+        pushed = None
+    if build_dt is not None and pushed is not None and pushed > build_dt:
+        return "landed {}d after the crash build".format(
+            round((pushed - build_dt).total_seconds() / 86400.0, 1)), pushed
+    low = desc.lower()
+    for pattern, label in _NOOP_DESC_PATTERNS:
+        if re.search(pattern, low):
+            return "cannot introduce a crash ({})".format(label), pushed
+    match = re.search(r"\bbug[ \t]*#?[ \t]*(\d{5,8})\b", desc, re.I)
+    if bug and match and int(match.group(1)) != bug:
+        return "belongs to bug {} not {}".format(match.group(1), bug), pushed
+    return None, pushed
+
+
+def _validate_landings(landings, channel, build_dt):
+    """Split resolved landings into ``(kept, rejected)``. ``kept`` is ordered by pushdate
+    ASCENDING, so ``kept[0]`` is the EARLIEST surviving landing — the best single representative
+    of when the regression was introduced, and a meaningful choice unlike the previous
+    ``sorted(nodes)[0]``, which ordered by hash and so picked essentially at random."""
+    kept, rejected = [], []
+    for landing in landings:
+        reason, pushed = _reject_reason(
+            landing["node"], channel, build_dt, landing.get("bug")
+        )
+        if reason:
+            rejected.append({**landing, "reason": reason})
+        else:
+            kept.append({**landing, "_pushed": pushed})
+    kept.sort(key=lambda item: (item["_pushed"] is None, item["_pushed"]))
+    for item in kept:
+        item.pop("_pushed", None)
+    return kept, rejected
 
 
 def _seed_nodes(uuid):
@@ -268,14 +371,37 @@ def freeze(records, corpus_dir=None):
         with open(crash_path, "w") as handle:
             json.dump(data, handle)
         reg_bugs = [int(b) for b in (rec.get("regressed_by") or []) if b]
-        reg_nodes = _regressor_nodes(reg_bugs)
+        # Validate the resolved landings against THIS crash's build before labelling: a node that
+        # landed after the build, or that is an auto-format/backout/revert/merge, cannot be the
+        # regressor. `regressor_node` is then the EARLIEST survivor and `regressor_bug` is that
+        # node's own bug, so the two always describe the same changeset.
+        build_dt = _build_date((data or {}).get("build"))
+        landings, rejected = _validate_landings(
+            _regressor_landings(reg_bugs), channel, build_dt
+        )
+        reg_nodes = [item["node"] for item in landings]
+        if rejected:
+            logger.info(
+                "eval: %s dropped %d unusable regressor landing(s): %s",
+                uuid, len(rejected),
+                "; ".join("{} ({})".format(r["node"], r["reason"]) for r in rejected),
+            )
+        if not reg_nodes and reg_bugs:
+            # Bug-level matching still carries the eval (`metrics._hit` falls back to it), so
+            # keep the case — but say so, because its node-level label is now empty.
+            logger.warning(
+                "eval: %s has NO usable regressor node (bug(s) %s); bug-match only",
+                uuid, reg_bugs,
+            )
         case = CorpusCase(
             uuid=uuid,
             signature=sig,
             regressor_node=(reg_nodes[0] if reg_nodes else ""),
             regressor_nodes=reg_nodes,
-            regressor_bug=(reg_bugs[0] if reg_bugs else None),
+            regressor_bug=(landings[0]["bug"] if landings else
+                           (reg_bugs[0] if reg_bugs else None)),
             regressor_bugs=reg_bugs,
+            label_rejects=rejected,
             channel=channel,
             crash_json_path=crash_path,
             seed_nodes=_seed_nodes(uuid),
