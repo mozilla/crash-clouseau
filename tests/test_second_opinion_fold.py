@@ -14,9 +14,11 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
+from crashclouseau import config  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 from crashclouseau.agent.result import CrashTriageResult  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
+    CONFIDENCE_SCORE,
     Candidate,
     Claim,
     Confidence,
@@ -28,6 +30,7 @@ from crashclouseau.agent.schema import (  # noqa: E402
     SecondOpinion,
     StructLayoutCitation,
     Verdict,
+    parse_and_validate,
 )
 
 _SF = SearchfoxCitation(
@@ -248,7 +251,9 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
         disabled = {**_ENABLED, "enabled": False}
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=disabled):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion") as m:
-                self.assertIsNone(orch._maybe_run_second_opinion(r, _SEED))
+                self.assertEqual(
+                    orch._maybe_run_second_opinion(r, _SEED), (None, "skipped_disabled")
+                )
                 m.assert_not_called()
 
     def test_abstain_verdict_skips(self):
@@ -256,7 +261,18 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
         r = self._result(Dossier(verdict=v))
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=_ENABLED):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion") as m:
-                self.assertIsNone(orch._maybe_run_second_opinion(r, _SEED))
+                self.assertEqual(
+                    orch._maybe_run_second_opinion(r, _SEED), (None, "skipped_abstain")
+                )
+                m.assert_not_called()
+
+    def test_missing_verdict_skips(self):
+        r = self._result(Dossier(verdict=None))
+        with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=_ENABLED):
+            with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion") as m:
+                self.assertEqual(
+                    orch._maybe_run_second_opinion(r, _SEED), (None, "skipped_no_verdict")
+                )
                 m.assert_not_called()
 
     def test_rung_below_min_confidence_skips(self):
@@ -264,8 +280,72 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
         cfg = {**_ENABLED, "min_confidence": 60}
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=cfg):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion") as m:
-                self.assertIsNone(orch._maybe_run_second_opinion(r, _SEED))
+                self.assertEqual(
+                    orch._maybe_run_second_opinion(r, _SEED),
+                    (None, "skipped_below_threshold"),
+                )
                 m.assert_not_called()
+
+    def test_boost_floor_keeps_the_fold_from_being_one_directional(self):
+        # Lowering min_confidence to 25 bought MEASUREMENT coverage of the weakest reported
+        # leads. It must not also let them be re-ranked: at `low` the refute clamp is a no-op
+        # (it never goes below a reportable lead), so a boost there could only move them UP —
+        # two rungs, 0.50 -> 0.97 p_worth. Both directions must be inert at the bottom rung.
+        boosted = _lead(Confidence.low)
+        orch._fold_second_opinion(boosted, _so(corroborates=True, confidence="high"), _SEED,
+                                  status="ok")
+        self.assertEqual(boosted.verdict.confidence, Confidence.low)
+        self.assertTrue(boosted.corroborations["second_opinion_corroborated"])
+
+        refuted = _lead(Confidence.low)
+        orch._fold_second_opinion(refuted, _so(corroborates=False, confidence="high"), _SEED,
+                                  status="ok")
+        self.assertEqual(refuted.verdict.confidence, Confidence.low)
+
+    def test_medium_and_above_still_boosts(self):
+        # The floor must not break the behaviour that shipped: a medium lead still rises.
+        d = _lead(Confidence.medium)
+        orch._fold_second_opinion(d, _so(corroborates=True, confidence="medium"), _SEED,
+                                  status="ok")
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+
+    def test_boost_floor_is_at_or_above_medium(self):
+        cfg = config.get_agent_second_opinion()
+        self.assertGreaterEqual(
+            cfg["min_boost_confidence"],
+            int(round(CONFIDENCE_SCORE[Confidence.medium] * 100)),
+        )
+        # ...and strictly above the measurement threshold, or the asymmetry is back.
+        self.assertGreater(cfg["min_boost_confidence"], cfg["min_confidence"])
+
+    def test_weakest_reported_lead_is_eligible_under_the_REAL_config(self):
+        # Pins the BEHAVIOUR of the min_confidence 50 -> 25 change, not just the constant. A
+        # review pass showed the eligibility check could be mutated back to an effective floor
+        # of 50 with the whole suite still green, because every other test here patches the
+        # config. This one drives the real `config.get_agent_second_opinion()`.
+        r = self._result(_lead(Confidence.low))
+        called = {"n": 0}
+
+        async def _fake(crash, candidate=None):
+            called["n"] += 1
+            return _so(corroborates=True, confidence="high")
+
+        with mock.patch.dict(os.environ, {"SECOND_OPINION_ENABLED": "1"}):
+            with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion", _fake):
+                so, status = orch._maybe_run_second_opinion(r, _SEED)
+        self.assertEqual(status, "ok")           # NOT skipped_below_threshold
+        self.assertIsNotNone(so)
+        self.assertEqual(called["n"], 1)
+
+    def test_default_min_confidence_covers_the_weakest_reported_lead(self):
+        # There is no separate report gate — ANY lead is shown — so the shipped default must
+        # reach `low` (25), the lowest rung a lead can hold. At the old default of 50 the
+        # weakest reported leads silently got no second opinion at all.
+        cfg = config.get_agent_second_opinion()
+        self.assertLessEqual(
+            cfg["min_confidence"],
+            int(round(CONFIDENCE_SCORE[Confidence.low] * 100)),
+        )
 
     def test_enabled_reported_lead_runs_with_candidate(self):
         r = self._result(_lead(Confidence.medium, candidate=True))
@@ -278,8 +358,9 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
 
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=_ENABLED):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion", _fake):
-                so = orch._maybe_run_second_opinion(r, _SEED)
+                so, status = orch._maybe_run_second_opinion(r, _SEED)
         self.assertIsNotNone(so)
+        self.assertEqual(status, "ok")
         self.assertTrue(so.corroborates)
         self.assertEqual(seen["candidate"], {"node": "abc123def456", "bug": 42})
         self.assertIs(seen["crash"], _SEED)
@@ -294,8 +375,9 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
 
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=_ENABLED):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion", _fake):
-                so = orch._maybe_run_second_opinion(r, _SEED)
+                so, status = orch._maybe_run_second_opinion(r, _SEED)
         self.assertIsNotNone(so)
+        self.assertEqual(status, "ok")
         self.assertIsNone(seen["candidate"])            # generator/mechanism mode
 
     def test_corroboration_promotable_sub_threshold_lead_still_runs(self):
@@ -322,8 +404,9 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
 
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=cfg):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion", _fake):
-                so = orch._maybe_run_second_opinion(r, seed)
+                so, status = orch._maybe_run_second_opinion(r, seed)
         self.assertIsNotNone(so)
+        self.assertEqual(status, "ok")
         self.assertEqual(called["n"], 1)
 
     def test_run_failure_returns_none(self):
@@ -334,7 +417,24 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
 
         with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=_ENABLED):
             with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion", _boom):
-                self.assertIsNone(orch._maybe_run_second_opinion(r, _SEED))
+                self.assertEqual(
+                    orch._maybe_run_second_opinion(r, _SEED), (None, "failed")
+                )
+
+    def test_silent_none_from_the_run_is_failed_not_skipped(self):
+        # ``run_second_opinion`` swallows its own errors and returns None (errored / empty /
+        # unparseable). For an ELIGIBLE lead that is a prod break, and it must be
+        # distinguishable from a skip — otherwise a broken pass reads as "not applicable".
+        r = self._result(_lead(Confidence.medium))
+
+        async def _empty(crash, candidate=None):
+            return None
+
+        with mock.patch.object(orch.config, "get_agent_second_opinion", return_value=_ENABLED):
+            with mock.patch("crashclouseau.agent.second_opinion.run_second_opinion", _empty):
+                self.assertEqual(
+                    orch._maybe_run_second_opinion(r, _SEED), (None, "failed")
+                )
 
 
 class TestSchemaRoundTrip(unittest.TestCase):
@@ -363,7 +463,6 @@ class TestSchemaRoundTrip(unittest.TestCase):
         # corroborations + second_opinion are computed OUTSIDE the LLM; a model that injects
         # them into its handoff JSON must not have them survive the parse boundary (they'd
         # spoof a chip / suppress the boost / fake an independent second opinion).
-        from crashclouseau.agent.schema import parse_and_validate
         obj = {
             "candidate": {"node": "abc123def456", "bug": 1},
             "verdict": {"decision": "lead", "confidence": "medium", "needinfo_draft": "?"},
@@ -375,6 +474,213 @@ class TestSchemaRoundTrip(unittest.TestCase):
         self.assertEqual(d.corroborations, {})            # injected flags stripped
         self.assertIsNone(d.second_opinion)               # injected SO stripped
         self.assertEqual(d.verdict.decision, Decision.lead)  # the real verdict is untouched
+
+    def test_parse_and_validate_strips_injected_status_and_raw_verdict(self):
+        # Same guarantee for the two new outside-the-LLM fields: a forged "ok" status would
+        # hide a broken pass, and a forged raw_verdict would make the gates look like a no-op.
+        obj = {
+            "candidate": {"node": "abc123def456", "bug": 1},
+            "verdict": {"decision": "lead", "confidence": "medium", "needinfo_draft": "?"},
+            "second_opinion_status": "ok",
+            "raw_verdict": {"decision": "lead", "confidence": "probable",
+                            "needinfo_draft": "?"},
+        }
+        d = parse_and_validate(obj)
+        self.assertIsNone(d.second_opinion_status)
+        self.assertIsNone(d.raw_verdict)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_new_fields_survive_db_json_round_trip(self):
+        d = _lead(Confidence.medium)                       # needs a cited anchor to stay a lead
+        d.raw_verdict = Verdict(decision=Decision.lead, confidence=Confidence.probable,
+                                needinfo_draft="?")
+        d.second_opinion_status = "failed"
+        back = Dossier.model_validate(d.model_dump(mode="json"))
+        self.assertEqual(back.second_opinion_status, "failed")
+        self.assertEqual(back.raw_verdict.confidence, Confidence.probable)
+        self.assertEqual(back.verdict.confidence, Confidence.medium)
+
+    def test_old_dossier_without_new_fields_validates_to_none(self):
+        back = Dossier.model_validate(
+            {"verdict": {"decision": "lead", "confidence": "medium", "needinfo_draft": "?"}}
+        )
+        self.assertIsNone(back.raw_verdict)
+        self.assertIsNone(back.second_opinion_status)
+
+
+class TestRawVerdictSnapshot(unittest.TestCase):
+    """#4: the gates' NET effect must be auditable — a clamp has to be distinguishable from
+    a no-op on an already-medium lead."""
+
+    def _result(self, dossier):
+        return CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=dossier)
+
+    def test_snapshot_captures_the_pre_gate_verdict_when_the_so_clamps(self):
+        r = self._result(_lead(Confidence.probable))
+        orch.apply_deterministic_gates(
+            r, {**_SEED, "is_offstack": False},
+            second_opinion=_so(corroborates=False, confidence="high"),
+            second_opinion_status="ok",
+        )
+        # Shipped clamped to medium; the raw snapshot still shows it came in at probable.
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
+        self.assertEqual(r.dossier.raw_verdict.confidence, Confidence.probable)
+
+    def test_snapshot_equals_shipped_when_no_gate_moves_it(self):
+        r = self._result(_lead(Confidence.medium))
+        orch.apply_deterministic_gates(
+            r, {**_SEED, "is_offstack": False},
+            second_opinion=_so(corroborates=False, confidence="high"),
+            second_opinion_status="ok",
+        )
+        # A confident refute on an ALREADY-medium lead is a no-op — the pair proves it.
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
+        self.assertEqual(r.dossier.raw_verdict.confidence, Confidence.medium)
+
+    def test_snapshot_does_not_alias_the_shipped_verdict(self):
+        r = self._result(_lead(Confidence.medium))
+        orch.apply_deterministic_gates(
+            r, {**_SEED, "is_offstack": False},
+            second_opinion=_so(corroborates=True, confidence="high"),
+            second_opinion_status="ok",
+        )
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.probable)   # boosted
+        self.assertEqual(r.dossier.raw_verdict.confidence, Confidence.medium)  # snapshot kept
+        self.assertIsNot(r.dossier.raw_verdict, r.dossier.verdict)
+
+
+class TestAppliedMoveIsDistinguishable(unittest.TestCase):
+    """A review pass proved `raw_verdict` alone cannot attribute a band move to the SO: the
+    corroboration gate runs FIRST and can move the same lead, so a clamp-after-bump persists
+    raw == shipped == `medium`, byte-identical to the SO doing nothing. The applied-move flags
+    (`second_opinion_boosted` / `second_opinion_clamped`) resolve it, because
+    `second_opinion_corroborated` / `_refuted` only record the SO's OPINION."""
+
+    def _result(self, dossier):
+        return CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=dossier)
+
+    def _corroborated_lead(self, confidence):
+        # A fault-address <-> struct-offset match makes _apply_corroboration_gate bump the lead
+        # to `probable` BEFORE the fold runs.
+        return Dossier(
+            candidate=Candidate(node="abc123def456", bug=42),
+            data_flow=DataFlowHypothesis(
+                summary="null-deref of mLength", operation="null",
+                citations=[StructLayoutCitation(type_name="T", field="mLength", offset=8)],
+            ),
+            verdict=Verdict(decision=Decision.lead, confidence=confidence, needinfo_draft="?"),
+        )
+
+    _FAULT_SEED = {**_SEED, "is_offstack": False,
+                   "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}}}
+
+    def test_clamp_after_a_corroboration_bump_is_still_visible(self):
+        r = self._result(self._corroborated_lead(Confidence.medium))
+        orch.apply_deterministic_gates(
+            r, self._FAULT_SEED,
+            second_opinion=_so(corroborates=False, confidence="high"),
+            second_opinion_status="ok",
+        )
+        d = r.dossier
+        # The raw/shipped pair collapses -- both `medium` -- exactly as the review showed.
+        self.assertEqual(d.raw_verdict.confidence, Confidence.medium)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        # ...so the applied-move flag is what proves the clamp fired.
+        self.assertTrue(d.corroborations["second_opinion_clamped"])
+
+    def test_no_op_refute_does_not_claim_a_clamp(self):
+        r = self._result(_lead(Confidence.medium))       # already medium, nothing to clamp
+        orch.apply_deterministic_gates(
+            r, {**_SEED, "is_offstack": False},
+            second_opinion=_so(corroborates=False, confidence="high"),
+            second_opinion_status="ok",
+        )
+        d = r.dossier
+        self.assertEqual(d.raw_verdict.confidence, Confidence.medium)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertTrue(d.corroborations["second_opinion_refuted"])       # opinion recorded
+        self.assertNotIn("second_opinion_clamped", d.corroborations)      # but nothing applied
+
+    def test_corroboration_gate_boost_is_not_credited_to_the_second_opinion(self):
+        r = self._result(self._corroborated_lead(Confidence.medium))
+        orch.apply_deterministic_gates(
+            r, self._FAULT_SEED,
+            second_opinion=_so(corroborates=True, confidence="high"),
+            second_opinion_status="ok",
+        )
+        d = r.dossier
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+        self.assertTrue(d.corroborations["second_opinion_corroborated"])  # opinion recorded
+        # The corroboration gate had already raised it, so the SO boost was inert.
+        self.assertNotIn("second_opinion_boosted", d.corroborations)
+
+    def test_real_second_opinion_boost_is_credited(self):
+        r = self._result(_lead(Confidence.medium))       # no fault-offset corroboration
+        orch.apply_deterministic_gates(
+            r, {**_SEED, "is_offstack": False},
+            second_opinion=_so(corroborates=True, confidence="high"),
+            second_opinion_status="ok",
+        )
+        d = r.dossier
+        self.assertEqual(d.raw_verdict.confidence, Confidence.medium)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+        self.assertTrue(d.corroborations["second_opinion_boosted"])
+
+    def test_suppressed_boost_is_not_credited(self):
+        d = _lead(Confidence.medium)
+        d.corroborations = {"downgraded_from_strong": True}
+        orch._fold_second_opinion(d, _so(corroborates=True, confidence="high"), _SEED,
+                                  status="ok")
+        self.assertEqual(d.verdict.confidence, Confidence.medium)        # stays suppressed
+        self.assertTrue(d.corroborations["second_opinion_corroborated"])
+        self.assertNotIn("second_opinion_boosted", d.corroborations)
+
+
+class TestSecondOpinionStatusPersisted(unittest.TestCase):
+    """#2: a null second_opinion must say WHY — the pass is best-effort, so a prod break
+    would otherwise be indistinguishable from an ineligible verdict."""
+
+    def _result(self, dossier):
+        return CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok", dossier=dossier)
+
+    def test_fold_stores_ok_alongside_the_second_opinion(self):
+        d = _lead(Confidence.medium)
+        orch._fold_second_opinion(d, _so(corroborates=True, confidence="high"), _SEED,
+                                  status="ok")
+        self.assertEqual(d.second_opinion_status, "ok")
+        self.assertIsNotNone(d.second_opinion)
+
+    def test_failed_is_distinguishable_from_skipped(self):
+        failed = _lead(Confidence.medium)
+        orch._fold_second_opinion(failed, None, _SEED, status="failed")
+        skipped = _lead(Confidence.medium)
+        orch._fold_second_opinion(skipped, None, _SEED, status="skipped_below_threshold")
+        self.assertIsNone(failed.second_opinion)
+        self.assertIsNone(skipped.second_opinion)
+        self.assertNotEqual(failed.second_opinion_status, skipped.second_opinion_status)
+
+    def test_status_is_authoritative_over_a_model_injected_value(self):
+        d = _lead(Confidence.medium)
+        d.second_opinion_status = "ok"          # as if the model had smuggled it through
+        orch._fold_second_opinion(d, None, _SEED, status="failed")
+        self.assertEqual(d.second_opinion_status, "failed")
+
+    def test_eval_path_records_no_status(self):
+        # The offline eval runner never runs the gate; it must not look like a skip or a fail.
+        r = self._result(_lead(Confidence.medium))
+        orch.apply_deterministic_gates(r, {**_SEED, "is_offstack": False})
+        self.assertIsNone(r.dossier.second_opinion_status)
+
+    def test_status_reaches_the_dossier_through_the_gates(self):
+        r = self._result(_lead(Confidence.medium))
+        orch.apply_deterministic_gates(
+            r, {**_SEED, "is_offstack": False},
+            second_opinion=None, second_opinion_status="failed",
+        )
+        self.assertEqual(r.dossier.second_opinion_status, "failed")
+        self.assertIsNone(r.dossier.second_opinion)
+        # A failed pass must not move the band.
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
 
 
 if __name__ == "__main__":

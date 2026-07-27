@@ -954,7 +954,7 @@ def _apply_worth_investigating(dossier):
         dossier.verdict = v.model_copy(update={"p_worth_investigating": float(p)})
 
 
-def _fold_second_opinion(dossier, second_opinion, seed):
+def _fold_second_opinion(dossier, second_opinion, seed, status=None):
     """Fold a blind second-opinion (#SO) into a REPORTED verdict, ASYMMETRICALLY
     (precision-first, recall-safe). ALWAYS stores it on the dossier (a measurement rides
     every dossier it ran on, even one the other gates then abstained); the confidence band
@@ -979,12 +979,18 @@ def _fold_second_opinion(dossier, second_opinion, seed):
     still runs then, AUTHORITATIVELY clearing any ``second_opinion`` the primary model may have
     injected into its own handoff JSON (it is a defined ``Dossier`` field, so pydantic would
     otherwise populate it). The SO field is thus only ever set HERE, never trusted from the
-    model — preserving the blind-independent guarantee."""
+    model — preserving the blind-independent guarantee.
+
+    ``status`` is ``_maybe_run_second_opinion``'s outcome string (``ok`` / ``failed`` /
+    ``skipped_*``), stored alongside so a null ``second_opinion`` is DIAGNOSABLE: the pass is
+    best-effort, so without it a prod-only break looks exactly like an ineligible verdict.
+    ``None`` (the eval runner's default) records "the gate never ran"."""
     if dossier is None:
         return
     # Authoritative: overwrite (with the real SO or None) so a model-injected value can never
     # masquerade as an independent second opinion. Must precede every early return below.
     dossier.second_opinion = second_opinion
+    dossier.second_opinion_status = status
     so = second_opinion
     v = dossier.verdict
     if so is None or v is None:
@@ -1000,8 +1006,26 @@ def _fold_second_opinion(dossier, second_opinion, seed):
         flags["second_opinion_corroborated"] = True
         downgraded = bool((dossier.corroborations or {}).get("downgraded_from_strong"))
         is_bare_lead = v.decision == Decision.lead and CONFIDENCE_SCORE.get(v.confidence, 0.0) < CONFIDENCE_SCORE[Confidence.probable]
-        if is_bare_lead and not downgraded:
+        # Measuring a lead does NOT license re-ranking it. Below `min_boost_confidence` the
+        # fold would be one-directional: the refute clamp never goes below a reportable lead,
+        # so at the bottom rung a confident refutation is a no-op while a corroboration would
+        # jump two rungs. Record the agreement there, leave the band alone.
+        rung = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
+        boostable = rung >= config.get_agent_second_opinion()["min_boost_confidence"]
+        if is_bare_lead and not boostable:
+            logger.info(
+                "agent: second-opinion corroborated but lead rung %s is below the boost floor; "
+                "recording agreement WITHOUT raising the band for %s",
+                rung, (seed or {}).get("uuid"),
+            )
+        elif is_bare_lead and not downgraded:
             dossier.verdict = v.model_copy(update={"confidence": Confidence.probable})
+            # Records that the boost was APPLIED, which `second_opinion_corroborated` does not:
+            # that flag marks the SO's OPINION and is set even when the band never moved. Without
+            # this, "the SO boosted medium->probable" and "the corroboration gate boosted it while
+            # the SO's agreement was inert" persist identically, and `raw_verdict` cannot tell
+            # them apart either (it is one snapshot of ALL gates' net effect).
+            flags["second_opinion_boosted"] = True
             logger.info(
                 "agent: second-opinion corroborated -> lead raised to probable for %s",
                 (seed or {}).get("uuid"),
@@ -1024,12 +1048,19 @@ def _fold_second_opinion(dossier, second_opinion, seed):
                 "an independent blind review confidently found the candidate cannot "
                 "explain the crash, and no cited candidate/hunk/edge anchor remains",
             )
+            flags["second_opinion_downgraded_strong"] = True
         elif v.decision == Decision.lead and (
             CONFIDENCE_SCORE.get(v.confidence, 0.0) > CONFIDENCE_SCORE[Confidence.medium]
         ):
             # Recall-safe: the lead survives (we don't drop a report on one blind
             # disagreement), but its band drops to a plain medium lead to reflect it.
             dossier.verdict = v.model_copy(update={"confidence": Confidence.medium})
+            # See `second_opinion_boosted`: this marks the clamp as APPLIED. Needed because the
+            # corroboration gate runs FIRST and can raise the same lead to `probable`, so a
+            # clamp back down to `medium` leaves raw_verdict == shipped == `medium` — identical
+            # to the SO having done nothing at all. From `low` the pair even INVERTS, reading as
+            # "the gates raised this verdict" when the SO in fact clamped it.
+            flags["second_opinion_clamped"] = True
             logger.info(
                 "agent: second-opinion confidently refuted -> lead clamped to medium for %s",
                 (seed or {}).get("uuid"),
@@ -1053,8 +1084,14 @@ def _will_corroboration_promote(dossier, seed):
 
 
 def _maybe_run_second_opinion(result, seed):
-    """Run the blind second-opinion (#SO) pass for a would-be-REPORTED lead, else return
-    ``None``. Prod-only and env-gated (``SECOND_OPINION_ENABLED``, default off); the offline
+    """Run the blind second-opinion (#SO) pass for a would-be-REPORTED lead. Returns
+    ``(second_opinion, status)`` — the parsed ``SecondOpinion`` (``None`` when it did not run
+    or the run failed) plus WHY, so a null SO is diagnosable in the persisted dossier rather
+    than silently ambiguous between "ineligible" and "broken in prod". ``status`` is one of
+    ``ok`` / ``failed`` / ``skipped_disabled`` / ``skipped_no_verdict`` / ``skipped_abstain`` /
+    ``skipped_below_threshold``.
+
+    Prod-only and env-gated (``SECOND_OPINION_ENABLED``, default off); the offline
     eval runner never calls this. Keyed on the RAW (pre-gate) verdict: a raw abstain can never
     become a report (the SF-3 / exposer gates only ever DOWNGRADE), so we skip it; but the
     ``_apply_corroboration_gate`` UPGRADE can promote a sub-``min_confidence`` bare lead to
@@ -1066,18 +1103,20 @@ def _maybe_run_second_opinion(result, seed):
     any failure returns ``None`` and the primary verdict is left untouched."""
     cfg = config.get_agent_second_opinion()
     if not cfg["enabled"]:
-        return None
+        return None, "skipped_disabled"
     dossier = result.dossier
     v = dossier.verdict if dossier is not None else None
-    if v is None or v.decision == Decision.abstain:
-        return None
+    if v is None:
+        return None, "skipped_no_verdict"
+    if v.decision == Decision.abstain:
+        return None, "skipped_abstain"
     rung = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
     if rung < cfg["min_confidence"]:
         # A pending deterministic corroboration bump (-> probable/70) still makes this a
         # reported lead that must get a second opinion; only skip when no such bump is due.
         promoted = int(round(CONFIDENCE_SCORE[Confidence.probable] * 100))
         if not (promoted >= cfg["min_confidence"] and _will_corroboration_promote(dossier, seed)):
-            return None
+            return None, "skipped_below_threshold"
     cand = dossier.candidate
     candidate = {"node": cand.node, "bug": cand.bug} if (cand and cand.node) else None
     try:
@@ -1091,16 +1130,24 @@ def _maybe_run_second_opinion(result, seed):
             "agent: second-opinion pass failed for %s",
             (seed or {}).get("uuid"), exc_info=True,
         )
-        return None
-    if so is not None:
-        logger.info(
-            "agent: second-opinion for %s -> mode=%s corroborates=%s confidence=%s cost=$%s",
-            (seed or {}).get("uuid"), so.mode, so.corroborates, so.confidence, so.cost_usd,
+        return None, "failed"
+    if so is None:
+        # ``run_second_opinion`` swallows its own errors and returns None (errored / empty /
+        # unparseable run). Log it here too: an eligible lead that got no second opinion is a
+        # PROD BREAK, and it must not look like a skip.
+        logger.warning(
+            "agent: second-opinion returned no result for %s (eligible lead, rung=%s)",
+            (seed or {}).get("uuid"), rung,
         )
-    return so
+        return None, "failed"
+    logger.info(
+        "agent: second-opinion for %s -> mode=%s corroborates=%s confidence=%s cost=$%s",
+        (seed or {}).get("uuid"), so.mode, so.corroborates, so.confidence, so.cost_usd,
+    )
+    return so, "ok"
 
 
-def apply_deterministic_gates(result, seed, second_opinion=None):
+def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_status=None):
     """Reshape the RAW agent verdict into the SHIPPED verdict with the deterministic,
     outside-the-LLM gates: attach area-experts, then the SF-3 call-path gate (off-stack
     only), the exposer classifier (all crashes), and the corroboration gate (fault-offset /
@@ -1114,7 +1161,18 @@ def apply_deterministic_gates(result, seed, second_opinion=None):
     rung the calibration keys on). ``seed`` is the ``build_seed`` crash dict (needs
     ``is_offstack``, ``experts``, ``raw_crash``, ``candidates``, ``prior_*``). ``second_opinion``
     is the parsed ``SecondOpinion`` from ``_maybe_run_second_opinion`` (``None`` for eval and
-    when the pass is disabled/didn't run)."""
+    when the pass is disabled/didn't run) and ``second_opinion_status`` is that call's outcome
+    string (``None`` for eval, where the gate never runs)."""
+    # Snapshot the RAW, pre-gate verdict FIRST — before any gate below can mutate it — so the
+    # gates' NET effect stays auditable in the persisted dossier. Without it a second-opinion
+    # clamp to `medium` is indistinguishable from a no-op on a lead that was already `medium`,
+    # and "how often does a gate actually MOVE the verdict?" is unanswerable from prod data.
+    # ``model_copy(deep=True)`` so the snapshot does not alias the Claim objects the gates
+    # rebuild, and does NOT re-run validators (a gate may legitimately produce a combination
+    # the raw-verdict rules would reject, e.g. a downgraded strong-evidence).
+    if result.dossier is not None and result.dossier.verdict is not None:
+        result.dossier.raw_verdict = result.dossier.verdict.model_copy(deep=True)
+
     # Attach deterministic area-experts (#15 phase 2) to the dossier so a
     # knowledgeable person is surfaced for ANY verdict (including abstain).
     if result.dossier is not None and seed.get("experts"):
@@ -1144,7 +1202,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None):
         # gate (so a corroboration-bumped lead is what's boosted/refuted) and BEFORE the
         # needinfo reconcile + worth-investigating below (so a downgrade re-derives the
         # action and worth-investigating reads the final rung). No-op when no SO was run.
-        _fold_second_opinion(result.dossier, second_opinion, seed)
+        _fold_second_opinion(
+            result.dossier, second_opinion, seed, status=second_opinion_status
+        )
         # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
         # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
         # must not ship the original strong-evidence action. Idempotent when nothing
@@ -1236,13 +1296,17 @@ def run_evidence_agent(uuid, force=False):
         # Blind second-opinion (#SO): an independent, no-context re-analysis of a
         # would-be-reported lead, run from the RAW verdict (async home) and folded inside the
         # gates below. Prod-only / env-gated (SECOND_OPINION_ENABLED); None otherwise.
-        second_opinion = _maybe_run_second_opinion(result, seed)
+        second_opinion, second_opinion_status = _maybe_run_second_opinion(result, seed)
 
         # Reshape the raw agent verdict into the shipped verdict (area-experts + the
         # callpath/exposer/corroboration gates + the second-opinion fold + needinfo reconcile
         # + observe-only). Shared with the offline eval runner so calibration scores the
         # pipeline we ship (the eval runner passes no second opinion).
-        apply_deterministic_gates(result, seed, second_opinion=second_opinion)
+        apply_deterministic_gates(
+            result, seed,
+            second_opinion=second_opinion,
+            second_opinion_status=second_opinion_status,
+        )
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already

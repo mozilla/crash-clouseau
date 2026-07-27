@@ -378,11 +378,25 @@ class Dossier(BaseModel):
     # claim; rides any verdict. Empty on older dossiers (backward compatible).
     corroborations: dict = Field(default_factory=dict)
     verdict: Verdict | None = None
+    # The RAW, pre-gate verdict, snapshotted by ``orchestrator.apply_deterministic_gates``
+    # BEFORE any deterministic gate runs. Without it the gates' NET effect is unauditable
+    # after the fact: a second-opinion clamp to ``medium`` looks identical to a no-op on a
+    # lead that was already ``medium``, so "how often does the SO actually MOVE a verdict?"
+    # cannot be answered from persisted data. Computed outside the LLM (stripped at the parse
+    # boundary like ``corroborations``/``second_opinion``); additive + backward compatible.
+    raw_verdict: Verdict | None = None
     # Blind second-opinion re-analysis (#SO), attached programmatically by
     # ``orchestrator._fold_second_opinion`` for a REPORTED lead when the pass is enabled.
     # Additive + backward compatible: older persisted dossiers omit it and validate to
     # ``None``; it rides the dossier JSONB payload, so surfacing it needs no DB migration.
     second_opinion: SecondOpinion | None = None
+    # WHY ``second_opinion`` is (or isn't) set — the SO is best-effort, so without this a
+    # prod-only break is INVISIBLE: a failed run and an ineligible verdict both leave
+    # ``second_opinion`` null and cannot be told apart. One of ``ok`` / ``failed`` /
+    # ``skipped_disabled`` / ``skipped_no_verdict`` / ``skipped_abstain`` /
+    # ``skipped_below_threshold``, or ``None`` when the gate never ran (the offline eval
+    # runner, and every dossier written before this field existed).
+    second_opinion_status: str | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def _has_lead_anchor(self) -> bool:
@@ -671,15 +685,19 @@ def parse_and_validate(result: str | dict) -> Dossier:
     if obj is None:
         return _abstain("no parseable ```json block in the agent result")
     # Strip the fields that are computed OUTSIDE the LLM — ``corroborations`` (deterministic
-    # gate flags set in ``orchestrator``) and ``second_opinion`` (set by the blind-SO fold) —
-    # so the primary model can NEVER populate them from its own handoff JSON. Left in, an
-    # injected value would spoof a deterministic corroboration chip, suppress the SO boost via
-    # a fake ``downgraded_from_strong``, or masquerade as an independent second opinion. The
-    # orchestrator overwrites both post-parse; this makes the strict path match the salvage
-    # path (which never copies them) and preserves the blind-independent guarantee.
+    # gate flags set in ``orchestrator``), ``second_opinion`` + ``second_opinion_status`` (set
+    # by the blind-SO fold) and ``raw_verdict`` (the pre-gate snapshot) — so the primary model
+    # can NEVER populate them from its own handoff JSON. Left in, an injected value would spoof
+    # a deterministic corroboration chip, suppress the SO boost via a fake
+    # ``downgraded_from_strong``, masquerade as an independent second opinion, forge an "ok"
+    # status over a failed pass, or fake a pre-gate verdict to make the gates look like a no-op.
+    # The orchestrator overwrites all of them post-parse; this makes the strict path match the
+    # salvage path (which never copies them) and preserves the blind-independent guarantee.
     if isinstance(obj, dict):
         obj.pop("corroborations", None)
         obj.pop("second_opinion", None)
+        obj.pop("second_opinion_status", None)
+        obj.pop("raw_verdict", None)
     # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
     # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
     # place, so the ``_salvage`` fallback below sees the normalized citations too.

@@ -188,10 +188,28 @@ async def run_second_opinion(crash: dict, candidate: dict | None = None) -> Seco
     except Exception:
         logger.warning("second-opinion: run failed for %s", crash.get("uuid"), exc_info=True)
         return None
-    if result_msg is None or getattr(result_msg, "is_error", False):
+    # Every ``return None`` below is a FAILURE, not a skip — the caller already decided this
+    # lead deserves a second opinion. They were silent, which made a prod-only break
+    # (SDK/tool/allowlist trouble, a model that never emits the JSON block) indistinguishable
+    # from the pass simply not being eligible. Log each one distinctly.
+    if result_msg is None:
+        logger.warning(
+            "second-opinion: no terminal ResultMessage for %s", crash.get("uuid")
+        )
+        return None
+    if getattr(result_msg, "is_error", False):
+        logger.warning(
+            "second-opinion: errored run for %s: %s",
+            crash.get("uuid"), getattr(result_msg, "result", None),
+        )
         return None
     so = parse_second_opinion(result_msg.result or "", candidate)
-    if so is not None:
+    if so is None:
+        logger.warning(
+            "second-opinion: unparseable result for %s (no valid trailing json block)",
+            crash.get("uuid"),
+        )
+    else:
         # Record THIS pass's own cost (from the terminal ResultMessage) so a validation run
         # can price the second opinion separately from the primary triage. Set here, not in
         # parse_second_opinion, because the cost is not part of the agent's JSON contract.

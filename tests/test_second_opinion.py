@@ -36,7 +36,7 @@ class TestSecondOpinionOptions(unittest.TestCase):
             set(opts.mcp_servers),
             {"searchfox", "patch", "history", "source", "bugzilla", "socorro"})
         self.assertEqual(opts.model, "claude-opus-4-8")   # Opus 4.8
-        self.assertEqual(opts.effort, "max")
+        self.assertEqual(opts.effort, "high")             # measured better than max; see config
 
 
 class TestSecondOpinionParse(unittest.TestCase):
@@ -88,8 +88,12 @@ class TestSecondOpinionConfig(unittest.TestCase):
         cfg = config.get_agent_second_opinion()
         self.assertFalse(cfg["enabled"])
         self.assertEqual(cfg["model"], "opus")
-        self.assertEqual(cfg["effort"], "max")
-        self.assertEqual(cfg["min_confidence"], 50)
+        # `high` beat `max` head-to-head on 51 ground-truth corpus cases (equal-or-better
+        # sensitivity/specificity at half the cost and 2.6x the speed), so max is not the default.
+        self.assertEqual(cfg["effort"], "high")
+        # 25 (= Confidence.low), NOT 50: any `lead` is REPORTED, so a threshold of 50 left the
+        # weakest shown leads with no second opinion at all (4 of 31 over the first prod days).
+        self.assertEqual(cfg["min_confidence"], 25)
 
     def test_env_enable(self):
         with mock.patch.dict(os.environ, {"SECOND_OPINION_ENABLED": "1"}):

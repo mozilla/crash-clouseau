@@ -286,10 +286,32 @@ def get_agent_second_opinion():
     return {
         "enabled": _env_bool("SECOND_OPINION_ENABLED", o.get("enabled", False)),
         "model": o.get("model", "opus"),
-        "effort": o.get("effort", "max"),
+        # `high`, NOT `max`. Measured head-to-head on 51 corpus cases with known ground truth
+        # (spike/so_instrument_calibration.py, both arms, identical cases): `high` matched or beat
+        # `max` on every axis — clean-label sensitivity 15/15 vs 14/15, specificity 26/26 for
+        # both, at HALF the cost ($19.89 vs $40.62) and 2.6x the speed (101s vs 258s mean). The
+        # sensitivity edge is one case and well within noise; the cost and latency wins are not.
+        # So the "SO is the allowed single-shot exception to the no-effort=max rule" carve-out is
+        # retired: max was simply worse here.
+        "effort": o.get("effort", "high"),
         "max_turns": o.get("max_turns", 20),
-        # Report threshold: every reported lead (rung >= 50) gets a second opinion by default.
-        "min_confidence": o.get("min_confidence", 50),
+        # Report threshold. There is NO separate report gate: ANY ``lead`` is shown (only
+        # abstains are hidden, modulo ``show_abstain``), so this must sit at the LOWEST rung a
+        # lead can hold — ``Confidence.low`` (0.25) — for "every reported lead gets a second
+        # opinion" to actually hold. It was 50, which silently left the WEAKEST shown leads (the
+        # ones an independent check helps most) with no second opinion at all: 4 of 31 reported
+        # leads over the first three prod days.
+        "min_confidence": o.get("min_confidence", 25),
+        # Separate, HIGHER bar for letting a corroboration MOVE the band (vs merely measuring).
+        # Measuring every reported lead is not a licence to re-rank the weakest ones, because
+        # the fold is inherently ONE-DIRECTIONAL at the bottom rung: the refute clamp never
+        # pushes below a still-reportable lead, so at `low` a confident refutation is a no-op
+        # while a corroboration would jump TWO rungs (low -> probable, p_worth 0.50 -> 0.97).
+        # The SO's corroborate signal is also the weaker of its two: it was never part of the
+        # calibration fit, and in the first prod days 2 of 6 corroborated leads still had the
+        # candidate landing AFTER the signature's first-seen buildid. So: boost only from
+        # `medium` up, which preserves the pre-existing band behaviour exactly.
+        "min_boost_confidence": o.get("min_boost_confidence", 50),
     }
 
 
