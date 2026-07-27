@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
@@ -191,7 +192,21 @@ _NOOP_DESC_PATTERNS = (
     (r"^revert \"", "revert"),
     (r"^merge (mozilla-central|autoland|inbound|beta|release)", "merge"),
     (r"^no bug - tagging", "release tagging"),
+    # TEST-ONLY changes, matched ANYWHERE rather than only at the start. This matters more than
+    # it looks: `_validate_landings` prefers the EARLIEST surviving landing, and in a multi-part
+    # bug the earliest part is often test scaffolding — a relabel run picked "Bug 1933181 - Skip
+    # two translations tests that fail on wayland" as a crash regressor, which an anchored
+    # `^test-only` never catches.
+    #
+    # Kept deliberately NARROW. A false positive here REJECTS a genuine regressor label, which is
+    # worse than missing one, so only unambiguous test-infra signals qualify. A broader
+    # "<verb> ... tests" rule was tried and wrongly flagged "Fix a crash in nsDocShell when tests
+    # run" and "Add a fast path for latest tests of divisibility".
     (r"^test-only", "test-only"),
+    (r"\b(skip|skipping|disable|disabling)\b[^.]{0,30}\btests?\b", "test-only"),
+    (r"\btests?[- ](expectations?|manifests?|annotations?)\b", "test-only"),
+    (r"\b(mochitest|xpcshell|reftest|crashtest|web-platform|wpt|talos|raptor)s?\b",
+     "test-only"),
 )
 
 
@@ -240,6 +255,14 @@ def _regressor_landings(bug_ids, channels=("nightly", "beta", "release")):
     return landings
 
 
+def _http_status(exc):
+    """HTTP status behind a requests exception, or ``None``. Lets a definitive 404 ("this rev is
+    not in this repo") be told apart from a transient 406/5xx/timeout."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 def _build_date(buildid):
     """The crash build's date, or ``None``. ``utils.get_build_date`` raises on anything that is
     not a well-formed buildid, and a missing/odd build must not abort a freeze."""
@@ -255,6 +278,11 @@ def _reject_reason(node, channel, build_dt, bug):
     """Why ``node`` cannot be the regressor of a crash from build ``build_dt``, or ``None`` when
     it is usable. Returns ``(reason, pushdate)`` so the caller can order what survives.
 
+    ``bug`` is the bug claiming this node: an int at freeze time (where each landing keeps its own
+    bug), or a COLLECTION when relabelling an existing corpus, whose stored cases only have a flat
+    ``regressor_nodes`` list and so cannot say which bug a node came from — there, a node is only
+    mismatched if its bug is none of the case's.
+
     Checks, in order of how conclusive they are:
 
     1. **Landed AFTER the crashing build.** Causally impossible, no judgement needed and no
@@ -265,11 +293,29 @@ def _reject_reason(node, channel, build_dt, bug):
        only ever a tie-breaker, never a rejection.
     4. **Belongs to a different bug** than the one claiming it.
     """
-    try:
-        rev = Revision.get_revision(channel or "nightly", node) or {}
-    except Exception as exc:  # pragma: no cover - network
-        logger.warning("eval: could not resolve landing %s: %s", node, exc)
-        return "unresolvable", None
+    rev, error = None, None
+    for attempt in range(3):
+        try:
+            rev = Revision.get_revision(channel or "nightly", node) or {}
+            error = None
+            break
+        except Exception as exc:  # pragma: no cover - network
+            error = exc
+            # A 404 is hg ANSWERING: the rev is not in this repo. That is a real rejection and
+            # retrying it is pointless. Anything else (406 rate-limit, 5xx, timeout, connection
+            # reset) is transient and must NOT be read as evidence against the node.
+            if _http_status(exc) == 404:
+                return "not found on hg", None
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))  # hg.mozilla.org rate-limits bulk access (406)
+    if error is not None:
+        # Keep the node and say we could not check it. Rejecting on a transient failure would let
+        # a network blip silently delete a good label — exactly what a relabel run must never do.
+        logger.warning(
+            "eval: could not resolve landing %s after retries (%s); KEEPING it unverified",
+            node, error,
+        )
+        return None, None
     if not rev.get("node"):
         return "not found on hg", None
     desc = (rev.get("desc") or "").strip()
@@ -288,8 +334,11 @@ def _reject_reason(node, channel, build_dt, bug):
         if re.search(pattern, low):
             return "cannot introduce a crash ({})".format(label), pushed
     match = re.search(r"\bbug[ \t]*#?[ \t]*(\d{5,8})\b", desc, re.I)
-    if bug and match and int(match.group(1)) != bug:
-        return "belongs to bug {} not {}".format(match.group(1), bug), pushed
+    if bug and match:
+        claimed = {bug} if isinstance(bug, int) else {int(b) for b in bug if b}
+        if claimed and int(match.group(1)) not in claimed:
+            return "belongs to bug {} not {}".format(
+                match.group(1), "/".join(str(b) for b in sorted(claimed))), pushed
     return None, pushed
 
 

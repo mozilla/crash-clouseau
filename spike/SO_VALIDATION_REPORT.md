@@ -155,6 +155,14 @@ Auditing all 64 labelled positives in `corpus_ship` with arithmetic + hg only:
 | **any problem** | **15 / 64 = 23.4%** |
 | *(also: labelled regressor is backed out)* | *4* |
 
+**Precision caveat on that table.** `audit_corpus_labels.py` treats ANY hg exception as "node not
+found", so the 3 not-found rows may be transient (hg.mozilla.org rate-limits bulk access, and it
+also 302-redirects to `hg-edge`, which a non-redirect-following client reads as a failure). A later
+re-audit reported 13 not-found and spot-checking 4 of them one at a time found **all 4 present with
+real descriptions** — so those were definitely artifacts. Read the headline as **12–15 of 64
+(19–23%)**. The *kinds* of defect are not in doubt: the landed-after-build, auto-format and
+wrong-bug findings were each verified against real changeset descriptions.
+
 **Root cause:** `crashclouseau/eval/corpus.py::_regressor_nodes(bug_ids)` resolves a bug to its
 landing node without checking that node against the crash's own build.
 
@@ -180,8 +188,30 @@ Every recorded `hit` is legitimate, so **a refit would be a no-op** and the ship
 which §3 fed as "the" candidate — already corrected there (sensitivity 0.72 → 0.93). The earlier
 speculation that this explains the inconclusive prompt A/B is therefore withdrawn too.
 
-**Still worth fixing, and fixed:** the labeller is genuinely buggy, so future corpora would repeat
-this. `regressor_node` was `sorted(nodes)[0]` — ordered by hash, i.e. picked at random — and nodes
+**Relabelling the EXISTING corpus is still outstanding.** `spike/relabel_corpus.py --write` does
+it from data already on disk (free, hg lookups only), and a dry run showed **18 of 64 labels would
+change — 15 genuine corrections and 3 semantics changes** (the old node stays in
+`regressor_nodes` in all 3, so `_hit` is unaffected), with 2 cases left node-less but still valid
+for bug-level scoring. It has NOT been applied: hg started rate-limiting hard after a day of bulk
+use, and each pass needs 385 lookups. `corpus_ship` is verified byte-identical to its
+pre-attempt state. Re-run it on a quiet hg.
+
+That dry run earned its keep twice. It caught two bugs in this very fix before they touched data:
+(1) a transient hg failure was being treated as grounds to REJECT a label, so a network blip would
+silently delete good ground truth — now retried, with a definitive 404 distinguished from a
+transient 406/5xx; and (2) preferring the EARLIEST surviving landing systematically favours test
+scaffolding in multi-part bugs — it picked *"Bug 1933181 - Skip two translations tests that fail on
+wayland"* as a crash regressor, because the `^test-only` pattern was anchored at the start. The
+test-only filter is now matched anywhere but kept deliberately narrow, since a false positive
+REJECTS a real label: a broader "<verb> … tests" rule wrongly flagged *"Fix a crash in nsDocShell
+when tests run"*.
+
+**Residual limitation, unresolved:** a single `regressor_node` is inherently lossy for a
+multi-part bug — neither "earliest" nor "latest" reliably identifies the part that introduced the
+crash. Experiments should prefer the `regressor_nodes` list; the singular field is a heuristic
+representative.
+
+**The labeller itself is fixed**, so future corpora will not repeat this. `regressor_node` was `sorted(nodes)[0]` — ordered by hash, i.e. picked at random — and nodes
 were pooled across bugs so `regressor_bug` could describe a different changeset than
 `regressor_node`. Both fixed, plus validation that rejects a landing which postdates the crash
 build, is an auto-format/backout/revert/merge/tagging push, or belongs to another bug; survivors

@@ -1,0 +1,1503 @@
+{
+  "summary": {
+    "corpus": "corpus_ship",
+    "n_cases": 64,
+    "n_labels_changed": 18,
+    "n_nodes_rejected": 104,
+    "n_cases_left_with_no_node": 2,
+    "wrote": true
+  },
+  "reports": [
+    {
+      "uuid": "03a04efd-945e-479a-addc-263fd0251015",
+      "was_regressor_node": "068ddb3652ea",
+      "n_nodes_before": 4,
+      "crash_buildid": "20251014213342",
+      "kept": [
+        "78a64826662b",
+        "832b10027e3b",
+        "068ddb3652ea"
+      ],
+      "rejected": [
+        {
+          "node": "111e68144f88",
+          "reason": "landed 0.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "78a64826662b",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "0bef6df0-0db4-43ae-a6b2-27f400260330",
+      "was_regressor_node": "91bfadad8e0a",
+      "n_nodes_before": 1,
+      "crash_buildid": "20260330093332",
+      "kept": [
+        "91bfadad8e0a"
+      ],
+      "rejected": [],
+      "now_regressor_node": "91bfadad8e0a",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "131d1004-6fbb-4c45-8477-cbbda0251203",
+      "was_regressor_node": "5f9e366c17fc",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251124214625",
+      "kept": [
+        "5f9e366c17fc",
+        "86c4f03a4305",
+        "8972ceeb1559"
+      ],
+      "rejected": [],
+      "now_regressor_node": "5f9e366c17fc",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "1321d4ad-967b-43b8-a76c-979500260521",
+      "was_regressor_node": "50641796ae6e",
+      "n_nodes_before": 3,
+      "crash_buildid": "20260514203426",
+      "kept": [
+        "556bd8a235db"
+      ],
+      "rejected": [
+        {
+          "node": "50641796ae6e",
+          "reason": "landed 5.5d after the crash build"
+        },
+        {
+          "node": "59b3ec728b22",
+          "reason": "landed 1.0d after the crash build"
+        }
+      ],
+      "now_regressor_node": "556bd8a235db",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "18abf671-908b-46c0-a641-8dab50251015",
+      "was_regressor_node": "b5d6bfc12f00",
+      "n_nodes_before": 2,
+      "crash_buildid": "20251007213923",
+      "kept": [
+        "b5d6bfc12f00",
+        "dcb61b95a5b3"
+      ],
+      "rejected": [],
+      "now_regressor_node": "b5d6bfc12f00",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "23bd9278-e713-469b-a683-ab0390250807",
+      "was_regressor_node": "13735d3c75cb",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250617092639",
+      "kept": [
+        "13735d3c75cb"
+      ],
+      "rejected": [],
+      "now_regressor_node": "13735d3c75cb",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "28cc2387-7a06-4cb0-8da0-c44cc0250904",
+      "was_regressor_node": "010afe1fcabb",
+      "n_nodes_before": 22,
+      "crash_buildid": "20250904092115",
+      "kept": [
+        "142950f7cc02",
+        "216f4b30b0c0",
+        "232bc92d24e2",
+        "295143572cc2",
+        "47e0ba3acc33",
+        "755c877677b5",
+        "b915f51df79a",
+        "d725386721e4",
+        "010afe1fcabb",
+        "0b4dbcbb8909",
+        "46b935061409",
+        "545c3770cabf",
+        "9fc97ed64612",
+        "a6b5919847a1",
+        "b50b606e99d4",
+        "b56c81cb2ba2",
+        "cbc06957aed3",
+        "cd6daec6e4ae"
+      ],
+      "rejected": [
+        {
+          "node": "347c59ae0bce",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        },
+        {
+          "node": "4c630ff1b325",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        },
+        {
+          "node": "4efe072f5aa1",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        },
+        {
+          "node": "6a6ff28c88f1",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        }
+      ],
+      "now_regressor_node": "142950f7cc02",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "39c46ffa-1a8d-416c-ba07-2700f0260209",
+      "was_regressor_node": "007298d99ba4",
+      "n_nodes_before": 9,
+      "crash_buildid": "20260115095939",
+      "kept": [
+        "007298d99ba4",
+        "4b4fb5fd1f38"
+      ],
+      "rejected": [
+        {
+          "node": "48be5ff02dcf",
+          "reason": "landed 19.0d after the crash build"
+        },
+        {
+          "node": "4d3ec02a3564",
+          "reason": "landed 19.0d after the crash build"
+        },
+        {
+          "node": "664ac9f557d1",
+          "reason": "landed 19.0d after the crash build"
+        },
+        {
+          "node": "94615f8bf640",
+          "reason": "landed 19.0d after the crash build"
+        },
+        {
+          "node": "97bf4a05fb87",
+          "reason": "landed 19.0d after the crash build"
+        },
+        {
+          "node": "c88c117b2663",
+          "reason": "landed 19.0d after the crash build"
+        },
+        {
+          "node": "cdf9cf902cdd",
+          "reason": "landed 0.8d after the crash build"
+        }
+      ],
+      "now_regressor_node": "007298d99ba4",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "40dd68fe-e2b6-4450-b359-4ea030260126",
+      "was_regressor_node": "3c99a43d1d94",
+      "n_nodes_before": 5,
+      "crash_buildid": "20251124214625",
+      "kept": [
+        "5f9e366c17fc",
+        "86c4f03a4305",
+        "8972ceeb1559"
+      ],
+      "rejected": [
+        {
+          "node": "3c99a43d1d94",
+          "reason": "landed 42.8d after the crash build"
+        },
+        {
+          "node": "71ae26400a95",
+          "reason": "landed 14.0d after the crash build"
+        }
+      ],
+      "now_regressor_node": "5f9e366c17fc",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "45a2cb7f-5a9f-4608-a842-93ba80251225",
+      "was_regressor_node": "75de582fbae9",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251220093050",
+      "kept": [
+        "75de582fbae9",
+        "9387e2360a1e"
+      ],
+      "rejected": [
+        {
+          "node": "96c4d9e3c03e",
+          "reason": "landed 3.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "75de582fbae9",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "46b917b7-ef6a-4040-aecf-c93c60251003",
+      "was_regressor_node": "38c40d735ab7",
+      "n_nodes_before": 13,
+      "crash_buildid": "20231027211343",
+      "kept": [
+        "38c40d735ab7",
+        "3ceaf46f8f55",
+        "46e18c56dd39",
+        "673df3f83249",
+        "c9d322362e22",
+        "f9f9143ac713",
+        "4471b2edc794",
+        "4517b343b411",
+        "d2e0fddb380e",
+        "e480891bbd3b",
+        "f21cf0e9ff8e",
+        "f7fe117ca37d",
+        "fcb29a7d62eb"
+      ],
+      "rejected": [],
+      "now_regressor_node": "38c40d735ab7",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "48da4669-b770-44b3-a561-63c040260106",
+      "was_regressor_node": "58c224b2e5ff",
+      "n_nodes_before": 4,
+      "crash_buildid": "20251212091729",
+      "kept": [
+        "f82e7952380c"
+      ],
+      "rejected": [
+        {
+          "node": "58c224b2e5ff",
+          "reason": "not found on hg"
+        },
+        {
+          "node": "9e35905d83a8",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        },
+        {
+          "node": "ffcf05014fca",
+          "reason": "not found on hg"
+        }
+      ],
+      "now_regressor_node": "f82e7952380c",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "4a5f4327-2381-4194-990c-d02be0251209",
+      "was_regressor_node": "0b168428809a",
+      "n_nodes_before": 6,
+      "crash_buildid": "20251127150445",
+      "kept": [
+        "a368fd92a379",
+        "abf90655ae82",
+        "a7e5bfa46961"
+      ],
+      "rejected": [
+        {
+          "node": "0b168428809a",
+          "reason": "landed 0.3d after the crash build"
+        },
+        {
+          "node": "39b491fb5202",
+          "reason": "landed 0.3d after the crash build"
+        },
+        {
+          "node": "995fd06d9ae5",
+          "reason": "landed 0.3d after the crash build"
+        }
+      ],
+      "now_regressor_node": "a368fd92a379",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "4b8239d2-02a2-49ee-93c6-9af0e0260212",
+      "was_regressor_node": "00a94805df47",
+      "n_nodes_before": 55,
+      "crash_buildid": "20231223095203",
+      "kept": [
+        "00a94805df47",
+        "029f5470314e",
+        "0595d51073c6",
+        "05a066dcfb52",
+        "0e68a1cc5f26",
+        "12768abca8ac",
+        "2214654fd856",
+        "23a3b0995f32",
+        "26c23ac47959",
+        "272ecdefa3db",
+        "279a5522919a",
+        "2d5bc871fb9e",
+        "2e334c8a1160",
+        "306ad5c722c8",
+        "3695862104e5",
+        "3ce5091256fd",
+        "44fac5680126",
+        "4d35297ae4bb",
+        "51dc14d395c6",
+        "53c348265bb8",
+        "5a2cef0729cc",
+        "6ecbca91effe",
+        "700cb49e7c8a",
+        "7a47354c58c4",
+        "7cbc5704562d",
+        "8436bfea59b9",
+        "88d92a0509cd",
+        "9430aed8659c",
+        "98d2ecb3f476",
+        "a65dfea63fc7",
+        "a78bb8799ef4",
+        "b1577155be1c",
+        "b32edc2659a6",
+        "b6d97ebd3dda",
+        "b7d997c42167",
+        "b9234a7fb938",
+        "bc4f18f14bd3",
+        "bcb45500ba22",
+        "be191f9ac293",
+        "c781f30e5605",
+        "cc1b04d5f70e",
+        "ce3fa8ca07ec",
+        "d3c7d90b2150",
+        "d43f0c82f214",
+        "d8501e23246c",
+        "da42eb3f9664",
+        "db7a0f8d337d",
+        "e3395cf67e5c",
+        "e59a8dc5add5",
+        "e903ac081227",
+        "e99c66838796",
+        "ea4d0db67f89",
+        "ee31e639b046",
+        "f0ac27321cf8",
+        "f55b735f283a"
+      ],
+      "rejected": [],
+      "now_regressor_node": "00a94805df47",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "53dc3292-76fb-4b3a-8bd7-391bd0251002",
+      "was_regressor_node": "0f1d823ebe02",
+      "n_nodes_before": 8,
+      "crash_buildid": "20250510092934",
+      "kept": [
+        "0f1d823ebe02",
+        "29195ee87cf4",
+        "3a6a79710d7e",
+        "4669801f1342",
+        "4ee2d1219a0a",
+        "91dc57f7033c",
+        "a86c7713f936",
+        "dda3f21e993c"
+      ],
+      "rejected": [],
+      "now_regressor_node": "0f1d823ebe02",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "5a444e22-41c4-4078-a904-efd220250724",
+      "was_regressor_node": "47d8d7840ccb",
+      "n_nodes_before": 2,
+      "crash_buildid": "20250722093426",
+      "kept": [
+        "c11e7594c36d"
+      ],
+      "rejected": [
+        {
+          "node": "47d8d7840ccb",
+          "reason": "cannot introduce a crash (revert)"
+        }
+      ],
+      "now_regressor_node": "c11e7594c36d",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "68ae34ad-496e-4822-a5d6-6a4170250825",
+      "was_regressor_node": "c640bfafa636",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250808212304",
+      "kept": [
+        "c640bfafa636"
+      ],
+      "rejected": [],
+      "now_regressor_node": "c640bfafa636",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "73cbfd08-a9c5-41ed-81a7-1108b0251127",
+      "was_regressor_node": "a3a13413c12c",
+      "n_nodes_before": 1,
+      "crash_buildid": "20230913205335",
+      "kept": [
+        "a3a13413c12c"
+      ],
+      "rejected": [],
+      "now_regressor_node": "a3a13413c12c",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "797d30ca-a17d-4f96-89a7-59be60260331",
+      "was_regressor_node": "6828a42b3856",
+      "n_nodes_before": 1,
+      "crash_buildid": "20260122072819",
+      "kept": [
+        "6828a42b3856"
+      ],
+      "rejected": [],
+      "now_regressor_node": "6828a42b3856",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "7a1f0195-9828-4c14-9cd5-265150260610",
+      "was_regressor_node": "009ece72f8eb",
+      "n_nodes_before": 7,
+      "crash_buildid": "20260327092354",
+      "kept": [
+        "76a2b61208b6"
+      ],
+      "rejected": [
+        {
+          "node": "009ece72f8eb",
+          "reason": "landed 33.5d after the crash build"
+        },
+        {
+          "node": "48ec5bb6bfe4",
+          "reason": "landed 69.7d after the crash build"
+        },
+        {
+          "node": "6b1114cb4a97",
+          "reason": "landed 71.5d after the crash build"
+        },
+        {
+          "node": "7f6ff9672f44",
+          "reason": "landed 46.5d after the crash build"
+        },
+        {
+          "node": "b62491de1ada",
+          "reason": "landed 3.5d after the crash build"
+        },
+        {
+          "node": "f6affd94efbc",
+          "reason": "landed 33.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "76a2b61208b6",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "7d355a41-cb38-473f-a855-12fa10251122",
+      "was_regressor_node": "5c68d5d90db2",
+      "n_nodes_before": 4,
+      "crash_buildid": "20251114214833",
+      "kept": [
+        "b6a51dc24ebf",
+        "b8685016e9a6"
+      ],
+      "rejected": [
+        {
+          "node": "5c68d5d90db2",
+          "reason": "landed 4.3d after the crash build"
+        },
+        {
+          "node": "a1de03def1b9",
+          "reason": "landed 4.3d after the crash build"
+        }
+      ],
+      "now_regressor_node": "b6a51dc24ebf",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "82b660f6-5b6f-415f-be8f-1d4ed0251005",
+      "was_regressor_node": "3f167f8b3137",
+      "n_nodes_before": 2,
+      "crash_buildid": "20251004093758",
+      "kept": [
+        "3f167f8b3137",
+        "79dca0a5f19e"
+      ],
+      "rejected": [],
+      "now_regressor_node": "3f167f8b3137",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "8363739b-b3eb-4345-a5c6-a59c40250722",
+      "was_regressor_node": "cb4f6a9c197c",
+      "n_nodes_before": 2,
+      "crash_buildid": "20250716214535",
+      "kept": [
+        "f73e0c41c92c"
+      ],
+      "rejected": [
+        {
+          "node": "cb4f6a9c197c",
+          "reason": "not found on hg"
+        }
+      ],
+      "now_regressor_node": "f73e0c41c92c",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "85a0b761-5b54-45e6-8b11-dafd30251104",
+      "was_regressor_node": "2a8d531e3aab",
+      "n_nodes_before": 4,
+      "crash_buildid": "20251101164325",
+      "kept": [
+        "7ff1bc834ea6",
+        "bf62697ae7ea",
+        "d51bf7d6db72"
+      ],
+      "rejected": [
+        {
+          "node": "2a8d531e3aab",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        }
+      ],
+      "now_regressor_node": "7ff1bc834ea6",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "86399cc9-8152-4c92-9dfc-9226c0250826",
+      "was_regressor_node": "2c97e4069615",
+      "n_nodes_before": 18,
+      "crash_buildid": "20181031100345",
+      "kept": [
+        "3eca90e1af07",
+        "3fb0c8f6d6e2",
+        "543cac7034fe",
+        "61d08765489c",
+        "7889d20e3a29",
+        "7e9935a07eaf",
+        "981f31de3924",
+        "d9eda2382bd9",
+        "de7f45d6f032",
+        "2c97e4069615",
+        "5744145e9c7e",
+        "821b04c10c0d",
+        "89480ab36714",
+        "90a9506812f6",
+        "9c23717ddc50",
+        "a1573c156ba1",
+        "ba172f2b086a",
+        "ec0336b4a1bf"
+      ],
+      "rejected": [],
+      "now_regressor_node": "3eca90e1af07",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "86954bbf-f157-4cd1-a587-e70270260205",
+      "was_regressor_node": "13d768fdb8a4",
+      "n_nodes_before": 5,
+      "crash_buildid": "20200801094810",
+      "kept": [],
+      "rejected": [
+        {
+          "node": "13d768fdb8a4",
+          "reason": "landed 2013.5d after the crash build"
+        },
+        {
+          "node": "3b7e82679e2a",
+          "reason": "belongs to bug 1655580 not 1661106"
+        },
+        {
+          "node": "53d3c6cf423d",
+          "reason": "landed 2013.5d after the crash build"
+        },
+        {
+          "node": "90d692633c9e",
+          "reason": "landed 2013.5d after the crash build"
+        },
+        {
+          "node": "e5f84ed277c7",
+          "reason": "landed 2013.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "",
+      "changed": true,
+      "lost_all_nodes": true
+    },
+    {
+      "uuid": "8de80740-8df8-49fb-87f0-e9d560251205",
+      "was_regressor_node": "c542d5f7eb5f",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250513214736",
+      "kept": [
+        "c542d5f7eb5f"
+      ],
+      "rejected": [],
+      "now_regressor_node": "c542d5f7eb5f",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "9dbf58f2-2f18-405c-851c-4fea00260607",
+      "was_regressor_node": "009ece72f8eb",
+      "n_nodes_before": 7,
+      "crash_buildid": "20260327092354",
+      "kept": [
+        "76a2b61208b6"
+      ],
+      "rejected": [
+        {
+          "node": "009ece72f8eb",
+          "reason": "landed 33.5d after the crash build"
+        },
+        {
+          "node": "48ec5bb6bfe4",
+          "reason": "landed 69.7d after the crash build"
+        },
+        {
+          "node": "6b1114cb4a97",
+          "reason": "landed 71.5d after the crash build"
+        },
+        {
+          "node": "7f6ff9672f44",
+          "reason": "landed 46.5d after the crash build"
+        },
+        {
+          "node": "b62491de1ada",
+          "reason": "landed 3.5d after the crash build"
+        },
+        {
+          "node": "f6affd94efbc",
+          "reason": "landed 33.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "76a2b61208b6",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "a4ff4dfa-900c-434a-83cf-24daa0260507",
+      "was_regressor_node": "37f3be8ded6a",
+      "n_nodes_before": 5,
+      "crash_buildid": "20260429203445",
+      "kept": [
+        "37f3be8ded6a",
+        "4517ae69c1c6",
+        "714abf62cbaf"
+      ],
+      "rejected": [
+        {
+          "node": "7f8782af86b7",
+          "reason": "landed 0.3d after the crash build"
+        },
+        {
+          "node": "a890cef72566",
+          "reason": "cannot introduce a crash (revert)"
+        }
+      ],
+      "now_regressor_node": "37f3be8ded6a",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "a59897f3-7d35-4f0d-a41e-654570260701",
+      "was_regressor_node": "02a2d43e0850",
+      "n_nodes_before": 42,
+      "crash_buildid": "20260312094748",
+      "kept": [
+        "0e5a8997b3d2",
+        "1d951faabf72",
+        "24cd1f22aab4",
+        "7f44566e282c",
+        "922aaa316c66",
+        "94c0787c8bbe",
+        "b76dd54922ff",
+        "b97f2493ae98",
+        "d53c10447206",
+        "e7d7df1b7b40"
+      ],
+      "rejected": [
+        {
+          "node": "02a2d43e0850",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "051838fac5ac",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "0c4f7a86de79",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "1f2338660c01",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "25967aa3c23a",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "2827a925d7c9",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "298029559df0",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "4406f8052ac8",
+          "reason": "landed 0.7d after the crash build"
+        },
+        {
+          "node": "47cd3f64922f",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "5b0132e04c75",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "6b57e393bf62",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "6f5740706bff",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "7a2dd0fae638",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "80f9babffc27",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "84e2985a237e",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "852d3ab675d3",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "8883303930db",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "8e75724401f3",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "8e993d000f6d",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "94f71b82eff7",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "a2644919365f",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "c2ab97e30695",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "c3ed0446f16c",
+          "reason": "landed 0.7d after the crash build"
+        },
+        {
+          "node": "c577c2d92016",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "cc0408a56487",
+          "reason": "landed 111.0d after the crash build"
+        },
+        {
+          "node": "d208dde3b1bd",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "dabfa0128bc7",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "e1ad0083f911",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "e53e8074aa3a",
+          "reason": "landed 116.0d after the crash build"
+        },
+        {
+          "node": "ead1834de5ef",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "ed6edd904e1f",
+          "reason": "landed 111.4d after the crash build"
+        },
+        {
+          "node": "f917f61a9597",
+          "reason": "landed 111.0d after the crash build"
+        }
+      ],
+      "now_regressor_node": "0e5a8997b3d2",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "ab943b20-a33f-466a-a087-042a70260122",
+      "was_regressor_node": "75de582fbae9",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251220093050",
+      "kept": [
+        "75de582fbae9",
+        "9387e2360a1e"
+      ],
+      "rejected": [
+        {
+          "node": "96c4d9e3c03e",
+          "reason": "landed 3.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "75de582fbae9",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "ad51f65a-a760-49ca-97e3-4ee920250723",
+      "was_regressor_node": "09616085d8ef",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250722093426",
+      "kept": [
+        "09616085d8ef"
+      ],
+      "rejected": [],
+      "now_regressor_node": "09616085d8ef",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "b2ef1937-361d-4802-a0b7-bd3ca0251130",
+      "was_regressor_node": "5f9e366c17fc",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251124214625",
+      "kept": [
+        "5f9e366c17fc",
+        "86c4f03a4305",
+        "8972ceeb1559"
+      ],
+      "rejected": [],
+      "now_regressor_node": "5f9e366c17fc",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1978822",
+      "was_regressor_node": "965eb6e57341",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250723155040",
+      "kept": [
+        "965eb6e57341"
+      ],
+      "rejected": [],
+      "now_regressor_node": "965eb6e57341",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1987624",
+      "was_regressor_node": "2a6dadcd0a1e",
+      "n_nodes_before": 5,
+      "crash_buildid": "20250314211155",
+      "kept": [
+        "2a6dadcd0a1e",
+        "699385bf3e07"
+      ],
+      "rejected": [
+        {
+          "node": "68e60c65b23f",
+          "reason": "landed 10.3d after the crash build"
+        },
+        {
+          "node": "726d5bb29819",
+          "reason": "landed 1.3d after the crash build"
+        },
+        {
+          "node": "a7073f2be4d9",
+          "reason": "landed 10.3d after the crash build"
+        }
+      ],
+      "now_regressor_node": "2a6dadcd0a1e",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1991494",
+      "was_regressor_node": "031e42166831",
+      "n_nodes_before": 22,
+      "crash_buildid": "20250829211936",
+      "kept": [
+        "031e42166831",
+        "05a226d5261c",
+        "0d7ae4c7f831",
+        "15595e54cf98",
+        "285eedeaaebe",
+        "3839f25f9631",
+        "4179c7da3556",
+        "6aaa9b6ff41c",
+        "71bd1c5d7772",
+        "8649de9603d2",
+        "89f0b923ad07",
+        "8d48747e0414",
+        "96da62c1c969",
+        "9c430aa474ad",
+        "a8a4e536ef6f",
+        "b270990e890d",
+        "bb08dcd4ac87",
+        "d68ee861218e",
+        "e2aea0877661",
+        "e9801354817f",
+        "eb2c55de9ce7",
+        "f1f078b25343"
+      ],
+      "rejected": [],
+      "now_regressor_node": "031e42166831",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1993379",
+      "was_regressor_node": "c4911116c376",
+      "n_nodes_before": 2,
+      "crash_buildid": "20251005210300",
+      "kept": [
+        "c4911116c376",
+        "d39196d22690"
+      ],
+      "rejected": [],
+      "now_regressor_node": "c4911116c376",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1994989",
+      "was_regressor_node": "062dfceb3e44",
+      "n_nodes_before": 7,
+      "crash_buildid": "20251014095535",
+      "kept": [
+        "062dfceb3e44",
+        "13ef9e23c963",
+        "529b0c195178",
+        "5757b09207b3",
+        "e41cfb05070e",
+        "eda99fc0116a",
+        "eec08d30cbb0"
+      ],
+      "rejected": [],
+      "now_regressor_node": "062dfceb3e44",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1997896",
+      "was_regressor_node": "2681c388b866",
+      "n_nodes_before": 5,
+      "crash_buildid": "20251101164325",
+      "kept": [
+        "2681c388b866",
+        "6fe7a496f6a8",
+        "7cde21140d5b",
+        "7f884686f5b8",
+        "dddacb4706b5"
+      ],
+      "rejected": [],
+      "now_regressor_node": "2681c388b866",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug1998521",
+      "was_regressor_node": "3ffe8bc716ed",
+      "n_nodes_before": 5,
+      "crash_buildid": "20251026204257",
+      "kept": [
+        "3ffe8bc716ed",
+        "6c0561746f9b",
+        "baae10f282ed",
+        "ea2814fa651f",
+        "fdf746352e71"
+      ],
+      "rejected": [],
+      "now_regressor_node": "3ffe8bc716ed",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2000587",
+      "was_regressor_node": "13d65a94e4cf",
+      "n_nodes_before": 2,
+      "crash_buildid": "20251114094637",
+      "kept": [
+        "13d65a94e4cf"
+      ],
+      "rejected": [
+        {
+          "node": "f564813850eb",
+          "reason": "landed 18.0d after the crash build"
+        }
+      ],
+      "now_regressor_node": "13d65a94e4cf",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2002128",
+      "was_regressor_node": "5f9e366c17fc",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251124214625",
+      "kept": [
+        "5f9e366c17fc",
+        "86c4f03a4305",
+        "8972ceeb1559"
+      ],
+      "rejected": [],
+      "now_regressor_node": "5f9e366c17fc",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2002687",
+      "was_regressor_node": "63aa400ac35b",
+      "n_nodes_before": 1,
+      "crash_buildid": "20251126203239",
+      "kept": [
+        "63aa400ac35b"
+      ],
+      "rejected": [],
+      "now_regressor_node": "63aa400ac35b",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2007047",
+      "was_regressor_node": "909b52c7e865",
+      "n_nodes_before": 2,
+      "crash_buildid": "20251216211257",
+      "kept": [
+        "f879d6b36ae6"
+      ],
+      "rejected": [
+        {
+          "node": "909b52c7e865",
+          "reason": "not found on hg"
+        }
+      ],
+      "now_regressor_node": "f879d6b36ae6",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2007139",
+      "was_regressor_node": "a820a22bd5f6",
+      "n_nodes_before": 1,
+      "crash_buildid": "20251214212515",
+      "kept": [
+        "a820a22bd5f6"
+      ],
+      "rejected": [],
+      "now_regressor_node": "a820a22bd5f6",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2009411",
+      "was_regressor_node": "031e42166831",
+      "n_nodes_before": 22,
+      "crash_buildid": "20250829211936",
+      "kept": [
+        "031e42166831",
+        "05a226d5261c",
+        "0d7ae4c7f831",
+        "15595e54cf98",
+        "285eedeaaebe",
+        "3839f25f9631",
+        "4179c7da3556",
+        "6aaa9b6ff41c",
+        "71bd1c5d7772",
+        "8649de9603d2",
+        "89f0b923ad07",
+        "8d48747e0414",
+        "96da62c1c969",
+        "9c430aa474ad",
+        "a8a4e536ef6f",
+        "b270990e890d",
+        "bb08dcd4ac87",
+        "d68ee861218e",
+        "e2aea0877661",
+        "e9801354817f",
+        "eb2c55de9ce7",
+        "f1f078b25343"
+      ],
+      "rejected": [],
+      "now_regressor_node": "031e42166831",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2012631",
+      "was_regressor_node": "60dabe0a1071",
+      "n_nodes_before": 2,
+      "crash_buildid": "20260126213906",
+      "kept": [
+        "60dabe0a1071",
+        "e6e124f289fb"
+      ],
+      "rejected": [],
+      "now_regressor_node": "60dabe0a1071",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2014136",
+      "was_regressor_node": "2eacf57b65a4",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251001071600",
+      "kept": [
+        "2eacf57b65a4",
+        "470c3081db4a"
+      ],
+      "rejected": [
+        {
+          "node": "850c85b7faf1",
+          "reason": "cannot introduce a crash (lando auto-format)"
+        }
+      ],
+      "now_regressor_node": "2eacf57b65a4",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2016312",
+      "was_regressor_node": "09756bcb255e",
+      "n_nodes_before": 6,
+      "crash_buildid": "20250806095656",
+      "kept": [
+        "09756bcb255e",
+        "38e961cebb16"
+      ],
+      "rejected": [
+        {
+          "node": "4c2b07b78ce9",
+          "reason": "landed 258.8d after the crash build"
+        },
+        {
+          "node": "5f898af2a599",
+          "reason": "landed 258.8d after the crash build"
+        },
+        {
+          "node": "638d545ac16b",
+          "reason": "landed 190.0d after the crash build"
+        },
+        {
+          "node": "d18fc99fd893",
+          "reason": "landed 258.8d after the crash build"
+        }
+      ],
+      "now_regressor_node": "09756bcb255e",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2049044",
+      "was_regressor_node": "d3da2cef414d",
+      "n_nodes_before": 1,
+      "crash_buildid": "20260521211559",
+      "kept": [
+        "d3da2cef414d"
+      ],
+      "rejected": [],
+      "now_regressor_node": "d3da2cef414d",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "bug2052825",
+      "was_regressor_node": "32128d7896d3",
+      "n_nodes_before": 3,
+      "crash_buildid": "20260708220003",
+      "kept": [
+        "32128d7896d3",
+        "852e44997cb5",
+        "95953135b6fd"
+      ],
+      "rejected": [],
+      "now_regressor_node": "32128d7896d3",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "c2a3a956-6db6-4ed4-a41a-a3d100250723",
+      "was_regressor_node": "1c5835148de5",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250602211130",
+      "kept": [
+        "1c5835148de5"
+      ],
+      "rejected": [],
+      "now_regressor_node": "1c5835148de5",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "cb0886af-2f8f-434a-a81a-8a3aa0251205",
+      "was_regressor_node": "5f9e366c17fc",
+      "n_nodes_before": 3,
+      "crash_buildid": "20251124214625",
+      "kept": [
+        "5f9e366c17fc",
+        "86c4f03a4305",
+        "8972ceeb1559"
+      ],
+      "rejected": [],
+      "now_regressor_node": "5f9e366c17fc",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "cfaa1ef3-0b81-4f08-8a9c-ce2530260326",
+      "was_regressor_node": "0c2657e75214",
+      "n_nodes_before": 13,
+      "crash_buildid": "20260327214219",
+      "kept": [
+        "0c2657e75214",
+        "2ead425234a5",
+        "365ed3302c3c",
+        "3981bcd36b50",
+        "535df2422590",
+        "542767479d68",
+        "1085ddb446f8",
+        "58196de66b55",
+        "9defa83e4762",
+        "d0f87d0f2b6a",
+        "decda03a4596",
+        "e40a4b5768d0"
+      ],
+      "rejected": [
+        {
+          "node": "305f77cef750",
+          "reason": "cannot introduce a crash (revert)"
+        }
+      ],
+      "now_regressor_node": "0c2657e75214",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "cfd929cf-421b-4c69-845f-4879b0260513",
+      "was_regressor_node": "7072472357dd",
+      "n_nodes_before": 1,
+      "crash_buildid": "20260512090214",
+      "kept": [
+        "7072472357dd"
+      ],
+      "rejected": [],
+      "now_regressor_node": "7072472357dd",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "d024ccf6-9ba3-4c60-82fa-6193d0250814",
+      "was_regressor_node": "32b9defcc9f1",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250425212424",
+      "kept": [
+        "32b9defcc9f1"
+      ],
+      "rejected": [],
+      "now_regressor_node": "32b9defcc9f1",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "d039cffb-4b1c-489b-ad90-0a9c10260122",
+      "was_regressor_node": "cf8c80aba5be",
+      "n_nodes_before": 1,
+      "crash_buildid": "20260109095429",
+      "kept": [
+        "cf8c80aba5be"
+      ],
+      "rejected": [],
+      "now_regressor_node": "cf8c80aba5be",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "d069e9f8-2768-4c74-8077-a27770251114",
+      "was_regressor_node": "13d65a94e4cf",
+      "n_nodes_before": 2,
+      "crash_buildid": "20251114094637",
+      "kept": [
+        "13d65a94e4cf"
+      ],
+      "rejected": [
+        {
+          "node": "f564813850eb",
+          "reason": "landed 18.0d after the crash build"
+        }
+      ],
+      "now_regressor_node": "13d65a94e4cf",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "de9c2fe8-0219-4fdd-9583-1515f0260501",
+      "was_regressor_node": "0bef0a15df9b",
+      "n_nodes_before": 8,
+      "crash_buildid": "20260313213158",
+      "kept": [
+        "0bef0a15df9b",
+        "449b238627e4"
+      ],
+      "rejected": [
+        {
+          "node": "2ba2b5d45fa0",
+          "reason": "not found on hg"
+        },
+        {
+          "node": "40098e1b94b1",
+          "reason": "landed 26.3d after the crash build"
+        },
+        {
+          "node": "8641863e8aa2",
+          "reason": "landed 26.3d after the crash build"
+        },
+        {
+          "node": "a0c82e98a369",
+          "reason": "not found on hg"
+        },
+        {
+          "node": "a4bcc25118ab",
+          "reason": "not found on hg"
+        },
+        {
+          "node": "e8a04d7e8811",
+          "reason": "landed 26.3d after the crash build"
+        }
+      ],
+      "now_regressor_node": "0bef0a15df9b",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "e7611b64-6166-4f6f-9d1d-3a50e0250804",
+      "was_regressor_node": "95103f20248f",
+      "n_nodes_before": 1,
+      "crash_buildid": "20250801043050",
+      "kept": [
+        "95103f20248f"
+      ],
+      "rejected": [],
+      "now_regressor_node": "95103f20248f",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "f1a71902-c82a-4bda-8fea-c402e0260226",
+      "was_regressor_node": "13d768fdb8a4",
+      "n_nodes_before": 5,
+      "crash_buildid": "20200801094810",
+      "kept": [],
+      "rejected": [
+        {
+          "node": "13d768fdb8a4",
+          "reason": "landed 2013.5d after the crash build"
+        },
+        {
+          "node": "3b7e82679e2a",
+          "reason": "belongs to bug 1655580 not 1661106"
+        },
+        {
+          "node": "53d3c6cf423d",
+          "reason": "landed 2013.5d after the crash build"
+        },
+        {
+          "node": "90d692633c9e",
+          "reason": "landed 2013.5d after the crash build"
+        },
+        {
+          "node": "e5f84ed277c7",
+          "reason": "landed 2013.5d after the crash build"
+        }
+      ],
+      "now_regressor_node": "",
+      "changed": true,
+      "lost_all_nodes": true
+    },
+    {
+      "uuid": "f4974bfb-5d01-41d3-8a0c-613760260409",
+      "was_regressor_node": "755a6eaeec23",
+      "n_nodes_before": 2,
+      "crash_buildid": "20260203092803",
+      "kept": [
+        "9e5adc8cb034"
+      ],
+      "rejected": [
+        {
+          "node": "755a6eaeec23",
+          "reason": "landed 57.3d after the crash build"
+        }
+      ],
+      "now_regressor_node": "9e5adc8cb034",
+      "changed": true,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "fca48200-78f1-4090-bee5-cc4600250901",
+      "was_regressor_node": "b0ef844bc744",
+      "n_nodes_before": 1,
+      "crash_buildid": "20241016214437",
+      "kept": [
+        "b0ef844bc744"
+      ],
+      "rejected": [],
+      "now_regressor_node": "b0ef844bc744",
+      "changed": false,
+      "lost_all_nodes": false
+    },
+    {
+      "uuid": "ffa8c3ea-861a-4336-85f4-b39cb0260115",
+      "was_regressor_node": "2e66c6575c26",
+      "n_nodes_before": 5,
+      "crash_buildid": "20251112091634",
+      "kept": [
+        "2e66c6575c26",
+        "44c360717358",
+        "6327748c3d3d",
+        "83ed52ad40f5",
+        "b22ec0ce576b"
+      ],
+      "rejected": [],
+      "now_regressor_node": "2e66c6575c26",
+      "changed": false,
+      "lost_all_nodes": false
+    }
+  ]
+}

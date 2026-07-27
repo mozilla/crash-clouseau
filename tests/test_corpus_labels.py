@@ -57,6 +57,30 @@ class TestRejectReason(unittest.TestCase):
             self.assertIsNotNone(reason, desc)
             self.assertIn("cannot introduce a crash", reason)
 
+    def test_test_only_changes_are_rejected_anywhere_in_the_desc(self):
+        # `_validate_landings` prefers the EARLIEST surviving landing, and in a multi-part bug
+        # that is often test scaffolding. A relabel run really did pick "Skip two translations
+        # tests that fail on wayland" as a crash regressor, because `^test-only` is anchored.
+        for desc in ("Bug 1933181 - Skip two translations tests that fail on wayland",
+                     "Bug 111 - Update test-expectations for the new parser",
+                     "Bug 444 - Disable the flaky mochitest for now",
+                     "Bug 555 - Fix wpt failures in fetch"):
+            reason = self._reason(_rev(desc, datetime(2026, 3, 20, tzinfo=timezone.utc)),
+                                  bug=None)
+            self.assertIsNotNone(reason, desc)
+            self.assertIn("test-only", reason)
+
+    def test_real_code_changes_that_merely_mention_tests_are_KEPT(self):
+        # A false positive REJECTS a genuine regressor label, which is worse than missing one --
+        # a broader "<verb> ... tests" rule wrongly flagged all of these.
+        for desc in ("Bug 222 - Fix a crash in nsDocShell when tests run",
+                     "Bug 333 - Add a fast path for latest tests of divisibility",
+                     "Bug 666 - Handle null in TestRunner::Start",
+                     "Bug 2023381 - Keep wake lock type for inhibit and uninhibit r=emilio"):
+            self.assertIsNone(
+                self._reason(_rev(desc, datetime(2026, 3, 20, tzinfo=timezone.utc)), bug=None),
+                desc)
+
     def test_merge_and_tagging_are_rejected(self):
         for desc in ("Merge mozilla-central to autoland", "No bug - tagging release"):
             reason = self._reason(_rev(desc, datetime(2026, 3, 20, tzinfo=timezone.utc)),
@@ -73,11 +97,64 @@ class TestRejectReason(unittest.TestCase):
     def test_missing_node_is_rejected(self):
         self.assertEqual(self._reason({}), "not found on hg")
 
-    def test_hg_failure_is_rejected_not_raised(self):
-        with mock.patch.object(corpus.Revision, "get_revision",
-                               side_effect=RuntimeError("hg down")):
-            reason, _ = corpus._reject_reason("abc123def456", "nightly", _BUILD, 1)
-        self.assertEqual(reason, "unresolvable")
+    def test_transient_hg_failure_KEEPS_the_node(self):
+        # A network blip is not evidence against a node. hg.mozilla.org rate-limits bulk access
+        # (406), and a relabel run that rejected on that would silently delete good labels --
+        # observed for real: 23 nodes came back "unresolvable" in one pass against 3 genuinely
+        # missing. Retries, then keeps it unverified.
+        with mock.patch.object(corpus.time, "sleep", lambda *_a: None):
+            with mock.patch.object(corpus.Revision, "get_revision",
+                                   side_effect=RuntimeError("406")) as m:
+                reason, _ = corpus._reject_reason("abc123def456", "nightly", _BUILD, 1)
+        self.assertIsNone(reason)
+        self.assertEqual(m.call_count, 3)          # retried before giving up
+
+    def test_a_retry_that_succeeds_is_used(self):
+        good = _rev("Bug 1 - real", datetime(2026, 3, 20, tzinfo=timezone.utc))
+        calls = {"n": 0}
+
+        def _flaky(channel, node):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("406")
+            return good
+
+        with mock.patch.object(corpus.time, "sleep", lambda *_a: None):
+            with mock.patch.object(corpus.Revision, "get_revision", _flaky):
+                reason, pushed = corpus._reject_reason("abc123def456", "nightly", _BUILD, 1)
+        self.assertIsNone(reason)
+        self.assertIsNotNone(pushed)
+        self.assertEqual(calls["n"], 2)
+
+    def test_an_empty_hg_answer_IS_a_rejection(self):
+        # Distinct from a transient failure: hg answered, and the node is not there.
+        self.assertEqual(self._reason({}), "not found on hg")
+
+    def test_a_404_is_a_rejection_and_is_not_retried(self):
+        # hg ANSWERING "not in this repo" is real evidence, unlike a 406/5xx. Observed for real:
+        # json-rev returns 404 for revs that never reached mozilla-central.
+        class _Resp:
+            status_code = 404
+
+        exc = RuntimeError("404 Client Error")
+        exc.response = _Resp()
+        with mock.patch.object(corpus.time, "sleep", lambda *_a: None):
+            with mock.patch.object(corpus.Revision, "get_revision", side_effect=exc) as m:
+                reason, _ = corpus._reject_reason("abc123def456", "nightly", _BUILD, 1)
+        self.assertEqual(reason, "not found on hg")
+        self.assertEqual(m.call_count, 1)          # no point retrying a definitive answer
+
+    def test_a_406_rate_limit_is_transient_and_keeps_the_node(self):
+        class _Resp:
+            status_code = 406
+
+        exc = RuntimeError("406 Not Acceptable")
+        exc.response = _Resp()
+        with mock.patch.object(corpus.time, "sleep", lambda *_a: None):
+            with mock.patch.object(corpus.Revision, "get_revision", side_effect=exc) as m:
+                reason, _ = corpus._reject_reason("abc123def456", "nightly", _BUILD, 1)
+        self.assertIsNone(reason)
+        self.assertEqual(m.call_count, 3)
 
     def test_unknown_build_date_skips_only_the_timing_check(self):
         # No build date -> we cannot judge ordering, but the desc checks must still apply.
