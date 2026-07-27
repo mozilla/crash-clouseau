@@ -542,6 +542,32 @@ def build_seed(uuid):
     if is_offstack:
         experts = _crashing_area_experts(frames, channel, pin_rev)
 
+    # When was this signature FIRST seen? One Socorro lookup, done here (once, at seed time)
+    # rather than in the gates, because `apply_deterministic_gates` is shared with the OFFLINE
+    # eval runner and must stay pure/deterministic — the same arrangement as `prior_hints`.
+    # Offline the seed simply lacks these keys and the gate no-ops (a documented fidelity gap).
+    # Best-effort: a lookup failure must never break a seed.
+    sig_first_seen = None
+    if config.get_agent_signature_age()["enabled"]:
+        try:
+            from crashclouseau import sigage
+
+            sig_first_seen = sigage.first_seen_buildid(
+                info.get("signature", ""),
+                info.get("product") or uuid_info.get("product", "") or "Firefox",
+                channel,
+            )
+        except Exception as exc:  # pragma: no cover - defensive; never break a seed
+            logger.warning("agent: signature first-seen lookup failed for %s: %s", uuid, exc)
+    # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
+    # runs — so hand it the map for every seeded candidate. Both candidate builders already
+    # carry `pushdate` (DB datetime on-stack, hg [epoch, tz] off-stack), so this costs nothing.
+    # A node the agent found some other way (e.g. via blame) is absent and the gate no-ops.
+    candidate_pushdates = {
+        c["node"]: c.get("pushdate")
+        for c in (candidates or []) if c.get("node") and c.get("pushdate") is not None
+    }
+
     return {
         "uuid": uuid,
         "signature": info.get("signature", ""),
@@ -565,6 +591,11 @@ def build_seed(uuid):
         # named. Surfaced to the agent (prompt) and used by the corroboration gate.
         "prior_regressor_bugs": sorted(prior_bugs),
         "prior_hints": prior_hints,
+        # Stale-signature downweight (see `_apply_signature_age_gate`): the buildid this
+        # signature was FIRST seen in, plus each seeded candidate's landing date, so the gate can
+        # ask whether the chosen candidate landed after the crash already existed.
+        "signature_first_seen_buildid": sig_first_seen,
+        "candidate_pushdates": candidate_pushdates,
     }
 
 
@@ -1068,6 +1099,85 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
 
 
+_STALE_SIGNATURE_CLAMP = {
+    Confidence.probable: Confidence.medium,
+    Confidence.medium: Confidence.low,
+}
+
+
+def _apply_signature_age_gate(dossier, seed):
+    """DOWNWEIGHT a lead whose CANDIDATE landed after the crash already existed.
+
+    If the signature was first seen more than ``min_age_days`` BEFORE the candidate landed, that
+    candidate cannot be the crash's ORIGIN, however plausible its diff looks. This is the single
+    most common way the pipeline is wrong: 10 of 10 high-confidence blind-second-opinion
+    refutations argued exactly this, and all 10 verified deterministically (median gap 178 days).
+
+    The comparison is candidate-pushdate vs first-seen, NOT first-seen vs the crash's BUILD date.
+    That distinction is the whole gate: ~two thirds of triaged signatures are old, so a
+    build-based rule fires on ~83% of independently CORROBORATED leads too and discriminates
+    nothing. Back-tested on 23 real prod leads with the second opinion as an independent
+    yardstick, this comparison at 7 days fires on 10/10 high-confidence refutations while sparing
+    5 of 6 corroborated leads.
+
+    Deliberately a downweight, ONE rung, never below a still-reportable lead:
+
+    * SIGNATURE REUSE is real — an old signature can acquire a new cause, and a rare
+      pre-existing crash can be made *frequent* by a new change (a volume regression). Landing
+      late disproves ORIGIN, not relevance.
+    * 1 of 6 INDEPENDENTLY-CONFIRMED leads still trips this, so a hard "stale -> abstain" rule
+      would destroy real leads.
+
+    Strong-evidence is FLAGGED but not downgraded: that verdict already requires a fully cited,
+    skeptic-survived chain, and neither prod culprit showed the pattern. A confident
+    second-opinion refute already covers the case where such a chain is genuinely wrong.
+
+    Reads only pre-computed seed keys, so it is a no-op offline (eval seeds carry no
+    ``signature_first_seen_buildid``) and never makes a network call from inside the gates. A
+    candidate absent from ``candidate_pushdates`` (e.g. one the agent found via blame rather than
+    from the seed) is also a no-op — unknown timing must not penalise a verdict. Mutates
+    ``dossier`` in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None:
+        return
+    cfg = config.get_agent_signature_age()
+    if not cfg["enabled"]:
+        return
+    first_seen = (seed or {}).get("signature_first_seen_buildid")
+    cand = dossier.candidate
+    if not first_seen or cand is None or not cand.node:
+        return
+    pushdate = ((seed or {}).get("candidate_pushdates") or {}).get(cand.node)
+    if pushdate is None:
+        return
+    from crashclouseau import sigage
+
+    landed_after = sigage.days_landed_after_first_seen(first_seen, pushdate)
+    if landed_after is None or landed_after <= cfg["min_age_days"]:
+        return
+    flags = {
+        "stale_signature": True,
+        "candidate_landed_after_first_seen_days": landed_after,
+        "signature_first_seen_buildid": first_seen,
+    }
+    dossier.corroborations = {**(dossier.corroborations or {}), **flags}
+    if v.decision != Decision.lead:
+        # strong-evidence / abstain: record the fact, do not move the band (see the docstring).
+        return
+    clamped = _STALE_SIGNATURE_CLAMP.get(v.confidence)
+    if clamped is None:
+        return
+    dossier.verdict = v.model_copy(update={"confidence": clamped})
+    flags["stale_signature_clamped"] = True
+    dossier.corroborations = {**dossier.corroborations, **flags}
+    logger.info(
+        "agent: candidate %s landed %.1fd AFTER this signature was first seen (%s) -> lead %s "
+        "clamped to %s for %s",
+        cand.node, landed_after, first_seen, v.confidence.value, clamped.value,
+        (seed or {}).get("uuid"),
+    )
+
+
 def _will_corroboration_promote(dossier, seed):
     """Peek at whether ``_apply_corroboration_gate`` will raise this bare lead to ``probable``
     (a fault-address<->struct-offset or prior-signature match). Used ONLY by
@@ -1150,10 +1260,11 @@ def _maybe_run_second_opinion(result, seed):
 def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_status=None):
     """Reshape the RAW agent verdict into the SHIPPED verdict with the deterministic,
     outside-the-LLM gates: attach area-experts, then the SF-3 call-path gate (off-stack
-    only), the exposer classifier (all crashes), and the corroboration gate (fault-offset /
-    prior-signature lead->probable bump); fold the blind second opinion when one was run;
-    re-derive the bridged needinfo from the FINAL verdict; and apply off-stack observe-only
-    last. Mutates ``result`` / ``result.dossier`` in place and returns it.
+    only), the exposer classifier (all crashes), the corroboration gate (fault-offset /
+    prior-signature lead->probable bump) and the stale-signature downweight; fold the blind
+    second opinion when one was run; re-derive the bridged needinfo from the FINAL verdict; and
+    apply off-stack observe-only last. Mutates ``result`` / ``result.dossier`` in place and
+    returns it.
 
     Extracted so the OFFLINE eval runner applies the exact same post-verdict reshaping as
     ``run_evidence_agent`` — the calibration must score the pipeline we SHIP, not the raw
@@ -1197,6 +1308,13 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
         # match raises a bare lead (medium/50%) to `probable` (70%).
         _apply_corroboration_gate(result.dossier, seed)
+        # Stale-signature downweight: the signature already existed long before this build, so
+        # no window changeset introduced it. Runs AFTER the corroboration gate deliberately —
+        # that gate's evidence (a fault-address <-> struct-offset match) is about the MECHANISM,
+        # while this is about whether the window can contain the origin at all, so the timing
+        # clamp should get the last word on the rung. Running it first would just hand a
+        # downweighted lead back to the bump.
+        _apply_signature_age_gate(result.dossier, seed)
         # Second-opinion fold: an independent blind re-analysis corroborates (boost) or
         # confidently refutes (downgrade) the reported lead. Runs AFTER the corroboration
         # gate (so a corroboration-bumped lead is what's boosted/refuted) and BEFORE the

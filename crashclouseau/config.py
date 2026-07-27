@@ -315,6 +315,28 @@ def get_agent_second_opinion():
     }
 
 
+def get_agent_signature_age():
+    """Stale-signature downweight knobs. When a crash's signature was first seen more than
+    ``min_age_days`` BEFORE the named candidate landed, that candidate cannot be the crash's
+    ORIGIN. Measured on the canary's first three prod days: 10 of 10 high-confidence
+    second-opinion refutations rested on this argument and all 10 verified deterministically
+    (median gap 178 days).
+
+    ``min_age_days`` = 7 was chosen by back-testing thresholds against those 23 real leads, with
+    the blind second opinion as an independent yardstick: at 7 days the rule fires on 10/10
+    high-confidence refutations while sparing 5 of 6 CORROBORATED leads. Tighter (>0d) drags in a
+    second corroborated lead for no extra recall; looser (>90d) drops to 6/10.
+
+    A DOWNWEIGHT, deliberately not a drop: signature REUSE is real (an old signature can acquire
+    a new cause, and a rare pre-existing crash can be made frequent by a new change), and 1 of 6
+    independently-confirmed leads still trips it — a hard rule would kill real leads."""
+    a = get_agent().get("signature_age", {})
+    return {
+        "enabled": _env_bool("SIGNATURE_AGE_ENABLED", a.get("enabled", True)),
+        "min_age_days": a.get("min_age_days", 7),
+    }
+
+
 def _normalize_calibration_table(raw):
     """Coerce a rung -> P map to ``{int rung score: float P}``; drop non-numeric entries.
     Accepts either the flat map or ``eval.calibrate``'s wrapper (a ``calibration_table`` key)."""

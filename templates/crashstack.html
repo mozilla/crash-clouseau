@@ -97,6 +97,11 @@
         <span class="corrob-chip refute" title="An independent blind re-analysis confidently found the candidate cannot explain this crash. The lead is kept (never dropped on one blind disagreement) but not promoted — its confidence is lowered where it can be. See the independent second opinion below.">independent review disputes this</span>
       </div>
       {% endif -%}
+      {% if corrob.get('stale_signature') -%}
+      <div class="corrob-chips">
+        <span class="corrob-chip refute" title="This crash signature was already being reported before the candidate landed, so the candidate cannot be what INTRODUCED it. Its confidence has been lowered one step. It is not dismissed: an old signature can acquire a new cause, and a rare pre-existing crash can be made frequent by a new change — so this changeset may still be relevant, just not the origin.">crash predates this changeset by {{ corrob.get('candidate_landed_after_first_seen_days', 0)|round|int }}d{% if corrob.get('signature_first_seen_buildid') %} (first seen in build {{ corrob.get('signature_first_seen_buildid')|e }}){% endif %}</span>
+      </div>
+      {% endif -%}
       {% if is_lead -%}
       {% if is_probable -%}
       <p class="muted">Probable cause &mdash; a related changeset was found <strong>and a deterministic signal corroborates the mechanism</strong> (see the check below), though the chain is not proven end&#8209;to&#8209;end. Stronger than a bare lead.</p>
