@@ -83,11 +83,44 @@ def first_seen_buildid(signature, product="Firefox", channel="nightly",
     return None
 
 
-_PUSHDATE_CACHE: dict = {}
+_JSON_REV_CACHE: dict = {}
+
+
+def json_rev(node, channel="nightly"):
+    """hg's ``json-rev`` for a changeset: ``{node, pushdate, git_commit, ...}``.
+
+    ONE request serves both things we want about a changeset — when it landed
+    (``pushdate_for_node``) and its git counterpart (``git_commit_for_node``) — so they share
+    this cache rather than each paying for the same lookup. The endpoint is SLOW (measured
+    8-13s on mozilla-central, whichever of hg.mozilla.org / hg-edge you ask), which is why it
+    belongs in the worker and never on a page render.
+
+    Takes a SHORT rev, unlike lando's ``hg2git`` which needs the full 40 chars. ``{}`` when
+    unresolvable; raises nothing. Cached per ``(node, channel)`` — both fields are immutable."""
+    if not node:
+        return {}
+    key = (node, channel or "")
+    if key in _JSON_REV_CACHE:
+        return _JSON_REV_CACHE[key]
+    from libmozdata.hgmozilla import Mercurial
+
+    from crashclouseau import net
+
+    out = {}
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    if repo_url:
+        try:
+            r = net.get("{}/json-rev/{}".format(repo_url, node), allow_redirects=True)
+            r.raise_for_status()
+            out = r.json() or {}
+        except Exception as exc:  # pragma: no cover - network; never break a gate
+            logger.warning("sigage: json-rev lookup failed for %s: %s", node, exc)
+    _JSON_REV_CACHE[key] = out
+    return out
 
 
 def pushdate_for_node(node, channel="nightly"):
-    """When a changeset landed, from hg's ``json-rev`` (``pushdate`` = ``[epoch, tzoffset]``).
+    """When a changeset landed (``[epoch, tzoffset]``), or ``None``.
 
     This is the FALLBACK for the stale-signature gate. The seed pre-computes a pushdate for
     every candidate in the build's pushlog window, but the agent can choose a candidate that
@@ -95,30 +128,15 @@ def pushdate_for_node(node, channel="nightly"):
     landing date -- so the gate used to silently no-op on precisely the crashes it exists to
     catch. Seen in prod on ``0cf2a052-2eae-4228-824f-6284d0260728``: the candidate landed 126
     days after the signature first appeared, the gate skipped, and only the (paid) blind second
-    opinion noticed.
+    opinion noticed."""
+    return json_rev(node, channel).get("pushdate") or None
 
-    ``None`` when unresolvable; raises nothing. Cached per ``(node, channel)`` -- a changeset's
-    push date is immutable."""
-    if not node:
-        return None
-    key = (node, channel or "")
-    if key in _PUSHDATE_CACHE:
-        return _PUSHDATE_CACHE[key]
-    from libmozdata.hgmozilla import Mercurial
 
-    from crashclouseau import net
-
-    pushdate = None
-    repo_url = Mercurial.get_repo_url(channel) if channel else ""
-    if repo_url:
-        try:
-            r = net.get("{}/json-rev/{}".format(repo_url, node), allow_redirects=True)
-            r.raise_for_status()
-            pushdate = (r.json() or {}).get("pushdate")
-        except Exception as exc:  # pragma: no cover - network; never break a gate
-            logger.warning("sigage: pushdate lookup failed for %s: %s", node, exc)
-    _PUSHDATE_CACHE[key] = pushdate
-    return pushdate
+def git_commit_for_node(node, channel="nightly"):
+    """The git sha for an hg changeset, or ``""``. Firefox lives in both forges since the
+    hg->git migration, so the filed bug links the changeset on each; resolved HERE, in the
+    worker, and persisted on the candidate so no page render ever pays for it."""
+    return json_rev(node, channel).get("git_commit") or ""
 
 
 def to_datetime(value):

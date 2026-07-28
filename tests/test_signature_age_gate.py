@@ -315,25 +315,31 @@ class TestSigageLookup(unittest.TestCase):
 
 
 class TestPushdateForNode(unittest.TestCase):
-    """sigage.pushdate_for_node: the gate's fallback when the seed never priced the candidate
-    the agent chose. hg's json-rev takes a SHORT rev and returns pushdate [epoch, tzoffset]."""
+    """sigage.json_rev + its two readers. The gate's fallback when the seed never priced the
+    candidate the agent chose, and the source of the bug comment's git link. hg's json-rev takes
+    a SHORT rev and returns both `pushdate` [epoch, tzoffset] and `git_commit` -- ONE slow
+    (8-13s) request, so both readers share one cache."""
 
     def setUp(self):
-        sigage._PUSHDATE_CACHE.clear()
+        sigage._JSON_REV_CACHE.clear()
 
     def _resp(self, payload):
         r = mock.Mock()
         r.json.return_value = payload
         return r
 
-    def test_reads_pushdate_and_caches(self):
-        r = self._resp({"node": "c90adbc8b3bf1234", "pushdate": [1784318610, 0]})
+    def test_both_readers_share_one_request(self):
+        r = self._resp({"node": "c90adbc8b3bf1234", "pushdate": [1784318610, 0],
+                        "git_commit": "9d7faea5127c"})
         with mock.patch("crashclouseau.net.get", return_value=r) as get:
             self.assertEqual(sigage.pushdate_for_node("c90adbc8b3bf", "nightly"),
                              [1784318610, 0])
+            self.assertEqual(sigage.git_commit_for_node("c90adbc8b3bf", "nightly"),
+                             "9d7faea5127c")
             self.assertEqual(sigage.pushdate_for_node("c90adbc8b3bf", "nightly"),
                              [1784318610, 0])
-        self.assertEqual(get.call_count, 1)          # immutable -> one request per node
+        # the endpoint costs 8-13s: pushdate + git sha + a repeat must be ONE request
+        self.assertEqual(get.call_count, 1)
         self.assertIn("json-rev/c90adbc8b3bf", get.call_args[0][0])
 
     def test_result_feeds_the_day_computation(self):
@@ -344,15 +350,61 @@ class TestPushdateForNode(unittest.TestCase):
             pd = sigage.pushdate_for_node("abc", "nightly")
         self.assertIsNotNone(sigage.days_landed_after_first_seen(_FIRST_SEEN, pd))
 
-    def test_missing_pushdate_field(self):
+    def test_missing_fields(self):
         with mock.patch("crashclouseau.net.get", return_value=self._resp({"node": "abc"})):
             self.assertIsNone(sigage.pushdate_for_node("abc", "nightly"))
+            self.assertEqual(sigage.git_commit_for_node("abc", "nightly"), "")
 
     def test_failure_and_empty_inputs_return_none(self):
         with mock.patch("crashclouseau.net.get", side_effect=RuntimeError("hg down")):
             self.assertIsNone(sigage.pushdate_for_node("zzz", "nightly"))
+            self.assertEqual(sigage.git_commit_for_node("zzz", "nightly"), "")
         self.assertIsNone(sigage.pushdate_for_node("", "nightly"))
         self.assertIsNone(sigage.pushdate_for_node("abc", ""))   # no repo for the channel
+
+
+class TestResolveCandidateGitCommit(unittest.TestCase):
+    """orchestrator._resolve_candidate_git_commit: the candidate's git sha is resolved ONCE in
+    the worker and stored, so no page render pays hg's 8-13s json-rev cost for the (gh) link."""
+
+    def test_stores_the_sha_on_the_candidate(self):
+        d = _lead()
+        with mock.patch.object(sigage, "git_commit_for_node",
+                               return_value="9d7faea5127c") as g:
+            orch._resolve_candidate_git_commit(d, _SEED)
+        g.assert_called_once_with("abc123def456", "nightly")
+        self.assertEqual(d.candidate.git_commit, "9d7faea5127c")
+
+    def test_no_op_when_already_known_or_absent(self):
+        d = _lead()
+        d.candidate = d.candidate.model_copy(update={"git_commit": "cached1"})
+        with mock.patch.object(sigage, "git_commit_for_node") as g:
+            orch._resolve_candidate_git_commit(d, _SEED)
+            orch._resolve_candidate_git_commit(None, _SEED)
+            orch._resolve_candidate_git_commit(
+                Dossier(candidate=None, verdict=Verdict(decision=Decision.abstain,
+                                                        abstain_reason="none")), _SEED)
+        g.assert_not_called()
+        self.assertEqual(d.candidate.git_commit, "cached1")
+
+    def test_unresolved_and_failure_leave_it_empty(self):
+        d = _lead()
+        with mock.patch.object(sigage, "git_commit_for_node", return_value=""):
+            orch._resolve_candidate_git_commit(d, _SEED)
+        self.assertEqual(d.candidate.git_commit, "")
+        with mock.patch.object(sigage, "git_commit_for_node",
+                               side_effect=RuntimeError("hg down")):
+            orch._resolve_candidate_git_commit(d, _SEED)   # must not raise
+        self.assertEqual(d.candidate.git_commit, "")
+
+    def test_gates_do_not_resolve_it(self):
+        # It must stay OUT of apply_deterministic_gates: that is shared with the offline eval
+        # runner, where one 8-13s hg call per corpus crash would wreck runtime + determinism.
+        result = CrashTriageResult(num_turns=1, total_cost_usd=0.1, result="ok",
+                                   dossier=_lead())
+        with mock.patch.object(sigage, "git_commit_for_node") as g:
+            orch.apply_deterministic_gates(result, _seed(-3.0))
+        g.assert_not_called()
 
 
 class TestConfig(unittest.TestCase):

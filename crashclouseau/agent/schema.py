@@ -207,6 +207,11 @@ class Candidate(BaseModel):
     author: str = ""
     channel: str = ""
     pushdate: datetime | None = None
+    # The git counterpart of ``node`` (Firefox is in both forges since the hg->git migration),
+    # resolved once in the worker and stored so the bug comment can link the changeset on
+    # GitHub without a page render paying for hg's 8-13s json-rev lookup. "" = not resolved
+    # (old dossiers, or hg had no counterpart) -> the comment simply omits the gh link.
+    git_commit: str = ""
     backedout: bool = False
     seed_score: int | None = None
     changed_functions: list[str] = Field(default_factory=list)

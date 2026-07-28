@@ -1347,6 +1347,30 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
     return result
 
 
+def _resolve_candidate_git_commit(dossier, seed):
+    """Store the chosen candidate's GIT sha on the dossier, for the filed bug's ``(gh)`` link.
+
+    Done HERE, once per run, rather than when the bug comment is rendered: hg's ``json-rev``
+    takes 8-13s, which is fine inside a ~20-minute analysis and unacceptable on a page view
+    (it made a cold crashstack render take 15s). The stale-signature gate has usually just
+    fetched the same URL for this same node, so this is normally a cache hit and costs nothing.
+
+    Best-effort and additive — an unresolved sha simply means the comment omits the gh link.
+    Never raises."""
+    cand = dossier.candidate if dossier is not None else None
+    if cand is None or not cand.node or cand.git_commit:
+        return
+    try:
+        from crashclouseau import sigage
+
+        git = sigage.git_commit_for_node(cand.node, (seed or {}).get("channel"))
+    except Exception:
+        logger.warning("agent: git-sha lookup failed for %s", cand.node, exc_info=True)
+        return
+    if git:
+        dossier.candidate = cand.model_copy(update={"git_commit": git})
+
+
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     On failure it records the reason (dossier ``payload['error']``) and marks status; a
@@ -1433,6 +1457,11 @@ def run_evidence_agent(uuid, force=False):
             second_opinion=second_opinion,
             second_opinion_status=second_opinion_status,
         )
+        # Resolve the candidate's git sha for the filed bug's (gh) link. Deliberately OUTSIDE
+        # apply_deterministic_gates: that function is shared with the offline eval runner, and
+        # an hg json-rev call (8-13s) per corpus crash would wreck an eval run's runtime and
+        # its determinism. Online only, once per run, usually a cache hit from the gate above.
+        _resolve_candidate_git_commit(result.dossier, seed)
 
         # ``result.actions`` is the single source of truth (build_result folds the
         # recorder's actions + the synthesized needinfo into it); model_dump already

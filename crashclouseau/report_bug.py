@@ -271,49 +271,26 @@ def build_stats_sentence(first, stats, uuid_info):
 
 
 _GITHUB_COMMIT_URL = "https://github.com/mozilla-firefox/firefox/commit/{}"
-# hg rev -> git commit ("" = looked up, no counterpart). The mapping is immutable and the
-# comment is re-rendered on every page view, so one lookup per node per dyno is plenty.
-_GIT_HASH_CACHE: dict = {}
 
 
-def hg_to_git(node, channel):
-    """The git commit for an hg rev, from hg's own ``json-rev`` -- which accepts a SHORT rev
-    and returns a ``git_commit`` field. (lando's ``hg2git`` would need the full 40-char hash;
-    ``Node.node`` only stores 12, which is why ``inspector.git2hg`` goes the other way.)
-    ``""`` when unresolvable. Cached + best-effort."""
-    if not node:
-        return ""
-    if node in _GIT_HASH_CACHE:
-        return _GIT_HASH_CACHE[node]
-    git = ""
-    repo_url = Mercurial.get_repo_url(channel) if channel else ""
-    if repo_url:
-        try:
-            r = net.get("{}/json-rev/{}".format(repo_url, node), allow_redirects=True)
-            r.raise_for_status()
-            git = (r.json() or {}).get("git_commit") or ""
-        except Exception:
-            logger.warning(
-                "bug preview: hg->git lookup failed for %s", node, exc_info=True
-            )
-    _GIT_HASH_CACHE[node] = git
-    return git
-
-
-def changeset_links(node, channel):
+def changeset_links(node, channel, git_commit=""):
     """``[<node>](hg) ([gh](github))`` -- the changeset hash itself links to hg, with a short
     ``(gh)`` for the GitHub counterpart, since Firefox lives in both forges after the
-    hg->git migration. The ``(gh)`` is dropped when the git counterpart can't be resolved,
-    and the hash left bare when the channel has no repo -- never a dead link."""
+    hg->git migration.
+
+    ``git_commit`` is supplied by the CALLER (persisted on the candidate by
+    ``orchestrator._resolve_candidate_git_commit``); this function makes no network call,
+    because resolving an hg rev to a git sha costs 8-13s at hg's ``json-rev`` and this runs on
+    every page render. No sha -> no ``(gh)``; no repo for the channel -> a bare hash. Never a
+    dead link, and never a slow one."""
     if not node:
         return ""
     repo_url = Mercurial.get_repo_url(channel) if channel else ""
     if not repo_url:
         return node
     out = "[{}]({}/rev/{})".format(node, repo_url, node)
-    git = hg_to_git(node, channel)
-    if git:
-        out += " ([gh]({}))".format(_GITHUB_COMMIT_URL.format(git))
+    if git_commit:
+        out += " ([gh]({}))".format(_GITHUB_COMMIT_URL.format(git_commit))
     return out
 
 
@@ -564,7 +541,9 @@ def _explanation_comment(verdict, candidate, channel=None):
         lines.append(cons)
     c = candidate or {}
     if c.get("node"):
-        detail = "Suspected regressor: {}".format(changeset_links(c["node"], channel))
+        detail = "Suspected regressor: {}".format(
+            changeset_links(c["node"], channel, c.get("git_commit") or "")
+        )
         if c.get("bug"):
             detail += " (bug {})".format(c["bug"])
         author = (c.get("author") or "").strip()

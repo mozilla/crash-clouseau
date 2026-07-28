@@ -56,6 +56,9 @@ def _dossier():
             "author": "Dev One <dev@moz.example>",
             "backedout": False,
             "changed_functions": ["Foo::bar"],
+            # Resolved once in the worker (orchestrator._resolve_candidate_git_commit) so the
+            # bug comment can link the changeset on GitHub without a render-time hg lookup.
+            "git_commit": "g1ta1b2c3d4",
         },
         "call_path": {
             "to_symbol": "Foo::bar",
@@ -227,7 +230,7 @@ class TestCrashstackPanel(unittest.TestCase):
         # The bug-preview product::component + Bugzilla-nick lookups are networked; mock
         # Everything networked in the bug preview is mocked so the panel renders offline and
         # deterministically: product::component, the Bugzilla nick, Socorro's crash
-        # reason/volume, the version lookup and the hg->git mapping. The comment ITSELF is
+        # reason/volume and the version lookup. The git sha comes from the candidate. The comment ITSELF is
         # composed for real from _stack() + the evidence.
         # authors_for -> {} makes the needinfo email come from the candidate author display.
         with mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
@@ -241,7 +244,6 @@ class TestCrashstackPanel(unittest.TestCase):
                                   return_value={"reason": "SIGSEGV", "address": "0x10"}), \
                 mock.patch.object(report_bug, "fetch_signature_stats",
                                   return_value=(True, {"count": 3, "installs": 2})), \
-                mock.patch.object(report_bug, "hg_to_git", return_value="g1ta1b2c3d4"), \
                 mock.patch.object(report_bug, "resolve_product_component", return_value=pc):
             return self.client.get("/crashstack.html?uuid=u-1")
 
@@ -1203,8 +1205,7 @@ class TestBugPreview(unittest.TestCase):
             report_bug.build_code_references(both, "nightly").count("\n- "), cap)
 
     def test_changeset_links_both_forges(self):
-        with mock.patch.object(report_bug, "hg_to_git", return_value="9d7faea5127c"):
-            s = report_bug.changeset_links("74675cc139d9", "nightly")
+        s = report_bug.changeset_links("74675cc139d9", "nightly", "9d7faea5127c")
         self.assertEqual(
             s,
             "[74675cc139d9](https://hg.mozilla.org/mozilla-central/rev/74675cc139d9) "
@@ -1212,49 +1213,37 @@ class TestBugPreview(unittest.TestCase):
 
     def test_changeset_links_drops_gh_when_unmapped(self):
         # No git counterpart -> hg only, never a dead github link.
-        with mock.patch.object(report_bug, "hg_to_git", return_value=""):
-            s = report_bug.changeset_links("abc123", "nightly")
+        s = report_bug.changeset_links("abc123", "nightly")
         self.assertEqual(s, "[abc123](https://hg.mozilla.org/mozilla-central/rev/abc123)")
 
     def test_changeset_links_bare_node_without_channel(self):
         # No channel -> no repo to link into; the node still gets named.
-        self.assertEqual(report_bug.changeset_links("abc123", None), "abc123")
-        self.assertEqual(report_bug.changeset_links("", "nightly"), "")
+        self.assertEqual(report_bug.changeset_links("abc123", None, "g1t"), "abc123")
+        self.assertEqual(report_bug.changeset_links("", "nightly", "g1t"), "")
 
-    def test_hg_to_git_reads_json_rev(self):
-        # hg's json-rev takes a SHORT rev and hands back the git commit.
-        r = mock.Mock()
-        r.json.return_value = {"node": "74675cc139d92c0d", "git_commit": "9d7faea5127c"}
-        report_bug._GIT_HASH_CACHE.pop("74675cc139d9", None)
-        with mock.patch.object(report_bug.net, "get", return_value=r) as get:
-            self.assertEqual(report_bug.hg_to_git("74675cc139d9", "nightly"), "9d7faea5127c")
-            # ...and it is cached, so a re-render does not re-fetch
-            self.assertEqual(report_bug.hg_to_git("74675cc139d9", "nightly"), "9d7faea5127c")
-        self.assertEqual(get.call_count, 1)
-        self.assertIn("json-rev/74675cc139d9", get.call_args[0][0])
-
-    def test_hg_to_git_survives_a_failure(self):
-        report_bug._GIT_HASH_CACHE.pop("zzz111", None)
-        with mock.patch.object(report_bug.net, "get", side_effect=Exception("boom")):
-            self.assertEqual(report_bug.hg_to_git("zzz111", "nightly"), "")
-        self.assertEqual(report_bug.hg_to_git("", "nightly"), "")
+    def test_changeset_links_never_makes_a_request(self):
+        # hg's json-rev costs 8-13s; resolving it here made a cold crashstack render take 15s.
+        # The sha is resolved once in the worker and passed in, so rendering must not touch hg.
+        with mock.patch.object(report_bug.net, "get", side_effect=AssertionError("no hg!")):
+            s = report_bug.changeset_links("74675cc139d9", "nightly", "9d7faea5127c")
+        self.assertIn("/commit/9d7faea5127c", s)
 
     def test_build_bug_comment_section_order(self):
         # ONE comment, in the order a triager reads a hand-filed crash bug.
         dossier = {
-            "candidate": {"node": "abc123", "bug": 7, "author": "Dev"},
+            "candidate": {"node": "abc123", "bug": 7, "author": "Dev",
+                          "git_commit": "g1t"},
             "verdict": {"confidence": "probable",
                         "mechanism": {"statement": "null deref of mFoo", "citations": [
                             {"kind": "searchfox", "symbol_id": "A::b",
                              "permalink": "https://searchfox.org/x#1"}]}},
         }
         info = {"uuid": "u-1", "channel": "nightly", "buildid": "20260727081724"}
-        with mock.patch.object(report_bug, "hg_to_git", return_value="g1t"):
-            c = report_bug.build_bug_comment(
-                info, self._stack3(), dossier,
-                details={"reason": "SIGSEGV", "address": "0x0"},
-                stats={"count": 2, "installs": 2}, first=True, version="155.0a1",
-                needinfo=":dev, can you have a look please?")
+        c = report_bug.build_bug_comment(
+            info, self._stack3(), dossier,
+            details={"reason": "SIGSEGV", "address": "0x0"},
+            stats={"count": 2, "installs": 2}, first=True, version="155.0a1",
+            needinfo=":dev, can you have a look please?")
         order = [
             "Crash report: https://crash-stats.mozilla.org/report/index/u-1",
             "Crash Reason:",
@@ -1272,9 +1261,8 @@ class TestBugPreview(unittest.TestCase):
     def test_build_bug_comment_drops_empty_sections(self):
         # No reason, no stats, no citations, no needinfo -> no empty headings, no blank runs.
         info = {"uuid": "u-1", "channel": "nightly", "buildid": "1"}
-        with mock.patch.object(report_bug, "hg_to_git", return_value=""):
-            c = report_bug.build_bug_comment(
-                info, self._stack3(), {"candidate": {"node": "n"}, "verdict": {}})
+        c = report_bug.build_bug_comment(
+            info, self._stack3(), {"candidate": {"node": "n"}, "verdict": {}})
         self.assertNotIn("Reason:", c)
         self.assertNotIn("Code references:", c)
         self.assertNotIn("There are", c)
@@ -1340,7 +1328,8 @@ class TestBugPreview(unittest.TestCase):
         ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",
               "buildid": "20260727081724"}
         dossier = {
-            "candidate": {"node": "n", "bug": 1, "author": "Dev <dev@x.com>"},
+            "candidate": {"node": "n", "bug": 1, "author": "Dev <dev@x.com>",
+                          "git_commit": "g1tsha"},
             "verdict": {"confidence": "high",
                         "mechanism": {"statement": "UAF of mFoo"},
                         "consistency": {"statement": "matches the crash"}},
@@ -1358,7 +1347,6 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch("crashclouseau.models.Node.authors_for",
                            return_value={"n": {"nick": "hgnick", "real": "Dev",
                                                "email": "dev@x.com"}}), \
-                mock.patch.object(report_bug, "hg_to_git", return_value="g1tsha"), \
                 mock.patch.object(report_bug, "_bugzilla_nick", return_value="bznick") as bz:
             prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
         self.assertEqual(prev["title"], "Crash in [@ Foo::bar]")
