@@ -39,6 +39,22 @@ the rest are one-time app setup.
    immediate kick, run once: `heroku run python bin/init.py` (creates schema if needed +
    runs one ingestion pass).
 
+## Before you deploy: check for live triage runs
+
+A release restarts every dyno (SIGTERM, then SIGKILL ~30s later). A triage run takes
+~20 minutes, so it cannot drain — the job is killed mid-analysis, the orphan reaper
+re-enqueues it, and the whole run starts over at roughly $3 a time. Three deploys inside
+one hour on 2026-07-28 produced 11 re-enqueues.
+
+```sh
+uv run python bin/predeploy.py && git push heroku augmented:main
+uv run python bin/predeploy.py --wait   # ...or block until the queue drains (40min max)
+```
+
+Exit 0 means nothing alive would be lost; exit 1 lists the runs and prices the loss.
+`--force` reports but never blocks. Runs already past `job_timeout` don't count — RQ has
+killed those already.
+
 ## Verify after deploy
 - `heroku run 'searchfox-cli --version'` → prints a version (build hook worked).
 - Slug size in the build output — the `claude-agent-sdk` wheel bundles a large (~239 MB)
