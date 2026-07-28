@@ -173,14 +173,13 @@
         {% endif -%}
         </p>
         <p><strong>Summary:</strong> {{ bug_preview['title']|e }}</p>
-        <p><strong>Description:</strong></p>
-        <pre class="action-body">{{ bug_preview['comment']|e }}</pre>
-        {% if bug_preview.get('explanation') -%}
+        {# ONE comment, verbatim: stack + crash reason + volume + analysis + needinfo ask.
+           Shown unrendered (escaped, not linkified) because it IS the markdown we post --
+           what you read here is byte-for-byte what lands in the bug. #}
         <p><strong>Comment:</strong></p>
-        <pre class="action-body">{{ bug_preview['explanation']|linkify(repo_url) }}</pre>
-        {% endif -%}
-        {% if bug_preview.get('needinfo') -%}
-        <p><strong>Needinfo:</strong> <span class="needinfo-draft">{{ bug_preview['needinfo']|e }}</span></p>
+        <pre class="action-body">{{ bug_preview['comment']|e }}</pre>
+        {% if bug_preview.get('needinfo_email') -%}
+        <p><strong>Needinfo flag:</strong> <span class="needinfo-draft">{{ bug_preview['needinfo_email']|e }}</span></p>
         {% endif -%}
       </div>
       {% endif -%}

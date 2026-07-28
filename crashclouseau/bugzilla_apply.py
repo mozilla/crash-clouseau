@@ -24,6 +24,8 @@ This module has two jobs:
 """
 from __future__ import annotations
 
+import os
+
 import libmozdata.config
 from . import net
 
@@ -36,6 +38,13 @@ _EXECUTABLE = {"bugzilla.add_comment", "bugzilla.update_bug"}
 
 _BZ_REST = "https://bugzilla.mozilla.org/rest/bug"
 _HTTP_TIMEOUT = 60
+
+
+def _bz_rest():
+    """The Bugzilla REST base these writes target. Overridable with ``BUGZILLA_REST_URL``
+    so the write path can be exercised against staging (bugzilla.allizom.org) with no way
+    for a test run to reach production BMO."""
+    return os.getenv("BUGZILLA_REST_URL", _BZ_REST)
 
 
 # --------------------------------------------------------------------------- #
@@ -92,7 +101,7 @@ def build_evidence(uuid):
 def _post_comment(bug_id, text, is_private, token):
     """POST /rest/bug/<id>/comment -> new comment id."""
     r = net.post(
-        "{}/{}/comment".format(_BZ_REST, bug_id),
+        "{}/{}/comment".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
         json={"comment": text, "is_private": bool(is_private)},
         timeout=_HTTP_TIMEOUT,
@@ -107,7 +116,7 @@ def _put_bug(bug_id, changes, token):
     if not changes:
         raise ValueError("update_bug action has no changes to apply")
     r = net.put(
-        "{}/{}".format(_BZ_REST, bug_id),
+        "{}/{}".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
         json=changes,
         timeout=_HTTP_TIMEOUT,

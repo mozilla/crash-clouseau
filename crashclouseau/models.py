@@ -1398,6 +1398,10 @@ class CrashStack(db.Model):
                     "stackpos": frame.stackpos,
                     "filename": filename,
                     "function": frame.function,
+                    # The binary the frame is in (e.g. ``xul.dll``) -- Socorro puts it
+                    # between the frame number and the function in the stack it pre-fills
+                    # into a crash bug, so the bug comment (report_bug) needs it too.
+                    "module": frame.module,
                     "changesets": OrderedDict(),
                     "line": frame.line,
                     "node": frame.node,

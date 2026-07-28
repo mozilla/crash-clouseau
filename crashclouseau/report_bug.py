@@ -8,6 +8,7 @@ import re
 from collections import Counter
 from jinja2 import Environment, FileSystemLoader
 import libmozdata.config
+from libmozdata import socorro
 from libmozdata.bugzilla import Bugzilla, BugzillaUser
 from libmozdata.hgmozilla import Mercurial
 from . import net
@@ -175,34 +176,286 @@ def get_info(uuid, changeset, evidence_summary=None):
 # product::component from the regressor. All best-effort — never raises into the caller.
 # --------------------------------------------------------------------------- #
 _MAX_PREVIEW_FRAMES = 10
+# Socorro truncates a frame's function to this width (with a trailing "...") in the stack
+# it pre-fills into a crash bug; matching it keeps a heavily-templated C++/Rust signature
+# from turning one frame into three wrapped lines.
+_MAX_FUNCTION_CHARS = 80
+# Code references appended after the analysis. Capped so a citation-heavy verdict cannot
+# bury the prose under a wall of links.
+_MAX_CODE_REFS = 6
 _EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
 # Process cache: product::component of a bug is stable, and the preview is a hot render
 # path. bug_id -> (product, component) | None (None = looked up, unreadable/absent).
 _PC_CACHE: dict = {}
 
 
-def build_stack_comment(uuid, stack, max_frames=_MAX_PREVIEW_FRAMES):
-    """Recreate, locally (no network), the crash-report comment Socorro pre-fills into its
-    'report a bug' link: the crash-report URL followed by the top ``max_frames`` frames of
-    the crashing thread. Sourced from the frames we already hold
-    (``models.CrashStack.get_by_uuid``), so it matches the Socorro format without the
-    round-trip."""
+def _fenced(text):
+    """``text`` in a markdown fenced block. BMO renders comments as markdown
+    (``class="comment-text markdown-body"``), so an unfenced C++/Rust stack gets mangled:
+    ``_`` becomes emphasis, ``*`` a list, ``<T>`` swallowed as a tag."""
+    return "```\n{}\n```".format(text.strip("\n"))
+
+
+def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES):
+    """The ``Top N frames:`` section, in the format Socorro pre-fills into a crash bug:
+    ``<stackpos>  <module>  <function>  <file>:<line>``, fenced. Sourced from the frames we
+    already hold (``models.CrashStack.get_by_uuid``), so no Socorro round-trip is needed."""
     frames = (stack or {}).get("frames") or []
     top = frames[:max_frames]
-    lines = [
-        "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
-        "",
-        "Top {} frames of crashing thread:".format(len(top)),
-        "",
-    ]
+    lines = []
     for f in top:
         fn = (f.get("function") or "").strip()
+        if len(fn) > _MAX_FUNCTION_CHARS:
+            fn = fn[:_MAX_FUNCTION_CHARS] + "..."
+        module = (f.get("module") or "").strip()
         fname = (f.get("filename") or "").strip()
         line = f.get("line")
         loc = "{}:{}".format(fname, line) if (fname and line and line > 0) else fname
-        desc = "  ".join(x for x in (fn, loc) if x) or (f.get("original") or "").strip()
+        desc = "  ".join(x for x in (module, fn, loc) if x)
+        if not desc:
+            desc = (f.get("original") or "").strip()
         lines.append("{}  {}".format(f.get("stackpos"), desc).rstrip())
-    return "\n".join(lines)
+    return "Top {} frames:\n{}".format(len(top), _fenced("\n".join(lines)))
+
+
+def build_reason_block(details):
+    """The crash-reason section, or ``None`` when Socorro gave us nothing.
+
+    A ``MOZ_CRASH``/Rust panic carries a human-written ``moz_crash_reason`` and gets the
+    ``MOZ_CRASH Reason:`` heading a hand-filed crash bug uses. Anything else (a segv, an
+    access violation) has only the OS-level ``reason``, which is worth stating together
+    with the faulting ``address`` -- for a null deref that pair *is* the diagnosis."""
+    details = details or {}
+    moz = (details.get("moz_crash_reason") or "").strip()
+    if moz:
+        return "MOZ_CRASH Reason:\n{}".format(_fenced(moz))
+    reason = (details.get("reason") or "").strip()
+    if not reason:
+        return None
+    address = (details.get("address") or "").strip()
+    body = "{} at {}".format(reason, address) if address else reason
+    return "Crash Reason:\n{}".format(_fenced(body))
+
+
+def build_stats_sentence(first, stats, uuid_info):
+    """One sentence on how much this signature is crashing -- deliberately the same
+    phrasing as the ``bug.txt`` draft template, so the automatic and hand-drafted comments
+    read alike. ``first`` is Socorro's "only this buildid" flag (see ``get_stats``).
+    ``None`` when we have no counts."""
+    stats = stats or {}
+    count = stats.get("count")
+    if not count:
+        return None
+    installs = stats.get("installs") or 0
+    if count == 1:
+        what = "There is 1 crash"
+    elif installs == 1:
+        what = "There are {} crashes (from 1 installation)".format(count)
+    else:
+        what = "There are {} crashes (from {} installations)".format(count, installs)
+    # Same "where" wording as bug.txt: a nightly is named by its channel + major version
+    # ("nightly 155"), a release/beta by its full version.
+    channel = (uuid_info or {}).get("channel") or ""
+    version = (uuid_info or {}).get("version") or ""
+    if channel == "nightly":
+        where = "nightly {}".format(utils.get_major(version)) if version else "nightly"
+    else:
+        where = version or channel
+    buildid = utils.get_buildid((uuid_info or {}).get("buildid"))
+    return "{}{} {}with buildid {}.".format(
+        what,
+        " in {}".format(where) if where else "",
+        "" if first else "starting ",
+        buildid,
+    )
+
+
+_GITHUB_COMMIT_URL = "https://github.com/mozilla-firefox/firefox/commit/{}"
+# hg rev -> git commit ("" = looked up, no counterpart). The mapping is immutable and the
+# comment is re-rendered on every page view, so one lookup per node per dyno is plenty.
+_GIT_HASH_CACHE: dict = {}
+
+
+def hg_to_git(node, channel):
+    """The git commit for an hg rev, from hg's own ``json-rev`` -- which accepts a SHORT rev
+    and returns a ``git_commit`` field. (lando's ``hg2git`` would need the full 40-char hash;
+    ``Node.node`` only stores 12, which is why ``inspector.git2hg`` goes the other way.)
+    ``""`` when unresolvable. Cached + best-effort."""
+    if not node:
+        return ""
+    if node in _GIT_HASH_CACHE:
+        return _GIT_HASH_CACHE[node]
+    git = ""
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    if repo_url:
+        try:
+            r = net.get("{}/json-rev/{}".format(repo_url, node), allow_redirects=True)
+            r.raise_for_status()
+            git = (r.json() or {}).get("git_commit") or ""
+        except Exception:
+            logger.warning(
+                "bug preview: hg->git lookup failed for %s", node, exc_info=True
+            )
+    _GIT_HASH_CACHE[node] = git
+    return git
+
+
+def changeset_links(node, channel):
+    """``[<node>](hg) ([gh](github))`` -- the changeset hash itself links to hg, with a short
+    ``(gh)`` for the GitHub counterpart, since Firefox lives in both forges after the
+    hg->git migration. The ``(gh)`` is dropped when the git counterpart can't be resolved,
+    and the hash left bare when the channel has no repo -- never a dead link."""
+    if not node:
+        return ""
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    if not repo_url:
+        return node
+    out = "[{}]({}/rev/{})".format(node, repo_url, node)
+    git = hg_to_git(node, channel)
+    if git:
+        out += " ([gh]({}))".format(_GITHUB_COMMIT_URL.format(git))
+    return out
+
+
+def build_code_references(verdict, channel, max_refs=_MAX_CODE_REFS):
+    """Markdown links to the code the verdict cites -- searchfox permalinks for symbols,
+    hg file links (at the candidate's own revision) for the lines its patch touched. This
+    is what makes the analysis checkable without leaving the bug. ``None`` when the verdict
+    cites nothing linkable."""
+    verdict = verdict or {}
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    cites = []
+    for claim in ("mechanism", "consistency"):
+        cites.extend((verdict.get(claim) or {}).get("citations") or [])
+    refs, seen = [], set()
+    for c in cites:
+        if len(refs) >= max_refs:
+            break
+        kind, url, label = c.get("kind"), "", ""
+        if kind == "searchfox" and c.get("permalink"):
+            url = c["permalink"]
+            label = c.get("symbol_id") or c.get("filename") or url
+        elif kind == "diff_line" and repo_url and c.get("filename") and c.get("node"):
+            url = "{}/file/{}/{}".format(repo_url, c["node"], c["filename"])
+            label = c["filename"]
+            if c.get("line"):
+                url += "#l{}".format(c["line"])
+                label += ":{}".format(c["line"])
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        refs.append("- [{}]({})".format(label, url))
+    return "Code references:\n{}".format("\n".join(refs)) if refs else None
+
+
+_REASON_COLUMNS = ["moz_crash_reason", "reason", "address"]
+# Process caches: the comment is rendered on every page view of a culprit/lead crash, and
+# neither of these moves in a way that matters for a preview (a crash's reason is
+# immutable; the counts only creep up). uuid -> value; keeps the render to one fetch per
+# uuid per dyno, preserving the "no Socorro round-trip on the hot path" property.
+_REASON_CACHE: dict = {}
+_STATS_CACHE: dict = {}
+
+
+def fetch_crash_reason(uuid):
+    """``{moz_crash_reason, reason, address}`` for ONE crash, from Socorro. Cached +
+    best-effort: ``{}`` on failure, which simply omits the reason section."""
+    if uuid in _REASON_CACHE:
+        return _REASON_CACHE[uuid]
+    got: dict = {}
+
+    def handler(json, data):
+        hits = json.get("hits") or []
+        if hits:
+            data.update(hits[0])
+
+    try:
+        socorro.SuperSearch(
+            params={"uuid": uuid, "_columns": _REASON_COLUMNS, "_results_number": 1},
+            handler=handler,
+            handlerdata=got,
+        ).wait()
+    except Exception:
+        logger.warning("bug preview: crash-reason lookup failed", exc_info=True)
+    _REASON_CACHE[uuid] = got
+    return got
+
+
+def fetch_signature_stats(uuid, info):
+    """``(first, {count, installs})`` for this signature at/after this buildid -- the same
+    Socorro aggregation the hand-drafted ``bug.txt`` comment uses, so both comments quote
+    the same numbers. ``(True, {})`` when unavailable. Cached + best-effort."""
+    if uuid in _STATS_CACHE:
+        return _STATS_CACHE[uuid]
+    buildid = utils.get_buildid(info.get("buildid"))
+    out = (True, {})
+    got: dict = {}
+
+    def handler(json, data):
+        data.update(json)
+
+    try:
+        socorro.SuperSearch(
+            params={
+                "signature": "=" + (info.get("signature") or ""),
+                "build_id": ">=" + str(buildid),
+                "product": info.get("product"),
+                "release_channel": info.get("channel"),
+                "_aggs.build_id": ["install_time", "_cardinality.install_time"],
+                "_results_number": 0,
+                "_facets": "release_channel",
+                "_facets_size": 100,
+            },
+            handler=handler,
+            handlerdata=got,
+        ).wait()
+        out = get_stats(got, int(buildid))
+    except Exception:
+        logger.warning("bug preview: signature stats lookup failed", exc_info=True)
+    _STATS_CACHE[uuid] = out
+    return out
+
+
+def build_bug_comment(
+    uuid_info,
+    stack,
+    dossier,
+    details=None,
+    stats=None,
+    first=True,
+    version=None,
+    needinfo=None,
+    max_frames=_MAX_PREVIEW_FRAMES,
+):
+    """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
+    hand-filed crash bug (cf. bug 2057432 comment 0):
+
+    1. the crash-report link;
+    2. the crash reason (``MOZ_CRASH Reason:`` for a panic, else the OS reason + address);
+    3. the top ``max_frames`` frames, fenced, with the module column;
+    4. one sentence on how much this signature is crashing;
+    5. the Clouseau analysis + suspected regressor;
+    6. searchfox/hg links for the code the analysis cites;
+    7. the needinfo ask.
+
+    Sections with no data are dropped, never emitted empty."""
+    uuid = (uuid_info or {}).get("uuid", "")
+    channel = (uuid_info or {}).get("channel")
+    info = dict(uuid_info or {})
+    if version:
+        info["version"] = version
+    sections = [
+        "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
+        build_reason_block(details),
+        build_frames_block(stack, max_frames=max_frames),
+        build_stats_sentence(first, stats, info),
+        _explanation_comment(
+            (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel
+        ),
+        build_code_references((dossier or {}).get("verdict"), channel),
+        needinfo,
+    ]
+    return "\n\n".join(s for s in sections if s)
 
 
 def _bugs_product_component(bugids):
@@ -294,9 +547,10 @@ def resolve_product_component(candidate, channel):
     return None, None
 
 
-def _explanation_comment(verdict, candidate):
+def _explanation_comment(verdict, candidate, channel=None):
     """The Clouseau analysis comment we'd post to the filed bug: the crash mechanism (and,
-    when present, why it is consistent with the crash) plus the suspected regressor.
+    when present, why it is consistent with the crash) plus the suspected regressor -- the
+    latter carrying an hg and a GitHub link when ``channel`` tells us which repo it is in.
     ``None`` when there is nothing substantive to say."""
     verdict = verdict or {}
     lines = []
@@ -310,7 +564,7 @@ def _explanation_comment(verdict, candidate):
         lines.append(cons)
     c = candidate or {}
     if c.get("node"):
-        detail = "Suspected regressor: {}".format(c["node"])
+        detail = "Suspected regressor: {}".format(changeset_links(c["node"], channel))
         if c.get("bug"):
             detail += " (bug {})".format(c["bug"])
         author = (c.get("author") or "").strip()
@@ -397,27 +651,49 @@ def _needinfo_line(person):
 
 
 def build_bug_preview(uuid_info, stack, dossier):
-    """The informative "bug we'd file" preview for the crashstack panel:
-    ``{title, comment, product, component, explanation, needinfo}`` -- the full sequence
-    the eventual auto-flow performs (file a bug with the stack, post the analysis comment,
-    needinfo the suspected regressor's author). The stack comment is recreated locally
-    (``build_stack_comment``); product/component are best-effort from the regressor
-    (``resolve_product_component``); the explanation comes from the dossier verdict.
+    """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
+    filer posts: ``{title, comment, product, component, needinfo, needinfo_email}``.
+
+    ``comment`` is the whole bug opener as ONE comment (``build_bug_comment``) -- the
+    stack, the crash reason, the volume, the analysis and the needinfo ask together, the
+    way a triager reads a hand-filed crash bug. ``needinfo_email`` is the requestee the
+    flag needs (the rendered ``needinfo`` line only carries a display nick).
+    product/component are best-effort from the regressor (``resolve_product_component``).
     Returns ``None`` when there is no candidate regressor to file a bug against."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     if not candidate or not candidate.get("node"):
         return None
     channel = uuid_info.get("channel")
+    uuid = uuid_info.get("uuid", "")
     product, component = resolve_product_component(candidate, channel)
+    person = _needinfo_person(candidate, channel)
+    # Version lives on the build row, not on the page's uuid_info; best-effort, and the
+    # stats sentence simply omits it when unavailable.
+    version = uuid_info.get("version")
+    if not version:
+        try:
+            version = models.UUID.get_info(uuid).get("version")
+        except Exception:
+            version = None
+    first, stats = fetch_signature_stats(uuid, uuid_info)
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
         # these bugs searchable/dedupable alongside Socorro-filed ones.
         "title": "Crash in [@ {}]".format((uuid_info.get("signature") or "").strip()),
-        "comment": build_stack_comment(uuid_info.get("uuid", ""), stack),
+        "comment": build_bug_comment(
+            uuid_info,
+            stack,
+            dossier,
+            details=fetch_crash_reason(uuid),
+            stats=stats,
+            first=first,
+            version=version,
+            needinfo=_needinfo_line(person),
+        ),
         "product": product,
         "component": component,
-        "explanation": _explanation_comment(dossier.get("verdict"), candidate),
-        "needinfo": _needinfo_line(_needinfo_person(candidate, channel)),
+        "needinfo": _needinfo_line(person),
+        "needinfo_email": (person or {}).get("email") or "",
     }

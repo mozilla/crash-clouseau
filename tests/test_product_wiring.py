@@ -225,14 +225,23 @@ class TestCrashstackPanel(unittest.TestCase):
 
     def _get(self, evidence, pc=("Core", "DOM: Core & HTML"), nick="stransky"):
         # The bug-preview product::component + Bugzilla-nick lookups are networked; mock
-        # both (the comment itself is recreated locally, so it renders for real from
-        # _stack()). authors_for -> {} makes the needinfo email come from the candidate
-        # author display deterministically.
+        # Everything networked in the bug preview is mocked so the panel renders offline and
+        # deterministically: product::component, the Bugzilla nick, Socorro's crash
+        # reason/volume, the version lookup and the hg->git mapping. The comment ITSELF is
+        # composed for real from _stack() + the evidence.
+        # authors_for -> {} makes the needinfo email come from the candidate author display.
         with mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
                         return_value=(_stack(), _uuid_info())), \
                 mock.patch.object(bugzilla_apply, "build_evidence", return_value=evidence), \
                 mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.UUID.get_info",
+                           return_value={"version": "155.0a1"}), \
                 mock.patch.object(report_bug, "_bugzilla_nick", return_value=nick), \
+                mock.patch.object(report_bug, "fetch_crash_reason",
+                                  return_value={"reason": "SIGSEGV", "address": "0x10"}), \
+                mock.patch.object(report_bug, "fetch_signature_stats",
+                                  return_value=(True, {"count": 3, "installs": 2})), \
+                mock.patch.object(report_bug, "hg_to_git", return_value="g1ta1b2c3d4"), \
                 mock.patch.object(report_bug, "resolve_product_component", return_value=pc):
             return self.client.get("/crashstack.html?uuid=u-1")
 
@@ -280,16 +289,30 @@ class TestCrashstackPanel(unittest.TestCase):
         # the "Draft a bug" button is gone (superseded by the informative preview)
         self.assertNotIn("Draft a bug", html)
         self.assertNotIn("draftBug", html)
-        # bug preview: product::component, Socorro-format title, recreated stack comment,
-        # the analysis comment, and the needinfo targeting the area-expert nick
+        # bug preview: product::component, Socorro-format title, and ONE comment carrying
+        # the stack, the analysis, the code references and the needinfo ask
         self.assertIn("Bug we", html)
         self.assertIn("Crash in [@ Foo::bar]", html)
         self.assertIn("Core :: DOM: Core &amp; HTML", html)
-        self.assertIn("Top 1 frames of crashing thread", html)
+        self.assertIn("Top 1 frames:", html)
+        self.assertIn("Crash Reason:", html)
+        self.assertIn("There are 3 crashes (from 2 installations) in nightly 155", html)
         self.assertIn("Clouseau analysis", html)
-        self.assertIn("Suspected regressor: culpritnode1", html)
+        self.assertIn("Code references:", html)
+        # the culprit changeset carries an hg AND a github link
+        self.assertIn(
+            "Suspected regressor: "
+            "[culpritnode1](https://hg.mozilla.org/mozilla-central/rev/culpritnode1) "
+            "([gh](https://github.com/mozilla-firefox/firefox/commit/g1ta1b2c3d4))",
+            html)
         # needinfo targets the REGRESSOR author by their BUGZILLA nick (mocked to stransky)
         self.assertIn(":stransky, can you have a look please?", html)
+        # ...and the flag's requestee is surfaced as an address, not just a nick
+        self.assertIn("Needinfo flag:", html)
+        self.assertIn("dev@moz.example", html)
+        # only one comment block is offered now (no separate Description/Comment pair)
+        self.assertNotIn("<strong>Description:</strong>", html)
+        self.assertEqual(html.count('<pre class="action-body">'), 1)
 
     def test_recorded_actions_ui_removed(self):
         # The whole "Recorded Bugzilla actions" apply UI is removed (informative-only
@@ -1017,25 +1040,211 @@ class TestBugPreview(unittest.TestCase):
 
     def _stack3(self):
         return {"frames": [
-            {"stackpos": 0, "function": "Foo::bar", "filename": "dom/Foo.cpp", "line": 51},
+            {"stackpos": 0, "function": "Foo::bar", "filename": "dom/Foo.cpp", "line": 51,
+             "module": "xul.dll"},
             {"stackpos": 1, "function": "os_unfair_lock", "filename": "", "line": 0,
+             "module": "libsystem_platform.dylib",
              "original": "os_unfair_lock (in libsystem_platform.dylib)"},
-            {"stackpos": 2, "function": "Baz::qux", "filename": "gfx/Baz.cpp", "line": -1},
+            {"stackpos": 2, "function": "Baz::qux", "filename": "gfx/Baz.cpp", "line": -1,
+             "module": "xul.dll"},
         ]}
 
-    def test_build_stack_comment_format(self):
-        c = report_bug.build_stack_comment("uuid-1", self._stack3())
-        self.assertIn("Crash report: https://crash-stats.mozilla.org/report/index/uuid-1", c)
-        self.assertIn("Top 3 frames of crashing thread:", c)
-        self.assertIn("0  Foo::bar  dom/Foo.cpp:51", c)
-        self.assertIn("1  os_unfair_lock", c)         # opaque frame: function only, no file
-        self.assertIn("2  Baz::qux  gfx/Baz.cpp", c)  # line -1 omitted, filename kept
+    def test_build_frames_block_format(self):
+        c = report_bug.build_frames_block(self._stack3())
+        self.assertIn("Top 3 frames:", c)
+        # Fenced, because BMO renders comments as markdown and would mangle C++ otherwise.
+        self.assertIn("```", c)
+        # Socorro's column order: stackpos, module, function, file:line.
+        self.assertIn("0  xul.dll  Foo::bar  dom/Foo.cpp:51", c)
+        self.assertIn("1  libsystem_platform.dylib  os_unfair_lock", c)  # no file
+        self.assertIn("2  xul.dll  Baz::qux  gfx/Baz.cpp", c)  # line -1 dropped, file kept
 
-    def test_build_stack_comment_caps_frames(self):
-        c = report_bug.build_stack_comment("uuid-1", self._stack3(), max_frames=2)
-        self.assertIn("Top 2 frames of crashing thread:", c)
-        self.assertIn("1  os_unfair_lock", c)
+    def test_build_frames_block_caps_frames(self):
+        c = report_bug.build_frames_block(self._stack3(), max_frames=2)
+        self.assertIn("Top 2 frames:", c)
+        self.assertIn("1  libsystem_platform.dylib  os_unfair_lock", c)
         self.assertNotIn("Baz::qux", c)
+
+    def test_build_frames_block_truncates_long_function(self):
+        # A heavily-templated signature is cut at Socorro's width so one frame stays one
+        # line; the file:line still follows it.
+        fn = "mozilla::Foo<" + "T" * 200 + ">::bar()"
+        stack = {"frames": [{"stackpos": 0, "function": fn, "filename": "a.cpp",
+                             "line": 3, "module": "xul.dll"}]}
+        c = report_bug.build_frames_block(stack)
+        self.assertIn("...", c)
+        self.assertIn("a.cpp:3", c)
+        self.assertNotIn("T" * 100, c)
+
+    def test_build_frames_block_falls_back_to_original(self):
+        # No symbols at all -> Socorro's raw frame text, rather than an empty line.
+        stack = {"frames": [{"stackpos": 0, "function": "", "filename": "", "line": 0,
+                             "module": "", "original": "0x7ffd (in unknown)"}]}
+        self.assertIn("0  0x7ffd (in unknown)", report_bug.build_frames_block(stack))
+
+    def test_build_reason_block_moz_crash(self):
+        b = report_bug.build_reason_block({"moz_crash_reason": "not implemented: no wipe",
+                                           "reason": "SIGSEGV", "address": "0x0"})
+        # A panic/MOZ_CRASH gets the hand-filed heading and its own text wins over the
+        # OS-level reason.
+        self.assertTrue(b.startswith("MOZ_CRASH Reason:"))
+        self.assertIn("not implemented: no wipe", b)
+        self.assertNotIn("SIGSEGV", b)
+
+    def test_build_reason_block_os_reason_with_address(self):
+        b = report_bug.build_reason_block(
+            {"reason": "EXCEPTION_ACCESS_VIOLATION_READ", "address": "0x0000000000000000"})
+        self.assertTrue(b.startswith("Crash Reason:"))
+        self.assertIn("EXCEPTION_ACCESS_VIOLATION_READ at 0x0000000000000000", b)
+
+    def test_build_reason_block_none_when_empty(self):
+        self.assertIsNone(report_bug.build_reason_block(None))
+        self.assertIsNone(report_bug.build_reason_block({}))
+        self.assertIsNone(report_bug.build_reason_block({"reason": "", "address": "0x0"}))
+
+    def test_build_stats_sentence(self):
+        info = {"channel": "nightly", "version": "155.0a1",
+                "buildid": "20260727081724"}
+        s = report_bug.build_stats_sentence(True, {"count": 2, "installs": 2}, info)
+        self.assertEqual(
+            s, "There are 2 crashes (from 2 installations) in nightly 155 "
+               "with buildid 20260727081724.")
+        # not the only buildid -> "starting with"
+        s = report_bug.build_stats_sentence(False, {"count": 2, "installs": 2}, info)
+        self.assertIn("starting with buildid 20260727081724.", s)
+        # singulars
+        self.assertIn("There is 1 crash", report_bug.build_stats_sentence(
+            True, {"count": 1, "installs": 1}, info))
+        self.assertIn("from 1 installation)", report_bug.build_stats_sentence(
+            True, {"count": 4, "installs": 1}, info))
+        # a release channel is named by its full version, not channel + major
+        self.assertIn(" in 154.0.1 with", report_bug.build_stats_sentence(
+            True, {"count": 2, "installs": 2},
+            {"channel": "release", "version": "154.0.1", "buildid": "2026"}))
+
+    def test_build_stats_sentence_none_without_counts(self):
+        self.assertIsNone(report_bug.build_stats_sentence(True, None, {}))
+        self.assertIsNone(report_bug.build_stats_sentence(True, {"count": 0}, {}))
+
+    def test_build_code_references(self):
+        verdict = {
+            "mechanism": {"citations": [
+                {"kind": "searchfox", "symbol_id": "A::b",
+                 "permalink": "https://searchfox.org/x#1"},
+                {"kind": "diff_line", "filename": "a/B.cpp", "line": 9, "node": "abc"},
+            ]},
+            "consistency": {"citations": [
+                # duplicate URL -> emitted once
+                {"kind": "searchfox", "symbol_id": "A::b",
+                 "permalink": "https://searchfox.org/x#1"},
+                # a stack_frame cite is already in the stack block -> not a link
+                {"kind": "stack_frame", "filename": "c.cpp", "line": 1, "stackpos": 0},
+            ]},
+        }
+        refs = report_bug.build_code_references(verdict, "nightly")
+        self.assertIn("- [A::b](https://searchfox.org/x#1)", refs)
+        self.assertIn("- [a/B.cpp:9](https://hg.mozilla.org/mozilla-central/file/abc/"
+                      "a/B.cpp#l9)", refs)
+        self.assertEqual(refs.count("searchfox.org/x#1"), 1)
+        self.assertNotIn("c.cpp", refs)
+
+    def test_build_code_references_caps_and_empties(self):
+        self.assertIsNone(report_bug.build_code_references(None, "nightly"))
+        self.assertIsNone(report_bug.build_code_references(
+            {"mechanism": {"citations": [{"kind": "stack_frame"}]}}, "nightly"))
+
+        def cites(n, off=0):
+            return [{"kind": "searchfox", "symbol_id": "s%d" % i,
+                     "permalink": "https://searchfox.org/x#%d" % i}
+                    for i in range(off, off + n)]
+
+        cap = report_bug._MAX_CODE_REFS
+        self.assertEqual(
+            report_bug.build_code_references(
+                {"mechanism": {"citations": cites(20)}}, "nightly").count("\n- "), cap)
+        # The cap holds across BOTH claims, not per-claim: mechanism alone already fills it.
+        both = {"mechanism": {"citations": cites(cap)},
+                "consistency": {"citations": cites(5, off=cap)}}
+        self.assertEqual(
+            report_bug.build_code_references(both, "nightly").count("\n- "), cap)
+
+    def test_changeset_links_both_forges(self):
+        with mock.patch.object(report_bug, "hg_to_git", return_value="9d7faea5127c"):
+            s = report_bug.changeset_links("74675cc139d9", "nightly")
+        self.assertEqual(
+            s,
+            "[74675cc139d9](https://hg.mozilla.org/mozilla-central/rev/74675cc139d9) "
+            "([gh](https://github.com/mozilla-firefox/firefox/commit/9d7faea5127c))")
+
+    def test_changeset_links_drops_gh_when_unmapped(self):
+        # No git counterpart -> hg only, never a dead github link.
+        with mock.patch.object(report_bug, "hg_to_git", return_value=""):
+            s = report_bug.changeset_links("abc123", "nightly")
+        self.assertEqual(s, "[abc123](https://hg.mozilla.org/mozilla-central/rev/abc123)")
+
+    def test_changeset_links_bare_node_without_channel(self):
+        # No channel -> no repo to link into; the node still gets named.
+        self.assertEqual(report_bug.changeset_links("abc123", None), "abc123")
+        self.assertEqual(report_bug.changeset_links("", "nightly"), "")
+
+    def test_hg_to_git_reads_json_rev(self):
+        # hg's json-rev takes a SHORT rev and hands back the git commit.
+        r = mock.Mock()
+        r.json.return_value = {"node": "74675cc139d92c0d", "git_commit": "9d7faea5127c"}
+        report_bug._GIT_HASH_CACHE.pop("74675cc139d9", None)
+        with mock.patch.object(report_bug.net, "get", return_value=r) as get:
+            self.assertEqual(report_bug.hg_to_git("74675cc139d9", "nightly"), "9d7faea5127c")
+            # ...and it is cached, so a re-render does not re-fetch
+            self.assertEqual(report_bug.hg_to_git("74675cc139d9", "nightly"), "9d7faea5127c")
+        self.assertEqual(get.call_count, 1)
+        self.assertIn("json-rev/74675cc139d9", get.call_args[0][0])
+
+    def test_hg_to_git_survives_a_failure(self):
+        report_bug._GIT_HASH_CACHE.pop("zzz111", None)
+        with mock.patch.object(report_bug.net, "get", side_effect=Exception("boom")):
+            self.assertEqual(report_bug.hg_to_git("zzz111", "nightly"), "")
+        self.assertEqual(report_bug.hg_to_git("", "nightly"), "")
+
+    def test_build_bug_comment_section_order(self):
+        # ONE comment, in the order a triager reads a hand-filed crash bug.
+        dossier = {
+            "candidate": {"node": "abc123", "bug": 7, "author": "Dev"},
+            "verdict": {"confidence": "probable",
+                        "mechanism": {"statement": "null deref of mFoo", "citations": [
+                            {"kind": "searchfox", "symbol_id": "A::b",
+                             "permalink": "https://searchfox.org/x#1"}]}},
+        }
+        info = {"uuid": "u-1", "channel": "nightly", "buildid": "20260727081724"}
+        with mock.patch.object(report_bug, "hg_to_git", return_value="g1t"):
+            c = report_bug.build_bug_comment(
+                info, self._stack3(), dossier,
+                details={"reason": "SIGSEGV", "address": "0x0"},
+                stats={"count": 2, "installs": 2}, first=True, version="155.0a1",
+                needinfo=":dev, can you have a look please?")
+        order = [
+            "Crash report: https://crash-stats.mozilla.org/report/index/u-1",
+            "Crash Reason:",
+            "Top 3 frames:",
+            "There are 2 crashes",
+            "Clouseau analysis (confidence probable): null deref of mFoo",
+            "Suspected regressor: [abc123](", "([gh](", ") (bug 7) by Dev.",
+            "Code references:",
+            ":dev, can you have a look please?",
+        ]
+        at = [c.find(x) for x in order]
+        self.assertNotIn(-1, at, "missing section in {!r}".format(c))
+        self.assertEqual(at, sorted(at), "sections out of order")
+
+    def test_build_bug_comment_drops_empty_sections(self):
+        # No reason, no stats, no citations, no needinfo -> no empty headings, no blank runs.
+        info = {"uuid": "u-1", "channel": "nightly", "buildid": "1"}
+        with mock.patch.object(report_bug, "hg_to_git", return_value=""):
+            c = report_bug.build_bug_comment(
+                info, self._stack3(), {"candidate": {"node": "n"}, "verdict": {}})
+        self.assertNotIn("Reason:", c)
+        self.assertNotIn("Code references:", c)
+        self.assertNotIn("There are", c)
+        self.assertNotIn("\n\n\n", c)
 
     def test_resolve_pc_uses_regressor_bug(self):
         with mock.patch.object(report_bug, "_bugs_product_component",
@@ -1094,7 +1303,8 @@ class TestBugPreview(unittest.TestCase):
             report_bug.build_bug_preview(ui, self._stack3(), {"candidate": {"bug": 1}}))
 
     def test_build_bug_preview_shape(self):
-        ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly"}
+        ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",
+              "buildid": "20260727081724"}
         dossier = {
             "candidate": {"node": "n", "bug": 1, "author": "Dev <dev@x.com>"},
             "verdict": {"confidence": "high",
@@ -1105,18 +1315,34 @@ class TestBugPreview(unittest.TestCase):
         # the author email (here sourced from the hgauthor record of the candidate node).
         with mock.patch.object(report_bug, "resolve_product_component",
                                return_value=("Core", "DOM")), \
+                mock.patch.object(report_bug, "fetch_crash_reason",
+                                  return_value={"reason": "SIGSEGV"}), \
+                mock.patch.object(report_bug, "fetch_signature_stats",
+                                  return_value=(True, {"count": 3, "installs": 2})), \
+                mock.patch("crashclouseau.models.UUID.get_info",
+                           return_value={"version": "155.0a1"}), \
                 mock.patch("crashclouseau.models.Node.authors_for",
                            return_value={"n": {"nick": "hgnick", "real": "Dev",
                                                "email": "dev@x.com"}}), \
+                mock.patch.object(report_bug, "hg_to_git", return_value="g1tsha"), \
                 mock.patch.object(report_bug, "_bugzilla_nick", return_value="bznick") as bz:
             prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
         self.assertEqual(prev["title"], "Crash in [@ Foo::bar]")
         self.assertEqual((prev["product"], prev["component"]), ("Core", "DOM"))
-        self.assertIn("Top 3 frames of crashing thread:", prev["comment"])
-        self.assertIn("UAF of mFoo", prev["explanation"])
-        self.assertIn("Suspected regressor: n (bug 1)", prev["explanation"])
+        # ONE comment carrying every section -- no separate description/explanation.
+        self.assertNotIn("explanation", prev)
+        c = prev["comment"]
+        self.assertIn("Top 3 frames:", c)
+        self.assertIn("Crash Reason:", c)
+        self.assertIn("There are 3 crashes (from 2 installations) in nightly 155", c)
+        self.assertIn("UAF of mFoo", c)
+        self.assertIn("Suspected regressor: [n](", c)
+        self.assertIn("/commit/g1tsha)) (bug 1)", c)
+        self.assertIn(":bznick, can you have a look please?", c)
         # the Bugzilla nick wins over the hg nick, and it's looked up from the email
         self.assertEqual(prev["needinfo"], ":bznick, can you have a look please?")
+        # the flag needs an address, not a display nick
+        self.assertEqual(prev["needinfo_email"], "dev@x.com")
         bz.assert_called_once_with("dev@x.com")
 
     def test_needinfo_person_uses_bugzilla_nick(self):
