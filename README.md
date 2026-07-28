@@ -12,21 +12,21 @@ Results on Firefox code are tracked in a meta bug: https://bugzilla.mozilla.org/
 
 ## Setup
 
-Install the prerequisites via `pip`:
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install uv, then:
 ```sh
-sudo pip install -r requirements.txt
+uv sync
 ```
+This creates a local `.venv` (Python from `.python-version`) with the app
+dependencies plus the dev group (coverage, flake8, honcho). Run project commands
+through uv, e.g. `uv run python -m crashclouseau.worker`.
+
+On Heroku the same `pyproject.toml` + `uv.lock` are installed by the buildpack
+(`uv sync --locked --no-default-groups`, so the dev group is skipped).
 
 ## Running tests
 
-Install test prerequisites via `pip`:
 ```sh
-sudo pip install -r test-requirements.txt
-```
-
-Run tests:
-```sh
-coverage run --source=crashclouseau -m unittest discover tests/
+uv run coverage run --source=crashclouseau -m unittest discover tests/
 ```
 
 ## UI Documentation

@@ -16,9 +16,14 @@ ENV PYTHONUNBUFFERED=1
     
 WORKDIR /tmp
 
-ADD requirements.txt /tmp/requirements.txt
+ADD pyproject.toml /tmp/pyproject.toml
+ADD uv.lock /tmp/uv.lock
 
-RUN pip install -r requirements.txt
+# Install the locked runtime dependencies (same set Heroku installs:
+# --no-default-groups drops the dev group) into the system interpreter.
+RUN pip install uv && \
+    uv export --no-default-groups --no-emit-project --no-hashes -o /tmp/requirements.txt && \
+    uv pip install --system -r /tmp/requirements.txt
 
 WORKDIR /
 

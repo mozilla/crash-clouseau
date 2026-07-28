@@ -44,7 +44,7 @@ tasks:
           source: ${event.repository.url}
         payload:
           maxRunTime: 3600
-          image: python:3.13
+          image: python:3.14
           env:
             CODECOV_TOKEN: 2074f917-03ff-4f90-bafd-1fb186e42216
             DATABASE_URL: postgres://clouseau2:passwd@localhost:5432/clouseau
@@ -55,8 +55,8 @@ tasks:
             - >
               git clone ${repository} repo && cd repo &&
               git -c advice.detachedHead=false checkout ${head_rev} &&
-              pip install --quiet -r requirements.txt &&
-              pip install --quiet -r test-requirements.txt &&
-              flake8 . &&
-              coverage run --source=crashclouseau -m unittest discover tests/ --verbose &&
+              pip install --quiet uv &&
+              uv sync --quiet &&
+              uv run flake8 . &&
+              uv run coverage run --source=crashclouseau -m unittest discover tests/ --verbose &&
               bash <(curl -s https://codecov.io/bash)

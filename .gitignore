@@ -1,6 +1,8 @@
 *~
 *.pyc
 *.pyo
+.venv/
+.coverage
 mozdata.ini
 test.py
 server.crt
