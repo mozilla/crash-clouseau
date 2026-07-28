@@ -40,11 +40,28 @@ except Exception:
     pass
 
 
+# ``requests`` defaults to NO timeout, i.e. block forever if the far end goes quiet. Inside
+# an RQ worker that is not a slow request, it is a lost run: the job hangs until RQ SIGKILLs
+# the work-horse at ``job_timeout``, the dossier is left stuck at ``running``, the orphan
+# reaper re-enqueues it, and the whole analysis is paid for again — twice, then abandoned at
+# ``reap_max_attempts``. Seen on 0cf2a052-2eae-4228-824f-6284d0260728, whose stale-signature
+# gate is the one code path that has to ask hg.mozilla.org (8-13s at the best of times, and
+# it 406-throttles) for a candidate's push date.
+#
+# ``(connect, read)``: 10s to establish a connection, then 60s of SILENCE allowed. The read
+# half is a gap-between-bytes limit, NOT a total-duration cap, so a large-but-progressing
+# response (an hg raw-rev of a big patch, a symbol file) still completes.
+DEFAULT_TIMEOUT = (10, 60)
+
+
 def _with_ua(kwargs):
-    # Merge our UA into any caller-supplied headers without clobbering an explicit one.
+    # Merge our UA into any caller-supplied headers without clobbering an explicit one, and
+    # bound the request unless the caller asked for something specific (setdefault, so an
+    # explicit timeout — including None for "wait forever" — always wins).
     headers = dict(kwargs.pop("headers", None) or {})
     headers.setdefault("User-Agent", USER_AGENT)
     kwargs["headers"] = headers
+    kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
     return kwargs
 
 
