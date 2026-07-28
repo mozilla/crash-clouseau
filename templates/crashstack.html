@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=8">
+    <link rel="stylesheet" href="/clouseau.css?v=10">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script src="/clouseau.js"></script>
@@ -96,6 +96,12 @@
       <div class="corrob-chips">
         <span class="corrob-chip refute" title="An independent blind re-analysis confidently found the candidate cannot explain this crash. The lead is kept (never dropped on one blind disagreement) but not promoted — its confidence is lowered where it can be. See the independent second opinion below.">independent review disputes this</span>
       </div>
+      {# The chip alone says a dispute happened but not WHY, and the reasoning sits far down the
+         page under the full second opinion — so hoist it here, next to the verdict it argues
+         against. Same text, still shown in full below. #}
+      {% if (d.get('second_opinion') or {}).get('refutation') -%}
+      <p class="refute-why"><strong>Why the review disputes it:</strong> {{ d['second_opinion']['refutation']|linkify(repo_url) }}</p>
+      {% endif -%}
       {% endif -%}
       {% if corrob.get('stale_signature') -%}
       <div class="corrob-chips">

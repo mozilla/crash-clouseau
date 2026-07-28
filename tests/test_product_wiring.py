@@ -314,6 +314,40 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertNotIn("<strong>Description:</strong>", html)
         self.assertEqual(html.count('<pre class="action-body">'), 1)
 
+    def test_refutation_reason_is_hoisted_next_to_the_chip(self):
+        # The chip says a dispute happened; the WHY used to live only in the second-opinion
+        # section far down the page. Hoist it under the badge, next to the verdict it argues
+        # against -- and still show it in full below.
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["corroborations"] = {"second_opinion_refuted": True}
+        ev["dossier"]["second_opinion"] = {
+            "mode": "verify", "corroborates": False, "confidence": "high",
+            "mechanism": "poisonCode memsets a stale range",
+            "refutation": "The signature's first-seen build is 20260311050622 but the "
+                          "changeset landed 2026-07-15 - the crash predates the change.",
+        }
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("independent review disputes this", html)
+        self.assertIn("Why the review disputes it:", html)
+        # hoisted ABOVE the full second-opinion section, and the reason appears in both
+        hoisted = html.index("Why the review disputes it:")
+        section = html.index("Independent second opinion")
+        self.assertLess(hoisted, section)
+        self.assertEqual(html.count("the crash predates the change."), 2)
+
+    def test_no_refutation_paragraph_when_corroborated(self):
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["corroborations"] = {"second_opinion_corroborated": True}
+        ev["dossier"]["second_opinion"] = {
+            "mode": "verify", "corroborates": True, "confidence": "high",
+            "mechanism": "agrees", "refutation": None,
+        }
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("independently confirmed", html)
+        self.assertNotIn("Why the review disputes it:", html)
+
     def test_recorded_actions_ui_removed(self):
         # The whole "Recorded Bugzilla actions" apply UI is removed (informative-only
         # phase); a lead with recorded actions shows the preview, not an apply trail.

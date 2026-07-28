@@ -91,12 +91,44 @@ class TestSignatureAgeGate(unittest.TestCase):
         self.assertTrue(d.corroborations["stale_signature"])          # still flagged
         self.assertNotIn("stale_signature_clamped", d.corroborations)  # but nothing moved
 
-    def test_unknown_candidate_pushdate_is_a_no_op(self):
-        # A node the agent found via blame rather than from the seed has no pushdate here.
+    def test_candidate_outside_the_seed_falls_back_to_hg(self):
+        # The agent chose a node the seed never priced (it found it via blame), so the gate has
+        # to resolve the landing date itself instead of skipping. Skipping is what let a
+        # 126-day-stale lead ship at 80% worth-investigating in prod.
+        seen = datetime.strptime(_FIRST_SEEN, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        landed = seen + timedelta(days=126.6)
         d = _lead(Confidence.probable)
-        orch._apply_signature_age_gate(d, _seed(178.0, node="99999999beef"))
+        with mock.patch.object(sigage, "pushdate_for_node",
+                               return_value=landed.timestamp()) as pd:
+            orch._apply_signature_age_gate(d, _seed(178.0, node="99999999beef"))
+        pd.assert_called_once_with("abc123def456", "nightly")
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertTrue(d.corroborations["stale_signature_clamped"])
+        self.assertEqual(d.corroborations["candidate_landed_after_first_seen_days"], 126.6)
+
+    def test_seeded_pushdate_wins_no_lookup(self):
+        # The pre-computed pushdate is authoritative: no hg request when the seed has one.
+        d = _lead(Confidence.probable)
+        with mock.patch.object(sigage, "pushdate_for_node") as pd:
+            orch._apply_signature_age_gate(d, _seed(178.0))
+        pd.assert_not_called()
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_unresolvable_pushdate_is_a_no_op(self):
+        # hg could not date the changeset either -> unknown timing must not penalise a verdict.
+        d = _lead(Confidence.probable)
+        with mock.patch.object(sigage, "pushdate_for_node", return_value=None):
+            orch._apply_signature_age_gate(d, _seed(178.0, node="99999999beef"))
         self.assertEqual(d.verdict.confidence, Confidence.probable)
         self.assertEqual(d.corroborations, {})
+
+    def test_no_lookup_before_first_seen_is_known(self):
+        # Offline purity: an eval seed has no first-seen buildid, so the gate must return
+        # BEFORE it would ever reach for the network.
+        d = _lead(Confidence.probable)
+        with mock.patch.object(sigage, "pushdate_for_node") as pd:
+            orch._apply_signature_age_gate(d, {**_SEED})
+        pd.assert_not_called()
 
     def test_no_candidate_is_a_no_op(self):
         d = Dossier(
@@ -280,6 +312,47 @@ class TestSigageLookup(unittest.TestCase):
 
         with mock.patch.object(sigage.socorro, "SuperSearch", _Boom):
             self.assertIsNone(sigage.first_seen_buildid("S"))
+
+
+class TestPushdateForNode(unittest.TestCase):
+    """sigage.pushdate_for_node: the gate's fallback when the seed never priced the candidate
+    the agent chose. hg's json-rev takes a SHORT rev and returns pushdate [epoch, tzoffset]."""
+
+    def setUp(self):
+        sigage._PUSHDATE_CACHE.clear()
+
+    def _resp(self, payload):
+        r = mock.Mock()
+        r.json.return_value = payload
+        return r
+
+    def test_reads_pushdate_and_caches(self):
+        r = self._resp({"node": "c90adbc8b3bf1234", "pushdate": [1784318610, 0]})
+        with mock.patch("crashclouseau.net.get", return_value=r) as get:
+            self.assertEqual(sigage.pushdate_for_node("c90adbc8b3bf", "nightly"),
+                             [1784318610, 0])
+            self.assertEqual(sigage.pushdate_for_node("c90adbc8b3bf", "nightly"),
+                             [1784318610, 0])
+        self.assertEqual(get.call_count, 1)          # immutable -> one request per node
+        self.assertIn("json-rev/c90adbc8b3bf", get.call_args[0][0])
+
+    def test_result_feeds_the_day_computation(self):
+        # The [epoch, tz] shape json-rev returns must be one sigage.to_datetime understands,
+        # or the gate would resolve a pushdate and still compute None days.
+        r = self._resp({"pushdate": [1784318610, 0]})
+        with mock.patch("crashclouseau.net.get", return_value=r):
+            pd = sigage.pushdate_for_node("abc", "nightly")
+        self.assertIsNotNone(sigage.days_landed_after_first_seen(_FIRST_SEEN, pd))
+
+    def test_missing_pushdate_field(self):
+        with mock.patch("crashclouseau.net.get", return_value=self._resp({"node": "abc"})):
+            self.assertIsNone(sigage.pushdate_for_node("abc", "nightly"))
+
+    def test_failure_and_empty_inputs_return_none(self):
+        with mock.patch("crashclouseau.net.get", side_effect=RuntimeError("hg down")):
+            self.assertIsNone(sigage.pushdate_for_node("zzz", "nightly"))
+        self.assertIsNone(sigage.pushdate_for_node("", "nightly"))
+        self.assertIsNone(sigage.pushdate_for_node("abc", ""))   # no repo for the channel
 
 
 class TestConfig(unittest.TestCase):

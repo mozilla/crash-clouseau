@@ -83,6 +83,44 @@ def first_seen_buildid(signature, product="Firefox", channel="nightly",
     return None
 
 
+_PUSHDATE_CACHE: dict = {}
+
+
+def pushdate_for_node(node, channel="nightly"):
+    """When a changeset landed, from hg's ``json-rev`` (``pushdate`` = ``[epoch, tzoffset]``).
+
+    This is the FALLBACK for the stale-signature gate. The seed pre-computes a pushdate for
+    every candidate in the build's pushlog window, but the agent can choose a candidate that
+    was never in that window (it found it via blame), and such a candidate has no pre-computed
+    landing date -- so the gate used to silently no-op on precisely the crashes it exists to
+    catch. Seen in prod on ``0cf2a052-2eae-4228-824f-6284d0260728``: the candidate landed 126
+    days after the signature first appeared, the gate skipped, and only the (paid) blind second
+    opinion noticed.
+
+    ``None`` when unresolvable; raises nothing. Cached per ``(node, channel)`` -- a changeset's
+    push date is immutable."""
+    if not node:
+        return None
+    key = (node, channel or "")
+    if key in _PUSHDATE_CACHE:
+        return _PUSHDATE_CACHE[key]
+    from libmozdata.hgmozilla import Mercurial
+
+    from crashclouseau import net
+
+    pushdate = None
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    if repo_url:
+        try:
+            r = net.get("{}/json-rev/{}".format(repo_url, node), allow_redirects=True)
+            r.raise_for_status()
+            pushdate = (r.json() or {}).get("pushdate")
+        except Exception as exc:  # pragma: no cover - network; never break a gate
+            logger.warning("sigage: pushdate lookup failed for %s: %s", node, exc)
+    _PUSHDATE_CACHE[key] = pushdate
+    return pushdate
+
+
 def to_datetime(value):
     """Best-effort UTC datetime from any of the pushdate shapes the candidate builders produce:
     a tz-aware ``datetime`` (on-stack, straight from the DB column), hg's ``[epoch, tzoffset]``

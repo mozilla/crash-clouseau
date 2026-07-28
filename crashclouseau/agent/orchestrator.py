@@ -1132,11 +1132,13 @@ def _apply_signature_age_gate(dossier, seed):
     skeptic-survived chain, and neither prod culprit showed the pattern. A confident
     second-opinion refute already covers the case where such a chain is genuinely wrong.
 
-    Reads only pre-computed seed keys, so it is a no-op offline (eval seeds carry no
-    ``signature_first_seen_buildid``) and never makes a network call from inside the gates. A
-    candidate absent from ``candidate_pushdates`` (e.g. one the agent found via blame rather than
-    from the seed) is also a no-op — unknown timing must not penalise a verdict. Mutates
-    ``dossier`` in place; never raises."""
+    Keyed off pre-computed seed keys, so it is a no-op OFFLINE (eval seeds carry no
+    ``signature_first_seen_buildid``, and the check for it comes first). Online, a candidate the
+    agent found outside the seeded window — via blame, so with no pre-computed landing date —
+    gets ONE hg ``json-rev`` lookup (``sigage.pushdate_for_node``) rather than being skipped:
+    that silent skip let a 126-day-stale lead ship at 80% worth-investigating in prod
+    (``0cf2a052-2eae-4228-824f-6284d0260728``). Timing that still cannot be resolved is a no-op —
+    unknown timing must not penalise a verdict. Mutates ``dossier`` in place; never raises."""
     v = dossier.verdict if dossier is not None else None
     if v is None:
         return
@@ -1147,11 +1149,17 @@ def _apply_signature_age_gate(dossier, seed):
     cand = dossier.candidate
     if not first_seen or cand is None or not cand.node:
         return
-    pushdate = ((seed or {}).get("candidate_pushdates") or {}).get(cand.node)
-    if pushdate is None:
-        return
     from crashclouseau import sigage
 
+    pushdate = ((seed or {}).get("candidate_pushdates") or {}).get(cand.node)
+    if pushdate is None:
+        # The agent chose a candidate that was not in the seeded pushlog window (it found it
+        # via blame), so no landing date was pre-computed for it. Resolve it now with ONE hg
+        # lookup. This only ever runs online: an offline seed carries no
+        # `signature_first_seen_buildid` and returned above, so the gate stays a no-op there.
+        pushdate = sigage.pushdate_for_node(cand.node, (seed or {}).get("channel"))
+    if pushdate is None:
+        return
     landed_after = sigage.days_landed_after_first_seen(first_seen, pushdate)
     if landed_after is None or landed_after <= cfg["min_age_days"]:
         return

@@ -174,6 +174,17 @@ s.red {
 }
 .corrob-chip.refute::before { content: "\2717\00a0"; }  /* ✗ */
 
+/* The refutation's reasoning, hoisted up next to the chip: the amber rule ties it to the
+   ✗ chip above it, and it stays quieter than the verdict's own prose. */
+.refute-why {
+    margin: 0.3em 0 0.8em;
+    padding: 0.4em 0.8em;
+    border-left: 3px solid #c05621;
+    background-color: #fff8f2;
+    font-size: 0.92em;
+    color: #4a4a4a;
+}
+
 .needinfo-draft {
     padding: 0.6em 0.8em;
     border-left: 3px solid #d98a00;
