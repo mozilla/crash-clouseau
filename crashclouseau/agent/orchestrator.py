@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
+from contextlib import contextmanager
 from datetime import timedelta
 
 from rq import Retry
@@ -1507,6 +1509,42 @@ def _resolve_candidate_git_commit(dossier, seed):
         dossier.candidate = cand.model_copy(update={"git_commit": git})
 
 
+_HEARTBEAT_INTERVAL_S = 120
+
+
+@contextmanager
+def _heartbeat(uuid):
+    """Stamp ``Dossier.updated`` every couple of minutes for as long as the triage runs, so
+    ``updated`` means "last known alive" instead of "started".
+
+    The triage is one ~20-minute ``asyncio.run`` with no natural checkpoint to stamp from, so
+    this is a daemon thread rather than a hook in the pipeline. It pushes its OWN Flask app
+    context per beat — the import-time ``app.app_context().push()`` is main-thread only (the
+    same reason ``reap_stale_agent_jobs`` pushes one), and a fresh context per beat also avoids
+    holding a DB session open and idle across the whole run.
+
+    A failing beat is logged and the loop CONTINUES: a transient DB blip must not silently end
+    the heartbeat, because a heartbeat that stops while the run lives is exactly what would let
+    the reaper duplicate live work. Daemon + a bounded join, so it can never hold up a worker."""
+    stop = threading.Event()
+
+    def beat():
+        while not stop.wait(_HEARTBEAT_INTERVAL_S):
+            try:
+                with app.app_context():
+                    models.Dossier.heartbeat(uuid)
+            except Exception:
+                logger.warning("agent: heartbeat failed for %s", uuid, exc_info=True)
+
+    t = threading.Thread(target=beat, name="hb-{}".format(str(uuid)[:8]), daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     On failure it records the reason (dossier ``payload['error']``) and marks status; a
@@ -1558,11 +1596,16 @@ def run_evidence_agent(uuid, force=False):
 
         from crashclouseau.agent.triage import run_crash_triage  # lazy: pulls the SDK
 
-        result = asyncio.run(
-            run_crash_triage(
-                crash=seed, tools_cfg=tools_cfg, llm_cfg=llm_cfg, recorder=recorder
+        # The long pole (~90% of the run). Heartbeat it so a dossier stuck `running` records how
+        # far it actually got: RQ's SIGKILL at job_timeout beats the error handler, so without
+        # this an abandoned run leaves `error`/`cost_usd` NULL and `updated` frozen at the start,
+        # and "died at minute 2" is indistinguishable from "died at minute 29".
+        with _heartbeat(uuid):
+            result = asyncio.run(
+                run_crash_triage(
+                    crash=seed, tools_cfg=tools_cfg, llm_cfg=llm_cfg, recorder=recorder
+                )
             )
-        )
 
         # Off-stack runs feed a ~112-candidate window, so they get a higher (still
         # log-only) cost ceiling than the scored-candidate default.

@@ -1576,6 +1576,35 @@ class Dossier(db.Model):
         return n
 
     @staticmethod
+    def heartbeat(uuid):
+        """Stamp ``updated`` on a RUNNING dossier: "this run was still alive just now".
+
+        Without a heartbeat ``updated`` records when the run STARTED, so an abandoned dossier
+        cannot say whether it died after 2 minutes or after 29 — and that is exactly the case
+        that is hard to diagnose, because RQ's SIGKILL at ``job_timeout`` beats the error
+        handler, leaving ``error`` and ``cost_usd`` NULL with no other trace.
+
+        Guarded on ``status='running'``, so it can never resurrect a dossier that has already
+        settled to ``done``/``error``, and one UPDATE with no prior SELECT so it cannot race
+        with the run's own writes. Returns True iff a row was stamped.
+
+        NOTE this changes what the orphan reaper measures FROM: the stale window now starts at
+        the last beat rather than at the run's start, so a run that dies late is reaped later.
+        That is the correct semantics (``updated`` finally means "last known alive"), and it is
+        what would let ``_STALE_BUFFER_S`` be decoupled from ``job_timeout`` and cut right down
+        — a dead run becomes detectable in a few missed beats instead of 35 minutes."""
+        uuidid = UUID.get_id(uuid)
+        if uuidid is None:
+            return False
+        res = db.session.execute(
+            db.update(Dossier)
+            .where(Dossier.uuidid == uuidid, Dossier.status == "running")
+            .values(updated=db.func.now())
+        )
+        db.session.commit()
+        return res.rowcount > 0
+
+    @staticmethod
     def add_usage(
         uuid,
         input_tokens=0,
