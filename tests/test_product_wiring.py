@@ -1366,6 +1366,40 @@ class TestBugPreview(unittest.TestCase):
         # the flag needs an address, not a display nick
         self.assertEqual(prev["needinfo_email"], "dev@x.com")
         bz.assert_called_once_with("dev@x.com")
+        # Metadata a create_bug is REJECTED without, plus what a hand-filed crash bug carries.
+        self.assertEqual(prev["version"], "Trunk")          # nightly
+        self.assertEqual(prev["type"], "defect")
+        self.assertEqual(prev["keywords"], ["crash", "regression"])
+        self.assertEqual(prev["cf_crash_signature"], "[@ Foo::bar]")
+        self.assertEqual(prev["blocked"], ["clouseau", 1])   # tracking bug + the regressor's
+        # NEVER asserted automatically: the pipeline is not accurate enough to claim causation
+        # as structured data (the blind review refutes ~74% of leads).
+        self.assertNotIn("regressed_by", prev)
+
+    def test_build_bug_preview_version_off_nightly(self):
+        """`Trunk` is only right for nightly; every product also has `unspecified`, whereas a
+        "Firefox NNN" value may not be active in the product we resolved."""
+        self.assertEqual(report_bug._bug_version("nightly"), "Trunk")
+        self.assertEqual(report_bug._bug_version("Nightly"), "Trunk")
+        self.assertEqual(report_bug._bug_version("beta"), "unspecified")
+        self.assertEqual(report_bug._bug_version(""), "unspecified")
+        self.assertEqual(report_bug._bug_version(None), "unspecified")
+
+    def test_build_bug_preview_blocked_without_a_regressor_bug(self):
+        ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",
+              "buildid": "20260727081724"}
+        dossier = {"candidate": {"node": "n", "author": "Dev <dev@x.com>"},
+                   "verdict": {"confidence": "medium"}}
+        with mock.patch.object(report_bug, "resolve_product_component",
+                               return_value=("Core", "DOM")), \
+                mock.patch.object(report_bug, "fetch_crash_reason", return_value={}), \
+                mock.patch.object(report_bug, "fetch_signature_stats",
+                                  return_value=(True, {})), \
+                mock.patch("crashclouseau.models.UUID.get_info", return_value={}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch.object(report_bug, "_bugzilla_nick", return_value=None):
+            prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
+        self.assertEqual(prev["blocked"], ["clouseau"])
 
     def test_needinfo_person_uses_bugzilla_nick(self):
         # email/name from the hgauthor record, nick from the Bugzilla user API.

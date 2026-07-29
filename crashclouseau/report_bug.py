@@ -629,16 +629,40 @@ def _needinfo_line(person):
     return None
 
 
+def _bug_version(channel):
+    """The Bugzilla ``version`` FIELD value for a crash on ``channel`` — not the Firefox
+    version string. A nightly crash is ``Trunk`` (verified present and active in Core,
+    Firefox, Toolkit, DevTools and WebExtensions, i.e. every product
+    ``resolve_product_component`` can return); anything else falls back to ``unspecified``,
+    which exists in every product, rather than guessing at a "Firefox NNN" value that may
+    not be active there. Bugzilla REJECTS a ``create_bug`` without this field."""
+    return "Trunk" if (channel or "").lower() == "nightly" else "unspecified"
+
+
 def build_bug_preview(uuid_info, stack, dossier):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
-    filer posts: ``{title, comment, product, component, needinfo, needinfo_email}``.
+    filer posts: ``{title, comment, product, component, version, type, keywords,
+    cf_crash_signature, blocked, needinfo, needinfo_email}``.
 
     ``comment`` is the whole bug opener as ONE comment (``build_bug_comment``) -- the
     stack, the crash reason, the volume, the analysis and the needinfo ask together, the
     way a triager reads a hand-filed crash bug. ``needinfo_email`` is the requestee the
     flag needs (the rendered ``needinfo`` line only carries a display nick).
     product/component are best-effort from the regressor (``resolve_product_component``).
-    Returns ``None`` when there is no candidate regressor to file a bug against."""
+    Returns ``None`` when there is no candidate regressor to file a bug against.
+
+    The metadata below ``component`` is what a hand-filed crash bug carries and what
+    ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO,
+    and ``keywords``/``cf_crash_signature``/``blocked`` mirror what the hand-draft path sets
+    in ``improve`` -- so the preview shows the whole bug rather than the parts a filer would
+    then have to supply by hand.
+
+    Deliberately NOT set: ``regressed_by``. It is the field that would assert "this crash was
+    caused by that bug" as structured, tooling-visible data, and the pipeline is not accurate
+    enough to claim it unattended -- the blind second opinion refutes ~74% of leads, and the
+    corrected instrument puts only ~28% of them on the true regressor. The suspected regressor
+    is stated in the comment prose, where a human can weigh it, and ``blocked`` records the
+    association without asserting causation."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     if not candidate or not candidate.get("node"):
@@ -673,6 +697,21 @@ def build_bug_preview(uuid_info, stack, dossier):
         ),
         "product": product,
         "component": component,
+        # --- metadata a create_bug needs / a hand-filed crash bug carries ---
+        "version": _bug_version(channel),
+        "type": "defect",
+        # `regression` alongside `crash`: the whole pipeline only looks inside a build's
+        # pushlog window, so every candidate it names is a suspected regression.
+        "keywords": ["crash", "regression"],
+        # Bugzilla's crash-signature field, same `[@ ...]` syntax as the title. This is what
+        # makes the bug show up against the signature in Socorro and in BMO's crash queries.
+        "cf_crash_signature": "[@ {}]".format((uuid_info.get("signature") or "").strip()),
+        # Mirrors `improve`: the crash bug blocks the `clouseau` tracking bug, plus the
+        # suspected regressor's own bug when we know it. An alias and a bug id are both
+        # accepted here. Association, NOT a causal claim (see the docstring on regressed_by).
+        "blocked": (
+            ["clouseau", candidate["bug"]] if candidate.get("bug") else ["clouseau"]
+        ),
         "needinfo": _needinfo_line(person),
         "needinfo_email": (person or {}).get("email") or "",
     }
