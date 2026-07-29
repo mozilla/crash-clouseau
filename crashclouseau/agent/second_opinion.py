@@ -64,9 +64,10 @@ _SYSTEM = (
     "- Bugzilla (mcp__bugzilla__bug reads a bug's product::component/status/regressed_by/"
     "regressions; mcp__bugzilla__signature_bugs finds existing bugs for the crash signature "
     "so you reuse prior analysis).\n"
-    "- crash-stats (mcp__socorro__crash_stats): this signature's occurrence breakdown — "
-    "first-seen buildid (regression window) and the OS/CPU/process-type/channel/"
-    "moz_crash_reason facets; a lopsided facet narrows the likely change.\n\n"
+    "- crash-stats (mcp__socorro__crash_stats): this signature's occurrence breakdown — the "
+    "buildid it was FIRST seen in (searched over a year of crash reports, so it may predate "
+    "this build by months) and the OS/CPU/process-type/channel/moz_crash_reason facets; a "
+    "lopsided facet narrows the likely change.\n\n"
     "End your reply with EXACTLY one fenced block:\n"
     "```json\n"
     '{"corroborates": true|false|null, "confidence": "low|medium|high", '

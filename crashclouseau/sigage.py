@@ -35,8 +35,9 @@ from libmozdata import socorro
 from crashclouseau.logger import logger
 
 # Socorro hard-rejects more than 365 days; the implicit "to now" upper bound pushes an exact
-# 365 over the line.
-_MAX_WINDOW_DAYS = 364
+# 365 over the line. Public because the second-opinion agent's crash-stats tool states the
+# window in its agent-facing text, and the figure must not drift between the two files.
+MAX_WINDOW_DAYS = 364
 
 
 def _buildid_to_dt(buildid):
@@ -48,12 +49,12 @@ def _buildid_to_dt(buildid):
 
 
 def first_seen_buildid(signature, product="Firefox", channel="nightly",
-                       days=_MAX_WINDOW_DAYS):
+                       days=MAX_WINDOW_DAYS):
     """The OLDEST buildid this signature appears in, within ``days``. ``None`` when the lookup
     finds nothing or fails. Raises nothing."""
     if not signature:
         return None
-    days = max(1, min(int(days or _MAX_WINDOW_DAYS), _MAX_WINDOW_DAYS))
+    days = max(1, min(int(days or MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     params = {
         "signature": "=" + signature,
