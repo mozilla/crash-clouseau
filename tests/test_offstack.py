@@ -672,6 +672,29 @@ class TestPriorSig(unittest.TestCase):
         with mock.patch.object(P.SocorroBugs, "get_bugs", side_effect=RuntimeError("boom")):
             self.assertEqual(P.prior_regressor_hints(["SIG"]), [])
 
+    def test_the_sibling_cap_keeps_the_NEWEST_bugs(self):
+        """Socorro's signature->bugs map is unordered, so the cap decides which priors survive.
+        An ascending sort kept the OLDEST siblings — the least likely to still be relevant —
+        on exactly the hot signatures where the cap bites."""
+        from crashclouseau import priorsig as P
+        seen = {}
+
+        class FakeBZ:
+            def __init__(self, bugids=None, include_fields=None, bughandler=None, bugdata=None):
+                seen["bugids"] = list(bugids or [])
+
+            def get_data(self):
+                return self
+
+            def wait(self):
+                return self
+
+        with mock.patch.object(P, "_MAX_SIBLINGS", 2), \
+                mock.patch.object(P.SocorroBugs, "get_bugs", return_value={"SIG": [100, 300, 200]}), \
+                mock.patch.object(P, "Bugzilla", FakeBZ):
+            P.prior_regressor_hints(["SIG"])
+        self.assertEqual(seen["bugids"], ["300", "200"])   # not ["100", "200"]
+
     def test_corroboration_flag_and_bump_single_in_window_prior(self):
         # seed['prior_regressor_bugs'] is already window-intersected in build_seed; a SINGLE
         # in-window prior matching the verdict candidate -> bump.

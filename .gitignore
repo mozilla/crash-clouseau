@@ -4,6 +4,9 @@
 .venv/
 .coverage
 mozdata.ini
+# bugzilla.allizom.org API key, used to test the bug-filing writes against staging.
+# A real credential sitting in the repo root: keep it one `git add -A` away from NOTHING.
+.allizom
 test.py
 server.crt
 server.csr

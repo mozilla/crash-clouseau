@@ -50,7 +50,13 @@ def prior_regressor_hints(signatures, exclude_bug=None):
         if not sigs:
             return []
         s2b = SocorroBugs.get_bugs(sigs)  # {signature: [bug_id, ...]}
-        ids = sorted({b for v in s2b.values() for b in (v or []) if b != exclude_bug})
+        # NEWEST first, THEN cap. Socorro's signature->bugs map is unordered, so an ascending
+        # sort kept the 60 OLDEST siblings — i.e. on exactly the hot, long-lived signatures where
+        # the cap actually bites, it threw away the priors most likely to still be relevant to
+        # today's code. Bug ids are monotonic in filing time, so descending is "most recent".
+        ids = sorted(
+            {b for v in s2b.values() for b in (v or []) if b != exclude_bug}, reverse=True
+        )
         ids = ids[:_MAX_SIBLINGS]
         if not ids:
             return []
