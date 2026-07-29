@@ -140,6 +140,28 @@ def git_commit_for_node(node, channel="nightly"):
     return json_rev(node, channel).get("git_commit") or ""
 
 
+def backedout_by_for_node(node, channel="nightly"):
+    """The sha that BACKED OUT this changeset: ``""`` when hg says it was not backed out, and
+    ``None`` when we could not find out.
+
+    TRI-STATE on purpose. A backed-out candidate is SUPPRESSED outright, not downweighted, so
+    "we don't know" must never collapse into "it's clean" — a failed lookup has to leave the
+    verdict alone. ``json_rev`` returns (and caches) ``{}`` for every no-answer case: an empty
+    channel makes no request at all, and a 404/timeout is swallowed. Hence the ``node`` sentinel
+    rather than testing ``backedoutby`` directly, which is simply ABSENT on a clean changeset
+    and would be indistinguishable from a failure.
+
+    Free in practice: this is the same cached ``json-rev`` request ``pushdate_for_node`` and
+    ``git_commit_for_node`` already make for this same node on every online run.
+
+    Note it says nothing about WHEN the backout landed, and it stays set forever — a change
+    that was backed out and later RE-LANDED (as a new node) still reports the old backout."""
+    rev = json_rev(node, channel)
+    if not rev.get("node"):
+        return None
+    return rev.get("backedoutby") or ""
+
+
 def to_datetime(value):
     """Best-effort UTC datetime from any of the pushdate shapes the candidate builders produce:
     a tz-aware ``datetime`` (on-stack, straight from the DB column), hg's ``[epoch, tzoffset]``

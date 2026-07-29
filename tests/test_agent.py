@@ -108,7 +108,10 @@ class TestBuildOptions(unittest.TestCase):
         self.assertIn("score=9", p)
         self.assertIn("bug=111", p)
         self.assertIn("mcp__patch__diff", p)   # steer to the tool, not shelling
-        self.assertIn("backed-out", p)
+        # The seed flag means the changeset IS ITSELF a backout, not that it WAS backed out;
+        # the old "backed-out" label invited exactly that misreading.
+        self.assertIn("is-itself-a-backout-commit", p)
+        self.assertNotIn("score=3 backed-out", p)
         self.assertIn("worth a human's time", p)   # triage-worthiness mission framing
         self.assertIn("not as a closed world", p)
 

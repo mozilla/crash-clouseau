@@ -147,22 +147,59 @@ class TestFoldRefute(unittest.TestCase):
         self.assertEqual(d.verdict.confidence, Confidence.medium)
         self.assertTrue(d.corroborations["second_opinion_refuted"])
 
-    def test_confident_refute_keeps_medium_lead_reportable(self):
-        # A medium lead cannot drop further (never below a reportable lead), but is flagged.
+    def test_refuted_medium_lead_is_abstained_not_left_reportable(self):
+        # There is no band below `medium` to clamp to, and the old "never below a reportable
+        # lead" floor made a refutation of the WEAKEST leads a guaranteed no-op.
         d = _lead(Confidence.medium)
         orch._fold_second_opinion(
-            d, _so(corroborates=False, confidence="high"), _SEED)
-        self.assertEqual(d.verdict.decision, Decision.lead)
-        self.assertEqual(d.verdict.confidence, Confidence.medium)
+            d, _so(corroborates=False, confidence="high", refutation="does not touch Run"), _SEED)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
         self.assertTrue(d.corroborations["second_opinion_refuted"])
+        self.assertTrue(d.corroborations["second_opinion_abstained"])
+        # the abstain must be schema-legal and carry the reviewer's reason
+        self.assertIsNone(d.verdict.needinfo_draft)
+        self.assertIn("does not touch Run", d.verdict.abstain_reason)
 
-    def test_non_confident_refute_leaves_verdict(self):
-        # corroborates=False but only medium confidence -> uncertain, no change / no flag.
+    def test_refuted_low_lead_is_abstained(self):
+        d = _lead(Confidence.low)
+        orch._fold_second_opinion(
+            d, _so(corroborates=False, confidence="high"), _SEED)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertTrue(d.corroborations["second_opinion_abstained"])
+
+    def test_a_medium_refute_now_moves_the_band_symmetrically(self):
+        """The bug: a medium AGREEMENT could raise a lead a whole band while a medium
+        REFUTATION did nothing at all — not even a flag. Seen on dcfc4da0."""
         d = _lead(Confidence.probable)
         orch._fold_second_opinion(
             d, _so(corroborates=False, confidence="medium"), _SEED)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertTrue(d.corroborations["second_opinion_refuted"])
+        self.assertTrue(d.corroborations["second_opinion_clamped"])
+
+    def test_a_medium_refute_of_a_weak_lead_abstains_it(self):
+        d = _lead(Confidence.low)
+        orch._fold_second_opinion(
+            d, _so(corroborates=False, confidence="medium"), _SEED)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_a_low_confidence_refute_still_changes_nothing(self):
+        # The SO is unsure of itself -> no signal, no flag (unchanged behaviour).
+        d = _lead(Confidence.probable)
+        orch._fold_second_opinion(
+            d, _so(corroborates=False, confidence="low"), _SEED)
         self.assertEqual(d.verdict.confidence, Confidence.probable)
         self.assertNotIn("second_opinion_refuted", d.corroborations)
+
+    def test_strong_evidence_still_needs_a_HIGH_refute_to_move(self):
+        """The biggest hammer keeps the higher bar: strong-evidence carries a fully cited,
+        skeptic-survived chain, so a merely medium refutation flags it without moving it."""
+        d = _strong()
+        orch._fold_second_opinion(
+            d, _so(corroborates=False, confidence="medium"), _SEED)
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+        self.assertTrue(d.corroborations["second_opinion_refuted"])
+        self.assertNotIn("second_opinion_downgraded_strong", d.corroborations)
 
 
 class TestFoldNoOp(unittest.TestCase):
@@ -286,21 +323,27 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
                 )
                 m.assert_not_called()
 
-    def test_boost_floor_keeps_the_fold_from_being_one_directional(self):
+    def test_boost_floor_holds_at_the_bottom_rung(self):
         # Lowering min_confidence to 25 bought MEASUREMENT coverage of the weakest reported
-        # leads. It must not also let them be re-ranked: at `low` the refute clamp is a no-op
-        # (it never goes below a reportable lead), so a boost there could only move them UP —
-        # two rungs, 0.50 -> 0.97 p_worth. Both directions must be inert at the bottom rung.
+        # leads; it must not also let them be re-ranked UP two rungs (0.50 -> 0.97 p_worth) on
+        # the corroborate signal, which was never part of the calibration fit. The bottom rung is
+        # deliberately NOT symmetric: a refutation there abstains the lead outright, because SO
+        # specificity is measured at 1.00. Promote conservatively, suppress readily.
         boosted = _lead(Confidence.low)
         orch._fold_second_opinion(boosted, _so(corroborates=True, confidence="high"), _SEED,
                                   status="ok")
+        self.assertEqual(boosted.verdict.decision, Decision.lead)
         self.assertEqual(boosted.verdict.confidence, Confidence.low)
         self.assertTrue(boosted.corroborations["second_opinion_corroborated"])
+        self.assertNotIn("second_opinion_boosted", boosted.corroborations)   # opinion, not a move
 
+        # Assert on the DECISION, not just the confidence: an abstain is also `low`, so a
+        # confidence-only assertion here passed either way and pinned nothing.
         refuted = _lead(Confidence.low)
         orch._fold_second_opinion(refuted, _so(corroborates=False, confidence="high"), _SEED,
                                   status="ok")
-        self.assertEqual(refuted.verdict.confidence, Confidence.low)
+        self.assertEqual(refuted.verdict.decision, Decision.abstain)
+        self.assertTrue(refuted.corroborations["second_opinion_abstained"])
 
     def test_medium_and_above_still_boosts(self):
         # The floor must not break the behaviour that shipped: a medium lead still rises.
@@ -530,10 +573,11 @@ class TestRawVerdictSnapshot(unittest.TestCase):
         r = self._result(_lead(Confidence.medium))
         orch.apply_deterministic_gates(
             r, {**_SEED, "is_offstack": False},
-            second_opinion=_so(corroborates=False, confidence="high"),
+            # A LOW-confidence refute: the reviewer is unsure of itself, so no signal — the one
+            # remaining refute shape that moves nothing.
+            second_opinion=_so(corroborates=False, confidence="low"),
             second_opinion_status="ok",
         )
-        # A confident refute on an ALREADY-medium lead is a no-op — the pair proves it.
         self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
         self.assertEqual(r.dossier.raw_verdict.confidence, Confidence.medium)
 
@@ -588,18 +632,21 @@ class TestAppliedMoveIsDistinguishable(unittest.TestCase):
         # ...so the applied-move flag is what proves the clamp fired.
         self.assertTrue(d.corroborations["second_opinion_clamped"])
 
-    def test_no_op_refute_does_not_claim_a_clamp(self):
-        r = self._result(_lead(Confidence.medium))       # already medium, nothing to clamp
+    def test_a_refuted_medium_lead_records_the_abstain_not_a_clamp(self):
+        """At medium there is no band to clamp to, so the applied move is an ABSTAIN — and the
+        flags must say which of the two actually happened."""
+        r = self._result(_lead(Confidence.medium))
         orch.apply_deterministic_gates(
             r, {**_SEED, "is_offstack": False},
             second_opinion=_so(corroborates=False, confidence="high"),
             second_opinion_status="ok",
         )
         d = r.dossier
-        self.assertEqual(d.raw_verdict.confidence, Confidence.medium)
-        self.assertEqual(d.verdict.confidence, Confidence.medium)
-        self.assertTrue(d.corroborations["second_opinion_refuted"])       # opinion recorded
-        self.assertNotIn("second_opinion_clamped", d.corroborations)      # but nothing applied
+        self.assertEqual(d.raw_verdict.decision, Decision.lead)          # came in as a lead
+        self.assertEqual(d.verdict.decision, Decision.abstain)           # shipped suppressed
+        self.assertTrue(d.corroborations["second_opinion_refuted"])      # opinion recorded
+        self.assertTrue(d.corroborations["second_opinion_abstained"])    # applied move
+        self.assertNotIn("second_opinion_clamped", d.corroborations)     # NOT a clamp
 
     def test_corroboration_gate_boost_is_not_credited_to_the_second_opinion(self):
         r = self._result(self._corroborated_lead(Confidence.medium))

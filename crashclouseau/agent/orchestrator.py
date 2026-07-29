@@ -996,12 +996,15 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
       deterministic corroboration gate — an independent blind agreement is a signal the
       first pipeline cannot have fabricated. Never touches strong-evidence or a lead already
       at/above ``probable`` (already maxed for a lead). Flagged for the UI.
-    * a CONFIDENT (high-confidence) refutation -> the confident-wrong catch: downgrade
-      ``strong-evidence`` to a soft ``lead`` (or ``abstain`` when no cited anchor stands, via
-      the shared downgrade), and clamp a ``lead`` down to a plain ``medium`` lead — but NEVER
-      below a still-reportable lead: we do not silently drop a report on ONE blind
-      disagreement (the SO is context-free and cannot see the pushlog linking evidence).
-    * anything else (unsure / a low-or-medium refutation / MECHANISM mode, where
+    * a refutation the SO is itself at least MEDIUM-confident about -> the confident-wrong
+      catch, SYMMETRIC with the boost above (it used to demand ``high``, which made a medium
+      refutation a total no-op while a medium agreement moved a whole band): clamp a ``lead``
+      above ``medium`` down to a plain ``medium`` lead, and ABSTAIN a lead at/below ``medium``,
+      where there is no lower band left — the weakest leads were otherwise the ones an
+      independent refutation could never touch. Downgrading ``strong-evidence`` still requires
+      ``high``: that verdict carries a fully cited, skeptic-survived chain and is the most
+      consequential thing to move, so the biggest hammer keeps the higher bar.
+    * anything else (unsure / a LOW-confidence refutation / MECHANISM mode, where
       ``corroborates`` is ``None`` and the two mechanisms aren't auto-compared) -> leave the
       verdict untouched; the independent read is still surfaced in the panel.
 
@@ -1037,10 +1040,12 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
         flags["second_opinion_corroborated"] = True
         downgraded = bool((dossier.corroborations or {}).get("downgraded_from_strong"))
         is_bare_lead = v.decision == Decision.lead and CONFIDENCE_SCORE.get(v.confidence, 0.0) < CONFIDENCE_SCORE[Confidence.probable]
-        # Measuring a lead does NOT license re-ranking it. Below `min_boost_confidence` the
-        # fold would be one-directional: the refute clamp never goes below a reportable lead,
-        # so at the bottom rung a confident refutation is a no-op while a corroboration would
-        # jump two rungs. Record the agreement there, leave the band alone.
+        # Measuring a lead does NOT license re-ranking it: below `min_boost_confidence` a boost
+        # would jump two rungs (low -> probable, p_worth 0.50 -> 0.97) on the weaker of the SO's
+        # two signals — the corroborate side was never part of the calibration fit, while a
+        # refutation is measured at specificity 1.00. Record the agreement, leave the band alone.
+        # (This floor is NOT what keeps the bottom rung symmetric any more: a refutation there
+        # now abstains the lead. Promote conservatively, suppress readily — see `config.py`.)
         rung = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
         boostable = rung >= config.get_agent_second_opinion()["min_boost_confidence"]
         if is_bare_lead and not boostable:
@@ -1070,9 +1075,15 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 "strong-evidence; NOT re-inflating to probable for %s",
                 (seed or {}).get("uuid"),
             )
-    elif so.corroborates is False and conf == "high":
+    elif so.corroborates is False and conf in ("medium", "high"):
+        # ``medium`` counts, symmetrically with the corroborate branch above. It did not, and the
+        # asymmetry was the bug: a medium AGREEMENT could raise a lead a whole band while a
+        # medium REFUTATION — often a specific, checkable "this diff does not touch the crashing
+        # path" — did nothing at all, not even a flag or a chip. Seen on
+        # ``dcfc4da0-7015-4845-8494-ec3380260729``. The measured instrument supports it: SO
+        # specificity is 1.00 against corpus ground truth, i.e. when it refutes it is right.
         flags["second_opinion_refuted"] = True
-        if v.decision == Decision.strong_evidence:
+        if v.decision == Decision.strong_evidence and conf == "high":
             _downgrade_to_lead_or_abstain(
                 dossier, seed,
                 "second-opinion confidently refuted the mechanism",
@@ -1093,8 +1104,30 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
             # "the gates raised this verdict" when the SO in fact clamped it.
             flags["second_opinion_clamped"] = True
             logger.info(
-                "agent: second-opinion confidently refuted -> lead clamped to medium for %s",
+                "agent: second-opinion refuted -> lead clamped to medium for %s",
                 (seed or {}).get("uuid"),
+            )
+        elif v.decision == Decision.lead:
+            # At or below `medium` there is no lower band to clamp to, and the old floor
+            # ("never drop a report on one blind disagreement") made a refutation of the
+            # WEAKEST leads a guaranteed no-op — the leads least worth a human's time were the
+            # ones the independent check could not touch. A rung-25 lead already means "we
+            # barely believe this"; a refutation on top leaves nothing to report.
+            why = "an independent blind review found the candidate cannot explain this " \
+                  "crash, and the lead was too weak to survive it"
+            if so.refutation:
+                why = "{}: {}".format(why, so.refutation)
+            dossier.verdict = Verdict(
+                decision=Decision.abstain,
+                confidence=Confidence.low,
+                abstain_reason=why,
+                mechanism=v.mechanism,
+                consistency=v.consistency,
+            )
+            flags["second_opinion_abstained"] = True
+            logger.info(
+                "agent: second-opinion refuted a %s lead with nothing left to clamp -> "
+                "abstain for %s", v.confidence.value, (seed or {}).get("uuid"),
             )
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
 
@@ -1186,6 +1219,96 @@ def _apply_signature_age_gate(dossier, seed):
     )
 
 
+def _resolve_candidate_backout(dossier, seed):
+    """Ask hg whether the chosen candidate was BACKED OUT, and store the backout sha on it.
+
+    ONLINE ONLY, and deliberately not inside ``apply_deterministic_gates``: that function is
+    shared with the offline eval runner, which must stay network-free. Splitting resolve (here)
+    from decide (``_apply_backout_gate``) is what keeps the gate a pure, offline-safe no-op.
+
+    Runs BEFORE the second-opinion pass so a doomed lead never buys a ~$1 independent review of
+    a changeset we are about to suppress. Costs nothing: ``json_rev`` is cached per node and
+    ``_resolve_candidate_git_commit`` fetches the same URL for the same node later in the run.
+
+    Best-effort — a failed lookup leaves ``backedout_by`` empty, which the gate treats as "not
+    backed out". That asymmetry is deliberate: never suppress a verdict on a lookup failure."""
+    cand = dossier.candidate if dossier is not None else None
+    if cand is None or not cand.node or cand.backedout_by:
+        return
+    try:
+        from crashclouseau import sigage
+
+        # ``seed["channel"]`` — NOT ``cand.channel``, which is a model-supplied schema field and
+        # is empty on every dossier (nothing fills it). An empty channel makes json_rev skip the
+        # request entirely and cache {}, which would poison the lookup for the rest of the run.
+        backedout_by = sigage.backedout_by_for_node(cand.node, (seed or {}).get("channel"))
+    except Exception:
+        logger.warning("agent: backout lookup failed for %s", cand.node, exc_info=True)
+        return
+    if backedout_by:
+        dossier.candidate = cand.model_copy(update={"backedout_by": backedout_by})
+
+
+def _apply_backout_gate(dossier, seed):
+    """SUPPRESS a verdict whose candidate was BACKED OUT: there is nothing left to act on.
+
+    A backed-out changeset is not in the tree. Whatever it did, no one can fix it, and a patch
+    is usually backed out precisely BECAUSE it was wrong — so naming one costs a triager's
+    attention and returns nothing. Unlike the stale-signature downweight this is not a
+    confidence question, so it is not a one-rung clamp but an outright abstain: 14 of the 17
+    measured cases sat at rung 25 or 50 anyway, and rung 25 has nowhere lower to go.
+
+    Measured on the canary DB (1501 dossiers, 847 reported verdicts): 17 reported leads named a
+    candidate the model itself flagged as backed out, and hg confirmed 19 of those 20 distinct
+    nodes were genuinely backed out (the 20th IS a revert, equally dead). But the model's flag
+    also MISSES them — 1 of 12 sampled `backedout: false` reported leads was in fact backed out
+    (`fa615d158e7b`, backed out by `9367c2806d2f`) — which extrapolates to ~9% of reported leads
+    rather than 2%. Hence a deterministic check on OUR OWN hg lookup, never on the model's flag.
+
+    Deliberately UNCONDITIONAL on the backout's timing. A patch backed out after the triaged
+    build could still be that build's true cause (``plans/09-skeptic-verifier.md:88``), but it is
+    equally unactionable, and resolving the backout's own landing date costs a second request.
+
+    Reads only ``candidate.backedout_by``, which ``_resolve_candidate_backout`` sets online, so
+    this is a natural no-op in the offline eval. Mutates in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    cand = dossier.candidate if dossier is not None else None
+    if v is None or cand is None or not cand.backedout_by:
+        return
+    sha = cand.backedout_by
+    dossier.corroborations = {
+        **(dossier.corroborations or {}),
+        "candidate_backedout": True,
+        "candidate_backedout_by": sha,
+    }
+    if v.decision == Decision.abstain:
+        # Already not reported — record the fact for the page and leave the reason alone.
+        return
+    # A NEW Verdict, not ``model_copy``: an abstain must not carry the needinfo_draft
+    # (``Verdict._consistency_rule`` rejects that outright) and must not inherit
+    # ``p_worth_investigating`` from the verdict it replaces. mechanism/consistency are kept so
+    # the page can still explain what was found and why it was dropped.
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=(
+            "candidate {} was BACKED OUT (by {}) — a backed-out changeset is not in the "
+            "tree, so there is nothing to act on; suppressed rather than reported".format(
+                cand.node, sha[:12]
+            )
+        ),
+        mechanism=v.mechanism,
+        consistency=v.consistency,
+    )
+    dossier.corroborations = {
+        **dossier.corroborations, "candidate_backedout_suppressed": True
+    }
+    logger.info(
+        "agent: candidate %s was backed out by %s -> %s/%s suppressed to abstain for %s",
+        cand.node, sha[:12], v.decision.value, v.confidence.value, (seed or {}).get("uuid"),
+    )
+
+
 def _will_corroboration_promote(dossier, seed):
     """Peek at whether ``_apply_corroboration_gate`` will raise this bare lead to ``probable``
     (a fault-address<->struct-offset or prior-signature match). Used ONLY by
@@ -1207,7 +1330,7 @@ def _maybe_run_second_opinion(result, seed):
     or the run failed) plus WHY, so a null SO is diagnosable in the persisted dossier rather
     than silently ambiguous between "ineligible" and "broken in prod". ``status`` is one of
     ``ok`` / ``failed`` / ``skipped_disabled`` / ``skipped_no_verdict`` / ``skipped_abstain`` /
-    ``skipped_below_threshold``.
+    ``skipped_backedout`` / ``skipped_below_threshold``.
 
     Prod-only and env-gated (``SECOND_OPINION_ENABLED``, default off); the offline
     eval runner never calls this. Keyed on the RAW (pre-gate) verdict: a raw abstain can never
@@ -1228,6 +1351,12 @@ def _maybe_run_second_opinion(result, seed):
         return None, "skipped_no_verdict"
     if v.decision == Decision.abstain:
         return None, "skipped_abstain"
+    cand = dossier.candidate
+    if cand is not None and cand.backedout_by:
+        # ``_apply_backout_gate`` will suppress this verdict outright, so an independent review
+        # of the changeset costs ~$1 to measure something we are about to drop. Resolved before
+        # this call in ``run_evidence_agent``, precisely so the money is never spent.
+        return None, "skipped_backedout"
     rung = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
     if rung < cfg["min_confidence"]:
         # A pending deterministic corroboration bump (-> probable/70) still makes this a
@@ -1331,6 +1460,13 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         _fold_second_opinion(
             result.dossier, second_opinion, seed, status=second_opinion_status
         )
+        # Backed-out candidate -> nothing to act on -> abstain. LAST of the verdict gates, and
+        # after the second-opinion fold, because it is the only unconditional one: no boost,
+        # corroboration or independent agreement can make a changeset that is not in the tree
+        # actionable, so it must get the final word on the rung. A pure read of
+        # ``candidate.backedout_by`` (resolved online by ``_resolve_candidate_backout``), hence a
+        # no-op in the offline eval and no network call on this shared path.
+        _apply_backout_gate(result.dossier, seed)
         # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
         # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
         # must not ship the original strong-evidence action. Idempotent when nothing
@@ -1442,6 +1578,11 @@ def run_evidence_agent(uuid, force=False):
                 "agent: %s over budget: $%.4f > $%s",
                 uuid, result.total_cost_usd, cap,
             )
+
+        # Was the chosen candidate backed out? Resolved HERE, before the second opinion, so a
+        # candidate that is no longer in the tree never buys a ~$1 independent review. Online
+        # only (one cached hg lookup) — the gate that acts on it lives in the shared ladder.
+        _resolve_candidate_backout(result.dossier, seed)
 
         # Blind second-opinion (#SO): an independent, no-context re-analysis of a
         # would-be-reported lead, run from the RAW verdict (async home) and folded inside the

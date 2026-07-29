@@ -289,7 +289,12 @@ def _user_prompt(crash: dict) -> str:
             if pushdate:
                 parts.append("landed={}".format(_fmt_pushdate(pushdate)))
             if c.get("backedout"):
-                parts.append("backed-out")
+                # This seed flag is `pushlog.is_backed_out(desc)` = the changeset IS ITSELF a
+                # backout commit. It does NOT mean it was backed out — labelling it "backed-out"
+                # invited exactly that misreading (the model then reported a WAS-backed-out fact
+                # under the same name). Whether a candidate WAS backed out is resolved
+                # deterministically by `orchestrator._resolve_candidate_backout`, not here.
+                parts.append("is-itself-a-backout-commit")
             if c.get("noise"):
                 parts.append("(likely-noise: down-rank)")
             if c.get("prior_sig"):

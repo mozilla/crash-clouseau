@@ -303,14 +303,18 @@ def get_agent_second_opinion():
         # leads over the first three prod days.
         "min_confidence": o.get("min_confidence", 25),
         # Separate, HIGHER bar for letting a corroboration MOVE the band (vs merely measuring).
-        # Measuring every reported lead is not a licence to re-rank the weakest ones, because
-        # the fold is inherently ONE-DIRECTIONAL at the bottom rung: the refute clamp never
-        # pushes below a still-reportable lead, so at `low` a confident refutation is a no-op
-        # while a corroboration would jump TWO rungs (low -> probable, p_worth 0.50 -> 0.97).
-        # The SO's corroborate signal is also the weaker of its two: it was never part of the
-        # calibration fit, and in the first prod days 2 of 6 corroborated leads still had the
-        # candidate landing AFTER the signature's first-seen buildid. So: boost only from
-        # `medium` up, which preserves the pre-existing band behaviour exactly.
+        # Measuring every reported lead is not a licence to re-rank the weakest ones: at `low` a
+        # boost would jump TWO rungs (low -> probable, p_worth 0.50 -> 0.97).
+        #
+        # NOTE this floor originally existed to stop the fold being one-directional at the bottom
+        # rung, back when a refutation there was a no-op. That is no longer why it is here: a
+        # refutation now ABSTAINS a lead at/below `medium` (see `_fold_second_opinion`), so the
+        # bottom rung moves in both directions — just not symmetrically, and deliberately. What
+        # justifies the floor NOW is that the two signals are not equally trustworthy: the
+        # corroborate side was never part of the calibration fit, and in the first prod days 2 of
+        # 6 corroborated leads still had the candidate landing AFTER the signature's first-seen
+        # buildid, whereas measured SO specificity is 1.00 (when it refutes, it is right). So:
+        # promote conservatively, suppress readily.
         "min_boost_confidence": o.get("min_boost_confidence", 50),
     }
 

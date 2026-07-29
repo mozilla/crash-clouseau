@@ -119,7 +119,7 @@ don't backtick some code and leave the rest bare. Shape:
 ```json
 {
   "crash": {"uuid": "...", "signature": "...", "failure_class": "uaf|null_deref|assertion|oob|shutdownhang|other", "crashing_thread": 0, "frames": []},
-  "candidate": {"node": "<hg node>", "bug": 123, "author": "...", "backedout": false},
+  "candidate": {"node": "<hg node>", "bug": 123, "author": "..."},
   "call_path": {"edges": [{"caller_symbol": "js::gc::GCMarker::markCurrentColorInParallel", "callee_symbol": "js::gc::MarkingTracerT::processMarkStackTop", "via": "calls-from", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::gc::MarkingTracerT::processMarkStackTop", "repo": "mozilla-central"}]}]},
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},

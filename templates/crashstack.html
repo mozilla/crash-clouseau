@@ -80,7 +80,9 @@
       </h2>
 
       {% if evidence['verdict'] == 'abstain' -%}
-      <p class="muted">Insufficient evidence &mdash; no culprit identified.{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
+      {#- A suppressed verdict is not the same as an empty one: we DID find a changeset, it is
+          just dead. Saying "insufficient evidence" there reads as a failure to look. -#}
+      <p class="muted">{% if corrob.get('candidate_backedout_suppressed') %}Nothing to report &mdash; the suspected changeset was backed out, so there is nothing left to act on.{% else %}Insufficient evidence &mdash; no culprit identified.{% endif %}{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
       {% endif -%}
 
       {% if corrob.get('fault_address_offset_match') -%}
@@ -94,7 +96,7 @@
       </div>
       {% elif corrob.get('second_opinion_refuted') -%}
       <div class="corrob-chips">
-        <span class="corrob-chip refute" title="An independent blind re-analysis confidently found the candidate cannot explain this crash. The lead is kept (never dropped on one blind disagreement) but not promoted — its confidence is lowered where it can be. See the independent second opinion below.">independent review disputes this</span>
+        <span class="corrob-chip refute" title="An independent blind re-analysis found the candidate cannot explain this crash. A strong lead is lowered a band, and a lead that was already weak is dropped entirely; a fully verified strong-evidence chain is only downgraded when the reviewer is itself highly confident, so it may be flagged here without having moved. The badge above shows where it actually landed. See the independent second opinion below.">independent review disputes this</span>
       </div>
       {# The chip alone says a dispute happened but not WHY, and the reasoning sits far down the
          page under the full second opinion — so hoist it here, next to the verdict it argues
@@ -102,6 +104,11 @@
       {% if (d.get('second_opinion') or {}).get('refutation') -%}
       <p class="refute-why"><strong>Why the review disputes it:</strong> {{ d['second_opinion']['refutation']|linkify(repo_url) }}</p>
       {% endif -%}
+      {% endif -%}
+      {% if corrob.get('candidate_backedout') -%}
+      <div class="corrob-chips">
+        <span class="corrob-chip refute" title="Clouseau checked hg itself: this changeset was backed out, so it is not in the tree and there is nothing left to fix. A patch is usually backed out because it was wrong, so it is suppressed rather than reported &mdash; whatever the rest of the analysis found.">candidate was backed out by <code>{{ corrob.get('candidate_backedout_by','')[:12]|e }}</code>{% if corrob.get('candidate_backedout_suppressed') %} &mdash; not reported{% endif %}</span>
+      </div>
       {% endif -%}
       {% if corrob.get('stale_signature') -%}
       <div class="corrob-chips">
@@ -156,7 +163,10 @@
           <a href="{{ repo_url }}/rev?node={{ cand['node'] }}" target="_blank" rel="noopener"><code>{{ cand['node'] }}</code></a>
           {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}" target="_blank" rel="noopener">bug {{ cand['bug'] }}</a>{% endif %}
           {% if cand.get('author') %} &mdash; {{ cand['author']|e }}{% endif %}
-          {% if cand.get('backedout') %} <span class="flag">backed out</span>{% endif %}
+          {#- `backedout_by` is Clouseau's own hg lookup; `backedout` is the model's claim, kept
+              only so old dossiers still show something. Never conflate them in the label. -#}
+          {% if cand.get('backedout_by') %} <span class="flag" title="Verified against hg: this changeset was backed out, so there is nothing left to act on.">backed out by <code>{{ cand['backedout_by'][:12] }}</code></span>
+          {% elif cand.get('backedout') %} <span class="flag" title="Reported by the analysis, not verified by Clouseau.">backed out (unverified)</span>{% endif %}
         </p>
         {% if cand.get('changed_functions') -%}
         <p class="muted">Changed functions: <code>{{ cand['changed_functions']|join(', ')|e }}</code></p>

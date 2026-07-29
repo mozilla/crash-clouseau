@@ -212,7 +212,17 @@ class Candidate(BaseModel):
     # GitHub without a page render paying for hg's 8-13s json-rev lookup. "" = not resolved
     # (old dossiers, or hg had no counterpart) -> the comment simply omits the gh link.
     git_commit: str = ""
+    # MODEL-SUPPLIED and ambiguous: the handoff shape no longer asks for it, but old dossiers
+    # carry it and the model may still volunteer one. Two different predicates have been written
+    # here — "this changeset IS a backout commit" (what the seed means, from
+    # ``pushlog.is_backed_out(desc)``) and "this changeset WAS backed out" (what the agent's
+    # ``changeset`` tool prints as "BACKED OUT BY"). Never gate on it; use ``backedout_by``.
     backedout: bool = False
+    # The sha that backed this candidate out, resolved by the ORCHESTRATOR against hg
+    # (``sigage.backedout_by_for_node``) and stripped from the model's handoff so it cannot be
+    # injected. "" = not backed out, or never resolved (offline / lookup failed) — the gate
+    # only ever fires on a non-empty value, so unknown timing never suppresses a verdict.
+    backedout_by: str = ""
     seed_score: int | None = None
     changed_functions: list[str] = Field(default_factory=list)
 
@@ -399,8 +409,8 @@ class Dossier(BaseModel):
     # prod-only break is INVISIBLE: a failed run and an ineligible verdict both leave
     # ``second_opinion`` null and cannot be told apart. One of ``ok`` / ``failed`` /
     # ``skipped_disabled`` / ``skipped_no_verdict`` / ``skipped_abstain`` /
-    # ``skipped_below_threshold``, or ``None`` when the gate never ran (the offline eval
-    # runner, and every dossier written before this field existed).
+    # ``skipped_backedout`` / ``skipped_below_threshold``, or ``None`` when the gate never ran
+    # (the offline eval runner, and every dossier written before this field existed).
     second_opinion_status: str | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -703,6 +713,12 @@ def parse_and_validate(result: str | dict) -> Dossier:
         obj.pop("second_opinion", None)
         obj.pop("second_opinion_status", None)
         obj.pop("raw_verdict", None)
+        # Same rule, one level down: ``candidate.backedout_by`` is resolved against hg by the
+        # orchestrator and SUPPRESSES the verdict outright, so a model that emits one could
+        # silence its own report (or, left empty, hide a real backout from a gate that only
+        # resolves when the field is unset).
+        if isinstance(obj.get("candidate"), dict):
+            obj["candidate"].pop("backedout_by", None)
     # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
     # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
     # place, so the ``_salvage`` fallback below sees the normalized citations too.
