@@ -1466,6 +1466,14 @@ class Dossier(db.Model):
         cost_usd=None,
         commit=True,
     ):
+        """Create or update a dossier in one atomic statement.
+
+        WARNING: ``payload`` REPLACES the stored JSONB wholesale — it is not merged. Any key
+        a previous write put there (``reap_attempts``, ``job_id``, ``error``) is gone unless
+        the caller carries it forward. This is what made the reaper's recovery rate
+        unmeasurable: a recovered run's finished payload dropped ``reap_attempts``, so the
+        counter only ever survived on runs that FAILED, and "0 of 28 reaped dossiers reached
+        done" was a tautology rather than a measurement."""
         uuidid = UUID.get_id(uuid)
         provided = {
             k: v
@@ -1590,6 +1598,27 @@ class Dossier(db.Model):
         if commit:
             db.session.commit()
         return n
+
+    @staticmethod
+    def get_reap_attempts(uuid):
+        """How many times the reaper has re-enqueued this dossier (0 if never, or if the row
+        is absent). Read just before a run's settling write so the count can be carried into
+        the FINISHED payload — see the caller in ``run_evidence_agent``, and the warning on
+        ``upsert`` about the payload being replaced wholesale.
+
+        Like the other read helpers here this leaves its transaction open for the session to
+        close, so don't call it immediately before something long-blocking."""
+        uuidid = UUID.get_id(uuid)
+        if uuidid is None:
+            return 0
+        row = (
+            db.session.query(Dossier.payload)
+            .filter(Dossier.uuidid == uuidid)
+            .first()
+        )
+        if row is None:
+            return 0
+        return int((row[0] or {}).get("reap_attempts", 0) or 0)
 
     @staticmethod
     def heartbeat(uuid):

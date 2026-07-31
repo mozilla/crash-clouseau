@@ -1660,6 +1660,23 @@ def run_evidence_agent(uuid, force=False):
             if over_budget:
                 payload["over_budget"] = True
 
+            # Did the reaper put us here? The upsert below replaces `payload` WHOLESALE, so a
+            # recovered run erased its own attempt counter on the way out — which is what made
+            # the reaper's recovery rate unmeasurable: the counter survived only on runs that
+            # FAILED, so "0 of 28 reaped dossiers ever reached done" was a tautology, not a
+            # measurement. Carrying it forward makes `where payload ? 'reap_attempts' group by
+            # status` finally answer "how often does the reaper actually recover a run?".
+            #
+            # Read HERE and not at the claim, deliberately: this is the last thing before the
+            # settling write, so the SELECT's transaction closes a few statements later. Read
+            # at the claim, it would be the last statement on this session before the ~20-minute
+            # agent call (nothing in the agent phase touches db.session, and the heartbeat runs
+            # on its own), leaving the connection idle-in-transaction for the whole run and
+            # pinning the xmin horizon against autovacuum.
+            reap_attempts = models.Dossier.get_reap_attempts(uuid)
+            if reap_attempts:
+                payload["reap_attempts"] = reap_attempts
+
             worker_models = sorted(
                 {_full_model(r.get("model")) for r in roles.values() if r.get("model")}
             )

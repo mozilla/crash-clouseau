@@ -121,6 +121,55 @@ class TestGiveUpReason(unittest.TestCase):
         self.assertIn("retrigger", reason)
 
 
+class TestRecoveryIsCountable(unittest.TestCase):
+    """A recovered run has to SAY it was recovered. ``upsert`` replaces ``payload`` wholesale, so
+    unless the run carries the inherited counter forward, finishing successfully ERASES it — the
+    counter then survives only on runs that failed, and the reaper's recovery rate reads 0%
+    forever. That is what made "0 of 28 reaped dossiers ever reached done" a tautology rather
+    than a measurement, on a reaper that was in fact broken for an unrelated reason.
+    """
+
+    def _finished_payload(self, inherited):
+        from contextlib import contextmanager
+
+        from tests.test_orchestrator import _SEED, _abstain_result, _triage_returning
+
+        seen = {}
+        MDoss = mock.MagicMock()
+        MDoss.get_by_uuid.return_value = None
+        MDoss.skip_triage.return_value = False
+        MDoss.claim_running.return_value = True
+        MDoss.get_reap_attempts.return_value = inherited
+        # Only the settling write matters; the non-dedup path also upserts at run START.
+        MDoss.upsert.side_effect = lambda *a, **kw: (
+            seen.update(kw) if kw.get("status") == "done" else None
+        )
+
+        @contextmanager
+        def noop_heartbeat(uuid):
+            yield
+
+        with mock.patch.object(orch.models, "Dossier", MDoss), \
+                mock.patch.object(orch.models, "Verdict", mock.MagicMock()), \
+                mock.patch.object(orch.models, "commit"), \
+                mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+                mock.patch.object(orch, "build_seed", return_value=dict(_SEED)), \
+                mock.patch.object(orch, "_seed_score", return_value=5), \
+                mock.patch.object(orch, "_heartbeat", noop_heartbeat), \
+                mock.patch.object(orch, "_resolve_candidate_backout"), \
+                mock.patch.object(orch, "_maybe_run_second_opinion", return_value=(None, None)), \
+                mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                           _triage_returning(_abstain_result())):
+            orch.run_evidence_agent("u-1")
+        return seen.get("payload") or {}
+
+    def test_a_recovered_run_keeps_the_counter(self):
+        self.assertEqual(self._finished_payload(2).get("reap_attempts"), 2)
+
+    def test_a_clean_run_does_not_invent_one(self):
+        self.assertNotIn("reap_attempts", self._finished_payload(0))
+
+
 @unittest.skipUnless(_is_postgres(), "round-trip needs a disposable Postgres backend")
 class TestOrphanStaysClaimable(unittest.TestCase):
     """The end-to-end proof, and the test that would have caught the regression: after the
@@ -176,6 +225,25 @@ class TestOrphanStaysClaimable(unittest.TestCase):
             models.Dossier.claim_running(_UUID, self.STALE_AFTER),
             "the retry lost the claim on a dead run",
         )
+
+    def test_get_reap_attempts_reads_what_the_bump_wrote(self):
+        self._orphan(self.STALE_AFTER + 600)
+        self.assertEqual(models.Dossier.get_reap_attempts(_UUID), 0)
+        models.Dossier.bump_reap_attempts(_UUID)
+        self.assertEqual(models.Dossier.get_reap_attempts(_UUID), 1)
+
+    def test_the_settling_write_erases_it_unless_carried(self):
+        """The mechanism, pinned: a plain upsert of a finished payload drops the counter. This
+        is why run_evidence_agent reads it at the claim and puts it back."""
+        self._orphan(self.STALE_AFTER + 600)
+        models.Dossier.bump_reap_attempts(_UUID)
+        models.Dossier.upsert(_UUID, payload={"verdict": "abstain"}, status="done")
+        self.assertEqual(models.Dossier.get_reap_attempts(_UUID), 0)
+        # ...and survives when the caller carries it, which is what the orchestrator does.
+        models.Dossier.upsert(
+            _UUID, payload={"verdict": "abstain", "reap_attempts": 1}, status="done"
+        )
+        self.assertEqual(models.Dossier.get_reap_attempts(_UUID), 1)
 
     def test_the_counter_survives_several_attempts(self):
         self._orphan(self.STALE_AFTER + 600)
