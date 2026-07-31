@@ -1588,103 +1588,108 @@ def run_evidence_agent(uuid, force=False):
         # Record the RQ job id so a retrigger can stop this run mid-flight.
         _record_job_id(uuid)
 
-        llm_cfg = config.get_llm()
-        tools_cfg = config.get_agent()
-        principal = llm_cfg.get("principal", {})
-        roles = llm_cfg.get("roles") or {}
-        recorder = ActionsRecorder()
-
-        from crashclouseau.agent.triage import run_crash_triage  # lazy: pulls the SDK
-
-        # The long pole (~90% of the run). Heartbeat it so a dossier stuck `running` records how
-        # far it actually got: RQ's SIGKILL at job_timeout beats the error handler, so without
-        # this an abandoned run leaves `error`/`cost_usd` NULL and `updated` frozen at the start,
-        # and "died at minute 2" is indistinguishable from "died at minute 29".
+        # Heartbeat the WHOLE run, not just the agent call. `updated` is the only liveness signal
+        # a dossier has: RQ's SIGKILL at job_timeout beats the error handler, so an abandoned run
+        # leaves `error`/`cost_usd` NULL, and without beats `updated` stays frozen at the start —
+        # "died at minute 2" reads the same as "died at minute 29". Started AFTER claim_running (a
+        # beat is guarded on status=running, so beating before we own the row could keep ANOTHER
+        # worker's orphan looking alive) and held past the final write, because the tail — backout
+        # resolve, the ~$1 second opinion with its own API retries, the gates, the git-sha lookup —
+        # is minutes long, and a live run that stops beating is exactly what would let the reaper
+        # duplicate work in flight.
         with _heartbeat(uuid):
+            llm_cfg = config.get_llm()
+            tools_cfg = config.get_agent()
+            principal = llm_cfg.get("principal", {})
+            roles = llm_cfg.get("roles") or {}
+            recorder = ActionsRecorder()
+
+            from crashclouseau.agent.triage import run_crash_triage  # lazy: pulls the SDK
+
             result = asyncio.run(
                 run_crash_triage(
                     crash=seed, tools_cfg=tools_cfg, llm_cfg=llm_cfg, recorder=recorder
                 )
             )
 
-        # Off-stack runs feed a ~112-candidate window, so they get a higher (still
-        # log-only) cost ceiling than the scored-candidate default.
-        cap = (
-            config.get_agent_offstack_cost_cap()
-            if seed.get("is_offstack")
-            else llm_cfg.get("max_cost_usd_per_crash", _DEFAULT_COST_CAP)
-        )
-        cost = result.total_cost_usd
-        over_budget = cap is not None and cost is not None and cost > cap
-        if over_budget:
-            logger.warning(
-                "agent: %s over budget: $%.4f > $%s",
-                uuid, result.total_cost_usd, cap,
+            # Off-stack runs feed a ~112-candidate window, so they get a higher (still
+            # log-only) cost ceiling than the scored-candidate default.
+            cap = (
+                config.get_agent_offstack_cost_cap()
+                if seed.get("is_offstack")
+                else llm_cfg.get("max_cost_usd_per_crash", _DEFAULT_COST_CAP)
+            )
+            cost = result.total_cost_usd
+            over_budget = cap is not None and cost is not None and cost > cap
+            if over_budget:
+                logger.warning(
+                    "agent: %s over budget: $%.4f > $%s",
+                    uuid, result.total_cost_usd, cap,
+                )
+
+            # Was the chosen candidate backed out? Resolved HERE, before the second opinion, so a
+            # candidate that is no longer in the tree never buys a ~$1 independent review. Online
+            # only (one cached hg lookup) — the gate that acts on it lives in the shared ladder.
+            _resolve_candidate_backout(result.dossier, seed)
+
+            # Blind second-opinion (#SO): an independent, no-context re-analysis of a
+            # would-be-reported lead, run from the RAW verdict (async home) and folded inside the
+            # gates below. Prod-only / env-gated (SECOND_OPINION_ENABLED); None otherwise.
+            second_opinion, second_opinion_status = _maybe_run_second_opinion(result, seed)
+
+            # Reshape the raw agent verdict into the shipped verdict (area-experts + the
+            # callpath/exposer/corroboration gates + the second-opinion fold + needinfo reconcile
+            # + observe-only). Shared with the offline eval runner so calibration scores the
+            # pipeline we ship (the eval runner passes no second opinion).
+            apply_deterministic_gates(
+                result, seed,
+                second_opinion=second_opinion,
+                second_opinion_status=second_opinion_status,
+            )
+            # Resolve the candidate's git sha for the filed bug's (gh) link. Deliberately OUTSIDE
+            # apply_deterministic_gates: that function is shared with the offline eval runner, and
+            # an hg json-rev call (8-13s) per corpus crash would wreck an eval run's runtime and
+            # its determinism. Online only, once per run, usually a cache hit from the gate above.
+            _resolve_candidate_git_commit(result.dossier, seed)
+
+            # ``result.actions`` is the single source of truth (build_result folds the
+            # recorder's actions + the synthesized needinfo into it); model_dump already
+            # carries it, so don't overwrite with the raw recorder here — that would drop
+            # the bridged needinfo action the apply UI needs.
+            payload = result.model_dump(mode="json")
+            if over_budget:
+                payload["over_budget"] = True
+
+            worker_models = sorted(
+                {_full_model(r.get("model")) for r in roles.values() if r.get("model")}
+            )
+            models.Dossier.upsert(
+                uuid,
+                payload=payload,
+                status="done",
+                worker_models=worker_models,
+                seed_score=seed_score,
+                cost_usd=result.total_cost_usd,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                cache_read_tokens=result.cache_read_tokens,
             )
 
-        # Was the chosen candidate backed out? Resolved HERE, before the second opinion, so a
-        # candidate that is no longer in the tree never buys a ~$1 independent review. Online
-        # only (one cached hg lookup) — the gate that acts on it lives in the shared ladder.
-        _resolve_candidate_backout(result.dossier, seed)
-
-        # Blind second-opinion (#SO): an independent, no-context re-analysis of a
-        # would-be-reported lead, run from the RAW verdict (async home) and folded inside the
-        # gates below. Prod-only / env-gated (SECOND_OPINION_ENABLED); None otherwise.
-        second_opinion, second_opinion_status = _maybe_run_second_opinion(result, seed)
-
-        # Reshape the raw agent verdict into the shipped verdict (area-experts + the
-        # callpath/exposer/corroboration gates + the second-opinion fold + needinfo reconcile
-        # + observe-only). Shared with the offline eval runner so calibration scores the
-        # pipeline we ship (the eval runner passes no second opinion).
-        apply_deterministic_gates(
-            result, seed,
-            second_opinion=second_opinion,
-            second_opinion_status=second_opinion_status,
-        )
-        # Resolve the candidate's git sha for the filed bug's (gh) link. Deliberately OUTSIDE
-        # apply_deterministic_gates: that function is shared with the offline eval runner, and
-        # an hg json-rev call (8-13s) per corpus crash would wreck an eval run's runtime and
-        # its determinism. Online only, once per run, usually a cache hit from the gate above.
-        _resolve_candidate_git_commit(result.dossier, seed)
-
-        # ``result.actions`` is the single source of truth (build_result folds the
-        # recorder's actions + the synthesized needinfo into it); model_dump already
-        # carries it, so don't overwrite with the raw recorder here — that would drop
-        # the bridged needinfo action the apply UI needs.
-        payload = result.model_dump(mode="json")
-        if over_budget:
-            payload["over_budget"] = True
-
-        worker_models = sorted(
-            {_full_model(r.get("model")) for r in roles.values() if r.get("model")}
-        )
-        models.Dossier.upsert(
-            uuid,
-            payload=payload,
-            status="done",
-            worker_models=worker_models,
-            seed_score=seed_score,
-            cost_usd=result.total_cost_usd,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            cache_read_tokens=result.cache_read_tokens,
-        )
-
-        row = _verdict_row(result)
-        models.Verdict.set(
-            uuid,
-            verdict=row["verdict"],
-            confidence=row["confidence"],
-            principal_model=_full_model(principal.get("model", "opus")),
-            rationale=row["rationale"],
-            evidence=row["evidence"],
-            effort=principal.get("effort"),
-        )
-        models.commit()
-        logger.info(
-            "agent: %s done (verdict=%s turns=%s cost=$%.4f)",
-            uuid, row["verdict"], result.num_turns, result.total_cost_usd or 0.0,
-        )
+            row = _verdict_row(result)
+            models.Verdict.set(
+                uuid,
+                verdict=row["verdict"],
+                confidence=row["confidence"],
+                principal_model=_full_model(principal.get("model", "opus")),
+                rationale=row["rationale"],
+                evidence=row["evidence"],
+                effort=principal.get("effort"),
+            )
+            models.commit()
+            logger.info(
+                "agent: %s done (verdict=%s turns=%s cost=$%.4f)",
+                uuid, row["verdict"], result.num_turns, result.total_cost_usd or 0.0,
+            )
     except Exception as exc:
         logger.error("agent: run_evidence_agent failed for %s", uuid, exc_info=True)
         reason = "{}: {}".format(type(exc).__name__, exc)
@@ -1748,17 +1753,23 @@ def reap_stale_agent_jobs():
             gaveup: list = []
 
             def _reap_one(uuid, force):
-                # GIVE-UP CAP: a crash that keeps orphaning (e.g. OOMs on every run)
-                # must not be re-enqueued forever (unbounded token burn). Count attempts
-                # in the dossier payload; past the cap, fail it VISIBLY (status=error +
-                # reason) instead of re-running — an operator can retrigger (which clears
-                # the counter). The cap (>=2) still covers a one-off transient orphan.
+                # GIVE-UP CAP: a crash that keeps orphaning must not be re-enqueued
+                # forever (unbounded token burn). Count attempts in the dossier payload;
+                # past the cap, fail it VISIBLY (status=error + reason) instead of
+                # re-running — an operator can retrigger (which clears the counter). The
+                # cap (>=2) still covers a one-off transient orphan.
+                #
+                # The reason states only what we actually know — that the dossier stopped
+                # beating and never came back. It used to assert "likely OOM/stall on every
+                # run", which sent weeks of investigation after memory limits when the real
+                # cause was this reaper re-enqueuing runs that skipped themselves.
                 n = models.Dossier.bump_reap_attempts(uuid)
                 if n > cap:
                     models.Dossier.set_status(
                         uuid, "error",
-                        error="reaper gave up after {} re-enqueue attempts (likely OOM"
-                              "/stall on every run); retrigger to retry".format(cap),
+                        error="reaper gave up after {} re-enqueue attempts: no heartbeat "
+                              "for {}s on each try, so the run never came back alive; "
+                              "retrigger to retry".format(cap, stale_after),
                     )
                     gaveup.append(uuid)
                     return

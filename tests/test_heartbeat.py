@@ -155,5 +155,74 @@ class TestHeartbeatThread(unittest.TestCase):
         self.assertEqual(beats, [])
 
 
+class TestHeartbeatScope(unittest.TestCase):
+    """WHERE the heartbeat starts and stops. It used to wrap only the agent call, leaving the
+    tail — backout resolve, the ~$1 second opinion with its own API retries, the gates, the
+    git-sha lookup, the writes — beating not at all. A live run that stops beating looks stale
+    to the reaper, which is the one condition under which recovery can duplicate work in flight.
+    """
+
+    def _run_with_recorder(self):
+        from contextlib import contextmanager
+
+        events = []
+        MDoss = mock.MagicMock()
+        MDoss.get_by_uuid.return_value = None
+        MDoss.skip_triage.return_value = False
+        MDoss.claim_running.side_effect = lambda *a, **kw: (events.append("claim"), True)[1]
+        MDoss.upsert.side_effect = lambda *a, **kw: events.append(
+            "upsert:{}".format(kw.get("status"))
+        )
+        MVerd = mock.MagicMock()
+        MVerd.set.side_effect = lambda *a, **kw: events.append("verdict")
+
+        @contextmanager
+        def recording_heartbeat(uuid):
+            events.append("hb-start")
+            try:
+                yield
+            finally:
+                events.append("hb-stop")
+
+        from tests.test_orchestrator import _SEED, _abstain_result, _triage_returning
+
+        with mock.patch.object(orch.models, "Dossier", MDoss), \
+                mock.patch.object(orch.models, "Verdict", MVerd), \
+                mock.patch.object(orch.models, "commit"), \
+                mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+                mock.patch.object(orch, "build_seed", return_value=dict(_SEED)), \
+                mock.patch.object(orch, "_seed_score", return_value=5), \
+                mock.patch.object(orch, "_heartbeat", recording_heartbeat), \
+                mock.patch.object(
+                    orch, "_resolve_candidate_backout",
+                    side_effect=lambda *a: events.append("backout")), \
+                mock.patch.object(
+                    orch, "_maybe_run_second_opinion",
+                    side_effect=lambda *a: (events.append("second-opinion"), (None, None))[1]), \
+                mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                           _triage_returning(_abstain_result())):
+            orch.run_evidence_agent("u-1")
+        return events
+
+    def test_the_whole_run_beats_not_just_the_agent_call(self):
+        events = self._run_with_recorder()
+        self.assertIn("hb-start", events)
+        start, stop = events.index("hb-start"), events.index("hb-stop")
+        # Every step that can block for minutes, and the writes that settle the dossier,
+        # must sit INSIDE the beating window.
+        for step in ("backout", "second-opinion", "upsert:done", "verdict"):
+            self.assertIn(step, events)
+            self.assertTrue(
+                start < events.index(step) < stop,
+                "{} runs outside the heartbeat: {}".format(step, events),
+            )
+
+    def test_it_starts_only_after_the_claim_is_won(self):
+        """A beat is guarded on status=running, so beating before we own the row would keep
+        ANOTHER worker's orphan looking alive and hide it from the reaper."""
+        events = self._run_with_recorder()
+        self.assertLess(events.index("claim"), events.index("hb-start"), events)
+
+
 if __name__ == "__main__":
     unittest.main()

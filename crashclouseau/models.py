@@ -1557,9 +1557,21 @@ class Dossier(db.Model):
     def bump_reap_attempts(uuid, commit=True):
         """Increment (in the JSONB ``payload``, no migration) the count of times the
         reaper has re-enqueued this stuck dossier, and return the new count. Lets the
-        reaper GIVE UP on a crash that keeps orphaning (e.g. OOMs on every run) instead
-        of re-enqueuing it forever. Reset by ``reset_for_retrigger`` (an operator
-        retrigger earns a fresh budget). Returns 0 if the row is absent."""
+        reaper GIVE UP on a crash that keeps orphaning instead of re-enqueuing it
+        forever. Reset by ``reset_for_retrigger`` (an operator retrigger earns a fresh
+        budget). Returns 0 if the row is absent.
+
+        This bookkeeping write MUST NOT refresh ``updated``. ``updated`` is the liveness
+        clock the re-enqueued run reads back (``skip_triage``, then ``claim_running``) to
+        decide whether the orphan is still owned by a live worker — so stamping it here
+        made the reaper announce "this dossier is alive as of now" a fraction of a second
+        before scheduling the retry, and every retry then skipped ITSELF as a duplicate.
+        Measured cost of that: 0 recoveries out of 28 reaped dossiers, each one burning
+        its attempts and settling to ``error``.
+
+        ``updated`` carries ``onupdate=now()``, so simply not assigning it is NOT enough —
+        an ORM flush of the dirty row re-stamps it anyway. Hence the explicit Core UPDATE
+        that writes the column back to its own value."""
         uuidid = UUID.get_id(uuid)
         if uuidid is None:
             return 0
@@ -1569,8 +1581,12 @@ class Dossier(db.Model):
         payload = dict(d.payload or {})
         n = int(payload.get("reap_attempts", 0) or 0) + 1
         payload["reap_attempts"] = n
-        d.payload = payload
-        d.updated = db.func.now()
+        db.session.execute(
+            db.update(Dossier)
+            .where(Dossier.uuidid == uuidid)
+            .values(payload=payload, updated=Dossier.updated)
+        )
+        db.session.expire(d)  # the row changed under the identity map
         if commit:
             db.session.commit()
         return n
@@ -1653,8 +1669,13 @@ class Dossier(db.Model):
         ``stale_after_s``). A ``running`` dossier OLDER than that is an orphan — its
         worker died mid-run (e.g. a Heroku dyno restart, which SIGKILLs before the
         exception handler can mark ``error``) — so it is NOT skipped and gets retried;
-        ``pending`` retries too. ``updated`` is stamped at run start (no heartbeat) and
-        RQ kills a run at its job timeout, so any ``running`` past the timeout is dead."""
+        ``pending`` retries too. ``updated`` is the run's heartbeat (stamped at the claim,
+        then every couple of minutes for as long as the run lives), so a ``running`` row
+        that has not been stamped within the window is dead, not merely slow.
+
+        NOTE this makes ``updated`` load-bearing for recovery, not just for reporting: any
+        write that refreshes it on an orphan tells the retry "someone is already on it"
+        and the retry skips itself. See ``bump_reap_attempts``."""
         d = Dossier.get_by_uuid(uuid)
         if d is None:
             return False
