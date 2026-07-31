@@ -5,8 +5,11 @@
 # Run heartbeat: `Dossier.updated` must mean "last known alive", not "started", or an abandoned
 # run cannot say how far it got (RQ's SIGKILL leaves no error and no cost).
 # The thread + statement-shape checks run anywhere; the round-trip needs a disposable Postgres
-# (the schema uses pg ARRAY/JSONB), matching tests/test_persistence.py:
-#   DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 python -m unittest tests.test_heartbeat
+# (the schema uses pg ARRAY/JSONB), matching tests/test_persistence.py. A throwaway one:
+#   docker run -d --name clouseau-pgtest -e POSTGRES_USER=clouseau -e POSTGRES_PASSWORD=passwd \
+#       -e POSTGRES_DB=clouseau_test -p 5433:5432 postgres:16
+#   DATABASE_URL=postgresql://clouseau:passwd@127.0.0.1:5433/clouseau_test \
+#       REDIS_URL=redis://localhost:6379/0 uv run python -m unittest tests.test_heartbeat
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -19,7 +22,7 @@ from unittest import mock  # noqa: E402
 from crashclouseau import db, models  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 
-_UUID = "11111111-2222-3333-4444-55555560260729"
+_UUID = "11111111-2222-3333-4444-555555602607"  # uuids.uuid is String(36)
 
 
 def _is_postgres():
@@ -73,11 +76,14 @@ class TestHeartbeatStatement(unittest.TestCase):
 class TestHeartbeatRoundTrip(unittest.TestCase):
     def setUp(self):
         db.create_all()
-        models.UUID.get_id(_UUID)
+        # Minimal parent row; the dossier FK needs it (buildid/signatureid are nullable).
+        db.session.add(models.UUID(_UUID, None, "hash", None))
+        db.session.commit()
 
     def tearDown(self):
-        db.session.remove()
-        db.drop_all()
+        # Deleting the parent cascades to dossiers.
+        db.session.query(models.UUID).filter(models.UUID.uuid == _UUID).delete()
+        db.session.commit()
 
     def test_it_stamps_a_running_dossier(self):
         models.Dossier.upsert(_UUID, payload={}, status="running")
