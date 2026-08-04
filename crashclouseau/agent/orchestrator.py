@@ -1249,6 +1249,48 @@ def _resolve_candidate_backout(dossier, seed):
         return
     if backedout_by:
         dossier.candidate = cand.model_copy(update={"backedout_by": backedout_by})
+        # Already doomed by ``_apply_backout_gate``; don't buy a request for the mirror
+        # predicate below on a verdict that is about to be suppressed outright.
+        return
+    _resolve_candidate_is_backout(dossier, seed)
+
+
+def _resolve_candidate_is_backout(dossier, seed):
+    """Ask hg whether the chosen candidate IS ITSELF a backout, and if so whether the patch it
+    reverts landed in its OWN push.
+
+    THE MIRROR of ``_resolve_candidate_backout``, and the hole it left. hg answers "was this
+    backed out?" with a field; "is this a backout?" is only in the description, so the two
+    predicates come from different places and only the first was ever gated. On
+    ``00b44d2a-4343-4caa-9e12-907550260802`` a sheriff's revert had an EMPTY ``backedoutby``
+    (it is a backout, it was not itself backed out), sailed past the gate, and shipped as a
+    strong-evidence culprit at 97% for a signature 283 days older than it.
+
+    Same shape as its mirror: ONLINE ONLY, deliberately outside ``apply_deterministic_gates``
+    so that ladder stays network-free for ``eval/runner.py``, and best-effort — a failed
+    lookup leaves both fields unset, which the gate reads as "not a backout".
+
+    The description is FREE (the cached ``json-rev`` this run already fetched). The same-push
+    lookup is one extra request, paid only when the candidate really is a backout — 10 of 1947
+    canary dossiers, so ~0.5% of runs."""
+    cand = dossier.candidate if dossier is not None else None
+    if cand is None or not cand.node:
+        return
+    try:
+        from crashclouseau import pushlog, sigage
+
+        # ``seed["channel"]``, never ``cand.channel`` — see ``_resolve_candidate_backout``.
+        channel = (seed or {}).get("channel")
+        desc = sigage.desc_for_node(cand.node, channel)
+        if not desc or not pushlog.is_backed_out(desc):
+            return
+        target = sigage.same_push_backout_target(cand.node, channel)
+    except Exception:
+        logger.warning("agent: is-backout lookup failed for %s", cand.node, exc_info=True)
+        return
+    dossier.candidate = cand.model_copy(
+        update={"is_backout": True, "backout_of_same_push": target or ""}
+    )
 
 
 def _apply_backout_gate(dossier, seed):
@@ -1311,6 +1353,100 @@ def _apply_backout_gate(dossier, seed):
     )
 
 
+def _apply_is_backout_gate(dossier, seed):
+    """The candidate IS ITSELF a backout. Two different things follow, so this is two rules.
+
+    NET-ZERO -> ABSTAIN. When the patch it reverts landed in the SAME push, no build ever
+    shipped that patch: the tree's content is identical before the push and after it, so the
+    candidate provably changed nothing and cannot have changed crash behaviour. This is a
+    fact, not a confidence question, hence an outright abstain — the same treatment
+    ``_apply_backout_gate`` gives a changeset that is no longer in the tree. Verified on
+    ``00b44d2a-4343-4caa-9e12-907550260802``: fix and revert both in mozilla-central push
+    44977, and ``dom/onnx/InferenceSession.cpp`` is byte-identical (sha1 ``1eea729e…``) at the
+    fix's parent, at the revert, and at the rev the crashing build was made from.
+
+    OTHERWISE -> CAP THE DECISION AT ``lead``. A backout whose reverted patch DID ship really
+    can make a crash reappear, and "reland the fix" is actionable — the 2026-07-29 owner
+    decision to keep such a changeset REPORTABLE stands, and a blunt is-a-backout->abstain
+    rule would destroy exactly that value. But a backout restores prior behaviour rather than
+    introducing new behaviour, so it is never the ORIGIN, and ``strong-evidence`` claims a
+    verified end-to-end chain to a cause. The rung is left alone: how much a human should care
+    is unchanged, only the claim about what was proven.
+
+    Reads only ``candidate.is_backout`` / ``backout_of_same_push``, both set online by
+    ``_resolve_candidate_is_backout``, so this is a no-op in the offline eval. Runs AFTER
+    ``_apply_backout_gate`` (a candidate that was itself backed out is already suppressed, and
+    a WAS-backed-out abstain must keep its own reason). Mutates in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    cand = dossier.candidate if dossier is not None else None
+    if v is None or cand is None or not cand.is_backout:
+        return
+    reverted = cand.backout_of_same_push
+    dossier.corroborations = {
+        **(dossier.corroborations or {}),
+        "candidate_is_backout": True,
+        **({"candidate_backout_same_push": reverted} if reverted else {}),
+    }
+    if v.decision == Decision.abstain:
+        # Already not reported — record the fact for the page, leave the reason alone.
+        return
+    if reverted:
+        # A NEW Verdict, not ``model_copy``, for the same reason as ``_apply_backout_gate``:
+        # an abstain must not carry a needinfo_draft or inherit ``p_worth_investigating``.
+        dossier.verdict = Verdict(
+            decision=Decision.abstain,
+            confidence=Confidence.low,
+            abstain_reason=(
+                "candidate {} is a BACKOUT of {}, and both landed in the SAME push — the "
+                "tree never differed, so this changeset cannot have changed crash "
+                "behaviour; suppressed rather than reported".format(
+                    cand.node, reverted[:12]
+                )
+            ),
+            mechanism=v.mechanism,
+            consistency=v.consistency,
+        )
+        dossier.corroborations = {
+            **dossier.corroborations, "candidate_backout_suppressed": True
+        }
+        logger.info(
+            "agent: candidate %s backs out %s from its OWN push (net-zero) -> %s/%s "
+            "suppressed to abstain for %s",
+            cand.node, reverted[:12], v.decision.value, v.confidence.value,
+            (seed or {}).get("uuid"),
+        )
+        return
+    if v.decision != Decision.strong_evidence:
+        return
+    # The draft was written to name a CAUSE, and this branch is also where an UNRESOLVED
+    # same-push lookup lands (``None`` -> ``""``), so the draft can assert a regression on a
+    # check that never completed. Say what the changeset actually is, in front of it.
+    draft = v.needinfo_draft
+    if draft:
+        draft = (
+            "(This changeset is a backout: it restores earlier behaviour rather than "
+            "introducing new behaviour, so at most it made the crash reappear — it is not "
+            "its origin.)\n\n"
+        ) + draft
+    dossier.verdict = v.model_copy(update={
+        "decision": Decision.lead,
+        "needinfo_draft": draft,
+        # ``high`` is reserved for a verified strong-evidence chain, and a lead's ``high`` is
+        # clamped to ``probable`` by ``Verdict._consistency_rule`` — which ``model_copy`` does
+        # NOT re-run, so do it here or the dossier ships an impossible ``lead``/``high``.
+        "confidence": (
+            Confidence.probable if v.confidence == Confidence.high else v.confidence
+        ),
+    })
+    dossier.corroborations = {**dossier.corroborations, "candidate_backout_capped": True}
+    logger.info(
+        "agent: candidate %s is itself a backout -> strong-evidence/%s capped to lead/%s "
+        "for %s",
+        cand.node, v.confidence.value, dossier.verdict.confidence.value,
+        (seed or {}).get("uuid"),
+    )
+
+
 def _will_corroboration_promote(dossier, seed):
     """Peek at whether ``_apply_corroboration_gate`` will raise this bare lead to ``probable``
     (a fault-address<->struct-offset or prior-signature match). Used ONLY by
@@ -1332,7 +1468,7 @@ def _maybe_run_second_opinion(result, seed):
     or the run failed) plus WHY, so a null SO is diagnosable in the persisted dossier rather
     than silently ambiguous between "ineligible" and "broken in prod". ``status`` is one of
     ``ok`` / ``failed`` / ``skipped_disabled`` / ``skipped_no_verdict`` / ``skipped_abstain`` /
-    ``skipped_backedout`` / ``skipped_below_threshold``.
+    ``skipped_backedout`` / ``skipped_backout_netzero`` / ``skipped_below_threshold``.
 
     Prod-only and env-gated (``SECOND_OPINION_ENABLED``, default off); the offline
     eval runner never calls this. Keyed on the RAW (pre-gate) verdict: a raw abstain can never
@@ -1359,6 +1495,11 @@ def _maybe_run_second_opinion(result, seed):
         # of the changeset costs ~$1 to measure something we are about to drop. Resolved before
         # this call in ``run_evidence_agent``, precisely so the money is never spent.
         return None, "skipped_backedout"
+    if cand is not None and cand.backout_of_same_push:
+        # Same reasoning for the net-zero backout: ``_apply_is_backout_gate`` is about to
+        # suppress this outright. Worth its own status rather than reusing the one above —
+        # the two are different failures and a merged label makes neither measurable.
+        return None, "skipped_backout_netzero"
     rung = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
     if rung < cfg["min_confidence"]:
         # A pending deterministic corroboration bump (-> probable/70) still makes this a
@@ -1469,6 +1610,11 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # ``candidate.backedout_by`` (resolved online by ``_resolve_candidate_backout``), hence a
         # no-op in the offline eval and no network call on this shared path.
         _apply_backout_gate(result.dossier, seed)
+        # The MIRROR predicate, and the last word after it: the candidate IS ITSELF a backout.
+        # Net-zero (it reverts a patch from its own push) -> abstain; otherwise cap the
+        # decision at `lead`, because a backout restores behaviour and is never an origin.
+        # After `_apply_backout_gate` so a WAS-backed-out abstain keeps its own reason.
+        _apply_is_backout_gate(result.dossier, seed)
         # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
         # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
         # must not ship the original strong-evidence action. Idempotent when nothing
@@ -1627,9 +1773,11 @@ def run_evidence_agent(uuid, force=False):
                     uuid, result.total_cost_usd, cap,
                 )
 
-            # Was the chosen candidate backed out? Resolved HERE, before the second opinion, so a
-            # candidate that is no longer in the tree never buys a ~$1 independent review. Online
-            # only (one cached hg lookup) — the gate that acts on it lives in the shared ladder.
+            # Was the chosen candidate backed out — or is it ITSELF a backout? Resolved HERE,
+            # before the second opinion, so a candidate we are about to suppress never buys a
+            # ~$1 independent review. Online only (a cached hg lookup, plus one json-pushes
+            # request on the ~0.5% of runs that name a backout); the gates that act on the
+            # answers live in the shared ladder.
             _resolve_candidate_backout(result.dossier, seed)
 
             # Blind second-opinion (#SO): an independent, no-context re-analysis of a

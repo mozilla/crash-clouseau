@@ -223,6 +223,16 @@ class Candidate(BaseModel):
     # injected. "" = not backed out, or never resolved (offline / lookup failed) — the gate
     # only ever fires on a non-empty value, so unknown timing never suppresses a verdict.
     backedout_by: str = ""
+    # The MIRROR predicate, and the one that actually bit us: does this changeset's own hg
+    # description say it IS ITSELF a backout/revert (``pushlog.is_backed_out``)? Also
+    # ORCHESTRATOR-authored and stripped from the handoff — ``backedout`` above is the model's
+    # unreliable guess at the same thing, and the two must not be confusable.
+    is_backout: bool = False
+    # When ``is_backout``: the changeset it backs out, IF that changeset landed in the SAME
+    # push (``sigage.same_push_backout_target``). Non-empty means the tree's content never
+    # differed, so the candidate provably changed nothing -> the verdict is suppressed.
+    # "" = no same-push target, or we could not find out (never suppress on unknown).
+    backout_of_same_push: str = ""
     seed_score: int | None = None
     changed_functions: list[str] = Field(default_factory=list)
 
@@ -409,7 +419,8 @@ class Dossier(BaseModel):
     # prod-only break is INVISIBLE: a failed run and an ineligible verdict both leave
     # ``second_opinion`` null and cannot be told apart. One of ``ok`` / ``failed`` /
     # ``skipped_disabled`` / ``skipped_no_verdict`` / ``skipped_abstain`` /
-    # ``skipped_backedout`` / ``skipped_below_threshold``, or ``None`` when the gate never ran
+    # ``skipped_backedout`` / ``skipped_backout_netzero`` / ``skipped_below_threshold``, or
+    # ``None`` when the gate never ran
     # (the offline eval runner, and every dossier written before this field existed).
     second_opinion_status: str | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -719,6 +730,11 @@ def parse_and_validate(result: str | dict) -> Dossier:
         # resolves when the field is unset).
         if isinstance(obj.get("candidate"), dict):
             obj["candidate"].pop("backedout_by", None)
+            # Same rule for the is-itself-a-backout pair: both suppress or cap the verdict, so
+            # a model that could set them could silence its own report — or, by emitting a
+            # false ``is_backout``, stop the orchestrator resolving the real one.
+            obj["candidate"].pop("is_backout", None)
+            obj["candidate"].pop("backout_of_same_push", None)
     # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
     # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
     # place, so the ``_salvage`` fallback below sees the normalized citations too.

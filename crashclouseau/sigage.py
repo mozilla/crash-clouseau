@@ -28,6 +28,7 @@ One Socorro lookup answers it. Four gotchas, all learned the hard way and all en
 Window truncation can only make first-seen look NEWER than it really is, so an age computed here
 is a LOWER bound and the resulting downweight is conservative.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
@@ -160,6 +161,133 @@ def backedout_by_for_node(node, channel="nightly"):
     if not rev.get("node"):
         return None
     return rev.get("backedoutby") or ""
+
+
+def desc_for_node(node, channel="nightly"):
+    """A changeset's commit message, or ``""`` when we could not find out.
+
+    Free: the same cached ``json-rev`` request already serves ``pushdate_for_node`` /
+    ``git_commit_for_node`` / ``backedout_by_for_node`` for this node on every online run.
+    Wanted for the MIRROR of ``backedout_by_for_node``'s predicate — hg tells us straight out
+    whether a changeset WAS backed out, but whether it IS ITSELF a backout only shows up in
+    its description (``pushlog.is_backed_out``)."""
+    return json_rev(node, channel).get("desc") or ""
+
+
+_PUSH_CACHE: dict = {}
+
+# What a backout says it undoes, in the two shapes mozilla-central actually uses. The GIT one
+# dominates since the hg->git migration: Lando writes `Revert "<title>"` + `This reverts commit
+# <40-char GIT sha>`, and NOT ONE of 909 backout descriptions sampled across pushes 44620-45020
+# names an hg short hash. The hg one is kept for `hg backout`-style descriptions (one line per
+# backed-out changeset, so ``findall``).
+_REVERTS_GIT_RE = re.compile(r"^This reverts commit ([0-9a-f]{40})", re.M)
+_BACKED_OUT_RE = re.compile(r"[Bb]acked out changeset ([0-9a-f]{12,40})")
+
+
+def push_for_node(node, channel="nightly"):
+    """The ``json-pushes`` record of the push that landed ``node``, ``full=1`` so every member
+    changeset carries its own ``node`` + ``desc``. ``{}`` when unresolvable; raises nothing.
+
+    Cached per ``(node, channel)`` like ``json_rev`` — a push is immutable once landed. Its
+    ONE caller (``same_push_backout_target``) only runs for a candidate that is itself a
+    backout, which is ~0.5% of runs, so this never costs a normal triage anything."""
+    if not node:
+        return {}
+    key = (node, channel or "")
+    if key in _PUSH_CACHE:
+        return _PUSH_CACHE[key]
+    from libmozdata.hgmozilla import Mercurial
+
+    from crashclouseau import net
+
+    out = {}
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    if repo_url:
+        try:
+            r = net.get(
+                "{}/json-pushes".format(repo_url),
+                params={"changeset": node, "version": "2", "full": "1"},
+                allow_redirects=True,
+            )
+            r.raise_for_status()
+            for pushid, push in ((r.json() or {}).get("pushes") or {}).items():
+                out = {**push, "pushid": pushid}
+                break
+        except Exception as exc:  # pragma: no cover - network; never break a gate
+            logger.warning("sigage: json-pushes lookup failed for %s: %s", node, exc)
+    _PUSH_CACHE[key] = out
+    return out
+
+
+def revert_targets(desc):
+    """Every changeset ``desc`` says it reverts, as 12-char hg hashes — or ``None`` when we
+    cannot enumerate them exactly.
+
+    ``None`` covers three cases that must NOT be told apart, because all three mean "we do not
+    know what this undoes": the description names nothing, it names a git commit lando could
+    not map, or lando was unreachable (``inspector.git2hg`` returns ``""`` for a genuine
+    non-Firefox commit AND for a transient failure). Every one of them has to reach the caller
+    as unknown, since the only thing a caller does with a complete answer is SUPPRESS.
+
+    Deliberately reads the description rather than matching against the push's members: a
+    sheriff routinely reverts and RELANDS in one push, and a reland carries the reverted
+    patch's title verbatim, so any title-similarity match happily "proves" that a backout of a
+    days-old changeset is same-push. Measured on live mozilla-central, that mistake makes 6.4%
+    of matches point at a node the backout does not revert at all."""
+    if not desc:
+        return None
+    targets = {h[:12] for h in _BACKED_OUT_RE.findall(desc)}
+    git_shas = _REVERTS_GIT_RE.findall(desc)
+    if not targets and not git_shas:
+        return None
+    from crashclouseau import inspector
+
+    for git_sha in git_shas:
+        hg_hash = inspector.git2hg(git_sha)
+        if not hg_hash:
+            return None
+        targets.add(hg_hash[:12])
+    return targets or None
+
+
+def same_push_backout_target(node, channel="nightly"):
+    """Does ``node`` back out changesets that ALL landed in ``node``'s own push?
+
+    TRI-STATE like ``backedout_by_for_node``: the first such changeset, ``""`` when the answer
+    is no, and ``None`` when we could not find out. The distinction matters because a hit
+    SUPPRESSES the verdict outright, so an unresolvable lookup must never read as a hit — nor
+    as a clean "no".
+
+    WHY THIS IS THE PRECISE DISCRIMINATOR. A backout is only interesting as a "regressor" when
+    it restores a crash that some build had stopped shipping. If everything it reverts landed
+    in its own push, no build ever contained any of it: the tree's content is identical before
+    the push and after it, so the changeset provably changed nothing. Seen in prod on
+    ``00b44d2a-4343-4caa-9e12-907550260802``, where a fix and its same-day revert both reached
+    mozilla-central in autoland merge push 44977 (``dom/onnx/InferenceSession.cpp`` is
+    byte-identical at the push parent, at the revert and at the push head) and the pipeline
+    still reported the revert as the culprit at 97%.
+
+    ALL of them, not any: proving one of three reverted patches is same-push says nothing about
+    the other two, and a target that landed in an EARLIER push is exactly the case where the
+    tree did differ and the backout is a real regressor worth reporting."""
+    targets = revert_targets(desc_for_node(node, channel))
+    if targets is None:
+        return None
+    members = push_for_node(node, channel).get("changesets") or []
+    if not members:
+        return None
+    by_short = {(m.get("node") or "")[:12]: (m.get("node") or "")
+                for m in members if m.get("node")}
+    if not targets <= set(by_short):
+        return ""
+    # Push order, so a multi-changeset backout names the first thing it undid rather than
+    # whichever hash happens to sort first.
+    for member in members:
+        short = (member.get("node") or "")[:12]
+        if short in targets:
+            return member.get("node")
+    return ""
 
 
 def to_datetime(value):

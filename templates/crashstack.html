@@ -82,7 +82,7 @@
       {% if evidence['verdict'] == 'abstain' -%}
       {#- A suppressed verdict is not the same as an empty one: we DID find a changeset, it is
           just dead. Saying "insufficient evidence" there reads as a failure to look. -#}
-      <p class="muted">{% if corrob.get('candidate_backedout_suppressed') %}Nothing to report &mdash; the suspected changeset was backed out, so there is nothing left to act on.{% else %}Insufficient evidence &mdash; no culprit identified.{% endif %}{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
+      <p class="muted">{% if corrob.get('candidate_backedout_suppressed') %}Nothing to report &mdash; the suspected changeset was backed out, so there is nothing left to act on.{% elif corrob.get('candidate_backout_suppressed') %}Nothing to report &mdash; the suspected changeset is a backout of a patch from its own push, so the tree never differed and it cannot have changed crash behaviour.{% else %}Insufficient evidence &mdash; no culprit identified.{% endif %}{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
       {% endif -%}
 
       {% if corrob.get('fault_address_offset_match') -%}
@@ -110,9 +110,18 @@
         <span class="corrob-chip refute" title="Clouseau checked hg itself: this changeset was backed out, so it is not in the tree and there is nothing left to fix. A patch is usually backed out because it was wrong, so it is suppressed rather than reported &mdash; whatever the rest of the analysis found.">candidate was backed out by <code>{{ corrob.get('candidate_backedout_by','')[:12]|e }}</code>{% if corrob.get('candidate_backedout_suppressed') %} &mdash; not reported{% endif %}</span>
       </div>
       {% endif -%}
+      {% if corrob.get('candidate_is_backout') -%}
+      <div class="corrob-chips">
+        {% if corrob.get('candidate_backout_same_push') -%}
+        <span class="corrob-chip refute" title="Clouseau checked hg itself: this changeset is a backout, and the patch it reverts landed in the very same push — so no build ever contained that patch and the tree's content never differed. Whatever it looks like in a diff, this changeset cannot have changed crash behaviour, so it is suppressed rather than reported.">reverts <code>{{ corrob.get('candidate_backout_same_push','')[:12]|e }}</code> from its own push &mdash; the tree never differed{% if corrob.get('candidate_backout_suppressed') %}, not reported{% endif %}</span>
+        {% else -%}
+        <span class="corrob-chip refute" title="Clouseau checked hg itself: this changeset is a backout. A backout RESTORES earlier behaviour, so it can make a crash reappear in a build — worth reporting, and relanding the reverted fix is actionable — but it never INTRODUCES the crash, so it is not reported as a verified cause. Note that a backout also permanently owns every line it re-adds, which is why blame points here.">this changeset is a backout{% if corrob.get('candidate_backout_capped') %} &mdash; reported as a lead, not a verified cause{% endif %}</span>
+        {% endif -%}
+      </div>
+      {% endif -%}
       {% if corrob.get('stale_signature') -%}
       <div class="corrob-chips">
-        <span class="corrob-chip refute" title="This crash signature was already being reported before the candidate landed, so the candidate cannot be what INTRODUCED it. Its confidence has been lowered one step. It is not dismissed: an old signature can acquire a new cause, and a rare pre-existing crash can be made frequent by a new change — so this changeset may still be relevant, just not the origin.">crash predates this changeset by {{ corrob.get('candidate_landed_after_first_seen_days', 0)|round|int }}d{% if corrob.get('signature_first_seen_buildid') %} (first seen in build {{ corrob.get('signature_first_seen_buildid')|e }}){% endif %}</span>
+        <span class="corrob-chip refute" title="This crash signature was already being reported before the candidate landed, so the candidate cannot be what INTRODUCED it. A lead's confidence is lowered one step; a fully verified strong-evidence chain is flagged without being moved, so it may appear here without having changed the badge above. It is not dismissed either way: an old signature can acquire a new cause, and a rare pre-existing crash can be made frequent by a new change — so this changeset may still be relevant, just not the origin.">crash predates this changeset by {{ corrob.get('candidate_landed_after_first_seen_days', 0)|round|int }}d{% if corrob.get('signature_first_seen_buildid') %} (first seen in build {{ corrob.get('signature_first_seen_buildid')|e }}){% endif %}</span>
       </div>
       {% endif -%}
       {% if is_lead -%}
@@ -167,6 +176,9 @@
               only so old dossiers still show something. Never conflate them in the label. -#}
           {% if cand.get('backedout_by') %} <span class="flag" title="Verified against hg: this changeset was backed out, so there is nothing left to act on.">backed out by <code>{{ cand['backedout_by'][:12] }}</code></span>
           {% elif cand.get('backedout') %} <span class="flag" title="Reported by the analysis, not verified by Clouseau.">backed out (unverified)</span>{% endif %}
+          {#- The MIRROR predicate, also Clouseau's own hg lookup: this changeset IS a backout.
+              Distinct from both flags above and never to be labelled like them. -#}
+          {% if cand.get('is_backout') %} <span class="flag" title="Verified against hg: this changeset's own description says it is a backout/revert. It restores earlier behaviour rather than introducing new behaviour.">is a backout{% if cand.get('backout_of_same_push') %} of <code>{{ cand['backout_of_same_push'][:12] }}</code>, from its own push{% endif %}</span>{% endif %}
         </p>
         {% if cand.get('changed_functions') -%}
         <p class="muted">Changed functions: <code>{{ cand['changed_functions']|join(', ')|e }}</code></p>
