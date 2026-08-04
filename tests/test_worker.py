@@ -44,5 +44,34 @@ class TestBlackHole(unittest.TestCase):
         job.cancel.assert_called_once()
 
 
+class TestWorkerRunsTheScheduler(unittest.TestCase):
+    """`Retry(max=2, interval=[60, 300])` in `agent.orchestrator.enqueue_agent` is not
+    self-executing: RQ parks the retry in the ScheduledJobRegistry and only a worker running
+    the scheduler puts it back on the queue. `work()` defaults `with_scheduler` to False, so
+    for two weeks the canary logged "requeuing" and requeued nothing — 54 stranded jobs, all
+    overdue. This test is the whole guard against that returning."""
+
+    def _worker(self):
+        with mock.patch.object(worker, "Worker") as W:
+            worker.main()
+        return W
+
+    def test_work_is_started_with_the_scheduler(self):
+        self._worker().return_value.work.assert_called_once_with(with_scheduler=True)
+
+    def test_the_exception_handler_is_still_wired(self):
+        """Guards the extraction of `main()` out of the `__main__` block."""
+        kwargs = self._worker().call_args.kwargs
+        self.assertEqual(kwargs["exception_handlers"], [worker.black_hole])
+        self.assertIs(kwargs["connection"], worker.conn)
+
+    def test_it_consumes_the_queues_this_process_was_told_to(self):
+        with mock.patch.object(worker, "listen", ["agent"]), \
+             mock.patch.object(worker, "Queue") as Q, \
+             mock.patch.object(worker, "Worker"):
+            worker.main()
+        self.assertEqual([c.args[0] for c in Q.call_args_list], ["agent"])
+
+
 if __name__ == "__main__":
     unittest.main()

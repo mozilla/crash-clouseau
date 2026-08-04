@@ -66,10 +66,27 @@ def resume():
     suspension.resume(conn)
 
 
-if __name__ == "__main__":
-    worker = Worker(
+def main():
+    """Run this process's worker.
+
+    ``with_scheduler=True`` is load-bearing, not a nicety. RQ does not re-run a
+    ``Retry(...)`` job inline: it parks it in the ScheduledJobRegistry with the configured
+    delay, and ONLY a worker running the scheduler moves a due job back onto the queue.
+    ``work()`` defaults it to False, so the retry that ``agent.orchestrator.enqueue_agent``
+    asks for (``Retry(max=2, interval=[60, 300])``) had never once fired: the canary was
+    holding 54 stranded jobs, every one of them overdue, the oldest since 2026-07-20 — the
+    same day the retry was added. Every transient failure since then was final, and the log
+    line said "requeuing" each time.
+
+    Safe with the Procfile's four dynos all calling it: RQ's scheduler takes a per-queue
+    Redis lock, so only one process actually schedules a given queue."""
+    rq_worker = Worker(
         [Queue(name, connection=conn) for name in listen],
         exception_handlers=[black_hole],
         connection=conn,
     )
-    worker.work()
+    rq_worker.work(with_scheduler=True)
+
+
+if __name__ == "__main__":
+    main()
