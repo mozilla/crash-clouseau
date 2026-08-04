@@ -366,7 +366,13 @@ def get_agent_calibration():
     map) or ``agent.calibration.path`` (a ``calibration_table.json`` written by
     ``eval.calibrate`` — its ``calibration_table`` sub-key is used). Empty ``{}`` until a paid
     calibration run has been fit + wired, so ``Verdict.p_worth_investigating`` stays ``None`` in
-    prod until then. A path is re-read only when its mtime changes."""
+    prod until then. A path is re-read only when its mtime changes.
+
+    The shipped table gives rungs 70 and 85 the SAME value (0.9714) on purpose: it is the pooled
+    70+85 bin (34/35), because rung 85 measured worse than rung 70 on the study corpus. It is a
+    result, not an unfinished fit — do not "separate" them, and expect no badge movement from any
+    gate that drops a verdict from 85 to 70. Full numbers in ``eval.calibrate``'s module
+    docstring."""
     cal = get_agent().get("calibration", {})
     if cal.get("table") is not None:
         return _normalize_calibration_table(cal["table"])

@@ -15,6 +15,29 @@ prints a text reliability diagram.
 
 Deterministic + offline: the cal/test split keys on a stable hash of the uuid (no RNG), and
 refitting reads only ``results.jsonl`` — it never re-runs the agent.
+
+THE TOP TWO RUNGS SHARE ONE VALUE, AND THAT IS THE ANSWER, NOT A BUG (measured 2026-08-04).
+``corpus_ship`` fits ``{25: 0.5, 50: 0.8, 70: 0.9714, 85: 0.9714}`` and the 0.9714 is exactly
+34/35 — the POOLED 70+85 bin. ``isotonic`` pools them because rung 85 scores WORSE than rung 70:
+
+    positives-only    rung 70  21/21 = 1.000     rung 85  13/14 = 0.929
+    with negatives    rung 70  17/21 = 0.810     rung 85   9/13 = 0.692
+
+Non-monotonic in the same direction on every cut, so a ``strong-evidence``/85 verdict is not
+empirically more likely to be worth investigating than a ``probable``/70 lead. Refitting the same
+rows will pool them again; the ladder above 70 carries no signal. Two consequences worth knowing
+before touching this:
+
+* A gate that moves a verdict from 85 to 70 (``orchestrator._apply_is_backout_gate``, the
+  second-opinion refute fold) cannot move the badge. That is correct behaviour, not a wiring bug.
+* Conditioning ``p_worth`` on the deterministic flags instead of the rung — which is the only way
+  to express "97%, unless the signature is 283 days older than the candidate" — CANNOT be fit
+  from this corpus. The flags are online-only, and ``sigage.first_seen_buildid`` searches Socorro
+  within 364 days of *today*, so for a historical corpus the fact is simply gone: backfilling
+  ``corpus_ship`` recovered it for 24 of 55 reported-with-node rows, of which 2 were stale
+  (``spike/enrich_corpus_gate_facts.py``). n=2. The labelled data cannot carry the flags
+  retroactively and the flagged data (prod, since 2026-07-27) has no labels; closing that needs
+  flags frozen at triage time plus a forward labelling loop, not a refit.
 """
 from __future__ import annotations
 

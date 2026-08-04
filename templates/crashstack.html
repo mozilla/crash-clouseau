@@ -64,7 +64,12 @@
        back to the rung %. #}
     {% set pw = vd.get('p_worth_investigating') if vd else None -%}
     {% set pw_pct = (pw * 100)|round|int if pw is not none else None -%}
-    {% set worth_help = 'Calibrated probability this report is worth a human’s time — fit against the 289-bug regressor study at PERSON level (getting the right person to investigate, not necessarily the exact changeset). Distinct from the raw confidence rung.' -%}
+    {#- The top two rungs share ONE calibrated value, and that is a measured result rather than
+        a placeholder: on the study corpus rung 85 scores no better than rung 70 (13/14 vs 21/21
+        positives-only; 9/13 vs 17/21 with negatives), so isotonic regression pools them. Do not
+        "fix" the table to separate them, and do not let the copy below imply a precision the
+        fit refuses to grant. See eval/calibrate.py. -#}
+    {% set worth_help = 'Calibrated probability this report is worth a human’s time — fit against the 289-bug regressor study at PERSON level (getting the right person to investigate, not necessarily the exact changeset). Distinct from the raw confidence rung. The two highest rungs share one value: a fully verified chain measured no more likely to be worth investigating than a probable lead, so the fit pools them.' -%}
     <div class="evidence-panel">
       <h2>
         Clouseau evidence
@@ -126,7 +131,14 @@
       {% endif -%}
       {% if is_lead -%}
       {% if is_probable -%}
-      <p class="muted">Probable cause &mdash; a related changeset was found <strong>and a deterministic signal corroborates the mechanism</strong> (see the check below), though the chain is not proven end&#8209;to&#8209;end. Stronger than a bare lead.</p>
+      {#- `is_probable` is just conf >= 65, which a lead reaches by the model asserting it as
+          well as by the corroboration gate — so this copy claimed a deterministic check that
+          had not run. False for 27 of 27 rung-70 leads in corpus_ship. Say which it was. -#}
+      {% if corrob.get('fault_address_offset_match') or corrob.get('prior_signature_match') -%}
+      <p class="muted">Probable cause &mdash; a related changeset was found <strong>and a deterministic signal corroborates the mechanism</strong> (see the check below), though the chain is not proven end&#8209;to&#8209;end.</p>
+      {% else -%}
+      <p class="muted">Probable cause &mdash; a related changeset was found and the analysis rates the link strongly, but the mechanism is <strong>not verified end&#8209;to&#8209;end and no deterministic check corroborates it</strong>. Worth a look by someone familiar with this code.</p>
+      {% endif -%}
       {% elif has_cand -%}
       <p class="muted">Plausible lead &mdash; a possibly-related changeset was found, but the mechanism is <strong>not verified end&#8209;to&#8209;end</strong>. Worth a look by someone familiar with this code, who may not be the cause.</p>
       {% else -%}
