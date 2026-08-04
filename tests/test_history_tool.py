@@ -75,6 +75,24 @@ class TestBlame(unittest.TestCase):
         self.assertIn("L5:", out)
         self.assertIn("bug 7", out)
 
+    def test_a_backout_is_tagged(self):
+        """A revert permanently OWNS every line it re-adds, so blaming a crashing line lands on
+        the revert rather than on whoever wrote the line. Untagged, this read presented a
+        sheriff's revert as the line's author and handed over the REVERTED patch's bug number
+        as if it were the revert's own — how `00b44d2a-4343-4caa-9e12-907550260802` came to
+        name a backout as its culprit. Same tags as `file_history`."""
+        rows = {"annotate": [
+            {"lineno": 408, "node": "65b7ea25c7db" + "0" * 28, "author": "S <s@m.org>",
+             "desc": 'Revert "Bug 2046861 - Reject it r=x" for leaks', "line": "MOZ_CRASH\n"},
+            {"lineno": 409, "node": "e471a805a3b5" + "0" * 28, "author": "P <p@m.org>",
+             "desc": "Bug 1955060 - Implement the ONNX API r=y", "line": "}\n"},
+        ]}
+        with mock.patch.object(H.Annotate, "get", return_value={"f.cpp": rows}):
+            out = _run(H.blame(CTX, "f.cpp", 408, 409))
+        self.assertIn("bug 2046861 BACKOUT", out)
+        self.assertIn("bug 1955060", out)
+        self.assertNotIn("bug 1955060 BACKOUT", out)
+
 
 class TestChangeset(unittest.TestCase):
     def test_metadata_and_files(self):

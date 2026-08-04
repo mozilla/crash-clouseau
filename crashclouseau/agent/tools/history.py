@@ -171,10 +171,24 @@ async def blame(
         return "blame: no annotation for {} lines {}-{} (channel {}).".format(path, start, end, ch)
     out = ["blame {} lines {}-{} (channel {}):".format(path, start, end, ch)]
     for r in sel:
-        bug = _bug(r.get("desc"))
+        # Same tags as `file_history`, and the BACKOUT one matters MORE here: a revert
+        # permanently owns every line it re-adds, so blaming a crashing line lands on the
+        # revert rather than on whoever wrote the line. Untagged, this read
+        # ("L408: 65b7ea25c7db bug 2046861 Serban Stanca") presents a sheriff's revert as the
+        # author of the crashing line and hands over the REVERTED patch's bug number as if it
+        # were the revert's own — which is how `00b44d2a-4343-4caa-9e12-907550260802` came to
+        # name a backout as its culprit. The bug number is kept, not hidden: it is the right
+        # bug to read, just not evidence that this changeset introduced anything.
+        desc = r.get("desc") or ""
+        tags = []
+        bug = _bug(desc)
+        if bug:
+            tags.append("bug {}".format(bug))
+        if _BACKOUT_RE.match(desc.strip()):
+            tags.append("BACKOUT")
         out.append("  L{}: {}  {}{}  | {}".format(
             r.get("lineno"), _short(r.get("node")),
-            ("bug {}  ".format(bug)) if bug else "",
+            (" ".join(tags) + "  ") if tags else "",
             _author(r.get("author")), (r.get("line") or "").rstrip("\n")[:100]))
     return "\n".join(out)
 
