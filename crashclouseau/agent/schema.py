@@ -352,6 +352,11 @@ class Candidate(BaseModel):
     # GitHub without a page render paying for hg's 8-13s json-rev lookup. "" = not resolved
     # (old dossiers, or hg had no counterpart) -> the comment simply omits the gh link.
     git_commit: str = ""
+    # The candidate author's email, resolved by the ORCHESTRATOR from hg's ``user`` field and
+    # STRIPPED from the model's handoff — this is who the automatic filer sends a needinfo to,
+    # so a model that could set it could point a ping at anyone. "" = unresolved, and the
+    # filed bug then simply carries no needinfo.
+    author_email: str = ""
     # MODEL-SUPPLIED and ambiguous: the handoff shape no longer asks for it, but old dossiers
     # carry it and the model may still volunteer one. Two different predicates have been written
     # here — "this changeset IS a backout commit" (what the seed means, from
@@ -948,6 +953,10 @@ def parse_and_validate(result: str | dict) -> Dossier:
             # false ``is_backout``, stop the orchestrator resolving the real one.
             obj["candidate"].pop("is_backout", None)
             obj["candidate"].pop("backout_of_same_push", None)
+            # Who the automatic filer needinfos. Resolved from hg by the orchestrator; a
+            # model-supplied value would let the handoff aim an unattended Bugzilla ping at
+            # an arbitrary address.
+            obj["candidate"].pop("author_email", None)
     # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
     # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
     # place, so the ``_salvage`` fallback below sees the normalized citations too.

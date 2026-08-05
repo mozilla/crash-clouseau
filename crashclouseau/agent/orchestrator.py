@@ -1632,27 +1632,55 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
 
 
 def _resolve_candidate_git_commit(dossier, seed):
-    """Store the chosen candidate's GIT sha on the dossier, for the filed bug's ``(gh)`` link.
+    """Store the chosen candidate's GIT sha and AUTHOR EMAIL on the dossier — the first for
+    the filed bug's ``(gh)`` link, the second for its needinfo.
 
     Done HERE, once per run, rather than when the bug comment is rendered: hg's ``json-rev``
     takes 8-13s, which is fine inside a ~20-minute analysis and unacceptable on a page view
     (it made a cold crashstack render take 15s). The stale-signature gate has usually just
     fetched the same URL for this same node, so this is normally a cache hit and costs nothing.
 
-    Best-effort and additive — an unresolved sha simply means the comment omits the gh link.
-    Never raises."""
+    The author email has to come from hg. The model supplies ``candidate.author`` as a bare
+    display name ("Jon Coppeard", "stransky") and the local ``Node.authors_for`` record is
+    empty for most candidates, so a dry run over 12 recent rung-70 leads resolved an email
+    for only 3 — the other 9 would have filed a bug with NO needinfo, which is most of the
+    point. hg's ``user`` field ("Jon Coppeard <jcoppeard@mozilla.com>") is authoritative and
+    already in the response this function fetches.
+
+    Best-effort and additive — an unresolved sha omits the gh link, an unresolved email omits
+    the needinfo. Never raises."""
     cand = dossier.candidate if dossier is not None else None
-    if cand is None or not cand.node or cand.git_commit:
+    if cand is None or not cand.node or (cand.git_commit and cand.author_email):
         return
     try:
         from crashclouseau import sigage
 
-        git = sigage.git_commit_for_node(cand.node, (seed or {}).get("channel"))
+        rev = sigage.json_rev(cand.node, (seed or {}).get("channel")) or {}
     except Exception:
-        logger.warning("agent: git-sha lookup failed for %s", cand.node, exc_info=True)
+        logger.warning("agent: json-rev lookup failed for %s", cand.node, exc_info=True)
         return
-    if git:
-        dossier.candidate = cand.model_copy(update={"git_commit": git})
+    update = {}
+    if not cand.git_commit and rev.get("git_commit"):
+        update["git_commit"] = rev["git_commit"]
+    if not cand.author_email:
+        email = _email_from_hg_user(rev.get("user"))
+        if email:
+            update["author_email"] = email
+    if update:
+        dossier.candidate = cand.model_copy(update=update)
+
+
+_HG_USER_EMAIL = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
+
+
+def _email_from_hg_user(user):
+    """The email out of an hg ``user`` field, ``"Real Name <a@b.c>"`` -> ``"a@b.c"``.
+
+    Requires the angle-bracket form on purpose. Some hg users are a bare address and a few
+    are a bare name; accepting anything that merely contains an ``@`` would eventually
+    needinfo a string that is not a person."""
+    m = _HG_USER_EMAIL.search(user or "")
+    return m.group(1) if m else ""
 
 
 _HEARTBEAT_INTERVAL_S = 120

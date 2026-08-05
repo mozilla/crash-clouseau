@@ -630,6 +630,12 @@ def _needinfo_person(candidate, channel):
     author = (c.get("author") or "").strip()
     if not email:
         email = _first_email(author)
+    if not email:
+        # hg's own ``user`` field, resolved once per run by the orchestrator and stored on
+        # the candidate. Without it the needinfo is usually absent: `Node.authors_for` is
+        # empty for most candidates and the model writes ``author`` as a bare display name
+        # ("Jon Coppeard"), so only 3 of 12 recent rung-70 leads resolved an address.
+        email = (c.get("author_email") or "").strip()
     if not name and author:
         name = author.split("<", 1)[0].strip()
     if not (email or name):
