@@ -780,6 +780,61 @@ def _normalize_citations(obj):
     return obj
 
 
+# --------------------------------------------------------------------------- #
+# Validation-failure reporting
+# --------------------------------------------------------------------------- #
+# ``abstain_reason`` is rendered VERBATIM to a human on crashstack.html. Formatting a raw
+# pydantic ``ValidationError`` into it put a wall of ``input_value={...}`` reprs and
+# ``errors.pydantic.dev`` links on the page — 118 persisted dossiers still carry one. The
+# field paths are the only part a reader (or a future audit) can use, so keep those and send
+# the full exception to the log, where it belongs.
+_MAX_REPORTED_PATHS = 4
+# A pydantic error path line in an ALREADY-PERSISTED reason: unindented, not the header.
+_ERR_PATH = re.compile(r"^([A-Za-z_][\w.\[\]]*(?:\.[\w.\[\]]+)*)\s*$", re.MULTILINE)
+
+
+def _validation_paths(exc: ValidationError) -> list[str]:
+    """The dotted field paths pydantic rejected, deduped, in report order."""
+    seen: set = set()
+    out: list = []
+    for err in exc.errors():
+        path = ".".join(str(p) for p in err.get("loc", ()))
+        if path and path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def _format_paths(paths: list[str], total: int | None = None) -> str:
+    n = total if total is not None else len(paths)
+    shown = paths[:_MAX_REPORTED_PATHS]
+    more = len(paths) - len(shown)
+    detail = ", ".join(shown) + (" (+{} more)".format(more) if more > 0 else "")
+    return "{} malformed field{}{}".format(n, "" if n == 1 else "s",
+                                           ": " + detail if detail else "")
+
+
+def humanize_validation_reason(reason: str | None) -> str | None:
+    """Turn a validation-failure ``abstain_reason`` into something a human can read.
+
+    Applied at READ time (``bugzilla_apply.build_evidence``) rather than only at write time,
+    because the walls of pydantic prose are already persisted on 118 dossiers and re-parsing
+    the stored text is the only way to fix those pages without a data migration. Any other
+    reason is returned unchanged."""
+    if not reason or not reason.startswith("dossier validation failed"):
+        return reason
+    body = reason.split(":", 1)[1] if ":" in reason else ""
+    paths = [m.group(1) for m in _ERR_PATH.finditer(body)
+             if m.group(1) not in ("Dossier",) and "." in m.group(1)]
+    return (
+        "Clouseau finished an analysis but could not read its own output back "
+        "({}), so nothing is reported rather than guessed. This is a Clouseau-side "
+        "failure, not a finding about the crash.".format(
+            _format_paths(paths) if paths else "malformed output"
+        )
+    )
+
+
 def validate_dossier(obj: dict) -> Dossier:
     """Strict gate: ``Dossier.model_validate`` — raises ``ValidationError`` on any
     uncited claim or malformed field."""
@@ -906,14 +961,22 @@ def parse_and_validate(result: str | dict) -> Dossier:
         if "verdict" not in kwargs:
             # verdict absent or failed its own grounding rules -> cannot be trusted;
             # abstain, but keep whatever evidence was salvageable for the panel.
+            # The FULL exception goes to the log, not into ``abstain_reason``: that string is
+            # rendered verbatim to a human, and a pydantic dump there is unreadable noise.
+            logger.warning("dossier validation failed (verdict unusable): %s", exc)
             kwargs["verdict"] = Verdict(
                 decision=Decision.abstain,
-                abstain_reason="dossier validation failed (verdict unusable): {}".format(exc),
+                abstain_reason="dossier validation failed (verdict unusable): {}".format(
+                    _format_paths(_validation_paths(exc))
+                ),
             )
         try:
             return Dossier(**kwargs)
-        except ValidationError:
-            return _abstain("dossier validation failed: {}".format(exc))
+        except ValidationError as inner:
+            logger.warning("dossier validation failed, nothing salvageable: %s", inner)
+            return _abstain("dossier validation failed: {}".format(
+                _format_paths(_validation_paths(exc))
+            ))
 
 
 def validate_role_fragment(role: str, obj):

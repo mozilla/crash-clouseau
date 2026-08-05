@@ -25,6 +25,7 @@ from crashclouseau.agent.schema import (
     StructLayoutCitation,
     _normalize_citations,
     dossier_from_db_json,
+    humanize_validation_reason,
     dossier_to_db_json,
     parse_and_validate,
     validate_dossier,
@@ -1039,6 +1040,64 @@ class TestCrashFrameIntCoercion(unittest.TestCase):
         # should still surface rather than being silently zeroed.
         d = self._frames({"stackpos": 1, "function": "F", "line": "line forty-two"})
         self.assertIsNone(d.crash)
+
+
+class TestValidationReasonIsReadable(unittest.TestCase):
+    """``abstain_reason`` is rendered VERBATIM to a human. Formatting a raw pydantic
+    ``ValidationError`` into it put ``input_value={...}`` reprs and errors.pydantic.dev
+    links on the page — 118 persisted dossiers still carry one, which is why the
+    humanizer runs at READ time too rather than only at the point of production."""
+
+    # The exact shape stored on prod dossier 4980, abridged to two of its nine errors.
+    _STORED = (
+        "dossier validation failed (verdict unusable): 9 validation errors for Dossier\n"
+        "call_path.edges.2.citations.0\n"
+        "  Input tag 'source_raw_file' found using 'kind' does not match any of the "
+        "expected tags: 'searchfox', 'diff_line' [type=union_tag_invalid, "
+        "input_value={'kind': 'source_raw_file...ocessedEvent().first);'}, input_type=dict]\n"
+        "    For further information visit https://errors.pydantic.dev/2.13/v/union_tag_invalid\n"
+        "verdict.consistency.citations.0\n"
+        "  Input tag 'changeset' found using 'kind' does not match any of the expected "
+        "tags: 'searchfox' [type=union_tag_invalid, input_value={'kind': 'changeset'}, "
+        "input_type=dict]\n"
+        "    For further information visit https://errors.pydantic.dev/2.13/v/union_tag_invalid"
+    )
+
+    def test_a_new_failure_records_paths_not_a_pydantic_dump(self):
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = []
+        reason = parse_and_validate(obj).verdict.abstain_reason
+        self.assertIn("verdict", reason)
+        for noise in ("input_value=", "[type=", "pydantic.dev", "For further information"):
+            self.assertNotIn(noise, reason)
+
+    def test_an_already_persisted_dump_is_rewritten(self):
+        out = humanize_validation_reason(self._STORED)
+        for noise in ("input_value=", "[type=", "pydantic.dev", "For further information"):
+            self.assertNotIn(noise, out)
+        # the useful part survives: how many, and which fields
+        self.assertIn("2 malformed fields", out)
+        self.assertIn("call_path.edges.2.citations.0", out)
+        self.assertIn("verdict.consistency.citations.0", out)
+        # and it says whose fault it is, so it does not read as a finding about the crash
+        self.assertIn("not a finding about the crash", out)
+
+    def test_long_path_lists_are_truncated(self):
+        body = "\n".join("verdict.mechanism.citations.{}\n  bad [type=x]".format(i)
+                         for i in range(9))
+        out = humanize_validation_reason(
+            "dossier validation failed (verdict unusable): 9 validation errors for "
+            "Dossier\n" + body)
+        self.assertIn("9 malformed fields", out)
+        self.assertIn("(+5 more)", out)
+        self.assertLess(len(out), 400)
+
+    def test_other_abstain_reasons_pass_through_untouched(self):
+        for reason in ("candidate 65b7ea25c7db is a BACKOUT of 507de5c66b0d",
+                       "lead has no cited candidate/hunk/edge anchor; nothing to act on",
+                       "", None):
+            with self.subTest(reason=reason):
+                self.assertEqual(humanize_validation_reason(reason), reason)
 
 
 if __name__ == "__main__":

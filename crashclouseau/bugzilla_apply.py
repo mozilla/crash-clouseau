@@ -30,6 +30,7 @@ import libmozdata.config
 from . import net
 
 from crashclouseau import config, models
+from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
 # Recorded actions the apply step knows how to execute directly. ``create_bug`` is
@@ -85,6 +86,11 @@ def build_evidence(uuid):
     ev = models.Verdict.get_evidence(uuid)
     if ev is None:
         return None
+    # `rationale` is rendered verbatim on crashstack.html, and for a validation-failure
+    # abstain it used to be a raw pydantic dump — input_value reprs, errors.pydantic.dev
+    # links, the lot. Rewriting it HERE rather than only at the point it is produced also
+    # repairs the ~118 dossiers that already have one persisted.
+    ev["rationale"] = schema.humanize_validation_reason(ev.get("rationale"))
     ui = config.get_agent_ui()
     idxs = applicable_indices(ev.get("actions"), ui)
     ev["ui"] = ui
