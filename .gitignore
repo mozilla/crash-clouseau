@@ -17,13 +17,16 @@ local.json
 bin/searchfox-cli
 .profile.d/searchfox-cli.sh
 
-# Research artifact from spike/collect_regressor_dataset.py (54 MB, regenerable).
-spike/regressor_dataset/
-spike/regressor_dataset_compact/
-spike/regressor_dataset_cache/
-spike/regressor_dataset_blind/
+# spike/ is the scratch yard: throwaway probes, corpus dumps and one-off measurement
+# scripts. A single session can leave 150+ files there, and spike/_dossier_dump.jsonl alone
+# is 42 MB of prod agent output. Ignoring the directory wholesale keeps `git status`
+# readable; it does NOT untrack anything already committed there, so the reports and tools
+# worth keeping stay under version control as they are.
+#
+# To keep a NEW spike artifact — a report a handoff points at, a reusable tool — add it
+# explicitly with `git add -f spike/<file>`.
+spike/
 
 # Phase-2 calibration eval artifacts (regenerable via eval.study_corpus / eval.calibrate).
 corpus_*/
 metrics_*.json
-spike/prior_sig_cache/

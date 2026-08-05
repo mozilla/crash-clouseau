@@ -1,0 +1,404 @@
+[
+ {
+  "id": 280,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "",
+  "bug": null,
+  "mechanism": "`webrender::device::gl::Device::compile_shader` only NUL-terminates the shader source string it hands to the driver when the renderer name matches a hardcoded allowlist of known-buggy GPUs (`Mali-T628/T720/T760/G57`, `Adreno (TM) 750`, emulators) at `gl.rs:1827`. The Moore Threads (`mtgpu`) renderer",
+  "uuid": "68581c54-768e-4e28-8d1b-178900260709",
+  "signature": "mtgpu_dri.so",
+  "so": {
+   "mode": "mechanism",
+   "corroborates": null,
+   "confidence": "medium",
+   "mechanism": "The Moore Threads GPU driver (mtgpu_dri.so, GPU vendor 0x1ed5) implements glShaderSource by calling strlen on the source pointer while ignoring the explicit non-null lengths array that gleam::shader_source correctly supplies; WebRender's shader source is a non-NUL-terminated Rust String, so strlen runs off the buffer end into a PROT_NONE guard page, producing the page-aligned SEGV_ACCERR. This is a vendor driver bug, not a Firefox/WebRender defect.",
+   "refutation": "",
+   "cost_usd": 0.4958344999999999
+  }
+ },
+ {
+  "id": 389,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "d86be929745b",
+  "bug": 2053211,
+  "mechanism": "`d86be929745b` (bug 2053211) relocated `Element::PostIdMaybeChange` \u2014 the only code that updates the cached `HasID()` flag \u2014 from `Element::SetAttrAndNotify` (where it ran *before* `AfterSetAttr`, guarded by the now-deleted 'This must happen before AfterSetAttr' comment) into `Element::AfterSetAttr`",
+  "uuid": "870d2488-87b1-4eb7-9014-143a60260710",
+  "signature": "mozilla::detail::nsTStringRepr<T>::BeginReading | mozilla::HashString",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "The candidate changed the name-attribute guard in nsGenericHTMLElement::AfterSetAttr from a textual !Equals(u\"\",eIgnoreCase) to the bitwise !IsEmptyString() (return !mBits). An empty-text name value not stored in the canonical mBits==0 form now passes the guard and reaches AddToNameTable(aValue->GetAtomValue()); GetAtomValue() returns null, producing DependentAtomOrString{mAtom=null,mString=null}, so IdentifierMapEntry::HashKey takes the HashString(*mString) branch and dereferences a null string pointer \u2192 SIGSEGV read at 0x0.",
+   "refutation": "",
+   "cost_usd": 1.3544110000000003
+  }
+ },
+ {
+  "id": 408,
+  "decision": "lead",
+  "confidence": "low",
+  "node": "9af4d03fddb6",
+  "bug": 2049363,
+  "mechanism": "Verified crash mechanism: at `render_target.rs:571`, `RenderTarget::add_task` executes `for sub_task_id in task.sub_tasks.clone()`, where `task = &render_tasks[task_id]` (`:341`) is an invalid `&RenderTask` obtained by indexing the bump-allocated `RenderTaskGraph.tasks: FrameVec<RenderTask>` (`rende",
+  "uuid": "35d0863b-a4ee-45d5-93ae-cc8630260710",
+  "signature": "core::clone::impls::impl$15::clone",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "medium",
+   "mechanism": "Near-null (0x11b) READ while cloning task.sub_tasks (SubTaskRange(Range<u32>)) in RenderTarget::add_task at render_target.rs:569 \u2014 the RenderTask reference `task` is corrupt/near-null (offset ~0x118 into the struct), i.e. render-task-graph corruption or a dangling task in the GPU process, not a bounds error.",
+   "refutation": "Changeset 9af4d03fddb6 only rewrites the picture-primitive BATCHING path (batch.rs quad-shader routing, deletes RasterizationSpace/ImageBrushUserData, drops an unused RenderTargetContext field). It never touches RenderTask, its sub_tasks field, SubTaskRange, or the render-task-graph topology/indexing that the crashing clone reads, so it cannot produce a near-null RenderTask reference in add_task's sub-task loop. Signal is also n=1 (single GPU-process crash, one NVIDIA driver).",
+   "cost_usd": 0.5834582500000001
+  }
+ },
+ {
+  "id": 462,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "d86be929745b",
+  "bug": 2053211,
+  "mechanism": "A null `nsAtom*` reaches `mozilla::dom::Document::AddToDocumentNameTable` and is used to build a `mozilla::IdentifierMapEntry` key `DependentAtomOrString(nullptr)` whose `mAtom` and `mString` are both null; `IdentifierMapEntry::HashKey` then takes its `HashString(*aKey->mString)` branch and reads a ",
+  "uuid": "813a451d-2dc6-4d20-94a6-6e10a0260710",
+  "signature": "mozilla::detail::nsTStringLengthStorage<T>::operator unsigned long long | mozilla::detail::nsTStringRepr<T>::Length | mozilla::HashString",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "Bug 2053211 changed nsGenericHTMLElement::AfterSetAttr's 'name'-attribute guard from !Equals(u\"\") to !IsEmptyString() (which is just !mBits). A name value whose text is empty/whose pointer bits are null now passes the guard and reaches AddToNameTable(aValue->GetAtomValue()); GetAtomValue() returns null, giving DependentAtomOrString{mAtom=null,mString=null}, so IdentifierMapEntry::HashKey takes the HashString(*mString) branch and dereferences a null string \u2014 Length() reads nsTStringRepr::mLength at offset 8, faulting at 0x8.",
+   "refutation": "",
+   "cost_usd": 1.2415725
+  }
+ },
+ {
+  "id": 848,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "a15cde96683b",
+  "bug": 2045637,
+  "mechanism": "The crash occurs when `js::gc::BufferAllocator::realloc`'s scope-exit guard calls `js::gc::BufferAllocator::free` (matching the demangled `realloc::<T>::operator()` signature frame) while growing a `NativeObject`'s dense-element buffer for `JS_DefineElement` during IndexedDB structured-clone deseria",
+  "uuid": "ca7785c3-c321-459d-9d72-d35630260712",
+  "signature": "@0x0 | js::gc::BufferAllocator::free | js::gc::BufferAllocator::realloc::<T>::operator()",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "medium",
+   "mechanism": "Bug 2045637 added a 'steal a mostly-empty chunk from the sweep list and allocate into it during marking' optimization (stealOrAllocNewChunk / stolenFromSweepList, with deferred mark-bit clearing) and rewired allocMedium's growHeap onto it. This code is a confirmed use-after-free (bug 2049401, csectype-uaf, regressed_by 2045637). During IndexedDB structured-clone deserialization, JS_DefineElement->ensureDenseElements->BufferAllocator::realloc calls alloc (entering the new stealing path) then free() via ScopeExit; corrupted chunk/free-list metadata makes control flow jump through a null pointer, giving EXCEPTION_ACCESS_VIOLATION_EXEC at 0x0.",
+   "refutation": "",
+   "cost_usd": 0.59326525
+  }
+ },
+ {
+  "id": 1847,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "a15cde96683b",
+  "bug": 2045637,
+  "mechanism": "`js::gc::BufferAllocator::traceMediumAlloc` reads `this->zone` unlocked on a parallel-marking helper thread, where `this` derives from `chunk->zone->bufferAllocator`; `js::gc::BufferAllocator::stealOrAllocNewChunk` (bug 2045637) mutates the same `BufferChunk`'s state on the main thread during `State",
+  "uuid": "420c72ca-00ca-4263-948d-ec3d90260715",
+  "signature": "js::gc::BufferAllocator::traceMediumAlloc",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "medium",
+   "mechanism": "Bug 2045637 introduced steal-from-sweep-list allocation during major GC marking: a nearly-empty chunk is pulled off the sweep list, allocated into, and has its mark-bit clearing DEFERRED because 'concurrent marking may be accessing them.' A ParallelMarkTask tracing a BigInt's medium buffer edge (traceMediumAlloc) then reads chunk/mark-bit state of a stolen chunk whose backing memory was concurrently mutated or freed \u2192 use-after-free read (EXCEPTION_ACCESS_VIOLATION_READ at 0xffffffffffffffff).",
+   "refutation": "",
+   "cost_usd": 0.4604415
+  }
+ },
+ {
+  "id": 2879,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "b6a49af97329",
+  "bug": 2042999,
+  "mechanism": "`b6a49af97329` (bug 2042999) widens `IsLineClampRoot` so `nsBlockFrame::ApplyLineClamp`/`FindLineClampTarget` now execute for any BFC-root block using the new non-legacy `line-clamp` property, not just `display:-webkit-box`. This exercises the exact `mLines`/`HasLineClampEllipsis` mutation machinery",
+  "uuid": "23d3a439-36dd-468d-8cfe-5f63b0260718",
+  "signature": "mozilla::nsDisplayListBuilder::IsForPainting",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "high",
+   "mechanism": "aBuilder (nsDisplayListBuilder*) is a poisoned/dangling pointer (value 0xffffffffffffffff); the inlined IsForPainting() reads mMode off it and faults. This is a display-list-builder lifetime/use-after-free bug on the RetainedDisplayListBuilder::AttemptPartialUpdate paint path, not a style-computation fault.",
+   "refutation": "The signature was first seen in buildid 20260621080854 (2026-06-21), ~26 days BEFORE the candidate landed (2026-07-17), so the change cannot have introduced it. Mechanistically the candidate only alters line-clamp root detection (IsLineClampRoot) and the style_adjuster line-clamp conditions; it never touches nsDisplayListBuilder allocation/lifetime or the retained-display-list partial-update path that produces the dangling -1 builder pointer.",
+   "cost_usd": 0.527934
+  }
+ },
+ {
+  "id": 2940,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "",
+  "bug": null,
+  "mechanism": "The crash is a genuine assertion failure, not memory corruption: `mozilla::MediaTrackGraphImpl::AddShutdownBlocker` unconditionally does `MOZ_RELEASE_ASSERT(NS_SUCCEEDED(barrier->AddBlocker(...)))` with no check of `AppShutdown::IsInOrBeyond(ShutdownPhase::AppShutdown)` beforehand, whereas the sibli",
+  "uuid": "fcc4d6f4-44e3-46d6-a4ae-19b2b0260719",
+  "signature": "mozilla::MediaTrackGraphImpl::AddShutdownBlocker",
+  "so": {
+   "mode": "mechanism",
+   "corroborates": null,
+   "confidence": "high",
+   "mechanism": "Content-process JS (a click handler) constructs new AudioContext() while the process's XpcomWillShutdown async-shutdown phase has already finished; MediaTrackGraphImpl::AddShutdownBlocker's guard only handles a missing shutdown service, so barrier->AddBlocker() returns 'too late to register' as a failure nsresult and MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv)) (MediaTrackGraph.cpp:1789) fires \u2014 a benign shutdown race, not a memory fault.",
+   "refutation": "",
+   "cost_usd": 0.58199475
+  }
+ },
+ {
+  "id": 3004,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "",
+  "bug": null,
+  "mechanism": "`mozilla::dom::ScriptLoader::GetBaseURI()` dereferences the weak `mDocument` pointer with only a debug-only `MOZ_ASSERT` guarding it (no release-build null check); `mDocument` is nulled by `DropDocumentReference()` when the owning `Document` is destructed while the `ScriptLoader` object can still be",
+  "uuid": "43f3e63f-11ef-461f-a500-a32750260719",
+  "signature": "mozilla::dom::Document::GetDocBaseURI",
+  "so": {
+   "mode": "mechanism",
+   "corroborates": null,
+   "confidence": "medium",
+   "mechanism": "Null-pointer dereference of ScriptLoader::mDocument in GetBaseURI(): an asynchronous dynamic import() resolves in a microtask (frames #28-30) after its content Document was torn down, so DropDocumentReference() had already set mDocument=nullptr; ImportMap::ResolveModuleSpecifier calls aLoader->GetBaseURI() -> mDocument->GetDocBaseURI(), which reads the base-URI nsCOMPtr field on a null Document, faulting at 0x150. GetBaseURI only MOZ_ASSERTs mDocument with no release-mode null guard.",
+   "refutation": "",
+   "cost_usd": 0.9848887500000001
+  }
+ },
+ {
+  "id": 3201,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "3f9d84a97b59",
+  "bug": 2022992,
+  "mechanism": "The crash fires inside `mozilla::nsDisplayListBuilder::AutoCurrentActiveScrolledRootSetter::InsertScrollFrame`'s post-reparenting `AssertDepthInvariant()` check, immediately downstream (via `GetOrCreateActiveScrolledRoot`) of `mozilla::ActiveScrolledRoot::GetOrCreateASRForFrame` \u2014 the exact function",
+  "uuid": "5ab1afa1-e990-4fe7-9f80-a66ce0260720",
+  "signature": "mozilla::ActiveScrolledRoot::AssertDepthInvariant",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "medium",
+   "mechanism": "The depth-invariant MOZ_DIAGNOSTIC_ASSERT fires in AutoCurrentActiveScrolledRootSetter::InsertScrollFrame's descendant-ASR reparenting loop (IncrementDepth + mParent reassignment), when a position:sticky ASR is painted inside a CSS-transformed scroll container leaves an ASR's depth inconsistent with its reparented parent \u2014 the pre-existing bug 2001862 / bug 2042439 mechanism.",
+   "refutation": "The signature was first seen in build 20260226092447 (Feb 2026), ~160 days before this changeset landed (2026-07-16), so it cannot have introduced the crash; the signature is already attributed to bug 2001862 (bug 2042439). The candidate is a behavior-preserving refactor that merely unifies the two ASR-creation helpers, still sets mDepth = parent->mDepth+1 identically for both kinds, and does not modify the InsertScrollFrame reparenting loop or AssertDepthInvariant where the crash occurs.",
+   "cost_usd": 0.7513875000000001
+  }
+ },
+ {
+  "id": 3751,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "50727795c336",
+  "bug": 1556481,
+  "mechanism": "The crash is a COM `AddRef` into freed/poisoned memory inside `dwrite.dll`'s internal font-metrics-builder cache, reached while replaying a cross-process paint recording. Mozilla's own custom `IDWriteFontFileLoader`/`IDWriteFontFileStream` implementation (`mozilla::gfx::DWriteFontFileLoader`/`DWrite",
+  "uuid": "8df251ae-37b0-481c-b9d2-117f70260723",
+  "signature": "ComPtr<T>::AddRef",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "high",
+   "mechanism": "Skia's DirectWrite scaler context (SkScalerContext_DW::generateMetrics) calls DWriteFontFace::GetDesignGlyphMetrics, which enters the system dwrite.dll metrics-builder code (CreateFontMetricsBuilder/TrueType/OpenType) and hits an internal __debugbreak (EXCEPTION_BREAKPOINT) while addref'ing a font-file loader \u2014 an in-library DirectWrite failure while building glyph metrics, consistent with a corrupt/odd system font; a single, one-build occurrence.",
+   "refutation": "The changeset only adds HRESULT failure checks to ScaledFontDWrite::CopyGlyphsToSink (the GetFontFileData recording/serialization path of bug 1556481), which is not on this stack and is not reachable from the DrawGlyphs\u2192GetDesignGlyphMetrics metrics path that crashes. The edit is purely defensive (early returns on FAILED hr), so it cannot introduce a crash, and the fault occurs inside Microsoft's dwrite.dll, not Gecko code.",
+   "cost_usd": 0.31032800000000005
+  }
+ },
+ {
+  "id": 3922,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "4e623fa8873e",
+  "bug": 1974546,
+  "mechanism": "The GPU process runs full `NSApplication` init on macOS because `nsAppShell::Init()`'s process-type exclusion list omits `GeckoProcessType_GPU` (only Content/RDD/Socket are excluded), and that init path triggers a LaunchServices notification registration requiring the `com.apple.coreservices.launchs",
+  "uuid": "e2108cbb-8985-4ec1-b771-3847a0260724",
+  "signature": "_dispatch_mach_send_and_wait_for_reply.cold.5",
+  "so": null,
+  "error": "AttributeError: 'NoneType' object has no attribute 'get'"
+ },
+ {
+  "id": 3986,
+  "decision": "lead",
+  "confidence": "probable",
+  "node": "2bd4d1634b6c",
+  "bug": 2046954,
+  "mechanism": "The RDD process's `FFmpegVulkanVideoDecoder::SelectVulkanDecoderPhysicalDevice` `dlopen`s the system `libvulkan.so.1` and calls `vkEnumeratePhysicalDevices` \u2014 whose internal Linux device-sorting code (`linux_read_sorted_physical_devices`) is the crash frame. This call is gated on a cached `AtStartup",
+  "uuid": "07ff9219-966b-41bc-a11f-b97120260724",
+  "signature": "linux_read_sorted_physical_devices",
+  "so": null,
+  "error": "AttributeError: 'NoneType' object has no attribute 'get'"
+ },
+ {
+  "id": 4394,
+  "decision": "lead",
+  "confidence": "medium",
+  "node": "074b7fa89cf7",
+  "bug": 1940449,
+  "mechanism": "The crash is a Windows-detected heap-corruption inside Intel's own `GmmLib` allocator, reached only via Firefox's `ID3D11Device::CreateTexture2D` call in `d3d11va_frames_init` (vendored ffvpx D3D11VA hardware-decode frame-pool allocation). Firefox's D3D11VA path can share a single `ID3D11Device` acr",
+  "uuid": "24b29f27-8c20-4c9b-8bba-d61540260727",
+  "signature": "RtlFreeHeap | <unknown in igdgmm64.dll> | GmmLib::GmmClientContext::DestroyResInfoObject",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "high",
+   "mechanism": "The Windows heap aborts with STATUS_HEAP_CORRUPTION while Intel's GmmLib (igdgmm64.dll) frees a resource-info object inside the D3D11 user-mode driver's CreateTexture2D, invoked by ffvpx's d3d11va hardware-decode frame-pool init. The corrupted heap is the Intel driver's own; this is a driver defect on Intel device 0x7d55 / driver 32.0.101.6314, with Firefox only passing a standard texture descriptor.",
+   "refutation": "Changeset 074b7fa89cf7 landed 2025-01-10, but the signature's first-seen buildid is 20260220 (Feb 2026) \u2014 ~13 months later \u2014 so the code shipped over a year before the first crash. Additionally the fault is heap corruption inside the closed Intel driver (GmmLib/igd10umt64xe), not in ffmpeg code, and the visible diff touches only the AV1 encoder, w32pthreads, and aarch64 assembly, none of which is on the amd64 D3D11 decode path.",
+   "cost_usd": 0.48832325000000004
+  }
+ },
+ {
+  "id": 4980,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "388857f92acb",
+  "bug": 2051354,
+  "mechanism": "`388857f92acb` (bug 2051354 part 5) introduced `IMContextWrapper::GdkEventKeyQueue`'s two-parallel-array design (`mEvents`/`mState`) plus the `AutoHandlingCompositionSignalHelper` RAII helper used by every composition signal handler including `OnRetrieveSurroundingNative`. `Clear()` (`widget/gtk/IMC",
+  "uuid": "eb81b94a-7455-4c56-8ac4-222900260730",
+  "signature": "mozilla::detail::InvalidArrayIndex_CRASH | nsTArray_Impl<T>::ElementAt | nsTArray_Impl<T>::operator[] | mozilla::widget::IMContextWrapper::GdkEventKeyQueue::GetFirstNonProcessedEvent",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "Bug 2051354 (388857f92acb) rewrote IMContextWrapper's key-event queue into two parallel arrays (mEvents + mState). GetFirstNonProcessedEvent()/HasNonProcessedEvents() locate an index by scanning mState but then dereference mEvents[index]; when the two arrays fall out of sync (mState non-empty, mEvents empty) the AutoHandlingCompositionSignalHelper constructor's MakeCopyOfFirstNonProcessedEvent() does mEvents[0] on a length-0 array \u2192 InvalidArrayIndex_CRASH (ElementAt aIndex=0, aLength=0).",
+   "refutation": "",
+   "cost_usd": 0.490942
+  }
+ },
+ {
+  "id": 4984,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "388857f92acb",
+  "bug": 2051354,
+  "mechanism": "`GdkEventKeyQueue::Clear()` desyncs its two parallel arrays (`mEvents`/`mState`) by clearing only `mEvents`; a focus change (`NotifyIMEOfFocusChange`) triggers this, and the next `OnKeyEvent()` call's `RemoveProcessedEvents()` computes a stale non-zero count from `mState` and calls `mEvents.RemoveEl",
+  "uuid": "b63286b3-f957-4b2c-a6ed-5036f0260730",
+  "signature": "mozilla::detail::InvalidArrayIndex_CRASH | nsTArray_Impl<T>::RemoveElementsAt | mozilla::widget::IMContextWrapper::GdkEventKeyQueue::RemoveProcessedEvents",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "RemoveProcessedEvents() computes `count` of leading processed entries from mState, then calls mEvents.RemoveElementsAt(0, count); the crash (ElementAt(0,0) on the mEvents unique_ptr array) means mEvents is empty while mState still holds >=count processed entries \u2014 the two parallel arrays introduced by this patch have desynchronized on the async IME (ibus/fcitx) key-release path.",
+   "refutation": "",
+   "cost_usd": 0.46833575000000005
+  }
+ },
+ {
+  "id": 4986,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "388857f92acb",
+  "bug": 2051354,
+  "mechanism": "`388857f92acb` (bug 2051354 part 5) reworked `GdkEventKeyQueue` into two parallel arrays (`mEvents`, `mState`) but left `Clear()` (`widget/gtk/IMContextWrapper.h:276`) updating only `mEvents`. `GetFirstNonProcessedEvent()` (`widget/gtk/IMContextWrapper.h:443`) computes its index from `mState` and th",
+  "uuid": "30f599dc-c8e5-491b-84ea-42ad10260730",
+  "signature": "mozilla::detail::InvalidArrayIndex_CRASH | nsTArray_Impl<T>::ElementAt | nsTArray_Impl<T>::operator[] | mozilla::widget::IMContextWrapper::GdkEventKeyQueue::GetFirstNonProcessedEvent",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "The changeset introduces GdkEventKeyQueue with parallel mEvents/mState arrays; GetFirstNonProcessedEvent scans mState for a non-processed entry then indexes mEvents at that position. When the arrays desync (mState reports a pending event while mEvents is length 0), mEvents[0] on the empty array triggers InvalidArrayIndex_CRASH (ElementAt(0,0)), reached via OnRetrieveSurroundingNative -> AutoHandlingCompositionSignalHelper -> MakeCopyOfFirstNonProcessedEvent.",
+   "refutation": "",
+   "cost_usd": 0.5141895
+  }
+ },
+ {
+  "id": 4999,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "388857f92acb",
+  "bug": 2051354,
+  "mechanism": "`388857f92acb` (bug 2051354 part 5) introduced an asymmetric `Clear()` on `mozilla::widget::IMContextWrapper::GdkEventKeyQueue` (`h:276`, clears only `mEvents`) alongside a `GetFirstNonProcessedEvent()` (`h:427-444`) that finds an index via the sibling `mState` array and then indexes the possibly-sh",
+  "uuid": "1c3997bb-5060-4299-81b6-e5ac50260730",
+  "signature": "mozilla::detail::InvalidArrayIndex_CRASH | nsTArray_Impl<T>::ElementAt | nsTArray_Impl<T>::operator[] | mozilla::widget::IMContextWrapper::GdkEventKeyQueue::GetFirstNonProcessedEvent",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "Changeset 388857f92acb (bug 2051354) introduced GdkEventKeyQueue with parallel mEvents/mState arrays plus AutoHandlingCompositionSignalHelper. GetFirstNonProcessedEvent() chooses an index by scanning mState but dereferences mEvents[index]; when a reentrant retrieve_surrounding callback runs with mState reporting a pending event while mEvents is empty, ElementAt(0) on the empty mEvents array triggers InvalidArrayIndex_CRASH (aIndex=0, aLength=0).",
+   "refutation": "",
+   "cost_usd": 0.5851485000000001
+  }
+ },
+ {
+  "id": 5012,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "388857f92acb",
+  "bug": 2051354,
+  "mechanism": "`mozilla::widget::IMContextWrapper::GdkEventKeyQueue::Clear()` clears only `mEvents` and not the parallel `mState` array (`widget/gtk/IMContextWrapper.h:276`). `Clear()` is invoked on a live instance during focus transitions in `NotifyIMEOfFocusChange` (`widget/gtk/IMContextWrapper.cpp:1600`). A lat",
+  "uuid": "38f8b6b6-4fd0-4c4b-bdf5-2707d0260730",
+  "signature": "mozilla::detail::InvalidArrayIndex_CRASH | nsTArray_Impl<T>::RemoveElementsAt | mozilla::widget::IMContextWrapper::GdkEventKeyQueue::RemoveProcessedEvents",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "Bug 2051354 part 5 introduced the GdkEventKeyQueue two-parallel-array design (mEvents/mState) and the new RemoveProcessedEvents() method (crash frame #2). It computes count from the leading mProcessed run in mState and calls mEvents.RemoveElementsAt(0,count); the two arrays desynced so count>0 while the target array was empty, tripping the infallible bounds check (ElementAt aIndex=0,aLength=0) on a Linux/GTK IME key-release path.",
+   "refutation": "",
+   "cost_usd": 0.517774
+  }
+ },
+ {
+  "id": 5021,
+  "decision": "lead",
+  "confidence": "probable",
+  "node": "b006cb779acb",
+  "bug": 2037396,
+  "mechanism": "`InputBuffer::set_buffer` panics when `self.data[chan]` (a per-group, per-channel buffer slot) is refilled before being cleared. Clearing only happens in `render_with_new_group` once every channel of a group is ready in the current flush round. Nothing prevents a channel from being re-supplied by a ",
+  "uuid": "59f2b47c-5073-4783-8fb0-a8e390260730",
+  "signature": "jxl::render::low_memory_pipeline::group_scheduler::InputBuffer::set_buffer",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "medium",
+   "mechanism": "A group's per-channel buffer is assigned twice in one pass inside jxl-rs's low_memory render pipeline (decode_and_render_hf_groups -> set_buffer_for_group), tripping the debug assert self.data[chan].is_none(); most plausibly an edge-case/malformed-image path in the newly-vendored group scheduler.",
+   "refutation": "b006cb779acb landed 2026-05-07 (~83d before the signature's first-seen build 20260729095131) and only modifies the C++/FFI glue, not third_party/rust/jxl where the assertion lives. The exact crash build contains 1cbef0bd69a3 (bug 2058355, 'Upgrade jxl-rs to 0.5.1', 2026-07-29), which rewrites the very group_scheduler.rs holding the assertion \u2014 a much better temporal and mechanistic match.",
+   "cost_usd": 0.5400305
+  }
+ },
+ {
+  "id": 5030,
+  "decision": "lead",
+  "confidence": "probable",
+  "node": "0eb801de397b",
+  "bug": 2037689,
+  "mechanism": "The crash faults inside the AMD driver's own heap allocator while releasing Firefox's `mVideoProcessor` COM object. The seed candidate is unrelated noise. The most recently and heavily changed code touching this exact object type is bug 2037689's new `ShaderBlt` fallback, which interleaves manual D3",
+  "uuid": "75ebce14-6232-4b5d-b17d-ab1ba0260730",
+  "signature": "amdxx64.dll | RtlpFreeUserBlock | CVideoProcessor::CLS::FinalRelease",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "low",
+   "mechanism": "On an AMD GPU (0x7550) in the GPU process, ~DCLayerTree releases the last ref on the driver's ID3D11VideoProcessor; the AMD driver faults freeing its internal objects (CVideoProcessor::CLS::FinalRelease \u2192 RtlpFreeUserBlock, NULL read) \u2014 a driver-side heap fault during video-processor teardown. The candidate adds a new HLG\u2192PQ D3D11 shader-blit fallback (exactly for AMD HDR) that runs draws/SRVs on the same D3D11 device, which could leave driver state that manifests as this teardown crash.",
+   "refutation": "",
+   "cost_usd": 0.7538414999999999
+  }
+ },
+ {
+  "id": 5339,
+  "decision": "strong-evidence",
+  "confidence": "high",
+  "node": "388857f92acb",
+  "bug": 2051354,
+  "mechanism": "`388857f92acb` (bug 2051354 part 5) added a new `mState` array to `GdkEventKeyQueue` that is appended to in `Push()` but not cleared by the pre-existing `Clear()`. `NotifyIMEOfFocusChange()`'s call to `Clear()` on blur/focus-change desyncs `mEvents` (now empty) from `mState` (still has a stale non-p",
+  "uuid": "aab4e42d-dd19-4b14-8a3f-4739a0260801",
+  "signature": "mozilla::detail::InvalidArrayIndex_CRASH | nsTArray_Impl<T>::ElementAt | nsTArray_Impl<T>::operator[] | mozilla::widget::IMContextWrapper::GdkEventKeyQueue::GetFirstNonProcessedEvent",
+  "so": {
+   "mode": "verify",
+   "corroborates": true,
+   "confidence": "high",
+   "mechanism": "Bug 2051354 part 5 (388857f92acb) introduced GdkEventKeyQueue with parallel mState/mEvents arrays. GetFirstNonProcessedEvent() finds a non-processed entry at index 0 in mState and returns mEvents[0], but mEvents is empty (arrays out of sync), producing ElementAt(aIndex=0, aLength=0). Reached from the AutoHandlingCompositionSignalHelper ctor via the ibus async-signal path; all of this code is new in the candidate, the crash line 443 matches the build rev exactly, and the signature's first-seen buildid equals the crash build.",
+   "refutation": "",
+   "cost_usd": 0.5727837500000001
+  }
+ },
+ {
+  "id": 5559,
+  "decision": "lead",
+  "confidence": "probable",
+  "node": "9be551f4325b",
+  "bug": 2058411,
+  "mechanism": "`XPCWrappedNative::InitTearOff` faults on a virtual `identity->QueryInterface` call through a corrupted pointer (`0xffffffffffffffff`). The crash's own stack shows this reached via a call chain (frames #13-15, then unsymbolicated JIT frames #7-12) that runs directly through brand-new code from bug 2",
+  "uuid": "d03108a8-813f-4834-9d7c-c49080260802",
+  "signature": "xul.dll | XPCWrappedNative::InitTearOff",
+  "so": {
+   "mode": "verify",
+   "corroborates": false,
+   "confidence": "high",
+   "mechanism": "Generic all-ones (0xffffffffffffffff) pointer read deep in XPConnect tearoff init (FindTearOff/GetNewOrUsed) while wrapping a URL object's associated inner window during a `new URL()` call; a single-occurrence corrupted/uninitialized-pointer fault, not attributable to the JIT resume change.",
+   "refutation": "The signature was first seen in buildid 20260424093121 (Apr 24), ~97 days BEFORE this changeset landed (2026-07-30), so it cannot have introduced the signature. Additionally the patch's new feature (resume into Baseline JIT via enterJitGeneratorResume) is not on the stack \u2014 the async function was resumed through the C++ interpreter (MaybeEnterInterpreterTrampoline \u2192 js::Interpret), and the diff touches only JIT trampoline/frame-building code, nothing in XPConnect/DOM wrapping.",
+   "cost_usd": 0.53614925
+  }
+ }
+]
