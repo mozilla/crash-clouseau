@@ -1758,6 +1758,12 @@ class Dossier(db.Model):
                 Dossier.worker_models, Verdict.verdict, Verdict.confidence,
                 # Failure reason (stashed by set_status on the error path); NULL otherwise.
                 Dossier.payload["error"].astext.label("error"),
+                # What the autofiler did, if anything (``record_filed_bug``): the bug id and
+                # whether it opened one or commented on an existing bug. NULL for every run
+                # before filing was armed, and for anything it declined to file.
+                Dossier.payload["filed_bug"]["bug"].astext.label("filed_bug"),
+                Dossier.payload["filed_bug"]["mode"].astext.label("filed_mode"),
+                Dossier.payload["filed_bug"]["needinfo"].astext.label("filed_needinfo"),
             )
             .select_from(Dossier)
             .join(UUID, Dossier.uuidid == UUID.id)

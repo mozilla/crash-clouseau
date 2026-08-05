@@ -141,6 +141,7 @@ def _task_view(rows, stale_after_s, now):
     tasks = []
     counts = {"done": 0, "running": 0, "error": 0, "pending": 0}
     stalled = 0
+    filed = 0
     cost_total = 0.0
     costed = 0
     durations_done = []
@@ -184,8 +185,15 @@ def _task_view(rows, stale_after_s, now):
                 "confidence": r.confidence,
                 "created": created,
                 "error": getattr(r, "error", None),
+                # `getattr` with a default: these came in with automatic filing, and
+                # `_task_view` is also fed hand-built rows by the tests.
+                "filed_bug": getattr(r, "filed_bug", None),
+                "filed_mode": getattr(r, "filed_mode", None),
+                "filed_needinfo": getattr(r, "filed_needinfo", None),
             }
         )
+        if getattr(r, "filed_bug", None):
+            filed += 1
 
     total = len(rows)
     done = counts.get("done", 0)
@@ -197,6 +205,7 @@ def _task_view(rows, stale_after_s, now):
         "error": counts.get("error", 0),
         "pending": counts.get("pending", 0),
         "stalled": stalled,
+        "filed": filed,
         "pct_done": round(100 * done / total) if total else 0,
         "cost_total": cost_total,
         "cost_avg": cost_total / costed if costed else 0.0,

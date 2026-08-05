@@ -495,6 +495,19 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 }
 .task-tok, .task-ts { font-family: monospace; color: #555; }
 .task-conf { margin-left: 0.4em; color: #555; }
+.task-bug { white-space: nowrap; }
+/* `cmt` = commented on somebody else's bug rather than opening one; `ni?` = a needinfo was
+   requested. Both are quiet by design — the bug link is the thing worth clicking. */
+.task-bug-mode, .task-bug-ni {
+    margin-left: 0.35em;
+    padding: 0 0.3em;
+    border-radius: 3px;
+    font-size: 0.75em;
+    background: #eee;
+    color: #555;
+    vertical-align: middle;
+}
+.task-bug-ni { background: #fdf2d0; color: #8a6d1f; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
 .task-err {
     margin-top: 0.3em;

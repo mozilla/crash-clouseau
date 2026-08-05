@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=6">
+    <link rel="stylesheet" href="/clouseau.css?v=7">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
     <script src="/clouseau.js"></script>
@@ -52,6 +52,10 @@
         <span class="tc-label">error</span>
       </div>
       <div class="task-card">
+        <span class="tc-num">{{ summary.filed }}</span>
+        <span class="tc-label">bugs filed</span>
+      </div>
+      <div class="task-card">
         <span class="tc-num">${{ '%.2f' | format(summary.cost_total) }}</span>
         <span class="tc-label">total cost</span>
       </div>
@@ -76,6 +80,7 @@
           <th>Signature</th>
           <th>Status</th>
           <th>Verdict</th>
+          <th>Bug</th>
           <th style="text-align:right;">Duration</th>
           <th style="text-align:right;">Cost</th>
           <th style="text-align:right;">Tokens&nbsp;(in&nbsp;/&nbsp;out&nbsp;/&nbsp;cache)</th>
@@ -99,6 +104,19 @@
             {% if t.confidence is not none %}<span class="task-conf">{{ '%.2f' | format(t.confidence) }}</span>{% endif %}
             {%- else -%}&mdash;{%- endif %}
           </td>
+          {#- What the automatic filer did. Empty for every run before filing was armed and
+              for anything it declined to file, so an em-dash here is the normal case, not a
+              failure. `comment_on_existing` is called out because the bug is somebody
+              else's — we added a comment to it rather than opening one. -#}
+          <td class="task-bug">
+            {% if t.filed_bug -%}
+            <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.filed_bug|e }}"
+               target="_blank" rel="noopener"
+               title="{% if t.filed_mode == 'comment_on_existing' %}An open bug already referenced this signature, so the analysis was added there as a comment instead of filing a duplicate.{% else %}Filed automatically by Clouseau.{% endif %}{% if t.filed_needinfo %} Needinfo: {{ t.filed_needinfo|e }}{% endif %}">bug&nbsp;{{ t.filed_bug|e }}</a>
+            {%- if t.filed_mode == 'comment_on_existing' %} <span class="task-bug-mode" title="commented on an existing bug rather than filing a new one">cmt</span>{% endif -%}
+            {%- if t.filed_needinfo %} <span class="task-bug-ni" title="needinfo: {{ t.filed_needinfo|e }}">ni?</span>{% endif -%}
+            {%- else -%}&mdash;{%- endif %}
+          </td>
           <td style="text-align:right;">{{ t.duration_str }}</td>
           <td style="text-align:right;">{% if t.cost_usd is not none %}${{ '%.4f' | format(t.cost_usd) }}{% else %}&mdash;{% endif %}</td>
           <td style="text-align:right;" class="task-tok"
@@ -117,7 +135,7 @@
         </tr>
         {% endfor -%}
         {% if not tasks -%}
-        <tr><td colspan="9" class="task-empty">No triage runs yet.</td></tr>
+        <tr><td colspan="10" class="task-empty">No triage runs yet.</td></tr>
         {%- endif %}
       </tbody>
     </table>

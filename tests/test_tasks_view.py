@@ -36,6 +36,9 @@ def _row(**kw):
         worker_models=None,
         verdict=None,
         confidence=None,
+        filed_bug=None,
+        filed_mode=None,
+        filed_needinfo=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -120,6 +123,65 @@ class TestTaskView(unittest.TestCase):
         # only the done task carried a cost -> avg is over costed tasks, not all
         self.assertAlmostEqual(s["cost_total"], 0.40)
         self.assertAlmostEqual(s["cost_avg"], 0.40)
+
+
+class TestFiledBugColumn(unittest.TestCase):
+    """The Bug column surfaces what the autofiler did. Rows predating automatic filing (and
+    every run it declined to file) carry no such fields at all, which is why `_task_view`
+    reads them with `getattr` defaults rather than attribute access."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def _render(self, rows):
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
+            rv = self.client.get("/tasks.html")
+        self.assertEqual(rv.status_code, 200)
+        return rv.get_data(as_text=True)
+
+    def test_a_filed_bug_links_to_bugzilla(self):
+        body = self._render([_row(uuid="filed001" + "0" * 28, verdict="lead",
+                                  confidence=0.7, filed_bug="1979234",
+                                  filed_mode="new_bug",
+                                  filed_needinfo="dev@moz.example")])
+        self.assertIn("https://bugzilla.mozilla.org/show_bug.cgi?id=1979234", body)
+        self.assertIn("bug&nbsp;1979234", body)
+        self.assertIn("dev@moz.example", body)   # the needinfo target, in the tooltip
+        self.assertIn("ni?", body)
+        self.assertNotIn(">cmt<", body)
+
+    def test_a_comment_on_an_existing_bug_is_marked_as_such(self):
+        # Worth distinguishing: that bug is somebody else's and we added to it.
+        body = self._render([_row(uuid="cmt00001" + "0" * 28,
+                                  filed_bug="1863047",
+                                  filed_mode="comment_on_existing")])
+        self.assertIn("show_bug.cgi?id=1863047", body)
+        self.assertIn(">cmt<", body)
+        self.assertIn("instead of filing a duplicate", body)
+
+    def test_rows_without_filing_render_a_dash_not_an_error(self):
+        # The normal case for every run before filing was armed.
+        body = self._render([_row(uuid="nofile01" + "0" * 28)])
+        self.assertNotIn("show_bug.cgi", body)
+        self.assertIn("bugs filed", body)        # the summary tile still renders
+
+    def test_the_summary_counts_only_filed_rows(self):
+        rows = [
+            _row(uuid="a" * 36, filed_bug="111"),
+            _row(uuid="b" * 36, filed_bug="222", filed_mode="comment_on_existing"),
+            _row(uuid="c" * 36),                                   # not filed
+            _row(uuid="d" * 36, filed_bug=None),                   # explicitly null
+        ]
+        _, summary = html._task_view(rows, STALE, NOW)
+        self.assertEqual(summary["filed"], 2)
+
+    def test_legacy_rows_without_the_fields_do_not_break(self):
+        row = _row()
+        for f in ("filed_bug", "filed_mode", "filed_needinfo"):
+            delattr(row, f)
+        tasks, summary = html._task_view([row], STALE, NOW)
+        self.assertIsNone(tasks[0]["filed_bug"])
+        self.assertEqual(summary["filed"], 0)
 
 
 class TestTasksRoute(unittest.TestCase):
