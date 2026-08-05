@@ -27,6 +27,7 @@ from crashclouseau.agent.schema import (  # noqa: E402
     DiffLineCitation,
     Dossier,
     FailureClass,
+    RefCitation,
     SearchfoxCitation,
     Verdict,
 )
@@ -318,6 +319,20 @@ class TestCallpathGate(unittest.TestCase):
         d = _strong(callpath_edges=None, candidate=False)  # no anchor at all
         orch._apply_callpath_gate(d, {"uuid": "u"})
         self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_ref_citation_cannot_verify_a_callpath(self):
+        # `RefCitation` is the catch-all kind added so the source/history tools have a legal
+        # way to cite what they read. It is deliberately the WEAKEST kind: giving the model
+        # a citation shape it can always satisfy must NOT hand it a way to manufacture the
+        # searchfox-verified call path SF-3 requires for off-stack strong evidence.
+        ref_edge = CallEdge(
+            caller_symbol="A::a", callee_symbol="A::b", via="x",
+            citations=[RefCitation(node="abc123def456", filename="f.cpp", line=1)],
+        )
+        d = _strong(callpath_edges=[ref_edge])
+        self.assertFalse(orch._has_verified_callpath(d))
+        orch._apply_callpath_gate(d, {"uuid": "u"})
+        self.assertEqual(d.verdict.decision, Decision.lead)
 
     def test_noop_on_non_strong(self):
         d = Dossier(candidate=Candidate(node="abc123def456"),

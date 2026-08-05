@@ -16,6 +16,8 @@ from crashclouseau.agent.schema import (
     CrashBrief,
     CrashFrame,
     Decision,
+    FailureClass,
+    RefCitation,
     SkepticStatus,
     SearchfoxCitation,
     DiffLineCitation,
@@ -818,6 +820,225 @@ class TestNodelessStackFrameCitation(unittest.TestCase):
         d = parse_and_validate(obj)
         self.assertEqual(d.verdict.decision, Decision.abstain)
         self.assertIn("validation failed", d.verdict.abstain_reason)
+
+
+class TestStackFrameCitationNullTolerance(unittest.TestCase):
+    """The other half of the ``node`` fix. A ``str`` field REJECTS an explicit ``null``
+    even with a default, and symbolication nulls these very fields — so the defaults alone
+    recovered 1 lost verdict of 41 across the prod corpus while the coercion recovered 14.
+    Nested in a verdict claim each null was a whole-verdict false abstain."""
+
+    def _cited(self, **over):
+        sf = _stack_frame()
+        sf.update(over)
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [sf]
+        return parse_and_validate(obj)
+
+    def test_every_null_field_keeps_the_verdict(self):
+        for field in ("uuid", "filename", "function", "node", "line", "stackpos"):
+            with self.subTest(field=field):
+                d = self._cited(**{field: None})
+                self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+                self.assertIsNone(d.verdict.abstain_reason)
+
+    def test_null_coerces_to_the_empty_value(self):
+        c = StackFrameCitation(uuid=None, stackpos=None, filename=None,
+                               function="os_unfair_lock", line=None, node=None)
+        self.assertEqual((c.uuid, c.filename, c.node), ("", "", ""))
+        self.assertEqual((c.stackpos, c.line), (0, 0))
+
+    def test_the_real_opaque_frame_survives(self):
+        # The case the coercion exists for: a JIT/stub frame whose function is all
+        # symbolication could recover.
+        d = self._cited(uuid=None, filename=None, line=None, node=None,
+                        function="os_unfair_lock")
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+
+    def test_a_citation_of_nothing_is_still_refused(self):
+        # The cost of defaulting everything: `{"kind": "stack_frame"}` would otherwise be a
+        # content-free citation that satisfies the min-citations anti-hallucination rule,
+        # and would render as "frame #0" — the CRASHING frame — out of thin air.
+        with self.assertRaises(ValidationError):
+            StackFrameCitation()
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [{"kind": "stack_frame"}]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_stackpos_alone_does_not_count_as_pointing_somewhere(self):
+        # stackpos/line both default to 0, so accepting them alone would re-open the hole.
+        with self.assertRaises(ValidationError):
+            StackFrameCitation(stackpos=3, line=9)
+
+
+class TestRefCitation(unittest.TestCase):
+    """The union had no member for the source/history tools: the agent reads a changeset,
+    cites it honestly, and no legal ``kind`` existed. Largest single loss in the prod
+    corpus — 22 of 41 destroyed verdicts, still firing 2026-08-04."""
+
+    def _with_kind(self, kind, **over):
+        cit = {"kind": kind, "node": "0123456789ab", "filename": "foo.cpp", "line": 7}
+        cit.update(over)
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [cit]
+        return parse_and_validate(obj)
+
+    def test_invented_kinds_normalize_to_ref_and_keep_the_verdict(self):
+        for kind in ("changeset", "source", "source_raw_file", "history",
+                     "history_changeset", "source_line", "pinned_source", "ref"):
+            with self.subTest(kind=kind):
+                d = self._with_kind(kind)
+                self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+                self.assertEqual(d.verdict.consistency.citations[0].kind, "ref")
+
+    def test_stack_kind_goes_to_stack_frame_not_the_catch_all(self):
+        # 5 of the 6 prod `kind:"stack"` citations carry the full StackFrameCitation field
+        # set. Routing them to the catch-all validates but throws away function/stackpos/
+        # uuid and renders an hg link where the page should name the frame.
+        sf = _stack_frame()
+        sf["kind"] = "stack"
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [sf]
+        d = parse_and_validate(obj)
+        cit = d.verdict.consistency.citations[0]
+        self.assertIsInstance(cit, StackFrameCitation)
+        self.assertEqual((cit.function, cit.stackpos, cit.uuid),
+                         ("Foo::Bar", 0, "uuid-1"))
+
+    def test_rev_and_path_are_accepted_as_aliases(self):
+        # What the source/history tools' own output calls these things, and the model copies
+        # that vocabulary: 21 prod citations name the changeset `rev` and the file `path`
+        # and carry no node/filename key at all. This is that exact shape.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [{
+            "kind": "source_raw_file", "rev": "0123456789ab",
+            "path": "dom/Foo.cpp", "line": 12, "content": "delete mFoo;",
+        }]
+        d = parse_and_validate(obj)
+        cit = d.verdict.consistency.citations[0]
+        self.assertIsInstance(cit, RefCitation)
+        self.assertEqual((cit.node, cit.filename), ("0123456789ab", "dom/Foo.cpp"))
+
+    def test_canonical_names_still_win_for_persisted_dossiers(self):
+        # The aliases must not REPLACE the field names, or every dossier already persisted
+        # with node/filename keys stops validating.
+        d = self._with_kind("ref")
+        cit = d.verdict.consistency.citations[0]
+        self.assertEqual((cit.node, cit.filename), ("0123456789ab", "foo.cpp"))
+        back = dossier_from_db_json(dossier_to_db_json(d))
+        self.assertEqual(back.verdict.consistency.citations[0].node, "0123456789ab")
+
+    def test_ref_with_only_content_is_accepted(self):
+        d = self._with_kind("changeset", node="", filename="", line=0,
+                            content="-  delete mFoo;")
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+
+    def test_ref_pointing_at_nothing_is_refused(self):
+        with self.assertRaises(ValidationError):
+            RefCitation()
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [{"kind": "changeset"}]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_an_unknown_kind_still_fails_rather_than_becoming_a_ref(self):
+        # The alias map stays PARTIAL on purpose: mapping every unrecognized kind to `ref`
+        # would make it total, but that is unmeasured. Pin the current contract so the
+        # choice is deliberate the next time someone looks.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [
+            {"kind": "wat", "node": "0123456789ab"},
+        ]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_ref_edge_is_kept_but_is_not_a_searchfox_citation(self):
+        # A `ref` is deliberately the WEAKEST kind. The SF-3 consequence — that it cannot
+        # manufacture the searchfox-verified call path off-stack strong evidence requires —
+        # is asserted against the real gate in tests.test_offstack.
+        obj = copy.deepcopy(_dossier())
+        obj["call_path"]["edges"][0]["citations"] = [
+            {"kind": "changeset", "node": "0123456789ab"},
+        ]
+        d = parse_and_validate(obj)
+        self.assertEqual(len(d.call_path.edges), 1)
+        cit = d.call_path.edges[0].citations[0]
+        self.assertIsInstance(cit, RefCitation)
+        self.assertNotIsInstance(cit, SearchfoxCitation)
+
+
+class TestFailureClassVocabulary(unittest.TestCase):
+    """``oom`` is a real Firefox crash family the enum could not say. The model wrote it
+    honestly, the enum rejected it, and because ``CrashBrief`` validates whole in
+    ``_salvage`` that dropped every frame: 21 prod dossiers in a month."""
+
+    def _brief(self, value):
+        obj = copy.deepcopy(_dossier())
+        obj["crash"]["failure_class"] = value
+        return parse_and_validate(obj)
+
+    def test_oom_is_kept(self):
+        self.assertEqual(self._brief("oom").crash.failure_class, FailureClass.oom)
+
+    def test_case_is_folded(self):
+        self.assertEqual(self._brief("OOM").crash.failure_class, FailureClass.oom)
+
+    def test_unknown_degrades_to_other_instead_of_dropping_the_brief(self):
+        for value in ("other:rust_panic", "jit_or_corruption", "", None):
+            with self.subTest(value=value):
+                d = self._brief(value)
+                self.assertIsNotNone(d.crash)
+                self.assertEqual(d.crash.failure_class, FailureClass.other)
+
+    def test_degrading_never_asserts_a_mechanism(self):
+        # `other` is the non-behaviour-asserting member — an unrecognized class must not
+        # be able to masquerade as a real one (the orchestrator's exposer classifier reads
+        # this field).
+        self.assertNotEqual(FailureClass("jit_or_corruption"), FailureClass.uaf)
+        self.assertEqual(FailureClass("jit_or_corruption"), FailureClass.other)
+
+
+class TestCrashFrameIntCoercion(unittest.TestCase):
+    """``_none_to_empty`` stopped one field short of ``line`` — exactly the field
+    symbolication nulls (``_stack_text`` shows the model ``#7 None :None``). 177 null lines
+    across 89 prod dossiers, the biggest single cause of the 127 dropped crash briefs."""
+
+    def _frames(self, frame):
+        obj = copy.deepcopy(_dossier())
+        obj["crash"]["frames"] = [
+            {"stackpos": 0, "function": "Foo::Bar", "filename": "foo.cpp", "line": 1},
+            frame,
+        ]
+        return parse_and_validate(obj)
+
+    def test_null_line_keeps_the_whole_brief(self):
+        d = self._frames({"stackpos": 1, "function": "F", "filename": "f.cpp", "line": None})
+        self.assertIsNotNone(d.crash)
+        self.assertEqual(len(d.crash.frames), 2)
+        self.assertEqual(d.crash.frames[1].line, 0)
+
+    def test_missing_and_null_stackpos_keep_the_brief(self):
+        # An INLINED frame has no position of its own; 52 prod frames omitted it.
+        for frame in ({"function": "F", "filename": "f.cpp", "line": 2},
+                      {"stackpos": None, "function": "F", "filename": "f.cpp"}):
+            with self.subTest(frame=frame):
+                d = self._frames(frame)
+                self.assertIsNotNone(d.crash)
+                self.assertEqual(len(d.crash.frames), 2)
+
+    def test_placeholder_strings_are_folded(self):
+        for placeholder in ("", "None", "unknown", "?"):
+            with self.subTest(placeholder=placeholder):
+                d = self._frames({"stackpos": 1, "function": "F", "line": placeholder})
+                self.assertIsNotNone(d.crash)
+                self.assertEqual(d.crash.frames[1].line, 0)
+
+    def test_real_drift_is_still_rejected(self):
+        # The coercion must not become "swallow anything" — a genuinely unparseable value
+        # should still surface rather than being silently zeroed.
+        d = self._frames({"stackpos": 1, "function": "F", "line": "line forty-two"})
+        self.assertIsNone(d.crash)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,9 @@ from enum import Enum
 from typing import Annotated, Literal, Union
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
+    ConfigDict,
     Field,
     TypeAdapter,
     ValidationError,
@@ -45,7 +47,30 @@ class FailureClass(str, Enum):
     assertion = "assertion"
     oob = "oob"
     shutdownhang = "shutdownhang"
+    # Real Firefox crash families the original vocabulary simply could not say. Left out,
+    # the model's honest ``"oom"`` was an enum error, and because ``CrashBrief`` validates
+    # whole in ``_salvage`` that dropped EVERY frame of the brief: 21 prod dossiers in a
+    # month (``oom`` x17). Silent, too — nothing but the UI reads the brief.
+    oom = "oom"
+    stackoverflow = "stackoverflow"
     other = "other"
+
+    @classmethod
+    def _missing_(cls, value):
+        """Case-fold, then degrade an unknown class to ``other`` instead of binning the
+        crash brief. A VOCABULARY field on model-supplied JSON needs a total function, not
+        another finite list — ``_KIND_ALIASES``/``_SIDE_ALIASES`` have each been extended
+        several times and still miss values. ``other`` is the non-behaviour-asserting
+        member, so an unrecognized class can never assert a mechanism it hasn't earned.
+
+        Persistence note: once an ``oom`` dossier is written, an older build's enum cannot
+        read the row back (``dossier_from_db_json`` raises). Do not roll the members back
+        selectively; ``_missing_`` alone does not have that property."""
+        s = str(value or "").strip().lower()
+        for member in cls:
+            if member.value == s:
+                return member
+        return cls.other
 
 
 class Decision(str, Enum):
@@ -79,6 +104,7 @@ class CitationKind(str, Enum):
     diff_line = "diff_line"
     stack_frame = "stack_frame"
     struct_layout = "struct_layout"
+    ref = "ref"
 
 
 # Categorical confidence -> numeric, for the abstain_below_confidence floor.
@@ -116,12 +142,27 @@ class DiffLineCitation(BaseModel):
 
 
 class StackFrameCitation(BaseModel):
+    """A frame of the crashing stack, cited as evidence.
+
+    Every field is optional and ``None``-tolerant, for the reason ``CrashFrame`` already
+    documents below: symbolication emits nulls for an opaque frame (macOS
+    ``os_unfair_lock``, JIT/stub/driver frames), and this model cites THOSE VERY FRAMES.
+    A default alone is not enough — pydantic rejects an explicit ``null`` regardless of the
+    default — so the before-validators are the load-bearing half. Measured over 1950 prod
+    handoffs: the defaults recover 1 lost verdict, the coercion recovers 14.
+
+    The cost of making everything optional is that ``{"kind": "stack_frame"}`` would
+    otherwise be a content-free citation that satisfies the ``Cited`` min-citations
+    anti-hallucination rule — and, with ``stackpos`` defaulting to 0, would render as
+    "frame #0", i.e. the CRASHING frame, out of thin air. ``_must_point_somewhere`` is what
+    keeps the guarantee: a citation has to name something."""
+
     kind: Literal["stack_frame"] = "stack_frame"
-    uuid: str
-    stackpos: int
-    filename: str
-    function: str
-    line: int
+    uuid: str = ""
+    stackpos: int = 0
+    filename: str = ""
+    function: str = ""
+    line: int = 0
     # NOT required: a stack frame legitimately has no changeset when the frame is not
     # attributable (no source file, or a file no changeset in the window touched) —
     # ``CrashFrame.node`` above is already ``""`` for exactly that case, and the sibling
@@ -136,6 +177,26 @@ class StackFrameCitation(BaseModel):
     # no metric moves. This also un-grenades ``DataFlowHypothesis.crash_site`` below, where a
     # nodeless frame used to drop the whole ``data_flow`` sub-object via ``_salvage``.
     node: str = ""
+
+    @field_validator("uuid", "filename", "function", "node", mode="before")
+    @classmethod
+    def _none_to_empty(cls, v):
+        return "" if v is None else v
+
+    @field_validator("stackpos", "line", mode="before")
+    @classmethod
+    def _none_to_zero(cls, v):
+        return 0 if v is None else v
+
+    @model_validator(mode="after")
+    def _must_point_somewhere(self):
+        """A citation must identify a frame. ``stackpos``/``line`` do NOT count: both
+        default to 0, so accepting them alone would let a bare ``{"kind":"stack_frame"}``
+        pass as a citation of frame #0. The real case this must keep working is the opaque
+        frame — ``function`` known, everything else null — and it does."""
+        if not (self.uuid or self.filename or self.function or self.node):
+            raise ValueError("stack_frame citation identifies no frame")
+        return self
 
 
 class StructLayoutCitation(BaseModel):
@@ -152,8 +213,61 @@ class StructLayoutCitation(BaseModel):
     repo: str = "mozilla-central"
 
 
+class RefCitation(BaseModel):
+    """A pointer at something the agent READ that none of the four kinds above can express.
+
+    This closes a STRUCTURAL gap, not a spelling one. The union predates the
+    ``mcp__source__raw_file`` and ``mcp__history__{file_history,blame,changeset}`` tools:
+    the agent reads a changeset, cites it honestly, and there is no legal ``kind`` to
+    write. ``_KIND_ALIASES`` cannot help — it only repairs spellings of kinds that exist.
+    Measured over 1950 prod handoffs this was the single largest loss: 22 of the 41
+    verdicts destroyed by validation, still firing as of 2026-08-04.
+
+    It is deliberately the WEAKEST citation kind. ``orchestrator._has_verified_callpath``
+    (the off-stack SF-3 gate) keys on ``isinstance(c, SearchfoxCitation)``, so a ``ref``
+    cannot manufacture strong evidence; it only stops honest evidence being thrown away."""
+
+    kind: Literal["ref"] = "ref"
+    # ``rev``/``path`` are accepted as aliases because they are what the tools' own output
+    # calls these things, and the model copies that vocabulary: 21 prod citations name the
+    # changeset ``rev`` and the file ``path``. They still validated (on ``content``), but
+    # both pointers were dropped, so the page showed bare prose where it could have linked
+    # the file. Aliasing costs nothing and recovers the link.
+    node: str = Field(default="", validation_alias=AliasChoices("node", "rev"))
+    filename: str = Field(default="", validation_alias=AliasChoices("filename", "path"))
+    line: int = 0
+    symbol_id: str = ""
+    permalink: str = ""
+    content: str = ""
+    # Needed because the two aliases above otherwise REPLACE the field names, which would
+    # break every dossier already persisted with ``node``/``filename`` keys.
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("node", "filename", "symbol_id", "permalink", "content", mode="before")
+    @classmethod
+    def _none_to_empty(cls, v):
+        return "" if v is None else v
+
+    @field_validator("line", mode="before")
+    @classmethod
+    def _none_to_zero(cls, v):
+        return 0 if v is None else v
+
+    @model_validator(mode="after")
+    def _must_point_somewhere(self):
+        """Same guarantee as ``StackFrameCitation``: every field defaulting would make
+        ``{"kind":"changeset"}`` a citation of nothing that still satisfies the
+        min-citations rule. Verified to recover the same 22 verdicts as the unguarded
+        version while still refusing a content-free citation."""
+        if not any((self.node, self.filename, self.symbol_id, self.permalink,
+                    self.content)):
+            raise ValueError("ref citation points at nothing")
+        return self
+
+
 Citation = Annotated[
-    Union[SearchfoxCitation, DiffLineCitation, StackFrameCitation, StructLayoutCitation],
+    Union[SearchfoxCitation, DiffLineCitation, StackFrameCitation, StructLayoutCitation,
+          RefCitation],
     Field(discriminator="kind"),
 ]
 
@@ -179,7 +293,9 @@ class Cited(BaseModel):
 # Content models
 # --------------------------------------------------------------------------- #
 class CrashFrame(BaseModel):
-    stackpos: int
+    # Defaulted for the same reason as the ``_none_to_empty`` fields below: an INLINED frame
+    # has no position of its own, and the model omitted ``stackpos`` on 52 prod frames.
+    stackpos: int = 0
     function: str = ""
     filename: str = ""
     line: int = 0
@@ -197,6 +313,17 @@ class CrashFrame(BaseModel):
         and force a false abstain. Coerce ``None`` -> ``""`` so a single opaque frame is
         kept (empty) instead of discarding the crash context."""
         return "" if v is None else v
+
+    @field_validator("stackpos", "line", mode="before")
+    @classmethod
+    def _int_none_to_zero(cls, v):
+        """The same hazard, one field short of where it was first fixed. ``line`` is
+        EXACTLY the field symbolication nulls — ``_stack_text`` shows the model frames
+        rendered ``#7 None :None`` — and the coercion above only covered the ``str``
+        fields, so a null ``line`` still dropped the whole brief. 177 null lines across 89
+        prod dossiers, the single biggest cause of the 127 lost crash briefs. Placeholder
+        strings are folded in too; anything else still fails, so real drift is not hidden."""
+        return 0 if v in (None, "", "None", "unknown", "?") else v
 
 
 class CrashBrief(BaseModel):
@@ -587,6 +714,24 @@ _KIND_ALIASES = {
     "structlayout": "struct_layout", "struct layout": "struct_layout",
     "field_layout": "struct_layout", "field-layout": "struct_layout",
     "fieldlayout": "struct_layout", "field layout": "struct_layout",
+    # The source/history tools have no citation kind of their own -> ``ref`` (see
+    # ``RefCitation``). Unlike every entry above, these are not misspellings: each is a tag
+    # the model INVENTED because the vocabulary had no word for what it had just read.
+    # This is exactly the set observed across 1950 prod handoffs — it recovers all 22
+    # affected verdicts with none newly lost, so it is complete for observed data, not a
+    # guess. It is still a PARTIAL map, and the next invented tag will miss it; mapping any
+    # unrecognized kind to ``ref`` would make it total (the "points at something" guard
+    # makes that safe), but that is unmeasured, so it is not what ships here.
+    "ref": "ref", "changeset": "ref", "source": "ref", "source_raw_file": "ref",
+    "source_raw": "ref", "source_read": "ref", "source_pinned": "ref",
+    "pinned_source": "ref", "source_line": "ref", "history": "ref",
+    "history_changeset": "ref", "history_file_history": "ref",
+    # ...but NOT ``stack``: 5 of the 6 prod ``kind:"stack"`` citations carry the exact
+    # ``StackFrameCitation`` field set (uuid/stackpos/filename/function/line/node), so
+    # routing them to the catch-all would silently discard function/stackpos/uuid and render
+    # an hg link where the page should say "frame #5 … AfterSetAttr". Measured: it recovers
+    # the same verdicts either way, so send it to the kind that keeps the information.
+    "stack": "stack_frame",
 }
 _SIDE_ALIASES = {
     "added": "added", "add": "added", "addition": "added",
