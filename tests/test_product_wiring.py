@@ -392,6 +392,47 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Possibly-related changeset", html)
         self.assertNotIn("Mechanism lead", html)
 
+    def test_abstain_does_not_head_its_candidate_suspected_regressor(self):
+        # The suppression gates write a NEW abstain Verdict but deliberately keep
+        # mechanism/consistency on it ("so the page can still explain what was found and why
+        # it was dropped"), and the candidate stays on the dossier — so all three of these
+        # sections RENDER on an abstain. Keyed on `is_lead` alone they fell through to the
+        # CULPRIT copy, so the very page that correctly suppressed a revert still headed it
+        # "Suspected regressor" and asserted its "Mechanism"/"Consistency with the crash".
+        ev = _evidence(verdict="abstain", confidence=25, show_abstain=True)
+        ev["dossier"]["corroborations"] = {
+            "candidate_is_backout": True,
+            "candidate_backout_same_push": "507de5c66b0d",
+            "candidate_backout_suppressed": True,
+        }
+        ev["dossier"]["verdict"] = {
+            "decision": "abstain",
+            "confidence": "low",
+            "abstain_reason": "candidate is a BACKOUT of a patch from its own push",
+            "mechanism": {"statement": "use-after-free of mPtr", "citations": [_SEARCHFOX]},
+            "consistency": {"statement": "matches the crashing frame", "citations": [_FRAME]},
+        }
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("ABSTAIN", html)
+        self.assertIn("Changeset examined", html)
+        self.assertNotIn("Suspected regressor", html)
+        self.assertNotIn("<h3>Mechanism</h3>", html)
+        self.assertNotIn("Consistency with the crash", html)
+        # The hedged lead voice is the right one for an abstain: it reports what the analysis
+        # thought without asserting it. The claims themselves are still shown.
+        self.assertIn("Working hypothesis (unverified)", html)
+        self.assertIn("Why it may be related", html)
+        self.assertIn("use-after-free of mPtr", html)
+
+    def test_culprit_keeps_the_assertive_headings(self):
+        # The other side of the inversion above: only a culprit verdict may use the
+        # assertive copy, and it must still get it.
+        html = self._get(_evidence()).get_data(as_text=True)   # culprit @ 90
+        self.assertIn("Suspected regressor", html)
+        self.assertIn("<h3>Mechanism</h3>", html)
+        self.assertIn("Consistency with the crash", html)
+        self.assertNotIn("Changeset examined", html)
+
     def test_worth_investigating_shown_for_culprit(self):
         # Phase-2: a calibrated p_worth_investigating on the dossier verdict is surfaced as
         # the person-level "worth investigating" %, REPLACING the raw (miscalibrated) rung %.

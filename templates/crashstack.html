@@ -52,6 +52,14 @@
     {% set conf = evidence['confidence'] -%}
     {% set vd = d.get('verdict') -%}
     {% set is_lead = evidence['verdict'] == 'lead' -%}
+    {#- The suppression gates keep ``mechanism``/``consistency`` on the abstain they write
+        (orchestrator: "so the page can still explain what was found and why it was dropped"),
+        and an abstained dossier can still carry a candidate — so the section headings below
+        RENDER on an abstain. Keyed on ``is_lead`` alone they fell through to the culprit
+        voice, and the very page that correctly suppressed a revert still headed it
+        "Suspected regressor". The assertive wording belongs to ``culprit`` only. -#}
+    {% set is_culprit = evidence['verdict'] == 'culprit' -%}
+    {% set is_abstain = evidence['verdict'] == 'abstain' -%}
     {% set cclass = 'high' if (conf is not none and conf >= 85) else ('probable' if (conf is not none and conf >= 65) else ('medium' if (conf is not none and conf >= 50) else 'low')) -%}
     {% set cand = d.get('candidate') -%}
     {% set has_cand = cand and cand.get('node') -%}
@@ -179,7 +187,7 @@
 
       {% if has_cand -%}
       <div class="evidence-section">
-        <h3>{% if is_lead %}Possibly-related changeset{% else %}Suspected regressor{% endif %}</h3>
+        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% else %}Suspected regressor{% endif %}</h3>
         <p>
           <a href="{{ repo_url }}/rev?node={{ cand['node'] }}" target="_blank" rel="noopener"><code>{{ cand['node'] }}</code></a>
           {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}" target="_blank" rel="noopener">bug {{ cand['bug'] }}</a>{% endif %}
@@ -226,14 +234,14 @@
 
       {% if vd and vd.get('mechanism') and vd['mechanism'].get('statement') -%}
       <div class="evidence-section">
-        <h3>{% if is_lead %}Working hypothesis (unverified){% else %}Mechanism{% endif %}</h3>
+        <h3>{% if is_culprit %}Mechanism{% else %}Working hypothesis (unverified){% endif %}</h3>
         <p>{{ vd['mechanism']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['mechanism'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
       {% if vd and vd.get('consistency') and vd['consistency'].get('statement') -%}
       <div class="evidence-section">
-        <h3>{% if is_lead %}Why it may be related{% else %}Consistency with the crash{% endif %}</h3>
+        <h3>{% if is_culprit %}Consistency with the crash{% else %}Why it may be related{% endif %}</h3>
         <p>{{ vd['consistency']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
