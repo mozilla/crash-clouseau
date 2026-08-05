@@ -129,6 +129,47 @@ class TestGates(_Base):
                 self.assertIn("wrong component", res["skipped"])
         self.assertEqual(self.created, [])
 
+    def test_offstack_observe_only_is_not_filed(self):
+        # `_apply_offstack_observe_only` empties `result.actions` to "SUPPRESS any outward
+        # action" while the off-stack canary's calibration is watched. This filer builds its
+        # own payload and never reads `result.actions`, so it walked straight through that
+        # suppression — 14 of 66 rung-70 verdicts in 30 days carry the flag.
+        res = bugzilla_apply.autofile_bug(
+            "u-1", _INFO, {}, {"candidate": {"node": "n"},
+                               "corroborations": {"offstack_observe_only": True}},
+            "lead", 70)
+        self.assertFalse(res["filed"])
+        self.assertIn("observe-only", res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_an_unsymbolicated_signature_is_not_filed(self):
+        # "Crash in [@ @0xe2ba40f948]" matches nothing and dedupes against nothing — the
+        # address differs per crash — and if no frame resolves to code there is nothing
+        # tying the crash to the candidate.
+        info = {**_INFO, "signature": "@0xe2ba40f948"}
+        res = bugzilla_apply.autofile_bug("u-1", info, {}, {"candidate": {"node": "n"}},
+                                          "lead", 70)
+        self.assertFalse(res["filed"])
+        self.assertIn("unsymbolicated", res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_a_partly_symbolicated_signature_still_files(self):
+        # The guard must require EVERY component to be a bare address: this real signature
+        # carries "unknown" and a raw frame yet is perfectly actionable.
+        info = {**_INFO,
+                "signature": "OOM | unknown | memcpy_repmovs_Intel | RTCEncodedFrameBase"}
+        self.assertTrue(self._file_with(info)["filed"])
+
+    def _file_with(self, info):
+        return bugzilla_apply.autofile_bug("u-1", info, {}, {"candidate": {"node": "n"}},
+                                           "lead", 70)
+
+    def test_unsymbolicated_predicate(self):
+        for sig in ("@0xe2ba40f948", "0xdeadbeef", "@0x0 | @0x1"):
+            self.assertTrue(bugzilla_apply._is_unsymbolicated(sig), sig)
+        for sig in ("@0x0 | js::gc::TraceEdgeInternal", "mozilla::Foo::Bar", "", None):
+            self.assertFalse(bugzilla_apply._is_unsymbolicated(sig), sig)
+
     def test_no_candidate_does_not_file(self):
         with mock.patch("crashclouseau.report_bug.build_bug_preview", return_value=None):
             self.assertFalse(self._file()["filed"])

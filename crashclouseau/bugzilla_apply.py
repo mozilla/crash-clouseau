@@ -29,6 +29,7 @@ This module remains the ONLY place in the product that writes to Bugzilla.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 import libmozdata.config
@@ -232,6 +233,19 @@ def _execute(action, token):
     raise ValueError("unsupported action type: {}".format(atype))
 
 
+_BARE_ADDR = re.compile(r"^@?0x[0-9a-fA-F]+$")
+
+
+def _is_unsymbolicated(signature):
+    """True when NO component of the signature resolved to a symbol.
+
+    Requires every ``|``-separated part to be a bare address, so a partly-symbolicated
+    signature still files: ``OOM | unknown | memcpy_repmovs_Intel | …`` is perfectly
+    actionable and must not be caught here."""
+    parts = [p.strip() for p in (signature or "").split("|") if p.strip()]
+    return bool(parts) and all(_BARE_ADDR.match(p) for p in parts)
+
+
 def _needinfo_changes(email):
     """The PUT body that sets a needinfo flag on an existing bug."""
     return {"flags": [{"name": "needinfo", "status": "?", "requestee": email}]}
@@ -266,6 +280,22 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     if confidence is None or confidence < cfg["min_confidence"]:
         return {"filed": False, "skipped": "confidence {} below {}".format(
             confidence, cfg["min_confidence"])}
+
+    # OFF-STACK OBSERVE-ONLY. `_apply_offstack_observe_only` empties `result.actions`
+    # precisely to "SUPPRESS any outward action" while the off-stack canary's calibration is
+    # being watched. This filer does not read `result.actions` — it builds its own payload —
+    # so without this check it walks straight through that suppression. 14 of the 66 rung-70
+    # verdicts in the last 30 days carry the flag, i.e. ~1 filed bug in 5.
+    if (dossier or {}).get("corroborations", {}).get("offstack_observe_only"):
+        return {"filed": False, "skipped": "off-stack run is observe-only"}
+
+    # An unsymbolicated signature is a bare address: "@0xe2ba40f948". Filing it produces a
+    # bug titled "Crash in [@ @0xe2ba40f948]" whose `cf_crash_signature` matches nothing and
+    # dedupes against nothing, because the address differs per crash — and if no frame
+    # resolves to code, nothing ties the crash to the candidate anyway.
+    if _is_unsymbolicated(uuid_info.get("signature")):
+        return {"filed": False, "skipped": "signature is unsymbolicated ({})".format(
+            uuid_info.get("signature"))}
 
     prior = models.Dossier.already_filed(uuid)
     if prior:
