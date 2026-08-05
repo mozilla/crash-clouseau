@@ -122,7 +122,20 @@ class StackFrameCitation(BaseModel):
     filename: str
     function: str
     line: int
-    node: str
+    # NOT required: a stack frame legitimately has no changeset when the frame is not
+    # attributable (no source file, or a file no changeset in the window touched) —
+    # ``CrashFrame.node`` above is already ``""`` for exactly that case, and the sibling
+    # ``AreaExpert.node`` defaults too. Required, it was a whole-dossier grenade: on
+    # dossier 5748 the model omitted it on two frames cited inside
+    # ``verdict.consistency.citations[]``, ``_salvage`` dropped the entire verdict, and a
+    # correct $1.75 analysis became "dossier validation failed (verdict unusable)". Safe
+    # to default because NO GATE reads a citation's ``node`` (every gate reads
+    # ``candidate.node``); the one consumer is the offline ``eval.metrics._nodes_in_dossier``
+    # node set, which already does ``getattr(cite, "node", None)`` and skips a falsy value —
+    # and it could not have seen a nodeless citation before this default existed either, so
+    # no metric moves. This also un-grenades ``DataFlowHypothesis.crash_site`` below, where a
+    # nodeless frame used to drop the whole ``data_flow`` sub-object via ``_salvage``.
+    node: str = ""
 
 
 class StructLayoutCitation(BaseModel):

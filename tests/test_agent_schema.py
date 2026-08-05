@@ -751,5 +751,74 @@ class TestOpaqueFrameNoneCoercion(unittest.TestCase):
         self.assertEqual(d.crash.frames[0].filename, "")
 
 
+class TestNodelessStackFrameCitation(unittest.TestCase):
+    """A cited stack frame legitimately has no changeset when the frame is not
+    attributable — ``CrashFrame.node`` above is already ``""`` for exactly that case.
+    Required, ``StackFrameCitation.node`` was a whole-dossier grenade: on prod dossier 5748
+    the model omitted it on two frames and ``_salvage`` binned the verdict, replacing a
+    correct analysis with "dossier validation failed (verdict unusable)".
+
+    The NESTING is the point of these tests. A top-level ``StackFrameCitation(...)`` check
+    passes while the bug survives, because the damage happens where the citation sits: in
+    the verdict's own claims (whole verdict dropped -> FALSE ABSTAIN) and in a call-path
+    edge (that edge dropped, losing the lead's anchor)."""
+
+    @staticmethod
+    def _nodeless(**over):
+        sf = _stack_frame()
+        sf.pop("node")
+        sf.update(over)
+        return sf
+
+    def test_citation_without_node_defaults_to_empty(self):
+        c = StackFrameCitation(uuid="u-1", stackpos=3, filename="foo.cpp",
+                               function="Foo::Bar", line=42)
+        self.assertEqual(c.node, "")
+
+    def test_nodeless_citation_in_consistency_keeps_the_verdict(self):
+        # The literal 5748 shape: two nodeless frames on the consistency claim.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [
+            self._nodeless(), self._nodeless(stackpos=1, function="Foo::Baz"),
+        ]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+        self.assertIsNone(d.verdict.abstain_reason)
+        self.assertEqual([c.node for c in d.verdict.consistency.citations], ["", ""])
+
+    def test_nodeless_citation_in_mechanism_keeps_the_verdict(self):
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["mechanism"]["citations"] = [self._nodeless()]
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+        self.assertIsNone(d.verdict.abstain_reason)
+
+    def test_nodeless_citation_in_call_path_edge_keeps_the_edge(self):
+        # The other nesting that blew up. A dropped edge is quieter than a dropped verdict
+        # but costs a lead its cited anchor, which `_skeptic_veto` demotes to abstain.
+        obj = copy.deepcopy(_dossier())
+        obj["call_path"]["edges"][0]["citations"] = [self._nodeless()]
+        d = parse_and_validate(obj)
+        self.assertEqual(len(d.call_path.edges), 1)
+        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+
+    def test_nodeless_citation_round_trips_through_db_json(self):
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = [self._nodeless()]
+        back = dossier_from_db_json(dossier_to_db_json(parse_and_validate(obj)))
+        self.assertEqual(back.verdict.consistency.citations[0].node, "")
+
+    def test_control_this_nesting_position_really_is_fatal(self):
+        # Guard against a vacuous suite: prove a claim-level failure in this exact position
+        # DOES bin the whole verdict, so the assertions above are actually load-bearing.
+        # Uses the min-citations rule rather than another required field, so a later
+        # relaxation of some other field can't quietly turn this control into a no-op.
+        obj = copy.deepcopy(_dossier())
+        obj["verdict"]["consistency"]["citations"] = []
+        d = parse_and_validate(obj)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("validation failed", d.verdict.abstain_reason)
+
+
 if __name__ == "__main__":
     unittest.main()
