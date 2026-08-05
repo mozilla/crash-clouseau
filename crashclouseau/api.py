@@ -2,9 +2,33 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import hmac
+import os
+
 from flask import request, jsonify, abort
 from crashclouseau import models
 from . import buginfo, java
+
+
+def _require_write_token():
+    """Gate the routes that WRITE to Bugzilla behind a shared secret.
+
+    ``/api/evidence/apply`` posts comments and sets needinfo flags on production BMO using
+    the deployment's API key. It is ``@cross_origin()`` and was reachable by anyone who
+    knew a uuid — and uuids are enumerable from the public reports pages and from
+    ``/api/evidence``. Its docstring claimed protection from "an explicit browser
+    ``confirm()``", but that dialog lived in the apply UI, which was removed in the
+    informative-only phase; a client-side dialog was never an authorization control anyway.
+
+    Set ``API_WRITE_TOKEN`` and send it as ``X-Clouseau-Token``. With the variable UNSET the
+    route is refused outright rather than left open: an unset secret must not mean "no
+    authentication required" on the one route that can write to a bug tracker."""
+    expected = os.getenv("API_WRITE_TOKEN", "")
+    if not expected:
+        abort(503, "write API disabled (no API_WRITE_TOKEN configured)")
+    supplied = request.headers.get("X-Clouseau-Token", "")
+    if not hmac.compare_digest(supplied, expected):
+        abort(403, "invalid or missing X-Clouseau-Token")
 
 
 def javast():
@@ -58,11 +82,13 @@ def evidence():
 def apply_actions():
     """Execute the human-confirmed subset of recorded Bugzilla actions (#12).
 
-    The ONLY write path to Bugzilla in the product, reached only from the POST route
-    behind an explicit browser ``confirm()``. Trusts only ``{uuid, indices}``; the
-    persisted action bodies are re-read server-side."""
+    Human-triggered Bugzilla writes. Requires ``X-Clouseau-Token`` (see
+    ``_require_write_token``) — this posts to production BMO with the deployment's API key,
+    so it cannot be left open to anyone holding a uuid. Trusts only ``{uuid, indices}``;
+    the persisted action bodies are re-read server-side."""
     from crashclouseau import bugzilla_apply
 
+    _require_write_token()
     data = request.get_json(silent=True) or {}
     uuid = data.get("uuid", "")
     indices = data.get("indices")

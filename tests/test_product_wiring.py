@@ -709,29 +709,39 @@ class TestBuildEvidence(unittest.TestCase):
 
 
 class TestApplyRoute(unittest.TestCase):
+    # The apply route WRITES to production Bugzilla, so it is behind a shared secret
+    # (`API_WRITE_TOKEN` + `X-Clouseau-Token`). Every request here carries it; the
+    # unauthenticated cases are covered by TestApplyRouteAuth below.
+    TOKEN = "test-write-token"
+
     def setUp(self):
         self.client = app.test_client()
+        self._env = mock.patch.dict(os.environ, {"API_WRITE_TOKEN": self.TOKEN})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    def _post(self, body):
+        return self.client.post("/api/evidence/apply", json=body,
+                                headers={"X-Clouseau-Token": self.TOKEN})
 
     def test_missing_uuid_400(self):
-        rv = self.client.post("/api/evidence/apply", json={"indices": [0]})
+        rv = self._post({"indices": [0]})
         self.assertEqual(rv.status_code, 400)
 
     def test_bad_indices_400(self):
-        rv = self.client.post("/api/evidence/apply", json={"uuid": "u-1", "indices": "x"})
+        rv = self._post({"uuid": "u-1", "indices": "x"})
         self.assertEqual(rv.status_code, 400)
 
     def test_boolean_indices_rejected_400(self):
         # JSON booleans are ints in Python; they must not slip through as indices.
-        rv = self.client.post("/api/evidence/apply",
-                              json={"uuid": "u-1", "indices": [True]})
+        rv = self._post({"uuid": "u-1", "indices": [True]})
         self.assertEqual(rv.status_code, 400)
 
     def test_ok(self):
         payload = [{"index": 0, "type": "bugzilla.add_comment", "ok": True, "result_id": 111}]
         with mock.patch.object(bugzilla_apply, "apply_recorded_actions",
                                return_value=payload) as ap:
-            rv = self.client.post("/api/evidence/apply",
-                                  json={"uuid": "u-1", "indices": [0]})
+            rv = self._post({"uuid": "u-1", "indices": [0]})
         self.assertEqual(rv.status_code, 200)
         self.assertEqual(rv.get_json(), {"uuid": "u-1", "results": payload})
         ap.assert_called_once_with("u-1", [0])
@@ -739,9 +749,59 @@ class TestApplyRoute(unittest.TestCase):
     def test_unknown_uuid_404(self):
         with mock.patch.object(bugzilla_apply, "apply_recorded_actions",
                                side_effect=LookupError):
-            rv = self.client.post("/api/evidence/apply",
-                                  json={"uuid": "u-1", "indices": [0]})
+            rv = self._post({"uuid": "u-1", "indices": [0]})
         self.assertEqual(rv.status_code, 404)
+
+
+class TestApplyRouteAuth(unittest.TestCase):
+    """`/api/evidence/apply` posts comments and needinfo flags to production BMO with the
+    deployment's API key, and was reachable by anyone holding a uuid — which the public
+    reports pages and `/api/evidence` both enumerate. The `confirm()` its docstring cited
+    lived in the apply UI, and that UI was removed."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def _post(self, headers=None):
+        with mock.patch.object(bugzilla_apply, "apply_recorded_actions",
+                               return_value=[]) as ap:
+            rv = self.client.post("/api/evidence/apply",
+                                  json={"uuid": "u-1", "indices": [0]},
+                                  headers=headers or {})
+        return rv, ap
+
+    def test_no_token_configured_refuses_rather_than_allows(self):
+        # An unset secret must not mean "no authentication required" on the one route that
+        # can write to a bug tracker.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("API_WRITE_TOKEN", None)
+            rv, ap = self._post()
+        self.assertEqual(rv.status_code, 503)
+        ap.assert_not_called()
+
+    def test_missing_header_forbidden(self):
+        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}):
+            rv, ap = self._post()
+        self.assertEqual(rv.status_code, 403)
+        ap.assert_not_called()
+
+    def test_wrong_token_forbidden(self):
+        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}):
+            rv, ap = self._post({"X-Clouseau-Token": "guess"})
+        self.assertEqual(rv.status_code, 403)
+        ap.assert_not_called()
+
+    def test_correct_token_allowed(self):
+        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}):
+            rv, ap = self._post({"X-Clouseau-Token": "s3cret"})
+        self.assertEqual(rv.status_code, 200)
+        ap.assert_called_once()
+
+    def test_read_route_is_still_open(self):
+        # Only the WRITE route is gated; the panel's read API must keep working.
+        with mock.patch.object(bugzilla_apply, "build_evidence", return_value=None):
+            rv = self.client.get("/api/evidence?uuid=u-1")
+        self.assertEqual(rv.status_code, 200)
 
 
 class TestReportBugEvidenceSummary(unittest.TestCase):

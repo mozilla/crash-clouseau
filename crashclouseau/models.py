@@ -1832,6 +1832,45 @@ class Dossier(db.Model):
             db.session.commit()
         return True
 
+    @staticmethod
+    def record_filed_bug(uuid, info, commit=True):
+        """Stamp ``payload["filed_bug"]`` with what the autofiler did for this crash.
+
+        The audit trail for the only unattended Bugzilla write, and the per-uuid
+        idempotence key: the reaper re-runs a crashed run, and without this a run that
+        filed and then died would file again on recovery. Same whole-dict reassignment as
+        ``mark_action_applied`` — ``payload`` is a plain JSONB column, not a MutableDict."""
+        d = Dossier.get_by_uuid(uuid)
+        if d is None or not d.payload:
+            return False
+        payload = dict(d.payload)
+        payload["filed_bug"] = info
+        d.payload = payload
+        db.session.add(d)
+        if commit:
+            db.session.commit()
+        return True
+
+    @staticmethod
+    def already_filed(uuid):
+        """The recorded ``filed_bug`` for this crash, or ``None``. Fails CLOSED (returns a
+        truthy sentinel) on a DB error so a lookup failure can never authorise a re-file."""
+        try:
+            d = Dossier.get_by_uuid(uuid)
+        except Exception:                                  # pragma: no cover - defensive
+            return {"skipped": "filed-bug lookup failed"}
+        return (d.payload or {}).get("filed_bug") if d is not None else None
+
+    @staticmethod
+    def filed_bugs_since(when):
+        """How many bugs the autofiler has filed since *when* — the daily-cap counter."""
+        return (
+            db.session.query(func.count(Dossier.id))
+            .filter(Dossier.payload.has_key("filed_bug"),   # noqa: W601 - JSONB ? operator
+                    Dossier.updated >= when)
+            .scalar()
+        ) or 0
+
 
 class Verdict(db.Model):
     __tablename__ = "verdicts"

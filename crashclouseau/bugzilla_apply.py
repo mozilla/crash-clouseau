@@ -15,16 +15,21 @@ This module has two jobs:
   apply-eligible) for the read-only panel and ``/api/evidence``. It writes nothing.
 
 * ``apply_recorded_actions(uuid, indices)`` executes the human-confirmed subset of
-  recorded actions via Bugzilla REST. It is the ONLY place in the product that
-  writes to Bugzilla, and only ever from the human-confirmed POST route. It
-  re-reads the persisted actions (never trusts a client-supplied action body — the
-  client sends indices only), refuses any ``type`` outside ``apply.enabled_types``,
-  skips already-applied actions (idempotent), and records the outcome so a partial
-  failure leaves landed writes marked applied.
+  recorded actions via Bugzilla REST. It re-reads the persisted actions (never trusts a
+  client-supplied action body — the client sends indices only), refuses any ``type``
+  outside ``apply.enabled_types``, skips already-applied actions (idempotent), and
+  records the outcome so a partial failure leaves landed writes marked applied.
+
+* ``autofile_bug(...)`` files a bug for a reported crash with NO human in the loop —
+  the one unattended write in the product. Every gate lives in that function and each
+  fails closed; ``AUTOFILE_BUGS`` is its kill-switch.
+
+This module remains the ONLY place in the product that writes to Bugzilla.
 """
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 
 import libmozdata.config
 from . import net
@@ -33,8 +38,11 @@ from crashclouseau import config, models
 from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
-# Recorded actions the apply step knows how to execute directly. ``create_bug`` is
-# intentionally NOT here: new bugs stay human-filed through the report_bug draft.
+# Recorded actions the human-confirmed APPLY step executes directly. ``create_bug`` is
+# still intentionally NOT here: a bug the MODEL asked for, replayed from a recorded action
+# body, stays human-filed through the report_bug draft. Automatic filing goes through
+# ``autofile_bug`` instead, which builds its own payload from the persisted dossier and
+# applies its own gates — the model never chooses what gets filed.
 _EXECUTABLE = {"bugzilla.add_comment", "bugzilla.update_bug"}
 
 _BZ_REST = "https://bugzilla.mozilla.org/rest/bug"
@@ -131,6 +139,84 @@ def _put_bug(bug_id, changes, token):
     return bug_id
 
 
+def _create_bug(payload, token):
+    """POST /rest/bug -> the new bug id.
+
+    libmozdata has no bug-creation call (``Bugzilla`` exposes ``put`` for existing bugs
+    only), so this posts directly, but through the same ``_bz_rest()`` base everything else
+    here uses — which is what makes ``BUGZILLA_REST_URL`` able to divert the whole write
+    path to bugzilla.allizom.org."""
+    r = net.post(
+        _bz_rest(),
+        headers={"X-Bugzilla-API-Key": token},
+        json=payload,
+        timeout=_HTTP_TIMEOUT,
+    )
+    if r.status_code >= 400:
+        # Bugzilla explains a rejection in the BODY; ``raise_for_status`` shows only
+        # "400 Client Error", which is useless in a worker log for a payload we cannot
+        # reproduce after the fact. Surface the reason.
+        raise RuntimeError("bugzilla create failed ({}): {}".format(
+            r.status_code, (r.text or "")[:400]))
+    return (r.json() or {}).get("id")
+
+
+def _link_blockers(bug_id, blockers, token):
+    """Set ``blocks`` on a freshly-created bug. Returns what actually got linked.
+
+    Has to be a SECOND call: BMO's create endpoint accepts ``blocks`` (and ``blocked``)
+    without complaint and silently discards both — verified on allizom, where three test
+    filings came back 200 with an empty blocks list. Only ``PUT {"blocks": {"add": [...]}}``
+    works.
+
+    The PUT is atomic and strict: one unknown id rejects the WHOLE list with code 101, so a
+    regressor bug that is restricted, wrong, or simply not visible to this account would
+    otherwise also cost us the ``clouseau`` meta-bug link. Hence the retry with the meta-bug
+    alone. Best-effort throughout — a bug that is filed but unlinked is a small loss; an
+    exception here would strand a filing we have already made."""
+    if not blockers:
+        return []
+    for attempt in (list(blockers), [b for b in blockers if isinstance(b, str)]):
+        if not attempt:
+            continue
+        try:
+            _put_bug(bug_id, {"blocks": {"add": attempt}}, token)
+            return attempt
+        except Exception as exc:
+            logger.warning("autofile: linking bug %s to %s failed: %s", bug_id, attempt, exc)
+    return []
+
+
+def _open_bugs_for_signature(signature):
+    """Ids of OPEN bugs whose ``cf_crash_signature`` references *signature*, newest first.
+
+    Read-only and unauthenticated (public bugs only, which is the right scope: we must not
+    reason about a security bug we can only see because the filing account can). A miss
+    means we file; a false hit means we comment on the wrong bug, so the match is on the
+    full ``[@ signature]`` form rather than a bare substring."""
+    if not signature:
+        return []
+    try:
+        r = net.get(
+            _bz_rest(),
+            params={
+                "include_fields": "id,summary,status,resolution",
+                "f1": "cf_crash_signature", "o1": "substring",
+                "v1": "[@ {}]".format(signature.strip()),
+                "resolution": "---",
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        # Fail CLOSED: if we cannot tell whether a bug exists, do not file a possible
+        # duplicate. A missed filing is recoverable; a duplicate on BMO is not.
+        logger.warning("autofile: signature bug lookup failed for %r: %s", signature, exc)
+        return None
+    return [b["id"] for b in sorted(bugs, key=lambda b: b.get("id", 0), reverse=True)]
+
+
 def _execute(action, token):
     atype = action.get("type")
     params = action.get("params") or {}
@@ -144,6 +230,119 @@ def _execute(action, token):
     if atype == "bugzilla.update_bug":
         return _put_bug(bug_id, params.get("changes") or {}, token)
     raise ValueError("unsupported action type: {}".format(atype))
+
+
+def _needinfo_changes(email):
+    """The PUT body that sets a needinfo flag on an existing bug."""
+    return {"flags": [{"name": "needinfo", "status": "?", "requestee": email}]}
+
+
+def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
+    """File a Bugzilla bug for a reported crash, unattended. Returns a result dict; NEVER
+    raises — a filing failure must not lose an analysis that is already persisted.
+
+    This is the only write to Bugzilla with no human in the loop, so every gate is here
+    rather than at the call site, and each one fails CLOSED:
+
+    * disabled unless ``AUTOFILE_BUGS`` is on (a real kill-switch: it writes to production
+      BMO on a schedule, so it has to be stoppable without a deploy);
+    * verdict must be reported and at/above ``min_confidence`` (70 = the ``probable`` rung);
+    * never twice for one crash (``Dossier.already_filed``), which matters because the
+      orphan reaper re-runs a crashed run and would otherwise re-file on recovery;
+    * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
+      is a nuisance while a bad gate at 300/day is an incident;
+    * if an OPEN bug already references the signature, comment there instead of filing a
+      duplicate — and if that lookup FAILS we skip entirely rather than risk the duplicate.
+
+    ``regressed_by`` is still not set (see ``report_bug.build_bug_preview``): the suspected
+    regressor is named in the comment prose, where a human can weigh it, and the needinfo
+    asks that human directly. The blocker link records the association without asserting
+    cause."""
+    cfg = config.get_agent_autofile()
+    if not cfg["enabled"]:
+        return {"filed": False, "skipped": "autofile disabled"}
+    if verdict not in cfg["verdicts"]:
+        return {"filed": False, "skipped": "verdict {} not fileable".format(verdict)}
+    if confidence is None or confidence < cfg["min_confidence"]:
+        return {"filed": False, "skipped": "confidence {} below {}".format(
+            confidence, cfg["min_confidence"])}
+
+    prior = models.Dossier.already_filed(uuid)
+    if prior:
+        return {"filed": False, "skipped": "already filed", "prior": prior}
+
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    try:
+        recent = models.Dossier.filed_bugs_since(since)
+    except Exception as exc:                                # pragma: no cover - defensive
+        return {"filed": False, "skipped": "cap check failed: {}".format(exc)}
+    if recent >= cfg["daily_cap"]:
+        logger.warning("autofile: daily cap %s reached (%s in 24h) — not filing for %s",
+                       cfg["daily_cap"], recent, uuid)
+        return {"filed": False, "skipped": "daily cap {} reached".format(cfg["daily_cap"])}
+
+    token = libmozdata.config.get("Bugzilla", "token", "")
+    if not token:
+        return {"filed": False, "skipped": "no Bugzilla API token configured"}
+
+    from crashclouseau import report_bug
+    try:
+        preview = report_bug.build_bug_preview(uuid_info, stack, dossier)
+    except Exception as exc:
+        logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
+        return {"filed": False, "skipped": "preview failed: {}".format(exc)}
+    if not preview:
+        return {"filed": False, "skipped": "no candidate regressor to file against"}
+    # ``resolve_product_component`` is best-effort and returns empty on a Bugzilla read
+    # failure or an unreadable regressor bug. Filing then gets rejected outright
+    # ("Bad argument param sent to Bugzilla::Product::new") — but the real reason to check
+    # here is that a HALF-resolved pair would file the bug into the wrong component, which
+    # is worse than not filing: it lands on a team that has no idea why they got it.
+    if not (preview.get("product") and preview.get("component")):
+        return {"filed": False,
+                "skipped": "product/component unresolved — refusing to file into the wrong "
+                           "component"}
+
+    signature = (uuid_info.get("signature") or "").strip()
+    existing = _open_bugs_for_signature(signature)
+    if existing is None:
+        return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
+
+    email = preview.get("needinfo_email") if cfg["needinfo"] else ""
+    result = {"filed": False, "uuid": uuid, "signature": signature,
+              "at": datetime.now(timezone.utc).isoformat()}
+    try:
+        if existing:
+            if not cfg["comment_on_existing"]:
+                return {"filed": False, "skipped": "open bug {} exists".format(existing[0])}
+            bug_id = existing[0]
+            _post_comment(bug_id, preview["comment"], False, token)
+            if email:
+                _put_bug(bug_id, _needinfo_changes(email), token)
+            result.update({"filed": True, "bug": bug_id, "mode": "comment_on_existing",
+                           "needinfo": email or None})
+        else:
+            payload = {k: v for k, v in preview.items()
+                       if k in ("product", "component", "version", "type", "keywords",
+                                "cf_crash_signature")}
+            payload["summary"] = preview["title"]
+            payload["description"] = preview["comment"]
+            if email:
+                payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
+            bug_id = _create_bug(payload, token)
+            # Blockers need a second call — create discards them silently (see
+            # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
+            linked = _link_blockers(bug_id, preview.get("blocked") or [], token)
+            result.update({"filed": True, "bug": bug_id, "mode": "new_bug",
+                           "needinfo": email or None, "blocks": linked})
+    except Exception as exc:
+        logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
+        return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}
+
+    models.Dossier.record_filed_bug(uuid, result)
+    logger.info("autofile: %s -> bug %s (%s, needinfo=%s)",
+                uuid, result["bug"], result["mode"], result.get("needinfo"))
+    return result
 
 
 def apply_recorded_actions(uuid, indices):

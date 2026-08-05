@@ -103,6 +103,15 @@
         {
             "enabled_types": ["bugzilla.add_comment", "bugzilla.update_bug"]
         },
+        "autofile":
+        {
+            "enabled": false,
+            "min_confidence": 70,
+            "verdicts": ["lead", "culprit"],
+            "needinfo": true,
+            "daily_cap": 10,
+            "comment_on_existing": true
+        },
         "filters":
         {
             "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr"],

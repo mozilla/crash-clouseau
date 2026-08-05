@@ -191,6 +191,30 @@ def _env_bool(name, default):
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def get_agent_autofile():
+    """Automatic bug FILING knobs (the only unattended write to Bugzilla).
+
+    ``enabled`` is a genuine kill-switch, not dead config: this posts to production BMO
+    without a human in the loop, so it has to be stoppable from ``heroku config:set``
+    without waiting on a deploy. It defaults OFF and is armed with ``AUTOFILE_BUGS=1``.
+
+    ``min_confidence`` 70 is the ``probable`` rung — a lead the model rated strongly or that
+    a deterministic check corroborated — measured at ~3 crashes/day, versus ~7.6/day if it
+    were lowered to the ``medium`` rung of 50. ``daily_cap`` bounds the damage a bad gate
+    can do in one night; the pipeline itself has no such bound."""
+    a = get_agent().get("autofile", {})
+    return {
+        "enabled": _env_bool("AUTOFILE_BUGS", a.get("enabled", False)),
+        "min_confidence": a.get("min_confidence", 70),
+        "verdicts": a.get("verdicts", ["lead", "culprit"]),
+        "needinfo": _env_bool("AUTOFILE_NEEDINFO", a.get("needinfo", True)),
+        "daily_cap": a.get("daily_cap", 10),
+        # An open bug already referencing the signature: comment there instead of filing a
+        # duplicate. Turning this off does NOT file anyway — it skips.
+        "comment_on_existing": a.get("comment_on_existing", True),
+    }
+
+
 def get_agent_ui():
     """UI/apply knobs for the evidence panel + apply/replay step (#12).
 

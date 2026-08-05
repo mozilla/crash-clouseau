@@ -1691,6 +1691,31 @@ def _heartbeat(uuid):
         t.join(timeout=5)
 
 
+def _autofile(uuid, payload, row):
+    """Hand a settled, PERSISTED run to the automatic Bugzilla filer.
+
+    Deliberately swallows everything. The dossier is already committed by the time this
+    runs, so any exception escaping here would turn a successful analysis into a run the
+    caller marks ``error`` — and then the reaper would re-run it and pay for it twice.
+    Gating lives entirely in ``bugzilla_apply.autofile_bug``; this only supplies the crash
+    context it needs and keeps the failure contained."""
+    try:
+        from crashclouseau import bugzilla_apply
+        stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
+        if not uuid_info:
+            return
+        res = bugzilla_apply.autofile_bug(
+            uuid, uuid_info, stack, payload.get("dossier") or {},
+            row["verdict"], row["confidence"],
+        )
+        if res.get("filed"):
+            logger.info("agent: %s filed bug %s (%s)", uuid, res["bug"], res["mode"])
+        elif res.get("skipped") not in (None, "autofile disabled"):
+            logger.info("agent: %s not filed — %s", uuid, res["skipped"])
+    except Exception:                                    # pragma: no cover - defensive
+        logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)
+
+
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     On failure it records the reason (dossier ``payload['error']``) and marks status; a
@@ -1855,6 +1880,11 @@ def run_evidence_agent(uuid, force=False):
                 "agent: %s done (verdict=%s turns=%s cost=$%.4f)",
                 uuid, row["verdict"], result.num_turns, result.total_cost_usd or 0.0,
             )
+            # File the bug LAST, after the analysis is committed. A filing failure must
+            # never cost us the run: the dossier is already durable, and `autofile_bug`
+            # returns rather than raises, so the worst case is a crash we analysed and
+            # didn't report — recoverable — instead of one we analysed and lost.
+            _autofile(uuid, payload, row)
     except Exception as exc:
         logger.error("agent: run_evidence_agent failed for %s", uuid, exc_info=True)
         reason = "{}: {}".format(type(exc).__name__, exc)
