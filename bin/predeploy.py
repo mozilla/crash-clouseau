@@ -34,6 +34,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# Whether the caller actually pointed us at a database. The fallbacks below exist so the
+# module can be imported by tests, but a deploy guard reading an EMPTY sqlite would answer
+# "nothing in flight" about a database that has no rows in it — so main() checks this and
+# refuses rather than reporting.
+_DB_CONFIGURED = bool(os.environ.get("DATABASE_URL"))
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
@@ -111,9 +117,28 @@ def main():
                    help="report but always exit 0")
     args = p.parse_args()
 
+    if not _DB_CONFIGURED:
+        # Previously this fell through to the in-memory sqlite default and died on
+        # "no such table: dossiers" under 40 lines of SQLAlchemy traceback. It exited 1, so
+        # `&& git push` was still safe, but nothing in the output said what was wrong.
+        print("predeploy: DATABASE_URL is not set, so there is no way to tell what is "
+              "running.\n"
+              "  DATABASE_URL=\"$(heroku config:get DATABASE_URL -a crash-clouseau-augmented)\" "
+              "\\\n    uv run python bin/predeploy.py", file=sys.stderr)
+        return 1
+
     deadline = time.time() + args.timeout
     while True:
-        rows = models.Dossier.list_tasks()
+        try:
+            rows = models.Dossier.list_tasks()
+        except Exception as exc:
+            # Refuse, never report. "Cannot see the queue" must not read like "queue empty":
+            # this function's exit code gates a deploy that kills ~$3-4 runs mid-analysis.
+            print("predeploy: cannot read the dossiers table ({}: {}) — refusing rather than "
+                  "guessing that nothing is in flight.".format(type(exc).__name__,
+                                                               str(exc).splitlines()[0][:120]),
+                  file=sys.stderr)
+            return 1
         runs = in_flight_runs(rows)
         _report(runs, mean_run_cost(rows))
         if not runs:
