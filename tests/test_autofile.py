@@ -186,6 +186,13 @@ class TestDuplicates(_Base):
         self.assertEqual(self.comments, [(12345, "the whole bug opener")])
         self.assertEqual(self.puts[0][0], 12345)
 
+    def test_the_oldest_open_bug_is_preferred(self):
+        # With several open bugs for one signature the earliest is the canonical one.
+        # Newest-first would prefer a recent duplicate — possibly one we filed ourselves.
+        bugzilla_apply._open_bugs_for_signature.return_value = [1990812, 2060922]
+        res = self._file()
+        self.assertEqual(res["bug"], 1990812)
+
     def test_a_failed_lookup_skips_rather_than_risking_a_duplicate(self):
         # `_open_bugs_for_signature` returns None on a network failure. A missed filing is
         # recoverable; a duplicate on BMO is not.
@@ -261,6 +268,35 @@ class TestBlockerLinking(_Base):
         self.assertTrue(res["filed"])
         self.assertEqual(res["bug"], 999)
         self.assertEqual(res["blocks"], [])
+
+    def test_what_failed_to_link_is_recorded(self):
+        # A restricted regressor bug (BMO answers 102) silently cost 2 of the first 3 real
+        # filings their regressor link. The gap has to be auditable.
+        def put(bug, changes, token):
+            if 42 in changes["blocks"]["add"]:
+                raise RuntimeError("Bug 42 does not exist.")
+            return bug
+        bugzilla_apply._put_bug.side_effect = put
+        res = self._file()
+        self.assertEqual(res["blocks"], ["clouseau"])
+        self.assertEqual(res["blocks_unlinked"], [42])
+
+    def test_nothing_unlinked_records_nothing(self):
+        res = self._file()
+        self.assertNotIn("blocks_unlinked", res)
+
+
+class TestSignatureMatching(_Base):
+    def test_specific_signatures_also_search_summaries(self):
+        for sig in ("mozilla::MediaDecoder::SetCDMProxy",
+                    "OOM | unknown | memcpy_repmovs_Intel | RTCEncodedFrameBase"):
+            self.assertTrue(bugzilla_apply._is_specific_signature(sig), sig)
+
+    def test_short_or_bare_tokens_do_not(self):
+        # Searching summaries for "memcpy" returns 32 open bugs; commenting on the wrong
+        # one is worse than filing a duplicate.
+        for sig in ("memcpy", "OOM", "", None, "shortish"):
+            self.assertFalse(bugzilla_apply._is_specific_signature(sig), repr(sig))
 
     def test_payload_carries_what_bmo_requires(self):
         self._file()

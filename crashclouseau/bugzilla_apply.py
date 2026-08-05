@@ -188,26 +188,44 @@ def _link_blockers(bug_id, blockers, token):
     return []
 
 
+def _is_specific_signature(signature):
+    """Is this signature distinctive enough to match against free-text bug SUMMARIES?
+
+    A qualified symbol (``mozilla::MediaDecoder::SetCDMProxy``) identifies one crash. A bare
+    token does not: searching summaries for ``memcpy`` returns 32 open bugs, and commenting
+    on the wrong one is worse than filing a duplicate. ``cf_crash_signature`` needs no such
+    guard — that field only ever holds crash signatures."""
+    sig = (signature or "").strip()
+    return len(sig) >= 16 and ("::" in sig or "|" in sig)
+
+
 def _open_bugs_for_signature(signature):
-    """Ids of OPEN bugs whose ``cf_crash_signature`` references *signature*, newest first.
+    """Ids of OPEN bugs referencing *signature*, oldest first.
 
     Read-only and unauthenticated (public bugs only, which is the right scope: we must not
-    reason about a security bug we can only see because the filing account can). A miss
-    means we file; a false hit means we comment on the wrong bug, so the match is on the
-    full ``[@ signature]`` form rather than a bare substring."""
+    reason about a security bug we can only see because the filing account can).
+
+    Matches the BARE signature, not the ``[@ signature]`` form. Bug 1990812 carries
+    ``[@ mozilla::MediaDecoder::SetCDMProxy ]`` — with a trailing space — so the bracketed
+    form missed it and we filed 2060922 as a near-duplicate of a REOPENED bug for the exact
+    same crash. Summaries are searched too, gated on ``_is_specific_signature``, because
+    that is where 1990812 carried it.
+
+    Oldest first: with several open bugs for one signature the earliest is the canonical
+    one, carrying whatever discussion already exists. Newest-first would prefer a recent
+    duplicate — including one we filed ourselves."""
     if not signature:
         return []
+    sig = signature.strip()
+    params = {
+        "include_fields": "id,summary,status,resolution",
+        "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
+        "resolution": "---",
+    }
+    if _is_specific_signature(sig):
+        params.update({"j_top": "OR", "f2": "short_desc", "o2": "substring", "v2": sig})
     try:
-        r = net.get(
-            _bz_rest(),
-            params={
-                "include_fields": "id,summary,status,resolution",
-                "f1": "cf_crash_signature", "o1": "substring",
-                "v1": "[@ {}]".format(signature.strip()),
-                "resolution": "---",
-            },
-            timeout=_HTTP_TIMEOUT,
-        )
+        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
         bugs = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
@@ -215,7 +233,7 @@ def _open_bugs_for_signature(signature):
         # duplicate. A missed filing is recoverable; a duplicate on BMO is not.
         logger.warning("autofile: signature bug lookup failed for %r: %s", signature, exc)
         return None
-    return [b["id"] for b in sorted(bugs, key=lambda b: b.get("id", 0), reverse=True)]
+    return [b["id"] for b in sorted(bugs, key=lambda b: b.get("id", 0))]
 
 
 def _execute(action, token):
@@ -362,9 +380,20 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             bug_id = _create_bug(payload, token)
             # Blockers need a second call — create discards them silently (see
             # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
-            linked = _link_blockers(bug_id, preview.get("blocked") or [], token)
+            wanted = preview.get("blocked") or []
+            linked = _link_blockers(bug_id, wanted, token)
             result.update({"filed": True, "bug": bug_id, "mode": "new_bug",
                            "needinfo": email or None, "blocks": linked})
+            # Record what did NOT link. Two of the first three real filings lost their
+            # regressor link because that bug is access-restricted (BMO answers 102 for
+            # 2043188), and the atomic PUT then rejects the whole list. The bug is still
+            # correct — the changeset is named in the comment prose — but a silent gap in
+            # the structured data is exactly the kind of thing nobody notices for a month.
+            missing = [b for b in wanted if b not in linked]
+            if missing:
+                result["blocks_unlinked"] = missing
+                logger.warning("autofile: bug %s could not link %s (restricted or unknown)",
+                               bug_id, missing)
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
         return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}
