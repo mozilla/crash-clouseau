@@ -424,6 +424,30 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Why it may be related", html)
         self.assertIn("use-after-free of mPtr", html)
 
+    def test_ref_citation_renders_and_survives_untyped_hunk_lines(self):
+        # `DiffHunk.lines` is deliberately an UNTYPED list (the model emits bare strings
+        # there), and the `cite()` macro is fed it directly — so a model-supplied int or
+        # dict reaches the `ref` branch unvalidated, where `[:12]`/`.startswith` would 500
+        # the whole page. Also pins that a `javascript:` permalink never becomes an href.
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["hunks"][0]["citations"] = [_DIFF]
+        ev["dossier"]["hunks"][0]["lines"] = [
+            {"kind": "ref", "node": 1234567890123},
+            {"kind": "ref", "node": {"a": 1}},
+            {"kind": "ref", "permalink": 5},
+            {"kind": "ref"},
+            {"kind": "ref", "permalink": "javascript:alert(1)", "symbol_id": "A::b"},
+        ]
+        ev["dossier"]["verdict"]["consistency"]["citations"] = [
+            {"kind": "ref", "node": "0123456789ab", "filename": "dom/Foo.cpp", "line": 4},
+        ]
+        rv = self._get(ev)
+        self.assertEqual(rv.status_code, 200)
+        html = rv.get_data(as_text=True)
+        self.assertIn("dom/Foo.cpp:4 @ 0123456789ab", html)
+        self.assertNotIn("javascript:alert(1)", html)
+
     def test_culprit_keeps_the_assertive_headings(self):
         # The other side of the inversion above: only a culprit verdict may use the
         # assertive copy, and it must still get it.
@@ -1224,6 +1248,37 @@ class TestBugPreview(unittest.TestCase):
                       "a/B.cpp#l9)", refs)
         self.assertEqual(refs.count("searchfox.org/x#1"), 1)
         self.assertNotIn("c.cpp", refs)
+
+    def test_build_code_references_renders_a_ref_citation(self):
+        # `ref` is the catch-all kind for what the source/history tools read. Without a
+        # branch here it was silently absent from the filed bug — the same "the evidence
+        # exists but the report doesn't say so" failure the kind was added to stop.
+        verdict = {"mechanism": {"citations": [
+            {"kind": "ref", "node": "abc", "filename": "a/B.cpp", "line": 9},
+            {"kind": "ref", "node": "def456789012"},          # changeset, no file
+            {"kind": "ref", "permalink": "https://example.org/x", "symbol_id": "A::b"},
+            {"kind": "ref", "content": "-  delete mFoo;"},    # nothing linkable -> skipped
+        ]}}
+        refs = report_bug.build_code_references(verdict, "nightly")
+        self.assertIn("- [a/B.cpp:9](https://hg.mozilla.org/mozilla-central/file/abc/"
+                      "a/B.cpp#l9)", refs)
+        self.assertIn("- [def456789012](https://hg.mozilla.org/mozilla-central/rev/"
+                      "def456789012)", refs)
+        self.assertIn("- [A::b](https://example.org/x)", refs)
+        self.assertNotIn("delete mFoo", refs)
+
+    def test_ref_with_a_label_not_a_path_links_to_the_changeset(self):
+        # `ref` is the catch-all kind, so the model sometimes puts a LABEL where a repo path
+        # belongs (prod dossier 4986: "hg-changeset-metadata"). /file/<node>/<label> is a 404
+        # in a list whose whole purpose is letting a human check the analysis, so it must
+        # fall through to /rev/<node>, which exists.
+        refs = report_bug.build_code_references(
+            {"consistency": {"citations": [
+                {"kind": "ref", "node": "ff789e9f149e", "filename": "hg-changeset-metadata"},
+            ]}}, "nightly")
+        self.assertIn("- [ff789e9f149e](https://hg.mozilla.org/mozilla-central/rev/"
+                      "ff789e9f149e)", refs)
+        self.assertNotIn("hg-changeset-metadata", refs)
 
     def test_build_code_references_caps_and_empties(self):
         self.assertIsNone(report_bug.build_code_references(None, "nightly"))

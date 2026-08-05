@@ -44,6 +44,29 @@
         <a class="cite" href="/codeview.html?uuid={{ uuid|urlencode }}&filename={{ c['filename']|urlencode }}&node={{ c['node'] }}&line={{ c['line'] }}&channel={{ chan }}&rev={{ node }}" target="_blank" rel="noopener">{{ c['filename']|e }}:{{ c['line'] }} ({{ c['side'] }})</a>
       {% elif c and c['kind'] == 'stack_frame' -%}
         <span class="cite">frame #{{ c['stackpos'] }} {{ c['function']|e }} {{ c['filename']|e }}:{{ c['line'] }}</span>
+      {%- elif c and c['kind'] == 'struct_layout' -%}
+        {#- Rendered nothing at all until now, which hid the one citation kind that carries a
+            machine-checked fact (the corroboration gate verifies this offset outside the LLM). -#}
+        <span class="cite">{{ c['type_name']|e }}::{{ c['field']|e }} @ +{{ c['offset'] }} (field layout)</span>
+      {%- elif c and c['kind'] == 'ref' -%}
+        {#- The catch-all kind: something the agent read via the source/history tools, which
+            no other citation kind can express. Linked to the changeset when there is one,
+            since that is the useful destination.
+            Everything is `|string`-coerced first. A VALIDATED citation is always str-typed
+            and always points at something (`schema.RefCitation._must_point_somewhere`), but
+            this macro is also fed `hunks[].lines`, which the schema deliberately leaves an
+            untyped list — so a model-supplied int or dict arrives here unchecked, and
+            `[:12]`/`.startswith` on one is a 500 on the whole page. -#}
+        {% set r_node = c['node']|string if c['node'] else '' -%}
+        {% set r_link = c['permalink']|string if c['permalink'] else '' -%}
+        {% set r_label = (c['filename'] or c['symbol_id'] or c['content'] or '')|string -%}
+        {% if r_node -%}
+        <a class="cite" href="{{ repo_url }}/rev?node={{ r_node|urlencode }}" target="_blank" rel="noopener">{% if c['filename'] %}{{ c['filename']|string|e }}{% if c['line'] %}:{{ c['line'] }}{% endif %} @ {% endif %}{{ r_node[:12]|e }}</a>
+        {%- elif r_link.startswith('https://') or r_link.startswith('http://') -%}
+        <a class="cite" href="{{ r_link }}" target="_blank" rel="noopener">{{ (r_label or r_link)|e }}{% if c['line'] %}:{{ c['line'] }}{% endif %}</a>
+        {%- elif r_label -%}
+        <span class="cite">{{ r_label|e }}{% if c['filename'] and c['line'] %}:{{ c['line'] }}{% endif %}</span>
+        {%- endif %}
       {% endif -%}
     {%- endmacro %}
     {% if show_evidence and evidence -%}

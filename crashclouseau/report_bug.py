@@ -318,6 +318,28 @@ def build_code_references(verdict, channel, max_refs=_MAX_CODE_REFS):
             if c.get("line"):
                 url += "#l{}".format(c["line"])
                 label += ":{}".format(c["line"])
+        elif kind == "ref":
+            # The catch-all kind (see ``schema.RefCitation``) — something read through the
+            # source/history tools. Without a branch here it is silently absent from the
+            # filed bug, which is the same "the evidence exists but the page doesn't say
+            # so" failure the kind was added to stop.
+            # ``filename`` has to LOOK like a repo path before it can build a /file/ URL.
+            # A ``ref`` is the catch-all kind, so the model sometimes puts a label there
+            # ("hg-changeset-metadata"), and /file/<node>/<label> is a 404 in a list whose
+            # whole purpose is letting a human check the analysis without leaving the bug.
+            # Falling through to /rev/<node> gives them a page that exists.
+            if repo_url and c.get("node") and "/" in (c.get("filename") or ""):
+                url = "{}/file/{}/{}".format(repo_url, c["node"], c["filename"])
+                label = c["filename"]
+                if c.get("line"):
+                    url += "#l{}".format(c["line"])
+                    label += ":{}".format(c["line"])
+            elif repo_url and c.get("node"):
+                url = "{}/rev/{}".format(repo_url, c["node"])
+                label = c["node"][:12]
+            elif str(c.get("permalink") or "").startswith(("https://", "http://")):
+                url = c["permalink"]
+                label = c.get("filename") or c.get("symbol_id") or url
         if not url or url in seen:
             continue
         seen.add(url)
