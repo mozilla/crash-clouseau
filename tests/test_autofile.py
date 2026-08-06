@@ -8,10 +8,12 @@ import os
 
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
+import inspect  # noqa: E402
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import bugzilla_apply  # noqa: E402
+from crashclouseau import bugzilla_apply, report_bug  # noqa: E402
+from crashclouseau import config as cconfig  # noqa: E402
 
 
 _PREVIEW = {
@@ -44,7 +46,8 @@ class _Base(unittest.TestCase):
         p = [
             mock.patch.object(bugzilla_apply.config, "get_agent_autofile",
                               return_value=_cfg()),
-            mock.patch.object(bugzilla_apply.libmozdata.config, "get", return_value="tok"),
+            mock.patch.object(bugzilla_apply.config, "get_bugzilla_token",
+                              return_value="tok"),
             mock.patch.object(bugzilla_apply.models.Dossier, "already_filed",
                               return_value=None),
             mock.patch.object(bugzilla_apply.models.Dossier, "filed_bugs_since",
@@ -111,7 +114,7 @@ class TestGates(_Base):
         self.assertEqual(self.created, [])
 
     def test_no_token_does_not_file(self):
-        bugzilla_apply.libmozdata.config.get.return_value = ""
+        bugzilla_apply.config.get_bugzilla_token.return_value = ""
         self.assertFalse(self._file()["filed"])
         self.assertEqual(self.created, [])
 
@@ -331,6 +334,57 @@ class TestFailuresAreContained(_Base):
             res = self._file()
         self.assertFalse(res["filed"])
         self.assertIn("preview failed", res["skipped"])
+
+
+class TestTokenResolution(unittest.TestCase):
+    """Where the write token comes from.
+
+    The reason this class exists: ``AUTOFILE_BUGS`` was armed on 08-05 with the key in
+    ``LIBMOZDATA_CFG_BUGZILLA_TOKEN``, and every crash for the next day skipped with "no
+    Bugzilla API token configured" — 13 rung-70 verdicts, 0 filings. libmozdata installs
+    ``ConfigIni`` as its global provider and never calls ``set_config``, so the
+    ``LIBMOZDATA_CFG_*`` variables its ``ConfigEnv`` class documents are read by nobody.
+    Nothing about that failure was visible from either end: the variable was set, and
+    ``libmozdata.config.get`` returned "" without complaint."""
+
+    def _resolve(self, env, ini=""):
+        with mock.patch.dict(os.environ, env, clear=False):
+            for k in ("BUGZILLA_TOKEN", "LIBMOZDATA_CFG_BUGZILLA_TOKEN"):
+                if k not in env:
+                    os.environ.pop(k, None)
+            with mock.patch.object(cconfig.libmozdata.config, "get", return_value=ini):
+                return cconfig.get_bugzilla_token()
+
+    def test_the_libmozdata_env_var_is_honoured(self):
+        # The name libmozdata WOULD read if it read the environment at all.
+        self.assertEqual(
+            self._resolve({"LIBMOZDATA_CFG_BUGZILLA_TOKEN": "from-lmd-env"}),
+            "from-lmd-env")
+
+    def test_our_own_env_var_is_honoured(self):
+        # Mirrors SOCORRO_TOKEN, the convention crashclouseau/__init__.py already uses.
+        self.assertEqual(self._resolve({"BUGZILLA_TOKEN": "from-env"}), "from-env")
+
+    def test_our_own_env_var_wins(self):
+        self.assertEqual(
+            self._resolve({"BUGZILLA_TOKEN": "ours",
+                           "LIBMOZDATA_CFG_BUGZILLA_TOKEN": "theirs"}), "ours")
+
+    def test_the_ini_still_works(self):
+        # Unset environment -> ~/.mozdata.ini, which is how this runs locally.
+        self.assertEqual(self._resolve({}, ini="from-ini"), "from-ini")
+
+    def test_nothing_configured_is_empty_not_none(self):
+        # `autofile_bug` tests `if not token`, and apply puts it in a header; None there
+        # would be a TypeError deep in requests instead of a clean skip.
+        self.assertEqual(self._resolve({}, ini=None), "")
+
+    def test_the_writers_go_through_the_resolver(self):
+        # The bug was one call site reading the token a way that could not work. Assert
+        # no writer has drifted back to libmozdata's config directly.
+        for mod in (bugzilla_apply, report_bug):
+            src = inspect.getsource(mod)
+            self.assertNotIn('"Bugzilla", "token"', src, mod.__name__)
 
 
 if __name__ == "__main__":

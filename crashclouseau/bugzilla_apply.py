@@ -32,7 +32,6 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 
-import libmozdata.config
 from . import net
 
 from crashclouseau import config, models
@@ -329,7 +328,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                        cfg["daily_cap"], recent, uuid)
         return {"filed": False, "skipped": "daily cap {} reached".format(cfg["daily_cap"])}
 
-    token = libmozdata.config.get("Bugzilla", "token", "")
+    token = config.get_bugzilla_token()
     if not token:
         return {"filed": False, "skipped": "no Bugzilla API token configured"}
 
@@ -415,7 +414,7 @@ def apply_recorded_actions(uuid, indices):
     """
     ui = config.get_agent_ui()
     enabled = set(ui.get("enabled_types") or [])
-    token = libmozdata.config.get("Bugzilla", "token", "")
+    token = config.get_bugzilla_token()
 
     # Re-read the persisted verdict + actions (never trust the client — it sends only
     # indices). ``get_evidence`` sources the actions from ``Dossier.payload["actions"]``.

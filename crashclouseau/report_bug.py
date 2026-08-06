@@ -7,13 +7,12 @@ import functools
 import re
 from collections import Counter
 from jinja2 import Environment, FileSystemLoader
-import libmozdata.config
 from libmozdata import socorro
 from libmozdata.bugzilla import Bugzilla, BugzillaUser
 from libmozdata.hgmozilla import Mercurial
 from . import net
 from urllib.parse import parse_qs, urlencode, urlparse
-from . import buginfo, models, utils
+from . import buginfo, config, models, utils
 from .logger import logger
 
 
@@ -121,7 +120,7 @@ async def get_info_helper(uuid, changeset, evidence_summary=None):
 
     cs = "https://crash-stats.mozilla.org/report/index/" + uuid
     bz = "https://bugzilla.mozilla.org/rest/bug"
-    bzh = {"X-Bugzilla-API-Key": libmozdata.config.get("Bugzilla", "token", "")}
+    bzh = {"X-Bugzilla-API-Key": config.get_bugzilla_token()}
     bzq = {"id": bugid, "include_fields": ["product", "component", "assigned_to"]}
     cs_api = "https://crash-stats.mozilla.org/api/SuperSearch/"
     cs_api_q = {

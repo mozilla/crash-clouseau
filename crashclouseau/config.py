@@ -5,6 +5,8 @@
 import json
 import os
 
+import libmozdata.config
+
 
 __GLOBAL = None
 __EXTS = None
@@ -81,6 +83,41 @@ def get_redis():
 
 def get_socorro():
     return _get_local().get("socorro", "")
+
+
+def get_bugzilla_token():
+    """The Bugzilla API key the write path authenticates with — environment first.
+
+    Environment first because **libmozdata cannot read it**. ``libmozdata.config.get``
+    looks like it honours ``LIBMOZDATA_CFG_<SECTION>_<OPTION>`` (that is what its
+    ``ConfigEnv`` provider is for), but the module installs ``ConfigIni`` as the global
+    provider and nothing calls ``set_config``, so the env var is never consulted. On
+    Heroku there is no ``~/.mozdata.ini`` and the deployed ``mozdata.ini`` has no token,
+    so the lookup returned "" and ``autofile_bug`` skipped every single crash with "no
+    Bugzilla API token configured" — silently, with the key sitting in the config vars.
+
+    Swapping the global provider to ``ConfigEnv`` is NOT the fix, on two counts:
+
+    * it does not read the ini at all, and ``[User-Agent] name`` is fetched with
+      ``required=True`` by every libmozdata connection — losing it asserts, and losing
+      the allowlisted ``crash-clouseau`` UA gets us 406-throttled by hg.mozilla.org;
+    * it would also put a token on ``libmozdata.bugzilla.Bugzilla``, whose reads we
+      deliberately leave anonymous: ``buginfo.get_bugs`` infers "security bug" from a
+      bug Socorro knows about that a Bugzilla search does not return, so authenticating
+      it would render a restricted bug's summary on a public canary instead.
+
+    ``BUGZILLA_TOKEN`` mirrors ``SOCORRO_TOKEN``, the convention this app already uses.
+    ``LIBMOZDATA_CFG_BUGZILLA_TOKEN`` is accepted too: it is the name libmozdata *would*
+    read if it read the environment, so anyone who sets it has every reason to expect it
+    to work, and finding out otherwise costs a night of unfiled bugs.
+    """
+    for name in ("BUGZILLA_TOKEN", "LIBMOZDATA_CFG_BUGZILLA_TOKEN"):
+        token = os.getenv(name)
+        if token:
+            return token
+    # Never None: the caller tests ``if not token`` to skip, and the apply path puts it
+    # straight into a header, where None is a TypeError inside requests.
+    return libmozdata.config.get("Bugzilla", "token", "") or ""
 
 
 def get_threshold(typ, product, channel):

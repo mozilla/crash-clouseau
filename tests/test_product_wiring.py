@@ -525,7 +525,7 @@ class TestApplyRecordedActions(unittest.TestCase):
         actions = _actions() if actions is None else actions
         ev = {"verdict": verdict, "confidence": confidence, "actions": actions}
         with mock.patch.object(bugzilla_apply, "net") as req, \
-                mock.patch.object(bugzilla_apply.libmozdata.config, "get",
+                mock.patch.object(bugzilla_apply.config, "get_bugzilla_token",
                                   return_value=token), \
                 mock.patch("crashclouseau.models.Verdict.get_evidence",
                            return_value=ev), \
@@ -582,7 +582,7 @@ class TestApplyRecordedActions(unittest.TestCase):
               "apply_min_confidence": 85, "enabled_types": ["bugzilla.update_bug"]}
         with mock.patch.object(bugzilla_apply.config, "get_agent_ui", return_value=ui), \
                 mock.patch.object(bugzilla_apply, "net") as req, \
-                mock.patch.object(bugzilla_apply.libmozdata.config, "get",
+                mock.patch.object(bugzilla_apply.config, "get_bugzilla_token",
                                   return_value="TESTTOKEN"), \
                 mock.patch("crashclouseau.models.Verdict.get_evidence",
                            return_value={"verdict": "culprit", "confidence": 90,
@@ -598,7 +598,7 @@ class TestApplyRecordedActions(unittest.TestCase):
         # action 0 (comment) succeeds; action 1 (update_bug PUT) raises. The earlier
         # success must stay marked-applied so a retry never re-posts it.
         with mock.patch.object(bugzilla_apply, "net") as req, \
-                mock.patch.object(bugzilla_apply.libmozdata.config, "get",
+                mock.patch.object(bugzilla_apply.config, "get_bugzilla_token",
                                   return_value="TESTTOKEN"), \
                 mock.patch("crashclouseau.models.Verdict.get_evidence",
                            return_value={"verdict": "culprit", "confidence": 90,
