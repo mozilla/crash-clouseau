@@ -139,6 +139,28 @@ def _put_bug(bug_id, changes, token):
     return bug_id
 
 
+class BugzillaRejected(RuntimeError):
+    """BMO answered and REFUSED a write (HTTP >= 400).
+
+    Deliberately distinct from a transport failure: when the connection times out we do not
+    know whether the write landed, so nothing may be retried.
+
+    ``is_client_error`` narrows that further, and the difference is not academic. A 4xx means
+    BMO understood the request and rejected the PAYLOAD — nothing was created, and changing
+    the payload is a sensible response. A 5xx (or a gateway page from in front of BMO) means
+    the request may have been understood, may have half-run, and had nothing to do with what
+    we sent; treating it as "the flags were the problem" would drop a perfectly good needinfo
+    during a BMO deploy, and re-posting could file the bug twice."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def is_client_error(self):
+        return self.status is not None and 400 <= self.status < 500
+
+
 def _create_bug(payload, token):
     """POST /rest/bug -> the new bug id.
 
@@ -156,8 +178,8 @@ def _create_bug(payload, token):
         # Bugzilla explains a rejection in the BODY; ``raise_for_status`` shows only
         # "400 Client Error", which is useless in a worker log for a payload we cannot
         # reproduce after the fact. Surface the reason.
-        raise RuntimeError("bugzilla create failed ({}): {}".format(
-            r.status_code, (r.text or "")[:400]))
+        raise BugzillaRejected("bugzilla create failed ({}): {}".format(
+            r.status_code, (r.text or "")[:400]), status=r.status_code)
     return (r.json() or {}).get("id")
 
 
@@ -185,6 +207,63 @@ def _link_blockers(bug_id, blockers, token):
         except Exception as exc:
             logger.warning("autofile: linking bug %s to %s failed: %s", bug_id, attempt, exc)
     return []
+
+
+def _create_bug_keeping_the_bug(payload, token):
+    """``(bug_id, needinfo_dropped)`` — create the bug, and never let the needinfo cost it.
+
+    BMO validates the ``flags`` requestee while CREATING the bug and rejects the WHOLE post
+    if it cannot resolve them: an hg commit address that is not a Bugzilla account came back
+    ``code 51, "There is no user named 'farre@mozilla.com'"`` and crash f6fe186b got no bug
+    at all. ``report_bug`` now resolves a verified account, so this should never fire — but
+    "should never fire" is exactly what the last unattended write said, and the failure mode
+    is silent: it surfaces as ``skipped: bugzilla write failed``, indistinguishable from a
+    transient blip.
+
+    The retry is deliberately NOT keyed on code 51. A disabled account, a requestee who
+    cannot be needinfo'd, a flag renamed on BMO's side — each would reject the create the
+    same way, and a narrow match would let those keep costing us bugs. Instead: if we sent
+    flags and the create failed, try once without them, and let the ORIGINAL error surface
+    if it fails again (the second failure means the flags were never the problem).
+
+    Safe against double-filing, and this is the whole reason ``BugzillaRejected`` carries a
+    status: ONLY a 4xx is retried. A timeout or a reset arrives as a plain ``requests``
+    exception and a 5xx arrives as a non-client rejection; in both cases we cannot tell
+    whether the POST landed, and re-posting could file the same bug twice — exactly what the
+    rest of this module (``already_filed``, ``record_filed_bug``) exists to prevent. A 5xx
+    also has nothing to do with the flags, so "retry without them" would throw away a good
+    needinfo every time BMO is mid-deploy."""
+    try:
+        return _create_bug(payload, token), False
+    except BugzillaRejected as exc:
+        if not payload.get("flags") or not exc.is_client_error:
+            raise
+        logger.warning("autofile: create rejected with a needinfo flag (%s); "
+                       "retrying without it rather than losing the bug", exc)
+        retry = {k: v for k, v in payload.items() if k != "flags"}
+        try:
+            return _create_bug(retry, token), True
+        except BugzillaRejected as second:
+            # Refused again: the flags were never the problem. Surface the FIRST rejection —
+            # it describes what BMO objected to about the bug itself — but LOG the second,
+            # because if it differs it is the one naming a systemic failure (a lost
+            # permission, a newly mandatory field) that would block every filing, and the
+            # caller only logs ``str(exc)`` with no ``__context__`` chain.
+            if str(second) != str(exc):
+                logger.error("autofile: create refused again without the flag: %s", second)
+            raise exc
+
+
+def _set_needinfo(bug_id, email, token):
+    """Set the needinfo flag on an existing bug. Returns the exception on failure, ``None``
+    on success — it never raises, because every caller has already made a write it must not
+    lose."""
+    try:
+        _put_bug(bug_id, _needinfo_changes(email), token)
+        return None
+    except Exception as exc:
+        logger.warning("autofile: needinfo for %s on bug %s failed: %s", email, bug_id, exc)
+        return exc
 
 
 def _is_specific_signature(signature):
@@ -364,10 +443,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 return {"filed": False, "skipped": "open bug {} exists".format(existing[0])}
             bug_id = existing[0]
             _post_comment(bug_id, preview["comment"], False, token)
-            if email:
-                _put_bug(bug_id, _needinfo_changes(email), token)
+            # The comment is already posted, so a failing needinfo must not escape: it would
+            # skip ``record_filed_bug`` below and the next run would comment a second time on
+            # the same bug. Lose the flag, keep the filing.
+            failed = _set_needinfo(bug_id, email, token) if email else None
             result.update({"filed": True, "bug": bug_id, "mode": "comment_on_existing",
-                           "needinfo": email or None})
+                           "needinfo": None if failed else (email or None)})
+            if failed:
+                result["needinfo_failed"] = email
         else:
             payload = {k: v for k, v in preview.items()
                        if k in ("product", "component", "version", "type", "keywords",
@@ -376,7 +459,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             payload["description"] = preview["comment"]
             if email:
                 payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
-            bug_id = _create_bug(payload, token)
+            bug_id, dropped = _create_bug_keeping_the_bug(payload, token)
+            if dropped:
+                result["needinfo_dropped"] = email
+                email = ""
             # Blockers need a second call — create discards them silently (see
             # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
             wanted = preview.get("blocked") or []

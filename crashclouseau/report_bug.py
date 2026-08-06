@@ -183,9 +183,10 @@ _MAX_FUNCTION_CHARS = 80
 # bury the prose under a wall of links.
 _MAX_CODE_REFS = 6
 _EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
-# Process cache: product::component of a bug is stable, and the preview is a hot render
-# path. bug_id -> (product, component) | None (None = looked up, unreadable/absent).
-_PC_CACHE: dict = {}
+# Process cache behind `_bug_meta`: a bug's product::component and the people on it are
+# both stable, and the preview is a hot render path (every crashstack view, not just a
+# filing). bug_id -> the raw bug dict, or {} for one we are not allowed to read.
+_BUG_CACHE: dict = {}
 
 
 def _fenced(text):
@@ -456,20 +457,34 @@ def build_bug_comment(
     return "\n\n".join(s for s in sections if s)
 
 
-def _bugs_product_component(bugids):
-    """``{bug_id (int) -> (product, component)}`` for the READABLE bugs among ``bugids``.
-    A security bug the token can't read is simply absent (Bugzilla returns no
-    product/component for it), which is what triggers the author-patches fallback below.
-    Cached + best-effort (never raises)."""
+def _bug_meta(bugids):
+    """``{bug_id (int) -> bug dict}`` for the bugs among ``bugids``, ``{}`` for one we
+    cannot read.
+
+    ONE fetch behind both things the preview asks a regressor bug: where to file
+    (``product``/``component``) and who to ask (``assigned_to``/``creator``). They used to
+    be two requests for the same bug -- and this path runs on every crashstack page view,
+    not just on a filing, so BMO's rate limiter is a real ceiling here (it answered 429 to
+    a few hundred reads while this was being written).
+
+    Unreadable is recorded as ``{}`` and cached: a security bug does not become readable
+    later, and re-asking on every preview spends a request to learn nothing. It always
+    arrives as ABSENCE rather than as an error, which is what makes one batched read able to
+    answer "and if that bug is private, try another". Measured anonymously: a mixed batch
+    (``id=2043188,2042379``) returns 200 carrying only 2042379, with no ``faults`` key, and
+    -- the case that matters, because rung 2 asks for exactly one bug -- the restricted id
+    ALONE also returns ``200 {"bugs":[]}`` in this query form. (``GET /rest/bug/2043188``,
+    the path form, is the one that answers 401/code 102; libmozdata does not use it.)
+
+    Best-effort: never raises."""
     want, out = [], {}
     for b in bugids:
         try:
             bid = int(b)
         except (TypeError, ValueError):
             continue
-        if bid in _PC_CACHE:
-            if _PC_CACHE[bid]:
-                out[bid] = _PC_CACHE[bid]
+        if bid in _BUG_CACHE:
+            out[bid] = _BUG_CACHE[bid]
         elif bid not in want:
             want.append(bid)
     if not want:
@@ -482,19 +497,39 @@ def _bugs_product_component(bugids):
     try:
         Bugzilla(
             bugids=[str(b) for b in want],
-            include_fields=["id", "product", "component"],
+            # ``assigned_to``/``creator``, NOT ``assigned_to_detail``. The detail hash is
+            # emitted as a companion of the BASE field -- Bugzilla's `_bug_to_hash` sets
+            # `assigned_to_detail` inside `if (filter_wants $params, 'assigned_to')` -- and
+            # `assigned_to_detail` is not a token `filter_wants` recognises: its prefix
+            # branch matches the literal `assigned_to.`, with a dot, not an underscore. Ask
+            # for the companion alone and the field simply never appears, which reads as
+            # "unreadable bug" and would silently kill rungs 2 and 3 while product/component
+            # (whose tokens are exact) kept working. Confirmed on the wire too: a request
+            # naming `creator` and not `creator_detail` came back carrying creator_detail.
+            include_fields=["id", "product", "component", "assigned_to", "creator"],
             bughandler=handler,
             bugdata=got,
         ).get_data().wait()
     except Exception:
-        logger.warning("bug preview: product/component lookup failed", exc_info=True)
+        # We could not ASK. Unlike "unreadable", this must NOT be cached as an empty answer:
+        # one BMO blip would otherwise blind this process to that bug for its whole life.
+        logger.warning("bug preview: bug metadata lookup failed", exc_info=True)
         return out
     for bid in want:
         bug = got.get(bid) or {}
+        _BUG_CACHE[bid] = bug
+        out[bid] = bug
+    return out
+
+
+def _bugs_product_component(bugids):
+    """``{bug_id (int) -> (product, component)}`` for the READABLE bugs among ``bugids``.
+    A security bug the token can't read is simply absent, which is what triggers the
+    author-patches fallback below. Cached + best-effort (never raises)."""
+    out = {}
+    for bid, bug in _bug_meta(bugids).items():
         pc = (bug.get("product"), bug.get("component"))
-        pc = pc if (pc[0] and pc[1]) else None
-        _PC_CACHE[bid] = pc
-        if pc:
+        if pc[0] and pc[1]:
             out[bid] = pc
     return out
 
@@ -534,7 +569,7 @@ def resolve_product_component(candidate, channel):
             bugs = models.Node.recent_bugs_by_author(email, channel)
             pcs = _bugs_product_component(bugs)
             if pcs:
-                # Tally in recent_bugs_by_author's NEWEST-FIRST order (not _PC_CACHE's
+                # Tally in recent_bugs_by_author's NEWEST-FIRST order (not the cache's
                 # cache-hits-first dict order): Counter.most_common breaks a count tie by
                 # first-seen, so this deterministically favours the author's most RECENT
                 # patch, independent of unrelated prior cache state.
@@ -574,48 +609,220 @@ def _explanation_comment(verdict, candidate, channel=None):
     return "\n\n".join(lines) if lines else None
 
 
-_NICK_CACHE: dict = {}   # email -> Bugzilla nick ("" = looked up, none/unresolvable)
+_USER_CACHE: dict = {}   # email -> {"exists", "nick"}
+
+# A Bugzilla ``real_name`` is a plain name plus annotations in brackets: "Andreas Farre
+# [:farre]", and often more than one and not always last — "[:jandem] (PTO until Monday)",
+# "Foo Bar [:foo] ⌚UTC+1". Strip every bracketed group WHEREVER it appears, not just a nick
+# tag at the end, or an author with a trailing note never matches their own hg name.
+_BZ_ANNOTATION = re.compile(r"[\[(][^\])]*[\])]")
 
 
-def _bugzilla_nick(email):
-    """The BUGZILLA IRC nick for a user (e.g. ``stransky``), looked up by login/email via
-    the Bugzilla user API (``/rest/user``). This is the Bugzilla handle -- distinct from the
-    hg-commit nick -- so a ``:nick`` needinfo actually reaches the right account. ``""`` when
-    unknown/unresolvable. Cached + best-effort (never raises)."""
+def _norm_name(name):
+    """A person's display name, normalised for comparison: bracketed annotations removed,
+    whitespace collapsed, casefolded. ``""`` for anything unusable, and ``""`` NEVER matches
+    ``""`` at the call sites -- an absent name must not make two strangers equal.
+
+    Stripping annotations cannot merge two people: what remains still has to be an EXACT
+    full-name match, and prod's own near-miss (``farre@mozilla.com`` "Andreas Farre" vs
+    ``sfarre@mozilla.com`` "Simon Farre") differs in the part no annotation touches."""
+    return re.sub(r"\s+", " ", _BZ_ANNOTATION.sub(" ", name or "")).strip().casefold()
+
+
+def _bugzilla_user(email):
+    """What Bugzilla knows about the login ``email``: ``{"exists": bool, "nick": str}``.
+
+    ``exists`` is the field the old nick-only lookup threw away, and it is the one that
+    matters. It is NOT ``bool(nick)`` -- plenty of real accounts have no nick -- but whether
+    ``/rest/user`` returned a user at all. BMO validates a needinfo requestee while CREATING
+    a bug and rejects the WHOLE post with code 51 for an unknown one, so a requestee that is
+    not an account costs the entire filing, not just the needinfo. That is not theoretical:
+    crash f6fe186b's hg author is ``farre@mozilla.com``, which is nobody on BMO (the account
+    is ``afarre@mozilla.com``), and the create came back 404.
+
+    ``permissive`` is what makes the distinction trustworthy. Passing a ``fault_user_handler``
+    makes libmozdata send it, so BMO answers 200 with the unknown name in ``faults`` instead
+    of erroring -- which means a missing user is now distinguishable from a network blip.
+    Without it, both arrive as an exception and we would drop a perfectly good needinfo every
+    time BMO hiccups. ``exists`` is therefore only False when BMO SAID so.
+
+    Anonymous, like every other read here: ``/rest/user?names=`` answers without an API key.
+    (``match=`` does not -- BMO replies 505, "Logged-out users cannot use the match argument"
+    -- which is why account resolution goes through BUG metadata and not a user search.)
+
+    Cached + best-effort (never raises)."""
     if not email:
-        return ""
-    if email in _NICK_CACHE:
-        return _NICK_CACHE[email]
+        return {"exists": False, "nick": ""}
+    if email in _USER_CACHE:
+        return _USER_CACHE[email]
     got: dict = {}
 
     def handler(user, data):
-        data["nick"] = (user.get("nick") or "").strip()
+        data["user"] = user
+
+    def fault(f, data):
+        data["fault"] = f
 
     try:
         # NB: BugzillaUser fires the query in its constructor (Connection.exec_queries) and
         # is drained by .wait() -- it has NO get_data() (that lives on the sibling Bugzilla
-        # class). The handler runs during wait() and fills ``got``.
+        # class). The handlers run during wait() and fill ``got``.
         BugzillaUser(
             user_names=[email],
             include_fields=["name", "nick"],
             user_handler=handler,
+            fault_user_handler=fault,
             user_data=got,
         ).wait()
     except Exception as exc:
-        # An unresolvable author email is a routine 400 (user not found / not visible), so
-        # log it concisely rather than with a full traceback -- the nick just stays empty.
-        logger.info("bug preview: bugzilla nick lookup failed for %s: %s", email, exc)
-    nick = got.get("nick", "")
-    _NICK_CACHE[email] = nick
-    return nick
+        # Could not ASK. Not the same as "no such user": leave the address usable and let
+        # the create's own fallback carry the risk.
+        logger.info("bug preview: bugzilla user lookup failed for %s: %s", email, exc)
+        return {"exists": True, "nick": "", "unverified": True}
+    user = got.get("user")
+    out = {"exists": user is not None, "nick": ((user or {}).get("nick") or "").strip()}
+    _USER_CACHE[email] = out
+    return out
+
+
+def _bug_people(bugids):
+    """``{bug_id -> [{"email", "real", "nick"}, ...]}``, assignee before creator, for the
+    READABLE bugs among ``bugids`` -- a bug we cannot read yields an empty list, which is
+    exactly the "then try another one" signal.
+
+    ``nobody@mozilla.org`` is skipped: it is the unassigned placeholder, not a person.
+    Shares ``_bug_meta``'s single fetch and cache; never raises."""
+    out = {}
+    for bid, bug in _bug_meta(bugids).items():
+        people = []
+        for key in ("assigned_to_detail", "creator_detail"):
+            d = bug.get(key) or {}
+            mail = (d.get("email") or d.get("name") or "").strip()
+            if not mail or mail.startswith("nobody@"):
+                continue
+            people.append({"email": mail,
+                           "real": (d.get("real_name") or "").strip(),
+                           "nick": (d.get("nick") or "").strip()})
+        out[bid] = people
+    return out
+
+
+def _match_author(people, name, email=""):
+    """The entry in ``people`` that IS the hg author, or ``None``.
+
+    Three keys, each an EXACT comparison, strongest first. The strictness is the point:
+    prod's hgauthors holds ``farre@mozilla.com`` "Andreas Farre" AND ``sfarre@mozilla.com``
+    "Simon Farre", and needinfo-ing the wrong human is worse than needinfo-ing nobody.
+
+    1. the same address. Conclusive.
+    2. the same display name, annotations stripped. Carries most of the weight.
+    3. the Bugzilla nick equals the hg address's local part -- ``longsonr@gmail.com`` is
+       "Robert Longson [:longsonr]", and hg records that author's name as the bare
+       ``longsonr``, so key 2 cannot see them.
+
+    Measured over 189 recent (bug, hg author) pairs where the bug was readable: key 2 alone
+    identifies 59%, adding key 3 takes it to 65%, and in ZERO cases did a weaker key point at
+    a different person than a stronger one. A fourth key -- local part equal across
+    DIFFERENT domains -- would reach 74%, and is deliberately not here: 10 of the 17 it adds
+    are ``moz-wptsync-bot``, which we must never ask to investigate a crash, and across
+    domains a bare local part is weak evidence that two addresses are one human."""
+    want_email = (email or "").strip().casefold()
+    want_name = _norm_name(name)
+    want_local = want_email.split("@")[0]
+    people = people or []
+    for p in people:
+        if want_email and (p.get("email") or "").strip().casefold() == want_email:
+            return p
+    for p in people:
+        if want_name and _norm_name(p.get("real")) == want_name:
+            return p
+    for p in people:
+        if want_local and (p.get("nick") or "").strip().casefold() == want_local:
+            return p
+    return None
+
+
+def _needinfo_account(candidate, channel, email, name):
+    """The Bugzilla LOGIN to put in the needinfo flag: ``{"email", "nick"}``, or ``{}``.
+
+    An hg commit address is not a Bugzilla account. Usually it happens to be one; when it is
+    not, BMO rejects the whole bug (see ``_bugzilla_user``). So ask the bugs instead --
+    deliberately the same ladder, and the same fallback, as ``resolve_product_component``
+    just above, because it is the same problem:
+
+    1. the hg author's own address, when BMO says it IS an account (the common case, one
+       cheap lookup, and no bug read at all);
+    2. the REGRESSOR bug's assignee or creator whose real name is the author's -- the bug the
+       changeset landed for knows the person's account even when hg does not;
+    3. the same over the author's other recent patches' bugs, which is what answers "and if
+       the regressor bug is private, find one that isn't": a restricted bug just vanishes
+       from a batched read, and the author's other landings are almost always public.
+    4. ``{}`` -- then we file with no flag rather than filing no bug.
+
+    Step 3 also runs when the regressor bug is perfectly readable but nobody on it matches
+    (an unassigned bug filed by a triager is ordinary), which is a deliberate widening of
+    "if it is private": one batched request, and the alternative is a needinfo we could have
+    resolved and didn't.
+
+    Cost, precisely, because this runs on every crashstack page view and not only when a bug
+    is filed: ``build_bug_preview`` calls ``resolve_product_component`` first, through the
+    same ``_bug_meta`` cache. Step 2 is therefore always free -- that function reads the
+    regressor bug first thing. Step 3 is free exactly when the regressor bug was UNREADABLE,
+    because p/c then fell back to the author's recent bugs and cached them, i.e. free in the
+    private-bug case this exists for. It costs one batched read in the other case (bug
+    readable, nobody on it matched)."""
+    if not email and not name:
+        return {}
+    user = _bugzilla_user(email)
+    if user.get("exists") and not user.get("unverified"):
+        return {"email": email, "nick": user.get("nick", "")}
+
+    c = candidate or {}
+    # `nodes.bug` is -1, not NULL, when the commit message carries no bug number (2555 of
+    # 20372 prod nodes), so "is there a bug" has to be a >0 test rather than a truth test.
+    try:
+        bug = int(c.get("bug") or 0)
+    except (TypeError, ValueError):
+        bug = 0
+    if bug > 0:
+        hit = _match_author(_bug_people([bug]).get(bug), name, email)
+        if hit:
+            return {"email": hit["email"], "nick": hit["nick"]}
+
+    if email:
+        try:
+            others = models.Node.recent_bugs_by_author(email, channel)
+        except Exception:
+            others = []
+        others = [b for b in others if b != bug]
+        if others:
+            people = _bug_people(others)
+            # recent_bugs_by_author is newest-first; keep that order so the account we pick
+            # comes from the author's most recent work.
+            for b in others:
+                hit = _match_author(people.get(b), name, email)
+                if hit:
+                    return {"email": hit["email"], "nick": hit["nick"]}
+    # Last: an address we could not CHECK (BMO would not answer the user lookup) beats no
+    # needinfo at all, but only after the bug-verified rungs have had their turn -- a
+    # name-matched account is better evidence than an unverified guess. If it turns out not
+    # to be a login, `_create_bug_keeping_the_bug` drops the flag and still files the bug.
+    if user.get("unverified") and email:
+        return {"email": email, "nick": ""}
+    return {}
 
 
 def _needinfo_person(candidate, channel):
-    """The person to needinfo for the suspected regressor: its AUTHOR, identified by their
-    BUGZILLA nick (e.g. ``:stransky``) looked up from the author's email via the Bugzilla
-    user API. The email/name come from the local hgauthor record for the candidate node,
-    else the candidate's author display string (``Real Name <email>``). Falls back to the
-    name/email when no Bugzilla nick resolves. ``{}`` when the author is unknown."""
+    """The person to needinfo for the suspected regressor: its AUTHOR, as
+    ``{nick, name, email, account}``. ``{}`` when the author is unknown.
+
+    ``email``/``name`` are the MERCURIAL identity -- from the local hgauthor record for the
+    candidate node, else the candidate's author display string (``Real Name <email>``).
+    ``account`` is the verified BUGZILLA login (``_needinfo_account``), which is a different
+    thing and often a different address, and it is the only one of the two safe to put in a
+    flag. ``nick`` is that account's Bugzilla handle, so a ``:nick`` needinfo reaches the
+    right person; it is empty when no account resolved, and the prose then falls back to the
+    plain name."""
     c = candidate or {}
     email = name = ""
     node = c.get("node")
@@ -639,13 +846,19 @@ def _needinfo_person(candidate, channel):
         name = author.split("<", 1)[0].strip()
     if not (email or name):
         return {}
-    return {"nick": _bugzilla_nick(email), "name": name, "email": email}
+    account = _needinfo_account(c, channel, email, name)
+    return {"nick": account.get("nick", ""), "name": name, "email": email,
+            "account": account.get("email", "")}
 
 
 def _needinfo_line(person):
     """The needinfo we'd request -- ``:nick, can you have a look please?`` -- for ``person``
-    (a ``{nick, name, email}`` dict). Prefer the IRC nick, then the name, then the email.
-    ``None`` when no usable identity is available."""
+    (a ``{nick, name, email, account}`` dict). Prefer the IRC nick, then the name, then the
+    email. ``None`` when no usable identity is available.
+
+    Deliberately still written when no ACCOUNT resolved and no flag will be set: naming the
+    human in the prose is most of the value, and a triager who reads "Andreas Farre, can you
+    have a look please?" can set the flag in one click. Silence would throw that away too."""
     person = person or {}
     nick = (person.get("nick") or "").strip()
     if nick:
@@ -740,5 +953,8 @@ def build_bug_preview(uuid_info, stack, dossier):
             ["clouseau", candidate["bug"]] if candidate.get("bug") else ["clouseau"]
         ),
         "needinfo": _needinfo_line(person),
-        "needinfo_email": (person or {}).get("email") or "",
+        # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
+        # create for an unknown requestee, so an unresolved account means no flag (and the
+        # prose above still names the person).
+        "needinfo_email": (person or {}).get("account") or "",
     }

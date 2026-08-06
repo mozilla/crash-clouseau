@@ -1764,6 +1764,15 @@ class Dossier(db.Model):
                 Dossier.payload["filed_bug"]["bug"].astext.label("filed_bug"),
                 Dossier.payload["filed_bug"]["mode"].astext.label("filed_mode"),
                 Dossier.payload["filed_bug"]["needinfo"].astext.label("filed_needinfo"),
+                # The requestee we WANTED and could not set: either BMO refused it during
+                # the create (``needinfo_dropped``, the bug was filed anyway) or the PUT on
+                # an existing bug failed (``needinfo_failed``). Without this a filing where
+                # nobody was asked renders exactly like one where nobody needed to be, and
+                # the whole point of the bug is to put it in front of a person.
+                func.coalesce(
+                    Dossier.payload["filed_bug"]["needinfo_dropped"].astext,
+                    Dossier.payload["filed_bug"]["needinfo_failed"].astext,
+                ).label("filed_needinfo_missed"),
             )
             .select_from(Dossier)
             .join(UUID, Dossier.uuidid == UUID.id)

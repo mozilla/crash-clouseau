@@ -9,6 +9,7 @@ import os
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import inspect  # noqa: E402
+import requests  # noqa: E402
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
@@ -334,6 +335,134 @@ class TestFailuresAreContained(_Base):
             res = self._file()
         self.assertFalse(res["filed"])
         self.assertIn("preview failed", res["skipped"])
+
+
+class TestTheNeedinfoNeverCostsTheBug(_Base):
+    """BMO validates the needinfo requestee while CREATING the bug and rejects the WHOLE
+    post if it cannot resolve them. Crash f6fe186b got no bug at all because its hg author
+    `farre@mozilla.com` is not an account (`code 51`). `report_bug` now resolves a verified
+    account, so these paths should not fire — but the filing must survive them anyway, and
+    the failure is silent otherwise: it reads as `skipped: bugzilla write failed`."""
+
+    def test_a_rejected_needinfo_is_dropped_and_the_bug_still_files(self):
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            if payload.get("flags"):
+                raise bugzilla_apply.BugzillaRejected(
+                    "bugzilla create failed (404): code 51, no user named X", status=404)
+            return 999
+
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["bug"], 999)
+        self.assertIsNone(res["needinfo"])                    # not claimed
+        self.assertEqual(res["needinfo_dropped"], "dev@moz.example")
+        self.assertEqual(len(calls), 2)                       # with flags, then without
+        self.assertNotIn("flags", calls[1])
+        # everything else about the bug is unchanged by the retry
+        self.assertEqual(calls[1]["summary"], calls[0]["summary"])
+        self.assertEqual(self.filed[0][1]["bug"], 999)        # recorded, so no re-file
+
+    def test_a_create_that_fails_for_its_own_reasons_is_not_masked(self):
+        # Refused twice: the retry proves the flags were not the problem, so the ORIGINAL
+        # rejection must surface (not the retry's), and nothing may be recorded as filed.
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            raise bugzilla_apply.BugzillaRejected(
+                "component is invalid" if payload.get("flags") else "second, less useful",
+                status=400)
+
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("component is invalid", res["skipped"])
+        self.assertNotIn("less useful", res["skipped"])
+        self.assertEqual(self.filed, [])
+
+    def test_a_server_error_is_never_retried(self):
+        """A 5xx is not a verdict on the payload. Retrying without the flag during a BMO
+        deploy would throw away a perfectly good needinfo — and, since a 5xx may have
+        half-run, could file the bug twice. Only a 4xx says "nothing was created, and what
+        you sent is why"."""
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            raise bugzilla_apply.BugzillaRejected("bugzilla create failed (503): "
+                                                  "<html>gateway</html>", status=503)
+
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(len(calls), 1)                 # posted once, never twice
+        self.assertNotIn("needinfo_dropped", res)
+        self.assertEqual(self.filed, [])
+
+    def test_a_systemic_second_rejection_is_logged_not_swallowed(self):
+        # The first rejection is the one returned (it names what BMO objected to), but if
+        # the flag-less retry fails for a DIFFERENT reason, that one is systemic — it would
+        # block every filing — and it must not vanish.
+        def create(payload, token):
+            raise bugzilla_apply.BugzillaRejected(
+                "code 51, no user named X" if payload.get("flags")
+                else "code 50, you must select a version", status=400)
+
+        bugzilla_apply._create_bug.side_effect = create
+        with self.assertLogs(level="ERROR") as logs:
+            res = self._file()
+        self.assertIn("code 51", res["skipped"])                     # returned: the first
+        self.assertTrue(any("must select a version" in m for m in logs.output))  # logged
+
+    def test_a_timeout_is_never_retried(self):
+        """The retry exists for a REFUSAL, where BMO told us it did not create the bug. A
+        timeout says nothing about whether the POST landed, and re-posting it would file the
+        same crash twice — the one outcome ``already_filed``/``record_filed_bug`` exist to
+        prevent. Hence ``BugzillaRejected`` is a distinct type and not a message match."""
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            raise requests.exceptions.ReadTimeout("timed out waiting for BMO")
+
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(len(calls), 1)                 # posted once, never twice
+        self.assertIn("timed out", res["skipped"])
+        self.assertEqual(self.filed, [])
+
+    def test_a_create_without_flags_is_never_retried(self):
+        # Must be a 4xx BugzillaRejected, i.e. a failure that WOULD be retried if flags were
+        # present. A plain RuntimeError never enters the retry block at all, so it would
+        # pass this test without the flags guard existing.
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            raise bugzilla_apply.BugzillaRejected("boom", status=400)
+
+        bugzilla_apply._create_bug.side_effect = create
+        self.assertFalse(self._file(needinfo=False)["filed"])
+        self.assertEqual(len(calls), 1)
+
+    def test_a_failed_needinfo_never_loses_an_already_posted_comment(self):
+        # The comment-on-existing path posts FIRST. If the needinfo PUT then raised, the
+        # filing went unrecorded and the next run commented on the same bug a second time.
+        bugzilla_apply._open_bugs_for_signature.return_value = [4242]
+        bugzilla_apply._put_bug.side_effect = RuntimeError("code 51, no user named X")
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual((res["bug"], res["mode"]), (4242, "comment_on_existing"))
+        self.assertIsNone(res["needinfo"])
+        self.assertEqual(res["needinfo_failed"], "dev@moz.example")
+        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(len(self.filed), 1)                  # recorded => no second comment
 
 
 class TestTokenResolution(unittest.TestCase):

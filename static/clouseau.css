@@ -508,6 +508,9 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
     vertical-align: middle;
 }
 .task-bug-ni { background: #fdf2d0; color: #8a6d1f; }
+/* `no ni` = we wanted to ask someone and Bugzilla would not accept the requestee, so the
+   bug was filed without one. Read as a gap, not as a success: nobody has been asked. */
+.task-bug-ni-missed { background: #f6e0e0; color: #8a2f2f; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
 .task-err {
     margin-top: 0.3em;

@@ -190,6 +190,7 @@ def _task_view(rows, stale_after_s, now):
                 "filed_bug": getattr(r, "filed_bug", None),
                 "filed_mode": getattr(r, "filed_mode", None),
                 "filed_needinfo": getattr(r, "filed_needinfo", None),
+                "filed_needinfo_missed": getattr(r, "filed_needinfo_missed", None),
             }
         )
         if getattr(r, "filed_bug", None):

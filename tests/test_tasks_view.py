@@ -150,6 +150,27 @@ class TestFiledBugColumn(unittest.TestCase):
         self.assertIn("ni?", body)
         self.assertNotIn(">cmt<", body)
 
+    def test_a_needinfo_we_could_not_set_is_shown_as_a_gap(self):
+        """An hg commit address is often not a Bugzilla login, and BMO refuses a create whose
+        requestee it cannot resolve — so the bug files without one. That run must not render
+        identically to one where nobody needed asking: the whole purpose of the filing is to
+        put the crash in front of a person, and here nobody has been."""
+        body = self._render([_row(uuid="noni0001" + "0" * 28, verdict="lead",
+                                  confidence=0.7, filed_bug="1979235",
+                                  filed_mode="new_bug", filed_needinfo=None,
+                                  filed_needinfo_missed="farre@mozilla.com")])
+        self.assertIn("no&nbsp;ni", body)
+        self.assertIn("farre@mozilla.com", body)      # who we wanted, in the tooltip
+        self.assertNotIn(">ni?<", body)               # never claim someone was asked
+
+    def test_rows_without_the_new_field_still_render(self):
+        # `list_tasks` gained `filed_needinfo_missed` after these rows existed; `_task_view`
+        # reads it with a getattr default for exactly this reason.
+        body = self._render([_row(uuid="old00001" + "0" * 28, filed_bug="1979236",
+                                  filed_mode="new_bug", filed_needinfo="dev@moz.example")])
+        self.assertIn("ni?", body)
+        self.assertNotIn("no&nbsp;ni", body)
+
     def test_a_comment_on_an_existing_bug_is_marked_as_such(self):
         # Worth distinguishing: that bug is somebody else's and we added to it.
         body = self._render([_row(uuid="cmt00001" + "0" * 28,

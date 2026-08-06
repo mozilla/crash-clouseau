@@ -249,8 +249,14 @@
            what you read here is byte-for-byte what lands in the bug. #}
         <p><strong>Comment:</strong></p>
         <pre class="action-body">{{ bug_preview['comment']|e }}</pre>
+        {# The flag needs a Bugzilla LOGIN, which an hg commit address often is not. When
+           none resolved, say so rather than rendering nothing: this block is "the bug we'd
+           file", and silence here reads as "no needinfo wanted" when the truth is "wanted
+           one, could not find the account". The comment above still names the person. #}
         {% if bug_preview.get('needinfo_email') -%}
         <p><strong>Needinfo flag:</strong> <span class="needinfo-draft">{{ bug_preview['needinfo_email']|e }}</span></p>
+        {% elif bug_preview.get('needinfo') -%}
+        <p><strong>Needinfo flag:</strong> <span class="needinfo-draft">none &mdash; no Bugzilla account resolved for the regressor's author, so the bug files without one.</span></p>
         {% endif -%}
       </div>
       {% endif -%}
