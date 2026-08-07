@@ -463,16 +463,24 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
     transition: width 0.3s;
 }
 
+/* One rule per column, and the list MUST cover every <th> in tasks.html and sum to 100%.
+   The table is `table-layout: fixed; width: 100%`, so a column with no declared width gets
+   whatever is left over -- and when the declared ones already add up to 100% that is
+   nothing, so the cell renders OUTSIDE the table. Adding the "Bug" column did exactly that:
+   the list still described the 9-column table, Actions fell off the right edge, and every
+   width from 5 onwards landed on the wrong column. Silent in every test and invisible until
+   somebody looks at the page, hence the guard in tests/test_tasks_view.py. */
 .tasks { table-layout: fixed; }
-.tasks th:nth-child(1), .tasks td:nth-child(1) { width: 7%; }
-.tasks th:nth-child(2), .tasks td:nth-child(2) { width: 24%; }
-.tasks th:nth-child(3), .tasks td:nth-child(3) { width: 10%; }
-.tasks th:nth-child(4), .tasks td:nth-child(4) { width: 11%; }
-.tasks th:nth-child(5), .tasks td:nth-child(5) { width: 7%; }
-.tasks th:nth-child(6), .tasks td:nth-child(6) { width: 7%; }
-.tasks th:nth-child(7), .tasks td:nth-child(7) { width: 15%; }
-.tasks th:nth-child(8), .tasks td:nth-child(8) { width: 11%; }
-.tasks th:nth-child(9), .tasks td:nth-child(9) { width: 8%; }
+.tasks th:nth-child(1),  .tasks td:nth-child(1)  { width: 7%; }   /* Crash    */
+.tasks th:nth-child(2),  .tasks td:nth-child(2)  { width: 20%; }  /* Signature */
+.tasks th:nth-child(3),  .tasks td:nth-child(3)  { width: 9%; }   /* Status   */
+.tasks th:nth-child(4),  .tasks td:nth-child(4)  { width: 10%; }  /* Verdict  */
+.tasks th:nth-child(5),  .tasks td:nth-child(5)  { width: 10%; }  /* Bug      */
+.tasks th:nth-child(6),  .tasks td:nth-child(6)  { width: 6%; }   /* Duration */
+.tasks th:nth-child(7),  .tasks td:nth-child(7)  { width: 6%; }   /* Cost     */
+.tasks th:nth-child(8),  .tasks td:nth-child(8)  { width: 14%; }  /* Tokens   */
+.tasks th:nth-child(9),  .tasks td:nth-child(9)  { width: 11%; }  /* Started  */
+.tasks th:nth-child(10), .tasks td:nth-child(10) { width: 7%; }   /* Actions  */
 
 .retrigger-btn {
     font-size: 0.75em;

@@ -10,6 +10,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
+import re  # noqa: E402
 import unittest  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
@@ -260,6 +261,56 @@ class TestTasksRoute(unittest.TestCase):
             rv = self.client.get("/tasks.html")
         self.assertEqual(rv.status_code, 200)
         self.assertIn("No triage runs yet", rv.get_data(as_text=True))
+
+
+class TestTaskColumnWidths(unittest.TestCase):
+    """The tasks table is `table-layout: fixed; width: 100%`, so its column widths are not
+    cosmetic -- they are the layout. A column the CSS does not name gets only what the named
+    ones leave over, and adding the Bug column left the 9-rule list summing to 100% with a
+    10th column to place, which put the Actions cell outside the table and shifted every
+    width from 5 onwards onto the wrong column.
+
+    Nothing else catches this: the route still returns 200, every rendering assertion still
+    passes, and the damage is visible only to somebody looking at the page. So assert the
+    two invariants directly against the shipped files."""
+
+    _CSS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "static", "clouseau.css")
+    _TPL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "templates", "tasks.html")
+
+    def _header_cells(self):
+        with open(self._TPL, encoding="utf-8") as fh:
+            tpl = fh.read()
+        # Scope to the tasks table's own <thead>: other tables must not affect the count.
+        head = re.search(r'<table class="tasks">.*?<thead>(.*?)</thead>', tpl, re.S)
+        self.assertIsNotNone(head, "tasks table <thead> not found")
+        return re.findall(r"<th\b", head.group(1))
+
+    def _widths(self):
+        with open(self._CSS, encoding="utf-8") as fh:
+            css = fh.read()
+        return {
+            int(n): float(w)
+            for n, w in re.findall(
+                r"\.tasks th:nth-child\((\d+)\)[^{]*\{\s*width:\s*([\d.]+)%", css)
+        }
+
+    def test_every_column_has_a_width(self):
+        widths = self._widths()
+        self.assertEqual(sorted(widths), list(range(1, len(self._header_cells()) + 1)),
+                         "each <th> in tasks.html needs a .tasks th:nth-child(N) width rule "
+                         "-- an unnamed column renders outside the table")
+
+    def test_widths_fill_the_table_exactly(self):
+        self.assertAlmostEqual(sum(self._widths().values()), 100.0, places=6)
+
+    def test_empty_row_colspan_matches(self):
+        """`colspan` on the "no runs yet" row is the same drift with a smaller blast radius:
+        it under-spans the table the moment a column is added."""
+        with open(self._TPL, encoding="utf-8") as fh:
+            tpl = fh.read()
+        self.assertIn('colspan="{}"'.format(len(self._header_cells())), tpl)
 
 
 class TestRetriggerEndpoint(unittest.TestCase):
