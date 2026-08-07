@@ -240,6 +240,22 @@ def make_role(name: str, llm_cfg: dict | None = None) -> AgentDefinition:
         prompt=spec["prompt"],
         tools=list(spec["tools"]),
         model=rcfg.get("model", "inherit"),
+        # Run the subagent INLINE: the principal blocks on its result instead of being
+        # handed a task id to wait on. Left unset (``None``, which ``asdict`` drops from
+        # the payload) the CLI now backgrounds it, and the principal correctly ends its
+        # turn to wait for a completion notification. The SDK reports that as a clean
+        # terminal ResultMessage whose text is a progress note -- "Still waiting on the
+        # call-graph-explorer and patch-scout background agents" -- and
+        # ``parse_and_validate`` finds no ```json handoff and abstains. It cost 36 runs
+        # and ~$29 in the two days after claude-agent-sdk 0.2.110 -> 0.2.131 (5f23df4),
+        # every one of them a plausible-looking "insufficient evidence" abstain.
+        #
+        # This whole module assumes an inline fan-out: ``build_result`` folds exactly one
+        # terminal ResultMessage, and ``run_crash_triage`` stops reading at the first one.
+        # Backgrounding is a real feature -- the parent gets woken for a continuation turn
+        # -- but adopting it means consuming turns until the task ledger drains, which is a
+        # different program from the one here.
+        background=False,
     )
     if rcfg.get("effort"):
         kwargs["effort"] = rcfg["effort"]

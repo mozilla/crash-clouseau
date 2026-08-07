@@ -78,6 +78,17 @@ class TestBuildOptions(unittest.TestCase):
         # subagents never get the Task tool (no recursion)
         self.assertNotIn("Task", o.agents["call-graph-explorer"].tools)
 
+    def test_roles_run_inline_not_backgrounded(self):
+        """Every subagent must be explicitly non-background, and the assertion is on
+        ``False`` rather than falsiness: ``None`` is also falsy, and ``None`` is exactly
+        the value that broke this. ``asdict`` drops a ``None`` from the payload, the CLI
+        then backgrounds the subagent, the principal ends its turn to wait for a
+        completion notification, and the progress note it leaves behind reaches
+        ``parse_and_validate`` as the final handoff -- one abstain per run, no error
+        anywhere. See the comment in ``roles.make_role``."""
+        for name, agent in self._opts().agents.items():
+            self.assertIs(agent.background, False, name)
+
     def test_recorder_adds_actions_server(self):
         rec = ActionsRecorder(uploader=None)
         o = self._opts(recorder=rec)
