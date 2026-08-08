@@ -1429,6 +1429,43 @@ class TestBugPreview(unittest.TestCase):
         self.assertNotIn(-1, at, "missing section in {!r}".format(c))
         self.assertEqual(at, sorted(at), "sections out of order")
 
+    def test_code_reference_urls_have_no_spaces_in_the_revision(self):
+        """Bug 2061961 shipped this to Bugzilla:
+
+            [servo/components/style/data.rs](https://hg.mozilla.org/mozilla-central/
+             file/tip (channel nightly)/servo/components/style/data.rs)
+
+        The revision component was prose. The schema now reduces a citation's node to a
+        real revision, so the end of that pipeline produces a link that resolves; asserted
+        here rather than only at the schema because this is where the reader sees it."""
+        from crashclouseau.agent.schema import RefCitation
+
+        cite = RefCitation(
+            kind="ref", node="tip (channel nightly)",
+            filename="servo/components/style/data.rs",
+        ).model_dump()
+        refs = report_bug.build_code_references(
+            {"mechanism": {"statement": "m", "citations": [cite]}}, "nightly")
+        self.assertIn(
+            "(https://hg.mozilla.org/mozilla-central/file/tip/"
+            "servo/components/style/data.rs)", refs)
+        url = refs[refs.index("](") + 2:refs.rindex(")")]
+        self.assertNotIn(" ", url)
+
+    def test_a_citation_whose_node_is_junk_still_links_by_permalink(self):
+        # Emptying the node must not lose the reference: the permalink branch takes over.
+        from crashclouseau.agent.schema import RefCitation
+
+        cite = RefCitation(
+            kind="ref", node="hg-changeset-metadata",
+            filename="servo/components/style/data.rs",
+            permalink="https://searchfox.org/firefox-main/source/servo/x.rs",
+        ).model_dump()
+        refs = report_bug.build_code_references(
+            {"mechanism": {"statement": "m", "citations": [cite]}}, "nightly")
+        self.assertIn("https://searchfox.org/firefox-main/source/servo/x.rs", refs)
+        self.assertNotIn("hg-changeset-metadata", refs)
+
     def test_build_bug_comment_drops_empty_sections(self):
         # No reason, no stats, no citations, no needinfo -> no empty headings, no blank runs.
         info = {"uuid": "u-1", "channel": "nightly", "buildid": "1"}

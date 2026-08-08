@@ -893,6 +893,40 @@ class TestRefCitation(unittest.TestCase):
                 self.assertEqual(d.verdict.decision, Decision.strong_evidence)
                 self.assertEqual(d.verdict.consistency.citations[0].kind, "ref")
 
+    def test_prose_in_node_is_reduced_to_a_usable_revision(self):
+        """Bug 2061961 was filed with a dead link:
+
+            [servo/components/style/data.rs](https://hg.mozilla.org/mozilla-central/
+             file/tip (channel nightly)/servo/components/style/data.rs)
+
+        because the handoff put ``"node": "tip (channel nightly)"``. A citation's node is
+        only ever the revision component of an hg URL, so it has to be one. A revision
+        never contains a space; the rest is the model narrating where it looked."""
+        d = self._with_kind("ref", node="tip (channel nightly)")
+        self.assertEqual(d.verdict.consistency.citations[0].node, "tip")
+
+    def test_a_node_that_is_not_a_revision_at_all_is_dropped(self):
+        # Better empty than wrong: report_bug and crashstack.html both fall back to the
+        # permalink/label when the node is empty, and on the page a TRUTHY bad node
+        # actively suppresses that fallback — so the reference vanishes instead of
+        # merely being unlinked.
+        for junk in ("hg-changeset-metadata", "mozilla-central tip", "the crash build",
+                     "deadbe", 12345):
+            with self.subTest(junk=junk):
+                d = self._with_kind("ref", node=junk)
+                self.assertEqual(d.verdict.consistency.citations[0].node, "")
+
+    def test_real_revisions_are_untouched(self):
+        for good in ("0123456789ab", "c998e317e0cc", "tip",
+                     "a87cb5eb8e0bbde515c068dd660dfb9d9ece621e"):
+            with self.subTest(good=good):
+                d = self._with_kind("ref", node=good)
+                self.assertEqual(d.verdict.consistency.citations[0].node, good)
+
+    def test_a_trailing_bug_reference_is_stripped_off_the_node(self):
+        d = self._with_kind("ref", node="c998e317e0cc (bug 2042063)")
+        self.assertEqual(d.verdict.consistency.citations[0].node, "c998e317e0cc")
+
     def test_stack_kind_goes_to_stack_frame_not_the_catch_all(self):
         # 5 of the 6 prod `kind:"stack"` citations carry the full StackFrameCitation field
         # set. Routing them to the catch-all validates but throws away function/stackpos/

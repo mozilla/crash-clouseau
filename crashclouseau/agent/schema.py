@@ -124,6 +124,38 @@ CONFIDENCE_SCORE: dict[Confidence, float] = {
 # --------------------------------------------------------------------------- #
 # Citations (a discriminated union on ``kind``)
 # --------------------------------------------------------------------------- #
+# A citation's ``node`` is only ever used as one thing: the revision component of an
+# hg URL. So it has to BE a revision. The model does not always oblige — it treats the
+# field as a place to say where it looked, and bug 2061961 was filed with
+#     [servo/components/style/data.rs](https://hg.mozilla.org/mozilla-central/file/tip (channel nightly)/servo/components/style/data.rs)
+# because the handoff said ``"node": "tip (channel nightly)"``. That is a dead link in the
+# one section of the comment whose entire purpose is letting a reader check the analysis
+# without leaving the bug, and it is worse than no link: on crashstack.html a truthy node
+# also SUPPRESSES the permalink fallback, so the page loses the reference altogether.
+#
+# Accepts a 7-40 char hex node (hg short or full, and a git sha), plus the symbolic ``tip``,
+# which hg resolves and which is what the model means when it says it read current source.
+# Anything else is prose: try the first whitespace-delimited token, since a revision never
+# contains a space and the rest is commentary ("tip (channel nightly)", "c998e317e0cc (bug
+# 2042063)"), and otherwise drop it — an empty node lets the permalink/label fallbacks run.
+#
+# Deliberately NOT applied to ``Candidate.node``: gates, backout resolution and the
+# autofiler all read that one, so silently blanking it would change a verdict rather than
+# a link. A citation's node has no such consumer (see StackFrameCitation.node's note).
+_HG_REV_RE = re.compile(r"^(?:[0-9a-fA-F]{7,40}|tip)$")
+
+
+def _clean_rev(v):
+    """A usable hg revision from whatever the model put in a citation's ``node``, or ""."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if not s or _HG_REV_RE.match(s):
+        return s
+    head = s.split()[0].strip("(),;:")
+    return head if _HG_REV_RE.match(head) else ""
+
+
 class SearchfoxCitation(BaseModel):
     kind: Literal["searchfox"] = "searchfox"
     permalink: str
@@ -139,6 +171,11 @@ class DiffLineCitation(BaseModel):
     line: int
     side: Literal["added", "deleted", "context"]
     content: str
+
+    @field_validator("node", mode="before")
+    @classmethod
+    def _clean_node(cls, v):
+        return _clean_rev(v)
 
 
 class StackFrameCitation(BaseModel):
@@ -178,10 +215,16 @@ class StackFrameCitation(BaseModel):
     # nodeless frame used to drop the whole ``data_flow`` sub-object via ``_salvage``.
     node: str = ""
 
-    @field_validator("uuid", "filename", "function", "node", mode="before")
+    @field_validator("uuid", "filename", "function", mode="before")
     @classmethod
     def _none_to_empty(cls, v):
         return "" if v is None else v
+
+    @field_validator("node", mode="before")
+    @classmethod
+    def _clean_node(cls, v):
+        """Also covers the None -> "" coercion the sibling validator does."""
+        return _clean_rev(v)
 
     @field_validator("stackpos", "line", mode="before")
     @classmethod
@@ -243,10 +286,18 @@ class RefCitation(BaseModel):
     # break every dossier already persisted with ``node``/``filename`` keys.
     model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("node", "filename", "symbol_id", "permalink", "content", mode="before")
+    @field_validator("filename", "symbol_id", "permalink", "content", mode="before")
     @classmethod
     def _none_to_empty(cls, v):
         return "" if v is None else v
+
+    @field_validator("node", mode="before")
+    @classmethod
+    def _clean_node(cls, v):
+        """Also covers the None -> "" coercion the sibling validator does. This is the
+        kind bug 2061961's dead link came through: ``ref`` is the catch-all, so it is
+        where the model is most likely to write prose instead of a revision."""
+        return _clean_rev(v)
 
     @field_validator("line", mode="before")
     @classmethod
