@@ -1575,7 +1575,19 @@ class Dossier(db.Model):
         ``running`` are otherwise not claimable. Routing the retrigger back through the
         same atomic claim is what collapses two concurrent retriggers of one uuid into a
         single run (exactly one wins pending->running): no double-pay. Also clears the
-        reaper attempt counter so an operator retrigger earns a fresh give-up budget."""
+        reaper attempt counter so an operator retrigger earns a fresh give-up budget.
+
+        Clears ``error`` for the same reason: an operator asked to start this run over, so
+        the PREVIOUS failure is no longer this row's state. Left in, it outlives the run
+        that produced it — ``upsert`` only drops it on success, by replacing the payload
+        wholesale — and the tasks view renders ``error`` for any status, so a queued,
+        perfectly healthy retrigger displays the failure it was meant to repair until the
+        moment it finishes. During a bulk recovery that reads as an ongoing outage.
+
+        Note this is cleared HERE and not filtered in the view: ``set_status(uuid,
+        "pending", error=...)`` on the transient-retry path is a pending row whose error
+        is current and worth showing. The difference is not the status, it is whether the
+        failure still describes what the row is doing."""
         uuidid = UUID.get_id(uuid)
         if uuidid is None:
             return
@@ -1587,6 +1599,7 @@ class Dossier(db.Model):
         payload = dict(d.payload or {})
         payload.pop("job_id", None)
         payload.pop("reap_attempts", None)
+        payload.pop("error", None)
         d.payload = payload
         if commit:
             db.session.commit()

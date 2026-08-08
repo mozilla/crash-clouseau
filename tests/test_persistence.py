@@ -198,6 +198,29 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         self.assertNotIn("reap_attempts", d.payload)   # fresh give-up budget
         self.assertNotIn("job_id", d.payload)
 
+    def test_retrigger_clears_the_previous_failure(self):
+        # The tasks view renders `error` for ANY status, so a stale one makes a queued
+        # retrigger look like a live failure -- during a bulk recovery, like an outage
+        # that is actually a queue draining normally.
+        Dossier.upsert(self.UUID, payload={}, status="running")
+        Dossier.set_status(self.UUID, "error", error="reaper gave up after 2 attempts")
+        self.assertEqual(Dossier.get_by_uuid(self.UUID).payload["error"],
+                         "reaper gave up after 2 attempts")
+        Dossier.reset_for_retrigger(self.UUID)
+        d = Dossier.get_by_uuid(self.UUID)
+        self.assertEqual(d.status, "pending")
+        self.assertNotIn("error", d.payload)
+
+    def test_transient_retry_keeps_its_reason_on_a_pending_row(self):
+        # The mirror case, and why this is fixed in reset_for_retrigger rather than by
+        # hiding errors on pending rows in the view: `_should_retry` parks a run as
+        # pending WITH the reason it is being requeued, and that one is current.
+        Dossier.upsert(self.UUID, payload={}, status="running")
+        Dossier.set_status(self.UUID, "pending", error="API error: Overloaded (529)")
+        d = Dossier.get_by_uuid(self.UUID)
+        self.assertEqual(d.status, "pending")
+        self.assertEqual(d.payload["error"], "API error: Overloaded (529)")
+
     def test_verdict_set_get(self):
         Dossier.upsert(self.UUID, payload={})
         Verdict.set(self.UUID, "culprit", confidence=90, principal_model="claude-opus-4-8",
