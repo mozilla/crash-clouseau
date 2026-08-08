@@ -240,15 +240,46 @@ def make_role(name: str, llm_cfg: dict | None = None) -> AgentDefinition:
         prompt=spec["prompt"],
         tools=list(spec["tools"]),
         model=rcfg.get("model", "inherit"),
-        # Run the subagent INLINE: the principal blocks on its result instead of being
-        # handed a task id to wait on. Left unset (``None``, which ``asdict`` drops from
-        # the payload) the CLI now backgrounds it, and the principal correctly ends its
-        # turn to wait for a completion notification. The SDK reports that as a clean
-        # terminal ResultMessage whose text is a progress note -- "Still waiting on the
-        # call-graph-explorer and patch-scout background agents" -- and
-        # ``parse_and_validate`` finds no ```json handoff and abstains. It cost 36 runs
-        # and ~$29 in the two days after claude-agent-sdk 0.2.110 -> 0.2.131 (5f23df4),
-        # every one of them a plausible-looking "insufficient evidence" abstain.
+        # DOCUMENTATION ONLY -- this line does NOT keep the subagent inline. Keep it
+        # anyway (it is the honest statement of intent, and the one path that DOES read
+        # the field wants exactly this value), but do not mistake it for the control:
+        # the control is ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`` in
+        # ``triage._CLI_ENV``. Deleting that env var and trusting this line reinstates
+        # the outage described below -- it already happened once, in eac7285.
+        #
+        # WHY IT IS INERT, so a future reader can re-verify against a new CLI build.
+        # Two independent reasons, either alone fatal, both checked against the bundled
+        # CLI 2.1.223 shipped inside claude-agent-sdk 0.2.131:
+        #
+        #   1. The value never survives the trip. The SDK sends the AgentDefinition over
+        #      the ``initialize`` control request, and the CLI rebuilds it with a TRUTHY
+        #      conditional spread -- ``...n.background&&{background:n.background},`` --
+        #      so ``false`` contributes NOTHING and the resolved definition has no
+        #      ``background`` key at all. (Sibling fields use ``!==void 0``; this one
+        #      does not.) By the time the Task tool looks, the field is ``undefined``.
+        #   2. Even a surviving ``false`` would be ignored. The Task/Agent launch decides
+        #      backgrounding with
+        #          let q = F === "remote",
+        #              ee = q || (o === !0 || V.background === !0 || K || G || !A && o !== !1) && !U;
+        #      where ``o`` is the model's ``run_in_background`` tool input, ``V`` the
+        #      resolved agent definition, ``U`` the env kill switch, and K/G/A the
+        #      coordinator / fork-subagent / in-process-teammate modes (all false for us).
+        #      ``V.background`` is only ever tested ``=== true``: the definition can force
+        #      backgrounding ON, never off. There is no ``background === !1`` anywhere in
+        #      the 290MB binary. With K/G/A false the expression collapses to
+        #      ``o !== false`` -- i.e. background is ON unless the MODEL explicitly asks
+        #      for a synchronous run, which the CLI's own tool description and system
+        #      prompt actively discourage ("Agents run in the background by default...").
+        #
+        # What that costs when it fires: the principal launches its subagents, is told
+        # not to poll, and correctly ends its turn to wait for a completion notification.
+        # The SDK reports that as a clean terminal ResultMessage (is_error False!) whose
+        # text is a progress note -- "Still waiting on the call-graph-explorer and
+        # patch-scout background agents" -- with no ```json handoff. 84 runs and ~$68 in
+        # the three days after claude-agent-sdk 0.2.110 -> 0.2.131 (5f23df4) landed that
+        # way, every one persisted as a plausible-looking "insufficient evidence" abstain.
+        # ``build_result`` now raises ``MissingHandoffError`` on that shape so the next
+        # such regression is a visible error rate instead of a quiet verdict.
         #
         # This whole module assumes an inline fan-out: ``build_result`` folds exactly one
         # terminal ResultMessage, and ``run_crash_triage`` stops reading at the first one.

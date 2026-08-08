@@ -71,7 +71,8 @@ class TestSchemaDefinition(unittest.TestCase):
         self.assertEqual(DOSSIER_SCHEMA_VERSION, 1)
 
     def test_dao_surface(self):
-        for m in ("upsert", "set_status", "add_usage", "get_by_uuid", "get_pending"):
+        for m in ("upsert", "set_status", "merge_payload", "add_usage", "get_by_uuid",
+                  "get_pending"):
             self.assertTrue(callable(getattr(Dossier, m)))
         for m in ("set", "get_by_uuid", "get_for_build"):
             self.assertTrue(callable(getattr(Verdict, m)))
@@ -158,6 +159,31 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         d = Dossier.get_by_uuid(self.UUID)
         self.assertEqual(d.input_tokens, 15)
         self.assertEqual(d.output_tokens, 4)
+
+    def test_merge_payload_keeps_the_other_keys(self):
+        # The whole reason merge_payload exists rather than reusing upsert, which
+        # REPLACES the payload wholesale. The failure path calls set_status (writing
+        # `error`) and only then records the forensics, so a wholesale write would
+        # delete the error string and the reaper's job_id/reap_attempts on its way past
+        # — losing the diagnosis it was added to preserve.
+        Dossier.upsert(self.UUID, payload={"job_id": "j1"}, status="running")
+        Dossier.set_status(self.UUID, "error", error="no readable handoff")
+        Dossier.merge_payload(self.UUID, {"result": "Waiting for the agents.",
+                                          "num_turns": 17})
+        p = Dossier.get_by_uuid(self.UUID).payload
+        self.assertEqual(p["result"], "Waiting for the agents.")
+        self.assertEqual(p["num_turns"], 17)
+        self.assertEqual(p["error"], "no readable handoff")   # survived
+        self.assertEqual(p["job_id"], "j1")                   # survived
+        # None is skipped, not stored, so a caller can pass an optional field
+        # unconditionally without writing a null over a real value.
+        Dossier.merge_payload(self.UUID, {"num_turns": None, "result": "second"})
+        p = Dossier.get_by_uuid(self.UUID).payload
+        self.assertEqual(p["num_turns"], 17)
+        self.assertEqual(p["result"], "second")
+
+    def test_merge_payload_missing_row_is_a_noop(self):
+        Dossier.merge_payload("no-such-uuid", {"result": "x"})  # must not raise
 
     def test_bump_reap_attempts_and_reset(self):
         # The reaper give-up counter lives in the JSONB payload (no migration). It

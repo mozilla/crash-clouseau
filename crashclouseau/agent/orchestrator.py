@@ -25,6 +25,7 @@ from datetime import timedelta
 from rq import Retry
 
 from crashclouseau import app, config, db, models, worker
+from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
     AreaExpert,
@@ -66,8 +67,49 @@ _TRANSIENT_MARKERS = (
 
 
 def _should_retry(exc) -> bool:
+    if isinstance(exc, MissingHandoffError):
+        # Not retried here, and NOT because it is deterministic — the residual family
+        # (once the backgrounding cause is gone) is the model fumbling its own
+        # serialization, which a re-roll would probably get right. It is that the retry
+        # is the expensive way to buy that re-roll: an RQ retry re-runs the whole ~20-min
+        # triage at full price immediately, whereas an `error` row costs nothing and is
+        # already recoverable — `proto_already_analyzed` counts only `done`, so the
+        # (signature, protohash) cluster stays UNPOISONED and the next crash sharing it
+        # gets a fresh run. `skip_triage` does treat `error` as terminal for the same
+        # uuid, so this trades an immediate paid re-roll for a free one later.
+        #
+        # The asymmetry is what settles it: if a CLI/SDK change ever re-breaks the
+        # handoff wholesale (0.2.131 did, at 60 failures/day), retrying doubles the burn
+        # on the exact failure that is hardest to notice.
+        #
+        # Classified by TYPE, before the substring match, and that ordering is load-
+        # bearing: this failure is defined by what happened, not by what the message
+        # says. The message is built from the agent's own run and could later be made to
+        # quote its final text — and a crash-triage run talks about timeouts, streams and
+        # connections for a living, so it would start matching _TRANSIENT_MARKERS by pure
+        # coincidence. Test: ``test_missing_handoff_is_not_retryable``.
+        return False
     blob = "{}: {}".format(type(exc).__name__, exc).lower()
     return any(m in blob for m in _TRANSIENT_MARKERS)
+
+
+# Budget for the agent's final text on a failed row, split HEAD + TAIL rather than
+# truncated to the first N. The handoff is the last thing the model writes, so a plain
+# ``[:8000]`` throws away precisely the evidence: the biggest failure family is a fenced
+# block whose JSON is malformed, and in prod those results run 8.5k-15.5k chars with the
+# broken block at the very end. The head is worth keeping too — it says which candidate
+# the run had converged on before it fumbled the serialization.
+_RAW_HEAD, _RAW_TAIL = 2000, 6000
+
+
+def _elide(text: str) -> str:
+    text = text or ""
+    if len(text) <= _RAW_HEAD + _RAW_TAIL:
+        return text
+    dropped = len(text) - _RAW_HEAD - _RAW_TAIL
+    return "{}\n\n[... {} chars elided ...]\n\n{}".format(
+        text[:_RAW_HEAD], dropped, text[-_RAW_TAIL:]
+    )
 
 
 def _current_job():
@@ -1933,6 +1975,31 @@ def run_evidence_agent(uuid, force=False):
             raise
         try:
             models.Dossier.set_status(uuid, "error", error=reason)
+            if isinstance(exc, MissingHandoffError):
+                # The run reached a terminal ResultMessage and we PAID for it — it just
+                # never emitted a handoff. This row used to go down the `done` path,
+                # which records cost/tokens; `set_status` records neither, so moving the
+                # failure to `error` would otherwise LOSE the spend that the old silent
+                # abstain at least accounted for. (The 0.2.131 regression's ~$68 was
+                # always in the DB — what went unnoticed was the failure, not the money.
+                # Keep both.) The final text is the whole diagnosis: a progress note, a
+                # truncated verdict and a malformed block are three different bugs and
+                # they are told apart by reading it.
+                #
+                # Via `merge_payload`, NOT `upsert`: upsert replaces the payload
+                # wholesale and would drop the `error` string `set_status` just wrote
+                # (plus job_id / reap_attempts).
+                models.Dossier.upsert(
+                    uuid,
+                    cost_usd=exc.cost_usd,
+                    input_tokens=exc.input_tokens,
+                    output_tokens=exc.output_tokens,
+                    cache_read_tokens=exc.cache_read_tokens,
+                )
+                models.Dossier.merge_payload(
+                    uuid,
+                    {"result": _elide(exc.raw_result), "num_turns": exc.num_turns},
+                )
         except Exception:  # pragma: no cover - best-effort
             pass
         return

@@ -38,6 +38,14 @@ class TestSecondOpinionOptions(unittest.TestCase):
         self.assertEqual(opts.model, "claude-opus-4-8")   # Opus 4.8
         self.assertEqual(opts.effort, "high")             # measured better than max; see config
 
+    def test_background_tasks_disabled(self):
+        # Same inline pin as the principal. The allowlist has no Task, but it is not a
+        # REGISTRATION control (no `tools=`, and bypassPermissions), so the Agent tool is
+        # still live; a backgrounded launch would turn the SO's final message into a
+        # progress note and parse_second_opinion would silently return None.
+        opts = build_options(_CRASH, None, searchfox_client=object())
+        self.assertEqual(opts.env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"), "1")
+
 
 class TestSecondOpinionParse(unittest.TestCase):
     def test_verify_mode(self):

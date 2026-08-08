@@ -152,6 +152,14 @@ def build_options(crash: dict, candidate: dict | None = None, *,
         max_turns=cfg["max_turns"],
         permission_mode="bypassPermissions",
         setting_sources=[],
+        # Same inline-subagent pin as the principal (see ``triage._CLI_ENV``). The SO's
+        # allowlist has no Task today, but ``allowed_tools`` is not a REGISTRATION
+        # control -- neither options object sets ``tools``, so the CLI's whole default
+        # toolset (Agent included) stays registered, and ``permission_mode`` is
+        # bypassPermissions. If the SO ever launches an agent, backgrounding would turn
+        # its final message into a progress note and ``parse_second_opinion`` would
+        # quietly return None -- i.e. a silently un-reviewed lead. One key buys it out.
+        env=dict(triage._CLI_ENV),
     )
     if cfg["effort"]:
         kwargs["effort"] = cfg["effort"]

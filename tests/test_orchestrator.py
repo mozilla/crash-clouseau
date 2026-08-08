@@ -13,6 +13,7 @@ import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
+from crashclouseau.agent.errors import MissingHandoffError  # noqa: E402
 from crashclouseau.agent.result import CrashTriageResult  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
     Candidate,
@@ -96,6 +97,15 @@ async def _triage_boom(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, ex
 
 async def _triage_transient(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
     raise RuntimeError("API error: Overloaded (529)")
+
+
+async def _triage_no_handoff(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
+    raise MissingHandoffError(
+        "crash triage ended after 17 turns with no readable ```json handoff",
+        raw_result="Waiting for the background agents; I'll continue once notified.",
+        cost_usd=0.81, num_turns=17,
+        input_tokens=10, output_tokens=2, cache_read_tokens=5,
+    )
 
 
 async def _triage_must_not_run(**kwargs):
@@ -636,6 +646,58 @@ class TestRunEvidenceAgent(unittest.TestCase):
         call = MDoss.set_status.call_args
         self.assertEqual(call.args[:2], ("u-1", "error"))
         self.assertIn("Overloaded", call.kwargs.get("error", ""))
+
+    def test_missing_handoff_errors_and_keeps_the_forensics(self):
+        """A run that never emitted a ```json handoff must settle on `error` — never on
+        a status=done abstain that reads like a considered verdict — and must keep the
+        agent's final text and the money it cost: `set_status` records neither, and this
+        is exactly the spend that went unnoticed for three days."""
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(retries_left=2)), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _triage_no_handoff):
+            orch.run_evidence_agent("u-1")  # must not raise: NOT retryable
+        call = MDoss.set_status.call_args
+        self.assertEqual(call.args[:2], ("u-1", "error"))
+        self.assertIn("no readable", call.kwargs.get("error", ""))
+        self.assertEqual(MDoss.upsert.call_args.kwargs["cost_usd"], 0.81)
+        merged = MDoss.merge_payload.call_args.args[1]
+        self.assertIn("Waiting for the background agents", merged["result"])
+        self.assertEqual(merged["num_turns"], 17)
+        MVerd.set.assert_not_called()          # no phantom abstain in the verdict table
+        self.assertIsNone(self._done_upsert(MDoss))
+
+    def test_missing_handoff_is_not_retryable(self):
+        """Classified by TYPE, not by what the message happens to say — an RQ retry
+        re-runs the whole ~20-min triage at full price, while an `error` row leaves the
+        proto cluster recoverable for free.
+
+        The marker word goes in the MESSAGE, which is the only thing `_should_retry`
+        looks at: put it in ``raw_result`` instead and the assertion passes with the
+        isinstance branch DELETED, which is how this test previously failed to test
+        anything. `build_result` builds this message from the agent's own run, so
+        quoting its final text is a plausible future edit — and a crash-triage run
+        talks about timeouts and streams for a living."""
+        marker_in_the_message = MissingHandoffError(
+            "crash triage: the shutdownhang timed out on the stream, and the run "
+            "ended with no readable ```json handoff",
+        )
+        self.assertTrue(  # the message really would match, absent the type check
+            any(m in str(marker_in_the_message) for m in orch._TRANSIENT_MARKERS))
+        self.assertFalse(orch._should_retry(marker_in_the_message))
+        self.assertTrue(orch._should_retry(RuntimeError("connection reset")))
+
+    def test_failed_row_keeps_the_tail_where_the_broken_handoff_is(self):
+        # A plain `[:8000]` would drop the malformed block entirely: it is the LAST
+        # thing the model writes, and that family's results run 8.5k-15.5k chars.
+        text = "HEAD" + ("x" * 20000) + "```json\n{,}\n```"
+        elided = orch._elide(text)
+        self.assertTrue(elided.startswith("HEAD"))
+        self.assertTrue(elided.endswith("```json\n{,}\n```"))
+        self.assertIn("chars elided", elided)
+        self.assertLess(len(elided), 8200)
+        short = "no fence here"
+        self.assertEqual(orch._elide(short), short)  # kept whole, no marker
 
     def test_skip_if_existing(self):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()

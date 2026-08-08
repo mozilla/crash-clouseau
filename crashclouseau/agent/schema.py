@@ -850,6 +850,17 @@ def _abstain(reason: str) -> Dossier:
     return Dossier(verdict=Verdict(decision=Decision.abstain, abstain_reason=reason))
 
 
+# The abstain_reason ``parse_and_validate`` uses when there was no readable handoff at
+# all. Named (not inlined) because ``triage.build_result`` matches on it to tell that
+# apart from a real verdict: the system prompt requires the fenced block on EVERY path
+# -- ``abstain`` is a value INSIDE the JSON, with a required ``abstain_reason`` -- so a
+# missing/unparseable block is never the model declining, it is the run never reaching a
+# conclusion. ``parse_and_validate`` keeps returning an abstain Dossier (its "never
+# raises" contract is relied on by the eval runner and the schema tests); the caller
+# decides that it is a failure.
+NO_HANDOFF_REASON = "no parseable ```json block in the agent result"
+
+
 # Top-level Dossier sub-objects salvaged independently (singular fields).
 _SINGLE_FIELDS: dict[str, type[BaseModel]] = {
     "crash": CrashBrief,
@@ -927,7 +938,7 @@ def parse_and_validate(result: str | dict) -> Dossier:
     floor, ...) is forced to abstain, but any salvaged evidence is still attached."""
     obj = result if isinstance(result, dict) else _extract_last_json_block(result)
     if obj is None:
-        return _abstain("no parseable ```json block in the agent result")
+        return _abstain(NO_HANDOFF_REASON)
     # Strip the fields that are computed OUTSIDE the LLM — ``corroborations`` (deterministic
     # gate flags set in ``orchestrator``), ``second_opinion`` + ``second_opinion_status`` (set
     # by the blind-SO fold) and ``raw_verdict`` (the pre-gate snapshot) — so the primary model

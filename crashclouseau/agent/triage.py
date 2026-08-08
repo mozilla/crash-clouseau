@@ -8,9 +8,11 @@
 in-process MCP evidence servers, the five senior ``AgentDefinition``s, tiering,
 options-level ``effort``), drives ``ClaudeSDKClient`` to a terminal
 ``ResultMessage``, and folds it into a typed ``CrashTriageResult`` — best-effort
-parsing the trailing ```json handoff into a #03-validated ``Dossier`` (abstain on
-failure). #11 runs ``asyncio.run(run_crash_triage(...))`` inside the RQ job; the
-vendored ``run``/``run_async`` are NOT used (they SystemExit). Options assembly
+parsing the trailing ```json handoff into a #03-validated ``Dossier`` (abstain on a
+validation failure; ``MissingHandoffError`` when there is no readable block at all,
+which is an infrastructure failure and not a verdict). #11 runs
+``asyncio.run(run_crash_triage(...))`` inside the RQ job; the vendored
+``run``/``run_async`` are NOT used (they SystemExit). Options assembly
 (`build_options`) and result folding (`build_result`) are split out so they unit-
 test without spawning the bundled CLI."""
 from __future__ import annotations
@@ -33,8 +35,13 @@ from claude_agent_sdk import (
 from crashclouseau import config
 from crashclouseau.agent import roles
 from crashclouseau.logger import logger
+from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.result import CrashTriageResult
-from crashclouseau.agent.schema import Decision, parse_and_validate
+from crashclouseau.agent.schema import (
+    Decision,
+    NO_HANDOFF_REASON,
+    parse_and_validate,
+)
 from crashclouseau.agent.tools import history as history_tools
 from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
@@ -57,6 +64,35 @@ from crashclouseau.vendor.hackbot_runtime.errors import AgentError
 NEEDINFO_ACTIONS = ["bugzilla.add_comment", "bugzilla.update_bug"]
 
 _BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Bash"]
+
+# THE thing that keeps the five subagents inline. Handed to the bundled CLI subprocess
+# via ``ClaudeAgentOptions.env``, which the SDK MERGES over ``os.environ`` (options.env
+# wins) -- see subprocess_cli.connect() -- so this one key adds nothing and clobbers
+# nothing else.
+#
+# Why an env var and not ``AgentDefinition.background=False`` (which we also set, and
+# which does NOT work -- the long WHY is in ``roles.make_role``): the CLI's Task/Agent
+# launch computes
+#     let q = F === "remote",
+#         ee = q || (o === !0 || V.background === !0 || K || G || !A && o !== !1) && !U;
+# ``V.background`` is only ever compared ``=== true``, so the agent definition is a
+# one-way opt-IN to backgrounding; the trailing ``&& !U``, where ``U`` is this env var,
+# is the only term in that expression that can turn it OFF. Setting it additionally
+# makes the CLI omit ``run_in_background`` from the Agent (and Bash) tool schemas and
+# drop the "agents run in the background by default, you will be notified" prompt
+# bullets -- so it removes the model's incentive, not just the mechanism. Verified by
+# live repro against the bundled CLI: 3/3 runs with it set emitted the ```json handoff,
+# 4/4 comparable runs without it ended on a progress note. It also closes the MCP
+# auto-background path (a >120s main-thread MCP call being parked as a task).
+#
+# The value MUST be one of "1"/"true"/"yes"/"on": the CLI parses it through a typed
+# boolean, so "0"/"false"/"" read as OFF -- setting it to "0" does not "disable the
+# workaround", it just leaves backgrounding enabled.
+#
+# Inline is not serial: the model still emits several Agent tool_use blocks in one
+# message and the CLI runs them concurrently, which is the pre-0.2.131 behaviour this
+# restores.
+_CLI_ENV = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 
 # Config short names (used verbatim for AgentDefinition) -> full ids for the
 # principal ClaudeAgentOptions model= level.
@@ -455,6 +491,9 @@ def build_options(
         max_turns=max_turns,
         permission_mode="bypassPermissions",
         setting_sources=[],
+        # Keeps the subagent fan-out inline; see _CLI_ENV. Copied, not shared, so a
+        # caller mutating options.env can't reach back into the module constant.
+        env=dict(_CLI_ENV),
     )
     if effort:
         kwargs["effort"] = effort
@@ -528,10 +567,12 @@ def _sum_tokens(result_msg):
 
 def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
     """Fold a terminal ``ResultMessage`` into a typed ``CrashTriageResult``,
-    best-effort parsing + #03-validating the trailing ```json handoff (abstain on
-    failure). Raises ``AgentError`` on a missing/errored result. The recorded
-    actions are the agent's own (via the ``actions`` MCP server) plus a synthesized
-    needinfo (``_needinfo_action``) so a strong-evidence verdict always yields an
+    best-effort parsing + #03-validating the trailing ```json handoff. Raises
+    ``AgentError`` on a missing/errored result, and ``MissingHandoffError`` when the
+    run produced no readable handoff at all; a handoff that parses but fails schema
+    validation still SALVAGES to an abstain. The recorded actions are the agent's own
+    (via the ``actions`` MCP server) plus a synthesized needinfo
+    (``_needinfo_action``) so a strong-evidence verdict always yields an
     apply-eligible action even though the agent only drafts the text."""
     if result_msg is None:
         raise AgentError("crash triage produced no result message")
@@ -539,6 +580,42 @@ def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
         detail = result_msg.result or getattr(result_msg, "subtype", "")
         raise AgentError(f"crash triage failed: {detail}")
     dossier = parse_and_validate(result_msg.result)
+    verdict = dossier.verdict if dossier is not None else None
+    if verdict is not None and verdict.abstain_reason == NO_HANDOFF_REASON:
+        # NO handoff is an infrastructure failure, not a verdict, and it must not be
+        # persisted as one. The system prompt demands the fenced block on every path
+        # (abstain included, with its reason INSIDE the JSON), so its absence means the
+        # run never reached a conclusion -- the model was cut off, truncated, or, as in
+        # the 0.2.131 backgrounding regression, left a "waiting for the background
+        # agents" progress note as its final message. Every one of those landed as a
+        # status=done, confidence-25 abstain that reads exactly like a considered
+        # "insufficient evidence": no error row, no reaper pickup, no alert. It took a
+        # human reading one crashstack page to notice a 66% failure rate.
+        #
+        # Checked here rather than in ``parse_and_validate`` because that function must
+        # keep its "never raises" contract for the eval runner. Auditing prod's 30-day
+        # pre-regression baseline found this fires ~0.3-0.5x/day and NONE of those were
+        # a legitimate decline: 6 of 9 emitted a fence whose JSON had a syntax error,
+        # the other 3 ended mid-prose announcing a lead they never serialized. So the
+        # false-positive risk is not "we lose a considered abstain", it is zero.
+        #
+        # The raw text and the usage ride on the exception so the error row keeps the
+        # forensics and the spend -- these runs cost full price (~$0.81 each).
+        ti, to, tc = _sum_tokens(result_msg)
+        logger.error(
+            "agent: no ```json handoff after %s turns; final text was: %r",
+            getattr(result_msg, "num_turns", "?"), (result_msg.result or "")[:2000],
+        )
+        raise MissingHandoffError(
+            "crash triage ended after {} turns with no readable ```json handoff "
+            "-- the run never reached a verdict".format(
+                getattr(result_msg, "num_turns", "?")
+            ),
+            raw_result=result_msg.result or "",
+            cost_usd=getattr(result_msg, "total_cost_usd", None),
+            num_turns=getattr(result_msg, "num_turns", None),
+            input_tokens=ti, output_tokens=to, cache_read_tokens=tc,
+        )
     actions = list(recorder.actions) if recorder is not None else []
     bridged = _needinfo_action(dossier)
     if bridged is not None:

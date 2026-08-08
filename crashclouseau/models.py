@@ -1539,6 +1539,36 @@ class Dossier(db.Model):
             db.session.commit()
 
     @staticmethod
+    def merge_payload(uuid, values, commit=True):
+        """MERGE ``values`` into the JSONB ``payload``, keeping every other key —
+        the opposite of ``upsert``, which replaces the payload wholesale. For the
+        failure paths, which have forensics to record (the agent's raw final text, the
+        turn count) on a row whose existing keys — ``error``, ``job_id``,
+        ``reap_attempts`` — are exactly what makes the failure diagnosable. A ``None``
+        value is skipped, not stored, so a caller can pass an optional field
+        unconditionally. Best-effort: no-op if the row isn't there. Reassigns payload
+        to a new dict so SQLAlchemy flags the JSONB column dirty (see ``set_job_id``).
+
+        Joins rather than going through ``UUID.get_id``, which does NOT return None for
+        an unknown uuid — it subscripts ``.first()`` and raises ``TypeError``. Callers
+        that guard on ``if uuidid is None`` are therefore guarding against nothing, and
+        this one is reached from the failure path, where the row is the least certain to
+        exist. One query instead of two, and the no-op is real."""
+        d = (
+            db.session.query(Dossier)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .filter(UUID.uuid == uuid)
+            .first()
+        )
+        if d is None:
+            return
+        payload = dict(d.payload or {})
+        payload.update({k: v for k, v in values.items() if v is not None})
+        d.payload = payload
+        if commit:
+            db.session.commit()
+
+    @staticmethod
     def reset_for_retrigger(uuid, commit=True):
         """Mark a dossier ``pending`` (dropping any recorded job_id) so a forced retrigger
         can re-claim it via the atomic ``claim_running`` -- ``done``/``error``/fresh

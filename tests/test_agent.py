@@ -5,11 +5,16 @@
 # DATABASE_URL=sqlite:// python -m unittest tests.test_agent
 import asyncio
 import json
+import mmap
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import claude_agent_sdk
+
 from crashclouseau.agent import triage
+from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.result import CrashTriageResult
 from crashclouseau.agent.schema import Decision
 from crashclouseau.agent.triage import build_options, build_result, run_crash_triage
@@ -34,6 +39,12 @@ _STRONG_DOSSIER = {
     }
 }
 _DOSSIER_JSON = json.dumps(_STRONG_DOSSIER)
+# A REAL abstain: the model spoke and declined, inside the mandated fence. Distinct from
+# "no fence at all", which build_result now treats as a failed run.
+_ABSTAIN_JSON = json.dumps(
+    {"verdict": {"decision": "abstain",
+                 "abstain_reason": "nothing credible in the window"}}
+)
 
 
 def _result_msg(result, *, is_error=False, num_turns=3, cost=0.25, subtype="success"):
@@ -78,14 +89,37 @@ class TestBuildOptions(unittest.TestCase):
         # subagents never get the Task tool (no recursion)
         self.assertNotIn("Task", o.agents["call-graph-explorer"].tools)
 
-    def test_roles_run_inline_not_backgrounded(self):
-        """Every subagent must be explicitly non-background, and the assertion is on
-        ``False`` rather than falsiness: ``None`` is also falsy, and ``None`` is exactly
-        the value that broke this. ``asdict`` drops a ``None`` from the payload, the CLI
-        then backgrounds the subagent, the principal ends its turn to wait for a
-        completion notification, and the progress note it leaves behind reaches
-        ``parse_and_validate`` as the final handoff -- one abstain per run, no error
-        anywhere. See the comment in ``roles.make_role``."""
+    def test_subagents_pinned_inline_by_cli_env(self):
+        """THE assertion that keeps the fan-out inline. The CLI backgrounds a subagent
+        unless the MODEL passes ``run_in_background: false`` -- the launch predicate only
+        ever tests ``V.background === true``, so the AgentDefinition can force
+        backgrounding on but never off. This env var is the only global off-switch (the
+        ``&& !U`` term). A backgrounded fan-out makes the principal end its turn on a
+        progress note, which used to reach ``parse_and_validate`` as the final handoff:
+        one silent abstain per run, no error anywhere. See ``triage._CLI_ENV``.
+
+        Asserted as the literal ``"1"``, not truthiness: the CLI parses the value through
+        a typed boolean that accepts only 1/true/yes/on, so ``"0"`` (or any other string)
+        silently leaves backgrounding ENABLED."""
+        self.assertEqual(
+            self._opts().env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"), "1")
+
+    def test_cli_env_does_not_clobber_the_process_env(self):
+        # options.env is MERGED over os.environ by the SDK (options.env wins), so this
+        # must stay a one-key dict -- anything else would drop ANTHROPIC_API_KEY / PATH
+        # from the subprocess. Also: a copy per call, so a caller mutating options.env
+        # cannot poison the module constant for every later run.
+        o1, o2 = self._opts(), self._opts()
+        self.assertEqual(set(o1.env), {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"})
+        o1.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "0"
+        self.assertEqual(o2.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+        self.assertEqual(triage._CLI_ENV["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+
+    def test_roles_declare_background_false(self):
+        """Kept as the statement of intent, NOT as the control: the CLI drops
+        ``background: false`` at parse time (a truthy conditional spread) and would
+        ignore it anyway. If it ever starts honouring the field, ``False`` is the value
+        we want. See the long comment in ``roles.make_role``."""
         for name, agent in self._opts().agents.items():
             self.assertIs(agent.background, False, name)
 
@@ -194,8 +228,34 @@ class TestBuildResult(unittest.TestCase):
         self.assertEqual(r.num_turns, 4)
         self.assertEqual(r.total_cost_usd, 0.5)
 
-    def test_missing_block_abstains(self):
-        r = build_result(_result_msg("no json here at all"))
+    def test_missing_block_raises_not_abstains(self):
+        """No handoff is an INFRASTRUCTURE failure, not a verdict: the system prompt
+        requires the fenced block on every path (abstain is a value inside it), so its
+        absence means the run never reached a conclusion. It used to persist as a
+        status=done abstain that read like a considered "insufficient evidence" — which
+        is how a 66% failure rate stayed invisible for three days."""
+        msg = _result_msg("Waiting for the three background agents to complete.",
+                          num_turns=17, cost=0.81)
+        with self.assertRaises(MissingHandoffError) as ctx:
+            build_result(msg)
+        exc = ctx.exception
+        # The forensics + the SPEND ride on the exception: `set_status` writes neither,
+        # and the run was paid for in full.
+        self.assertIn("background agents", exc.raw_result)
+        self.assertEqual(exc.cost_usd, 0.81)
+        self.assertEqual(exc.num_turns, 17)
+
+    def test_unparseable_json_block_also_raises(self):
+        # A fence whose JSON is malformed is the SAME failure — the verdict is gone
+        # either way, and prod's pre-regression baseline was mostly this shape.
+        with self.assertRaises(MissingHandoffError):
+            build_result(_result_msg("x\n```json\n{\"verdict\": {,}\n```"))
+
+    def test_parsed_block_that_fails_validation_still_abstains(self):
+        # The guard must NOT swallow the salvage path: a block that parses but fails
+        # #03 validation is the model speaking, so it stays a (salvaged) abstain.
+        bad = {"verdict": {"decision": "strong-evidence", "confidence": "high"}}
+        r = build_result(_result_msg("x\n```json\n" + json.dumps(bad) + "\n```"))
         self.assertEqual(r.decision, Decision.abstain)
         self.assertTrue(r.dossier.verdict.abstain_reason)
 
@@ -210,7 +270,7 @@ class TestBuildResult(unittest.TestCase):
     def test_actions_captured(self):
         rec = ActionsRecorder(uploader=None)
         rec.record("bugzilla.update_bug", {"bug_id": 1, "changes": {}}, reasoning="x")
-        r = build_result(_result_msg("no json"), recorder=rec)
+        r = build_result(_result_msg("x\n```json\n" + _ABSTAIN_JSON + "\n```"), recorder=rec)
         self.assertEqual(len(r.actions), 1)
         self.assertEqual(r.actions[0]["type"], "bugzilla.update_bug")
 
@@ -246,7 +306,7 @@ class TestBuildResult(unittest.TestCase):
         self.assertEqual(r.actions, [])
 
     def test_no_bridge_on_abstain(self):
-        r = build_result(_result_msg("no json here at all"))
+        r = build_result(_result_msg("x\n```json\n" + _ABSTAIN_JSON + "\n```"))
         self.assertEqual(r.decision, Decision.abstain)
         self.assertEqual(r.actions, [])
 
@@ -359,6 +419,50 @@ class TestSumTokens(unittest.TestCase):
         rm = SimpleNamespace(model_usage={"x": None, "y": "bad",
                                           "z": {"inputTokens": 5}}, usage=None)
         self.assertEqual(triage._sum_tokens(rm), (5, 0, 0))
+
+
+def _bundled_cli():
+    """The CLI binary the SDK will actually spawn, or None (mirrors
+    ``SubprocessCLITransport._find_bundled_cli``)."""
+    path = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
+    return path if path.is_file() else None
+
+
+class TestBundledCLICanary(unittest.TestCase):
+    """Fail HERE, offline, when an SDK bump removes the switch the inline fan-out
+    depends on — rather than in prod, silently, at ~$25/day of abstains.
+
+    ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`` is an internal env var of the bundled CLI,
+    not public SDK API, so nothing else notices if it disappears: the CLI ignores an
+    unknown variable, the subagents background again, and the principal starts leaving
+    progress notes. That is exactly how 0.2.110 -> 0.2.131 got through — the lock bump
+    diffed ``ClaudeAgentOptions``' fields across every release and never looked at what
+    the CLI does with them.
+
+    KNOW WHAT THIS DOES NOT CATCH. It is a presence check on a string, and the variable
+    is read at ~22 sites of which only one — the ``&& !U`` in the Agent launch predicate
+    — is load-bearing for the fan-out; the rest are Bash/PowerShell/Monitor/TUI. An SDK
+    bump that keeps the variable for the Bash schema while restructuring the Agent launch
+    would leave this green and prod broken. Asserting the predicate itself is not an
+    option: every identifier in it is minified and renames between builds. So on any SDK
+    bump, re-derive it by hand —
+        grep -a -o -b -E '.{80}V?\\.background===.{160}' <bundled>/claude
+    — and check the term is still ``&& !U``. The runtime backstop for the case this
+    misses is ``MissingHandoffError``: a backgrounded fan-out now errors loudly instead
+    of persisting as a plausible abstain."""
+
+    def test_switch_still_exists_in_the_bundled_binary(self):
+        cli = _bundled_cli()
+        if cli is None:  # not installed (e.g. a --no-default-groups checkout)
+            self.skipTest("no bundled CLI to scan")
+        with open(cli, "rb") as fh, mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            self.assertNotEqual(
+                mm.find(b"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"), -1,
+                "the bundled CLI no longer mentions "
+                "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: triage._CLI_ENV is now inert and "
+                "the subagent fan-out is backgrounding again. Re-derive the launch "
+                "predicate (grep -a for 'V.background===') before shipping this SDK bump.",
+            )
 
 
 if __name__ == "__main__":
