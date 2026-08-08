@@ -129,14 +129,17 @@ class TestRecoveryIsCountable(unittest.TestCase):
     than a measurement, on a reaper that was in fact broken for an unrelated reason.
     """
 
-    def _finished_payload(self, inherited):
+    def _finished_payload(self, inherited, run_started=None):
         from contextlib import contextmanager
 
         from tests.test_orchestrator import _SEED, _abstain_result, _triage_returning
 
         seen = {}
         MDoss = mock.MagicMock()
-        MDoss.get_by_uuid.return_value = None
+        # What `_record_job_id` just stamped, read back so the settling write can carry it.
+        MDoss.get_by_uuid.return_value = (
+            mock.Mock(payload={"run_started": run_started}) if run_started else None
+        )
         MDoss.skip_triage.return_value = False
         MDoss.claim_running.return_value = True
         MDoss.get_reap_attempts.return_value = inherited
@@ -169,6 +172,23 @@ class TestRecoveryIsCountable(unittest.TestCase):
     def test_a_clean_run_does_not_invent_one(self):
         self.assertNotIn("reap_attempts", self._finished_payload(0))
 
+    def test_a_finished_run_carries_its_start_time_forward(self):
+        """Same wholesale-replace trap, second field. Driven through
+        ``run_evidence_agent`` so the assertion is on what the orchestrator actually
+        writes: an earlier version of this test hand-supplied `run_started` to `upsert`
+        and therefore passed with the carry-forward DELETED.
+
+        Without it, only failed runs keep a start time. Every `done` row falls back to
+        `created` — the crash's first ingest, which a retrigger deliberately preserves —
+        so a 16-minute run renders as "29h", and the fleet's average-duration stat, which
+        is built only from done rows, stays inflated by every recovered crash."""
+        started = "2026-08-08T16:18:45+00:00"
+        self.assertEqual(
+            self._finished_payload(0, run_started=started).get("run_started"), started)
+
+    def test_a_run_with_no_recorded_start_does_not_invent_one(self):
+        self.assertNotIn("run_started", self._finished_payload(0))
+
 
 @unittest.skipUnless(_is_postgres(), "round-trip needs a disposable Postgres backend")
 class TestOrphanStaysClaimable(unittest.TestCase):
@@ -191,6 +211,13 @@ class TestOrphanStaysClaimable(unittest.TestCase):
     def _orphan(self, age_s):
         """A dossier stuck `running` with its last beat `age_s` ago."""
         models.Dossier.upsert(_UUID, payload={}, status="running")
+        return self._age(age_s)
+
+    def _age(self, age_s):
+        """Push the heartbeat back WITHOUT touching the payload. Separate from `_orphan`
+        because that one upserts `payload={}` — which wipes the very `job_id` the
+        own-job-reclaim tests need — and because every ordinary write refreshes `updated`
+        via ``onupdate``, so the age has to be set last."""
         old = datetime.now(timezone.utc) - timedelta(seconds=age_s)
         db.session.execute(
             db.update(models.Dossier)
@@ -258,6 +285,137 @@ class TestOrphanStaysClaimable(unittest.TestCase):
         models.Dossier.bump_reap_attempts(_UUID)
         self.assertTrue(models.Dossier.skip_triage(_UUID, self.STALE_AFTER))
         self.assertFalse(models.Dossier.claim_running(_UUID, self.STALE_AFTER))
+
+    def test_an_rq_retry_can_retake_the_row_its_own_dead_horse_left(self):
+        """Heroku SIGKILLs a worker on every deploy. RQ requeues the job under the SAME
+        id, but the dossier is still `running` -- so without this the retry sees an owned
+        row, refuses, and the crash waits out the full 35-minute reaper window with
+        workers idle. Measured 4/4 on 2026-08-08. Recovered in 4 min instead."""
+        # Order matters: `set_job_id` writes the payload, and `updated` carries
+        # onupdate=now(), so stamping the id REFRESHES the heartbeat — the same trap that
+        # made `bump_reap_attempts` defeat the reaper. Age the row AFTER the stamp, which
+        # is also the real sequence: the id is recorded at the start of a run that then
+        # dies.
+        models.Dossier.upsert(_UUID, payload={}, status="running")
+        models.Dossier.set_job_id(_UUID, "job-abc")
+        self._age(models._OWN_JOB_RECLAIM_AFTER_S + 30)   # quiet, far from STALE_AFTER
+        self.assertFalse(
+            models.Dossier.claim_running(_UUID, self.STALE_AFTER),
+            "a not-yet-stale row must not be claimable without the owning job id",
+        )
+        self.assertTrue(
+            models.Dossier.claim_running(_UUID, self.STALE_AFTER, own_job_id="job-abc"),
+            "the RQ retry could not re-take the row its own dead work-horse left",
+        )
+
+    def test_a_beating_run_is_not_stealable_even_by_its_own_job_id(self):
+        """THE safety property, and the one the first version of this got wrong. It is NOT
+        true that RQ only retries a job whose work-horse is dead: the abandoned-execution
+        cleanup keys on the worker PARENT's heartbeat, and the parent can die while its
+        forked horse runs on. Reproduced on rq 2.10.0 -- SIGKILL only the parent and a
+        second execution of the SAME job id starts while the first is still running. If
+        the id alone granted the claim, that would be two ~20-minute ~$3 runs on one
+        crash, both reaching `_autofile`, which can file two bugs for one crash.
+
+        The dossier's own heartbeat is the authority: a live run stamps `updated` every
+        120s, so it can never look `_OWN_JOB_RECLAIM_AFTER_S` (240s) quiet."""
+        for age in (0, 10, models._OWN_JOB_RECLAIM_AFTER_S - 30):
+            models.Dossier.upsert(_UUID, payload={}, status="running")
+            models.Dossier.set_job_id(_UUID, "job-abc")   # re-stamps `updated`, so:
+            self._age(age)
+            self.assertFalse(
+                models.Dossier.claim_running(
+                    _UUID, self.STALE_AFTER, own_job_id="job-abc"),
+                "a run beating {}s ago was stolen by its own job id".format(age),
+            )
+            self.assertTrue(
+                models.Dossier.skip_triage(
+                    _UUID, self.STALE_AFTER, own_job_id="job-abc"),
+                "skip_triage let a live run be re-run by its own job id",
+            )
+
+    def test_the_reclaim_window_cannot_drift_under_the_heartbeat(self):
+        """The safety argument above is only true while the reclaim window stays a
+        comfortable multiple of the beat. Pinned so raising `_HEARTBEAT_INTERVAL_S`
+        without raising this fails here rather than in production."""
+        from crashclouseau.agent import orchestrator as _orch
+        self.assertGreaterEqual(
+            models._OWN_JOB_RECLAIM_AFTER_S, 2 * _orch._HEARTBEAT_INTERVAL_S)
+
+    def test_skip_triage_lets_our_own_dead_attempt_through(self):
+        """`skip_triage` runs ~30 lines BEFORE the claim, so without the same arm the
+        claim's is unreachable for every ordinary (force=False) job and a deploy-killed
+        ingestion run still waits for the reaper."""
+        models.Dossier.upsert(_UUID, payload={}, status="running")
+        models.Dossier.set_job_id(_UUID, "job-abc")   # refreshes `updated`, so age after
+        self._age(models._OWN_JOB_RECLAIM_AFTER_S + 30)
+        self.assertTrue(
+            models.Dossier.skip_triage(_UUID, self.STALE_AFTER),
+            "without the job id this row still looks like someone else's live run",
+        )
+        self.assertFalse(
+            models.Dossier.skip_triage(_UUID, self.STALE_AFTER, own_job_id="job-abc"))
+        self.assertTrue(   # ...and not somebody else's
+            models.Dossier.skip_triage(_UUID, self.STALE_AFTER, own_job_id="other"))
+
+    def test_another_jobs_live_run_is_not_stealable(self):
+        """The safety half. A retrigger cancels the old job and enqueues a NEW id, so the
+        ids differ and this arm must not fire -- otherwise two workers run one crash and
+        we pay twice."""
+        self._orphan(10)
+        models.Dossier.set_job_id(_UUID, "job-owner")
+        self.assertFalse(
+            models.Dossier.claim_running(_UUID, self.STALE_AFTER, own_job_id="job-other"))
+        # ...and an absent/None job id must not match a row with no job_id recorded.
+        models.Dossier.upsert(_UUID, payload={}, status="running")
+        self.assertFalse(models.Dossier.claim_running(_UUID, self.STALE_AFTER))
+        self.assertFalse(
+            models.Dossier.claim_running(_UUID, self.STALE_AFTER, own_job_id=None))
+
+    def test_a_settled_row_is_never_reclaimable_by_its_own_job(self):
+        """`done`/`error` are terminal. The own-job arm is scoped to `running` so a job
+        that already finished and is somehow retried cannot re-run and re-bill."""
+        for settled in ("done", "error"):
+            models.Dossier.upsert(_UUID, payload={"job_id": "job-abc"}, status=settled)
+            self.assertFalse(
+                models.Dossier.claim_running(
+                    _UUID, self.STALE_AFTER, own_job_id="job-abc"),
+                settled,
+            )
+
+    def test_set_job_id_stamps_when_this_attempt_started(self):
+        # The tasks view times a run from this, not from `created` (which survives a
+        # retrigger and made a 20-minute-old run render as "29h running").
+        self._orphan(10)
+        models.Dossier.set_job_id(_UUID, "job-abc")
+        started = models.Dossier.get_by_uuid(_UUID).payload["run_started"]
+        parsed = datetime.fromisoformat(started)
+        self.assertIsNotNone(parsed.tzinfo)
+        self.assertLess(
+            abs((datetime.now(timezone.utc) - parsed).total_seconds()), 60)
+
+    def test_run_started_reaches_a_done_row_through_the_real_settling_write(self):
+        """Driven through the ACTUAL writes, not a hand-built row: the settling upsert
+        REPLACES the payload wholesale, so `run_started` only reaches a finished run if the
+        caller carries it forward — exactly like `reap_attempts`. Without that, every
+        `done` row still times from `created` and the fleet's average-duration stat stays
+        inflated by every retriggered crash, which is most of them during a recovery."""
+        models.Dossier.upsert(_UUID, payload={}, status="running")
+        models.Dossier.set_job_id(_UUID, "job-abc")
+        started = models.Dossier.get_by_uuid(_UUID).payload["run_started"]
+        # what run_evidence_agent does at the end
+        models.Dossier.upsert(
+            _UUID, payload={"dossier": {}, "run_started": started}, status="done")
+        row = next(r for r in models.Dossier.list_tasks() if r.uuid == _UUID)
+        self.assertEqual(row.run_started, started)
+        self.assertEqual(models.Dossier.get_by_uuid(_UUID).payload["run_started"], started)
+
+    def test_retrigger_drops_the_previous_attempts_start(self):
+        # Or a row queued seconds ago renders the elapsed time of the run it replaces.
+        models.Dossier.upsert(_UUID, payload={}, status="running")
+        models.Dossier.set_job_id(_UUID, "job-abc")
+        models.Dossier.reset_for_retrigger(_UUID)
+        self.assertNotIn("run_started", models.Dossier.get_by_uuid(_UUID).payload)
 
 
 if __name__ == "__main__":

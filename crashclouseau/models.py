@@ -19,6 +19,18 @@ PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
 # Evidence-agent persistence (#04). The dossier JSON content schema is owned by
 # the dossier-builder sub-plan (#03); this layer stores the envelope + verdict.
 DOSSIER_SCHEMA_VERSION = 1
+
+# How quiet a ``running`` dossier must go before the RQ job that OWNS it may re-take it
+# (``Dossier.claim_running(..., own_job_id=)``). Deliberately a small multiple of
+# ``agent.orchestrator._HEARTBEAT_INTERVAL_S`` (120s): a live run stamps ``updated`` every
+# beat, so it can never look this stale, and a retry therefore cannot displace a horse that
+# is still working — which is possible, because RQ's abandoned-execution cleanup keys on
+# the worker PARENT's heartbeat and will retry a job whose forked horse is alive. Two beats
+# of slack absorbs a late beat; a retry cannot physically land sooner than the registry TTL
+# (~90s) plus the retry interval anyway. Kept here rather than imported to avoid
+# models -> agent.orchestrator; ``tests/test_reaper_recovery`` pins the relationship so the
+# two cannot drift apart.
+_OWN_JOB_RECLAIM_AFTER_S = 240
 VERDICT_TYPE = db.Enum(
     "culprit", "lead", "unrelated", "abstain", "error", name="VERDICT_TYPE"
 )
@@ -1534,6 +1546,13 @@ class Dossier(db.Model):
             return
         payload = dict(d.payload or {})
         payload["job_id"] = job_id
+        # Stamp when THIS attempt started. `created` is the row's first-ever ingest and
+        # `reset_for_retrigger` deliberately leaves it alone, so on a retriggered crash it
+        # can be days old -- the tasks view computed duration from it and showed a run that
+        # started 20 minutes ago as "29h running". Written here because this is the first
+        # thing after `claim_running`, so it marks the start of the attempt that owns the
+        # row, and it is rewritten on every attempt.
+        payload["run_started"] = datetime.now(timezone.utc).isoformat()
         d.payload = payload
         if commit:
             db.session.commit()
@@ -1600,6 +1619,10 @@ class Dossier(db.Model):
         payload.pop("job_id", None)
         payload.pop("reap_attempts", None)
         payload.pop("error", None)
+        # And the previous attempt's start, or a row that was queued seconds ago renders
+        # the elapsed time of the run it is replacing — the same lie, from the other end,
+        # as timing from `created`. The next attempt stamps a fresh one at `set_job_id`.
+        payload.pop("run_started", None)
         d.payload = payload
         if commit:
             db.session.commit()
@@ -1735,7 +1758,7 @@ class Dossier(db.Model):
         )
 
     @staticmethod
-    def skip_triage(uuid, stale_after_s):
+    def skip_triage(uuid, stale_after_s, own_job_id=None):
         """Whether triage of ``uuid`` should be SKIPPED: it is already ``done``/``error``,
         or a run is genuinely in progress (``running`` and ``updated`` within
         ``stale_after_s``). A ``running`` dossier OLDER than that is an orphan — its
@@ -1747,7 +1770,14 @@ class Dossier(db.Model):
 
         NOTE this makes ``updated`` load-bearing for recovery, not just for reporting: any
         write that refreshes it on an orphan tells the retry "someone is already on it"
-        and the retry skips itself. See ``bump_reap_attempts``."""
+        and the retry skips itself. See ``bump_reap_attempts``.
+
+        ``own_job_id`` mirrors the arm in ``claim_running`` and has to be here too, or that
+        one is unreachable for every ordinary (non-forced) job: this early-out runs ~30
+        lines before the claim, so a deploy-killed ingestion run would still skip itself
+        here and still wait out the reaper. Same bound for the same reason — the row must
+        have gone quiet for ``_OWN_JOB_RECLAIM_AFTER_S``, so a horse that is still beating
+        is never treated as ours to take back."""
         d = Dossier.get_by_uuid(uuid)
         if d is None:
             return False
@@ -1759,30 +1789,88 @@ class Dossier(db.Model):
                 return True  # unknown age -> assume in progress
             if upd.tzinfo is None:
                 upd = upd.replace(tzinfo=timezone.utc)
-            return (datetime.now(timezone.utc) - upd).total_seconds() < stale_after_s
+            quiet_s = (datetime.now(timezone.utc) - upd).total_seconds()
+            if own_job_id and quiet_s >= _OWN_JOB_RECLAIM_AFTER_S:
+                owner = (getattr(d, "payload", None) or {}).get("job_id")
+                if str(owner or "") == str(own_job_id):
+                    # Our own dead attempt: re-run it now instead of waiting for the reaper.
+                    return False
+            return quiet_s < stale_after_s
         return False  # pending -> run
 
     @staticmethod
-    def claim_running(uuid, stale_after_s):
+    def claim_running(uuid, stale_after_s, own_job_id=None):
         """Atomically claim ``uuid`` for a run: set ``status='running'`` + ``updated=now()``
         iff no dossier exists yet, or it is ``pending``, or a STALE ``running`` orphan
-        (``updated`` older than ``stale_after_s``). Returns True iff THIS caller won the
-        claim, so with several agentworkers exactly one runs a given uuid — no double-pay.
-        ``done``/``error``/a FRESH ``running`` are not claimable -> False. A single atomic
-        Postgres ``INSERT .. ON CONFLICT DO UPDATE .. WHERE .. RETURNING`` (no
-        check-then-set race between the skip decision and marking it running)."""
+        (``updated`` older than ``stale_after_s``), or the ``running`` row is owned by
+        ``own_job_id`` — THIS job's own previous attempt. Returns True iff THIS caller won
+        the claim, so with several agentworkers exactly one runs a given uuid — no
+        double-pay. ``done``/``error``/a FRESH ``running`` owned by ANOTHER job are not
+        claimable -> False. A single atomic Postgres ``INSERT .. ON CONFLICT DO UPDATE ..
+        WHERE .. RETURNING`` (no check-then-set race between the skip decision and marking
+        it running).
+
+        The ``own_job_id`` arm exists because without it RQ's retry-after-a-dead-worker is
+        a GUARANTEED no-op for these jobs. When Heroku SIGKILLs a worker mid-run (every
+        deploy does), RQ requeues the job under the SAME id, but the dossier is still
+        ``running`` with a heartbeat from seconds ago — so the retry looks at a row that
+        appears freshly owned, refuses the claim, and exits "claimed by another worker;
+        skipping" in a couple of seconds. It then has to wait out the full
+        ``job_timeout + buffer`` before the reaper will touch it. Measured 2026-08-08: 4 of
+        4 deploy-killed runs self-skipped in 2-11s, and the crashes sat dead for 35-50
+        minutes each while three agentworkers idled.
+
+        THE ID ALONE IS NOT ENOUGH, and assuming it was is how the first version of this
+        was wrong. It is NOT true that RQ only retries a job whose work-horse is dead: the
+        abandoned-execution path keys on the WORKER PARENT's execution heartbeat, and the
+        parent can die while its forked horse runs on (``teardown`` never kills the horse).
+        The registry entry then expires after ~90s and another worker's
+        ``StartedJobRegistry.cleanup`` calls ``job.retry(...)`` under the SAME id. This was
+        reproduced on the pinned rq 2.10.0 against a real Redis: SIGKILL only the parent,
+        and a second execution of the same job id starts while the first is still running.
+        Three ways the parent can stop beating while the horse lives here: an unprotected
+        Redis call in ``monitor_work_horse`` escaping to "found an unhandled exception,
+        quitting" (``worker.black_hole``'s comment records seeing exactly that line in
+        prod); a Redis failover blocking the parent for minutes while the horse talks only
+        to Anthropic/hg/Postgres (the connection is built with no ``socket_timeout``); and
+        the dyno swapping under the Node CLI, which starves the parent's monitor loop on
+        precisely the biggest runs. Granting the claim on the id alone would then put two
+        ~20-minute, ~$3 runs on one crash — both upserting the dossier, both reaching
+        ``_autofile``, which can file two Bugzilla bugs for one crash.
+
+        So the arm is ANDed with the dossier's own heartbeat going quiet for
+        ``_OWN_JOB_RECLAIM_AFTER_S``. A live run stamps ``updated`` every
+        ``_HEARTBEAT_INTERVAL_S`` and therefore can never look that stale, so a horse that
+        is still working cannot be displaced no matter what Redis believes; a genuinely
+        dead one is recovered in 4 minutes instead of 35.
+
+        A retrigger — the case where someone else legitimately owns an in-flight run —
+        cancels the old job and enqueues a NEW id, and ``reset_for_retrigger`` pops
+        ``job_id`` outright, so this arm cannot fire there at all."""
         uuidid = UUID.get_id(uuid)
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        claimable = [
+            Dossier.status == "pending",
+            and_(Dossier.status == "running", Dossier.updated < cutoff),
+        ]
+        if own_job_id:
+            own_cutoff = datetime.now(timezone.utc) - timedelta(
+                seconds=_OWN_JOB_RECLAIM_AFTER_S
+            )
+            claimable.append(
+                and_(
+                    Dossier.status == "running",
+                    Dossier.updated < own_cutoff,
+                    Dossier.payload["job_id"].astext == str(own_job_id),
+                )
+            )
         ins = pg.insert(Dossier).values(
             uuidid=uuidid, schema_version=DOSSIER_SCHEMA_VERSION, status="running"
         )
         stmt = ins.on_conflict_do_update(
             index_elements=["uuidid"],
             set_={"status": "running", "updated": db.func.now()},
-            where=or_(
-                Dossier.status == "pending",
-                and_(Dossier.status == "running", Dossier.updated < cutoff),
-            ),
+            where=or_(*claimable),
         ).returning(Dossier.id)
         won = db.session.execute(stmt).first() is not None
         db.session.commit()
@@ -1801,6 +1889,11 @@ class Dossier(db.Model):
                 Dossier.worker_models, Verdict.verdict, Verdict.confidence,
                 # Failure reason (stashed by set_status on the error path); NULL otherwise.
                 Dossier.payload["error"].astext.label("error"),
+                # When the CURRENT attempt started (``set_job_id``). `created` is the
+                # row's first ingest and survives a retrigger, so it is the wrong clock
+                # for a re-run; the view prefers this and falls back to `created` for
+                # rows written before it existed.
+                Dossier.payload["run_started"].astext.label("run_started"),
                 # What the autofiler did, if anything (``record_filed_bug``): the bug id and
                 # whether it opened one or commented on an existing bug. NULL for every run
                 # before filing was armed, and for anything it declined to file.

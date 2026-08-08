@@ -131,6 +131,17 @@ def _aware(dt):
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def _parse_ts(value):
+    """Read the ISO timestamp `set_job_id` stamps into the JSONB payload. Returns None
+    for anything unreadable — a display clock must never take the page down."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _task_view(rows, stale_after_s, now):
     """Turn raw Dossier.list_tasks rows into per-task display dicts + a fleet summary.
 
@@ -144,6 +155,8 @@ def _task_view(rows, stale_after_s, now):
     filed = 0
     cost_total = 0.0
     costed = 0
+    cost_done_total = 0.0
+    done_costed = 0
     durations_done = []
     for r in rows:
         created = _aware(r.created)
@@ -151,10 +164,17 @@ def _task_view(rows, stale_after_s, now):
         status = r.status or "pending"
         counts[status] = counts.get(status, 0) + 1
 
-        if status in ("done", "error") and created and updated:
-            duration = (updated - created).total_seconds()
-        elif created:
-            duration = (now - created).total_seconds()
+        # Time THIS attempt, not the row. `created` is the crash's first ingest and
+        # `reset_for_retrigger` leaves it untouched, so on a retriggered crash it can be
+        # days old — the page showed runs that started twenty minutes earlier as
+        # "29h running", which reads as a hung fleet during exactly the bulk recovery it
+        # was being used to watch. `run_started` is stamped when the attempt claims the
+        # row; absent on rows written before it existed, and there `created` is right.
+        started = _aware(_parse_ts(getattr(r, "run_started", None))) or created
+        if status in ("done", "error") and started and updated:
+            duration = (updated - started).total_seconds()
+        elif started:
+            duration = (now - started).total_seconds()
         else:
             duration = None
 
@@ -166,6 +186,9 @@ def _task_view(rows, stale_after_s, now):
         if cost is not None:
             cost_total += cost
             costed += 1
+            if status == "done":
+                cost_done_total += cost
+                done_costed += 1
         if status == "done" and duration is not None:
             durations_done.append(duration)
 
@@ -209,7 +232,15 @@ def _task_view(rows, stale_after_s, now):
         "filed": filed,
         "pct_done": round(100 * done / total) if total else 0,
         "cost_total": cost_total,
-        "cost_avg": cost_total / costed if costed else 0.0,
+        # Averaged over runs that FINISHED, not over every row carrying a cost. An
+        # abandoned or errored run keeps the cost it burned before dying, so dividing by
+        # `costed` mixes part-runs into a figure the template labels "avg/done" — it read
+        # $2.54 against a true $2.93, a 13% understatement that grows with the failure
+        # rate, i.e. it looks best exactly when things are worst. Divided by the done runs
+        # that actually RECORDED a cost, not by every done run: a finished row can carry a
+        # NULL cost_usd, and counting it as $0 reintroduces the same downward bias from the
+        # other side.
+        "cost_avg": cost_done_total / done_costed if done_costed else 0.0,
         "duration_avg_s": avg_dur,
         "duration_avg_str": _fmt_duration(avg_dur),
     }

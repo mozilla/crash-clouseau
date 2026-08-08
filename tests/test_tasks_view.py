@@ -40,6 +40,7 @@ def _row(**kw):
         filed_bug=None,
         filed_mode=None,
         filed_needinfo=None,
+        run_started=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -79,6 +80,71 @@ class TestTaskView(unittest.TestCase):
         self.assertEqual(summary["stalled"], 0)
         # running duration = now - created (elapsed so far), not updated - created
         self.assertAlmostEqual(tasks[0]["duration_s"], 5 * 60)
+
+    def test_duration_times_the_attempt_not_the_row(self):
+        """A retriggered crash keeps its original `created` (reset_for_retrigger leaves it
+        alone deliberately), so timing from it reported runs that had started 20 minutes
+        earlier as "29h running" -- during a bulk recovery that reads as a hung fleet.
+        `run_started` is stamped when the attempt claims the row."""
+        row = _row(
+            status="running",
+            created=NOW - timedelta(hours=29),          # first ingested yesterday
+            updated=NOW - timedelta(minutes=1),         # beating
+            run_started=(NOW - timedelta(minutes=20)).isoformat(),
+        )
+        tasks, _ = html._task_view([row], STALE, NOW)
+        self.assertAlmostEqual(tasks[0]["duration_s"], 20 * 60)
+        self.assertEqual(tasks[0]["duration_str"], "20m")
+
+    def test_done_duration_also_measures_the_attempt(self):
+        row = _row(
+            status="done",
+            created=NOW - timedelta(hours=29),
+            updated=NOW,
+            run_started=(NOW - timedelta(minutes=16)).isoformat(),
+        )
+        tasks, _ = html._task_view([row], STALE, NOW)
+        self.assertAlmostEqual(tasks[0]["duration_s"], 16 * 60)
+
+    def test_duration_falls_back_to_created_without_a_run_started(self):
+        # Rows written before `run_started` existed, and the tests' hand-built rows.
+        row = _row(status="running", created=NOW - timedelta(minutes=7),
+                   updated=NOW - timedelta(minutes=1))
+        tasks, _ = html._task_view([row], STALE, NOW)
+        self.assertAlmostEqual(tasks[0]["duration_s"], 7 * 60)
+
+    def test_an_unparseable_run_started_does_not_break_the_page(self):
+        row = _row(status="running", created=NOW - timedelta(minutes=7),
+                   updated=NOW - timedelta(minutes=1), run_started="not-a-timestamp")
+        tasks, _ = html._task_view([row], STALE, NOW)
+        self.assertAlmostEqual(tasks[0]["duration_s"], 7 * 60)
+
+    def test_cost_avg_is_per_done_run_not_per_costed_row(self):
+        """The template labels it avg/done. An errored or abandoned run keeps the cost it
+        burned before dying, so dividing by every costed row understates the real
+        per-result cost -- and understates it MORE the worse the failure rate, i.e. it
+        looks best exactly when things are worst."""
+        rows = [
+            _row(status="done", cost_usd=3.00),
+            _row(status="done", cost_usd=3.00),
+            _row(status="error", cost_usd=0.20),   # died early, still cost something
+            _row(status="running", cost_usd=0.10),
+        ]
+        _, s = html._task_view(rows, STALE, NOW)
+        self.assertAlmostEqual(s["cost_total"], 6.30)   # total is still everything spent
+        self.assertAlmostEqual(s["cost_avg"], 3.00)     # not 6.30/4 = 1.575
+
+    def test_cost_avg_is_zero_when_nothing_finished(self):
+        _, s = html._task_view([_row(status="error", cost_usd=0.20)], STALE, NOW)
+        self.assertEqual(s["cost_avg"], 0.0)
+
+    def test_cost_avg_skips_a_done_run_with_no_recorded_cost(self):
+        # The mirror of the bug being fixed: counting a cost-less finished run as $0 drags
+        # the average down just as including part-runs did.
+        rows = [_row(status="done", cost_usd=3.00), _row(status="done", cost_usd=None)]
+        _, s = html._task_view(rows, STALE, NOW)
+        self.assertAlmostEqual(s["cost_avg"], 3.00)   # not 1.50
+        self.assertEqual(s["done"], 2)
 
     def test_running_past_threshold_is_stalled(self):
         row = _row(

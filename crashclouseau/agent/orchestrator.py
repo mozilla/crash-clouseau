@@ -1800,10 +1800,16 @@ def run_evidence_agent(uuid, force=False):
     try:
         skip_dedup = config.get_agent_skip_if_existing()
         stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
+        # Our own RQ job id, so both liveness decisions below can recognise a `running`
+        # row this very job left behind when its worker was SIGKILLed (every deploy) and
+        # re-take it instead of waiting out the reaper. Needed HERE as well as at the
+        # claim: this early-out runs first, so without it the claim's arm is unreachable
+        # for every non-forced job. See ``Dossier.claim_running``.
+        own_job_id = getattr(_current_job(), "id", None)
         # Cheap cost dedup early-out (already-done / a same-proto sibling). A forced
         # retrigger bypasses it; the atomic claim below is still the real guard.
         if skip_dedup and not force and (
-            models.Dossier.skip_triage(uuid, stale_after) or _proto_already_triaged(uuid)
+            models.Dossier.skip_triage(uuid, stale_after, own_job_id=own_job_id) or _proto_already_triaged(uuid)
         ):
             logger.info("agent: dossier/proto-signature already triaged for %s; skipping", uuid)
             return
@@ -1820,14 +1826,21 @@ def run_evidence_agent(uuid, force=False):
         # token cost). Only the global "re-run everything" mode (skip_if_existing off, and
         # not a retrigger) force-marks running unconditionally.
         if skip_dedup or force:
-            if not models.Dossier.claim_running(uuid, stale_after):
+            if not models.Dossier.claim_running(
+                uuid, stale_after, own_job_id=own_job_id
+            ):
                 logger.info("agent: %s claimed by another worker / settled; skipping", uuid)
                 return
         else:
             models.Dossier.upsert(uuid, payload={}, status="running", seed_score=seed_score)
 
-        # Record the RQ job id so a retrigger can stop this run mid-flight.
+        # Record the RQ job id so a retrigger can stop this run mid-flight; it also stamps
+        # when THIS attempt started. Read back so the settling write can carry it forward
+        # (that write replaces the payload wholesale).
         _record_job_id(uuid)
+        run_started = (getattr(models.Dossier.get_by_uuid(uuid), "payload", None) or {}).get(
+            "run_started"
+        )
 
         # Heartbeat the WHOLE run, not just the agent call. `updated` is the only liveness signal
         # a dossier has: RQ's SIGKILL at job_timeout beats the error handler, so an abandoned run
@@ -1919,6 +1932,13 @@ def run_evidence_agent(uuid, force=False):
             reap_attempts = models.Dossier.get_reap_attempts(uuid)
             if reap_attempts:
                 payload["reap_attempts"] = reap_attempts
+            # Same carry-forward, same reason: this upsert REPLACES the payload wholesale,
+            # so without it `run_started` survives only on rows that failed. A `done` row
+            # would fall back to `created` — the crash's first ingest, which a retrigger
+            # leaves untouched — and go on rendering a 16-minute run as "29h", which is
+            # also what feeds the fleet's average-duration stat.
+            if run_started:
+                payload["run_started"] = run_started
 
             worker_models = sorted(
                 {_full_model(r.get("model")) for r in roles.values() if r.get("model")}

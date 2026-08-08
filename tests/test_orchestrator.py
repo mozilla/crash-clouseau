@@ -384,6 +384,43 @@ class TestReaper(unittest.TestCase):
         self.assertEqual(q.enqueue_call.call_args.kwargs["args"], ("oom",))
 
 
+class TestOwnJobIdWiring(unittest.TestCase):
+    """The model-level arms are useless if the call site never passes the id — and
+    deleting both kwargs left the whole suite green before these existed."""
+
+    def _patches(self):
+        return TestRunEvidenceAgent._patches(self)
+
+    def test_both_liveness_checks_get_our_own_job_id(self):
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.skip_triage.return_value = False
+        MDoss.claim_running.return_value = True
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(id="job-abc")), \
+             mock.patch.object(orch.config, "get_agent_skip_if_existing", return_value=True), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                        _triage_returning(_abstain_result())):
+            orch.run_evidence_agent("u-1")
+        self.assertEqual(MDoss.skip_triage.call_args.kwargs.get("own_job_id"), "job-abc")
+        self.assertEqual(MDoss.claim_running.call_args.kwargs.get("own_job_id"), "job-abc")
+
+    def test_outside_a_worker_it_degrades_to_the_old_behaviour(self):
+        # `_current_job()` is None in unit tests and direct calls; the id must then be
+        # None, i.e. neither arm can fire.
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.skip_triage.return_value = False
+        MDoss.claim_running.return_value = True
+        with pD, pV, pC, pS, pSc, \
+             mock.patch.object(orch, "_current_job", return_value=None), \
+             mock.patch.object(orch.config, "get_agent_skip_if_existing", return_value=True), \
+             mock.patch.object(orch, "_proto_already_triaged", return_value=False), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                        _triage_returning(_abstain_result())):
+            orch.run_evidence_agent("u-1")
+        self.assertIsNone(MDoss.claim_running.call_args.kwargs.get("own_job_id"))
+
+
 class TestLiveJobUuids(unittest.TestCase):
     """`_live_job_uuids` matches on the job's first ARG, not on a recorded job_id: a job
     that is still queued has never had its id written to the dossier (`set_job_id` runs
