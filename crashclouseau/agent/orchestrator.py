@@ -2017,6 +2017,43 @@ def _proto_already_triaged(uuid):
         return False
 
 
+def _live_job_uuids(queue):
+    """UUIDs that already have a live job on the agent queue — waiting for a free worker,
+    started, parked in the scheduler for a retry, or deferred.
+
+    A ``pending`` dossier means "a job was enqueued for this uuid and has not claimed it
+    yet", and the reaper reads that as a LOST job. It usually is. It is not when the job
+    is simply behind other jobs: three agentworkers at ~16 min a run drain ~11 jobs an
+    hour, so in any batch bigger than that the tail waits longer than
+    ``job_timeout + _STALE_BUFFER_S`` (35 min) purely by queueing. The reaper then
+    re-enqueues it — putting it at the BACK of the same queue, which makes the wait worse
+    — and after ``reap_max_attempts`` marks it ``error``. An operator bulk-retrigger of 83
+    uuids lost 68 that way, none of which had anything wrong with them.
+
+    Elapsed time cannot tell the two apart; the queue can. Matching is on the job's first
+    arg because ``enqueue_agent`` enqueues ``run_evidence_agent(uuid)`` and the payload's
+    ``job_id`` is only written once the run STARTS — a queued job has no id recorded
+    anywhere, which is exactly the state in question.
+
+    Raises nothing: the caller must treat a failure as "cannot tell", not as "none alive".
+    """
+    from rq.registry import (
+        DeferredJobRegistry,
+        ScheduledJobRegistry,
+        StartedJobRegistry,
+    )
+
+    job_ids = list(queue.get_job_ids())
+    for reg in (StartedJobRegistry, ScheduledJobRegistry, DeferredJobRegistry):
+        job_ids.extend(reg(queue=queue).get_job_ids())
+    if not job_ids:
+        return set()
+    jobs = queue.job_class.fetch_many(
+        job_ids, connection=queue.connection, serializer=queue.serializer
+    )
+    return {j.args[0] for j in jobs if j is not None and j.args}
+
+
 def reap_stale_agent_jobs():
     """Re-enqueue crashes whose triage was orphaned — dossier stuck ``running`` past
     job_timeout + buffer because the worker died mid-run (e.g. Heroku restarts dynos
@@ -2039,6 +2076,35 @@ def reap_stale_agent_jobs():
                 return 0
             queue = worker.get_queue(config.get_agent_queue())
             cap = config.get_agent_reap_max_attempts()
+
+            # Drop the pending dossiers whose job is alive and merely queued. Fails SAFE:
+            # if the queue cannot be read we do not know whether they are lost, so we skip
+            # the pending sweep this pass rather than assume the worst — the reaper runs
+            # again shortly, while a wrong give-up is terminal. Only `pending` is filtered;
+            # a `running` dossier's job sits in StartedJobRegistry whether its worker is
+            # alive or SIGKILLed, so queue membership proves nothing there and the
+            # heartbeat stays the signal.
+            if stale_pending:
+                try:
+                    live = _live_job_uuids(queue)
+                except Exception:
+                    logger.warning(
+                        "agent: reaper could not read the queue; skipping the pending "
+                        "sweep (%d candidates) rather than risk failing queued runs",
+                        len(stale_pending), exc_info=True,
+                    )
+                    stale_pending = []
+                else:
+                    queued = [u for u in stale_pending if u in live]
+                    if queued:
+                        logger.info(
+                            "agent: reaper left %d pending run(s) alone — still queued "
+                            "behind a backlog, not lost: %s",
+                            len(queued), ", ".join(queued),
+                        )
+                    stale_pending = [u for u in stale_pending if u not in live]
+            if not stale_running and not stale_pending:
+                return 0
             reenqueued: list = []
             gaveup: list = []
 

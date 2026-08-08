@@ -325,6 +325,105 @@ class TestReaper(unittest.TestCase):
         q.enqueue_call.assert_called_once()
         self.assertEqual(q.enqueue_call.call_args.kwargs["kwargs"], {"force": True})
 
+    def test_reap_leaves_a_pending_run_that_is_merely_queued(self):
+        """The one that cost 68 runs. `pending` past the stale window is only a LOST job
+        if nothing is going to pick it up; behind a backlog it is a perfectly healthy run
+        waiting its turn. Three workers drain ~11 jobs/hour, so any batch bigger than that
+        guarantees a tail older than the 35-min window, and re-enqueueing it just moves it
+        to the back of the same queue until the cap fails it."""
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running", return_value=[]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending",
+                               return_value=["queued", "lost"]), \
+             mock.patch.object(orch, "_live_job_uuids", return_value={"queued"}), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=1), \
+             mock.patch.object(orch.models.Dossier, "set_status") as set_status, \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 1)                      # only the genuinely lost one
+        q.enqueue_call.assert_called_once()
+        self.assertEqual(q.enqueue_call.call_args.kwargs["args"], ("lost",))
+        set_status.assert_not_called()              # and nothing was failed
+
+    def test_reap_skips_the_pending_sweep_when_the_queue_is_unreadable(self):
+        # Fails SAFE. Not knowing whether a job is alive must not be read as "it is dead":
+        # a wrong give-up is terminal, while skipping one pass costs a few minutes. The
+        # running sweep is unaffected -- it never consults the queue.
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                               return_value=["orphan"]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending",
+                               return_value=["p1", "p2"]), \
+             mock.patch.object(orch, "_live_job_uuids", side_effect=RuntimeError("redis")), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=1), \
+             mock.patch.object(orch.models.Dossier, "set_status") as set_status, \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 1)
+        self.assertEqual(q.enqueue_call.call_args.kwargs["args"], ("orphan",))
+        set_status.assert_not_called()
+
+    def test_reap_does_not_filter_running_by_queue_membership(self):
+        """A `running` orphan must still be reaped even though its job is in
+        StartedJobRegistry -- which is where a job sits whether its worker is alive or was
+        SIGKILLed, so membership proves nothing. The heartbeat is the signal there."""
+        # A pending candidate has to be present or the filter block never runs and this
+        # asserts nothing -- the first version of this test passed with the running sweep
+        # filtered too.
+        q = mock.MagicMock()
+        with mock.patch.object(orch.models.Dossier, "get_stale_running",
+                               return_value=["oom"]), \
+             mock.patch.object(orch.models.Dossier, "get_stale_pending",
+                               return_value=["queued"]), \
+             mock.patch.object(orch, "_live_job_uuids", return_value={"oom", "queued"}), \
+             mock.patch.object(orch.models.Dossier, "bump_reap_attempts", return_value=1), \
+             mock.patch.object(orch.worker, "get_queue", return_value=q):
+            n = orch.reap_stale_agent_jobs()
+        self.assertEqual(n, 1)                      # the running orphan, not the queued one
+        q.enqueue_call.assert_called_once()
+        self.assertEqual(q.enqueue_call.call_args.kwargs["args"], ("oom",))
+
+
+class TestLiveJobUuids(unittest.TestCase):
+    """`_live_job_uuids` matches on the job's first ARG, not on a recorded job_id: a job
+    that is still queued has never had its id written to the dossier (`set_job_id` runs
+    when the run STARTS), and that is precisely the state we need to recognise."""
+
+    def _queue(self, queued_ids, jobs):
+        q = mock.MagicMock()
+        q.get_job_ids.return_value = list(queued_ids)
+        q.job_class.fetch_many.return_value = jobs
+        return q
+
+    def _run(self, q, registry_ids=()):
+        reg = mock.MagicMock()
+        reg.return_value.get_job_ids.return_value = list(registry_ids)
+        with mock.patch("rq.registry.StartedJobRegistry", reg), \
+             mock.patch("rq.registry.ScheduledJobRegistry", reg), \
+             mock.patch("rq.registry.DeferredJobRegistry", reg):
+            return orch._live_job_uuids(q)
+
+    def test_collects_the_uuid_from_each_job(self):
+        jobs = [mock.Mock(args=("u1",)), mock.Mock(args=("u2",))]
+        self.assertEqual(self._run(self._queue(["j1", "j2"], jobs)), {"u1", "u2"})
+
+    def test_includes_the_registries_not_just_the_queue(self):
+        # A job parked for an RQ retry lives in ScheduledJobRegistry, not on the queue --
+        # `Retry(...)` is how a transient failure is requeued, and that run is alive.
+        jobs = [mock.Mock(args=("scheduled",))]
+        q = self._queue([], jobs)
+        self.assertEqual(self._run(q, registry_ids=["s1"]), {"scheduled"})
+
+    def test_tolerates_an_expired_job_and_an_argless_one(self):
+        # fetch_many yields None for an id that expired between listing and fetching.
+        jobs = [None, mock.Mock(args=()), mock.Mock(args=("real",))]
+        self.assertEqual(self._run(self._queue(["a", "b", "c"], jobs)), {"real"})
+
+    def test_empty_queue_short_circuits_without_fetching(self):
+        q = self._queue([], [])
+        self.assertEqual(self._run(q), set())
+        q.job_class.fetch_many.assert_not_called()
+
     def test_reap_gives_up_past_cap(self):
         # A crash that keeps orphaning must be failed VISIBLY, not re-enqueued forever.
         q = mock.MagicMock()
