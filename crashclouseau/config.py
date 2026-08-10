@@ -450,6 +450,57 @@ def get_agent_bit_flip():
     }
 
 
+def get_agent_bad_machine():
+    """Bad-machine suppression knobs.
+
+    A machine with failing memory scatters: one installation produced 21 crashes across 20
+    distinct signatures in two days and we filed TWO bugs from it (2062168, 2062173). Jan de
+    Mooij closed the first with exactly this rule -- "It's just one crash report and that
+    installation has multiple crashes with distinct signatures" -- and the same reviewer had
+    already written, on bug 2061124, that "crashes with very few reports in common code paths
+    are often hardware related".
+
+    ``min_signatures`` 10 is where the effect is both largest and stable. Measured over 141k
+    nightly crashes (11,735 single-machine signatures, outcome = later reproduced on DIFFERENT
+    hardware, base rate 17.96%): at 10 with the CPU guard the recurrence rate drops to 11.58%
+    (-7.0pp, z=-4.4), the largest effect anywhere in the study, holding across a split-half
+    (-8.6pp and -5.8pp on consecutive months). Lower thresholds are weak (5 gives -1.8pp before
+    the guard) and higher ones overfit (15 flips sign across lookbacks). Crash COUNT is not a
+    predicate at any threshold -- every value from 3 to 50 lands between -1.5pp and +1.8pp with
+    no significance. Diversity, not volume.
+
+    ``max_cpu_infos`` 1 is the MECHANISM TEST, not a refinement. ``install_time`` collides: 11%
+    of ids with 3+ signatures span several CPU models (VM/distro images sharing one install
+    second). Bug 2061961 looks like a scattergun and carries 4 CPUs and 3 operating systems. The
+    scatter effect is strong where the id resolves to one CPU and vanishes where it does not
+    (+1.0pp, p=0.77) -- it appears exactly where "one bad machine" predicts and nowhere else.
+
+    ``min_span_seconds`` 1800 separates a failing machine from one cascading session. Bug
+    2047016 (RESOLVED FIXED, a real regression that grew to 682 crashes across 23 installs) had
+    its FIRST crash on a machine that emitted 5 distinct signatures in 22 minutes -- one broken
+    Wayland/video stack unwinding, not bad hardware. Signature count cannot tell a cascade from a
+    scattergun; elapsed time can, and this guard is what keeps that bug out of the false
+    negatives.
+
+    NOT scoped to JS, though the request came from the JS team: a bad machine poisons every
+    component. Of the filings this reasoning covers, one is Servo/style and one is WebRTC.
+
+    UPTIME IS DELIBERATELY ABSENT. The JS team's rule of thumb paired "no recent crashes from the
+    same machine" with "high uptime"; the first half holds and the second does not. Uptime looks
+    predictive only because the previous crash resets the clock (median uptime by crash ordinal
+    on one machine: 1281s, 585s, 278s, 171s), so any machine that crashes often looks
+    low-uptime. Matched on crashes-per-machine the signal is AUC 0.497 -- a coin flip -- and its
+    sign flips between adjacent fortnights. It is measured and recorded, never gated on."""
+    a = get_agent().get("bad_machine", {})
+    return {
+        "enabled": _env_bool("BAD_MACHINE_GATE_ENABLED", a.get("enabled", True)),
+        "min_signatures": a.get("min_signatures", 10),
+        "max_cpu_infos": a.get("max_cpu_infos", 1),
+        "min_span_seconds": a.get("min_span_seconds", 1800),
+        "lookback_days": a.get("lookback_days", 14),
+    }
+
+
 def _normalize_calibration_table(raw):
     """Coerce a rung -> P map to ``{int rung score: float P}``; drop non-numeric entries.
     Accepts either the flat map or ``eval.calibrate``'s wrapper (a ``calibration_table`` key)."""

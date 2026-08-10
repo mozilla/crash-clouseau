@@ -655,7 +655,40 @@ def build_seed(uuid):
         # shape plus what a reviewer told us to check when we see it. Handed to the agent as a
         # HINT — see `triage._archetype_lines`. Empty on any failure.
         "archetypes": _matching_archetypes(info, stack_text, raw_crash),
+        # What else the machine that produced this crash has been crashing on — the bad-machine
+        # gate's input (`machine.install_history`). Every value None when unknown.
+        "install_history": _install_history(raw_crash),
     }
+
+
+def _install_history(raw_crash):
+    """This installation's recent crash profile, for ``_apply_bad_machine_gate``.
+
+    Costs ONE SuperSearch (~200ms warm) on a run that already takes ~20 minutes, and needs no
+    extra crash fetch: ``install_time`` is already on the processed crash ``build_seed`` holds.
+    Bounded at the crash's own ``date_processed`` so the answer is causal rather than hindsight.
+    Never raises, and returns all-``None`` when disabled — the gate treats that as unknown."""
+    cfg = config.get_agent_bad_machine()
+    empty = {"distinct_signatures": None, "distinct_cpus": None,
+             "crashes": None, "span_seconds": None}
+    if not cfg["enabled"]:
+        return empty
+    raw = raw_crash or {}
+    if not raw.get("install_time"):
+        return empty
+    try:
+        from crashclouseau import machine
+
+        return machine.install_history(
+            raw.get("install_time"),
+            product=raw.get("product") or "Firefox",
+            channel=raw.get("release_channel") or "nightly",
+            before=raw.get("date_processed"),
+            days=cfg["lookback_days"],
+        )
+    except Exception as exc:                            # pragma: no cover - never break a seed
+        logger.warning("agent: install history lookup failed: %s", exc)
+        return empty
 
 
 def _matching_archetypes(info, stack_text, raw_crash):
@@ -1430,6 +1463,93 @@ def _apply_backout_gate(dossier, seed):
     )
 
 
+def _apply_bad_machine_gate(dossier, seed):
+    """SUPPRESS a verdict whose crash came from a machine that is scattering unrelated
+    signatures: the machine is broken, not the code.
+
+    Jan de Mooij wrote this rule for us on bug 2062168: "I think this one is bad hardware rather
+    than a regression. It's just one crash report and that installation has multiple crashes with
+    distinct signatures." That installation — one 2011 Sandy Bridge — produced 21 crashes across
+    20 distinct signatures in two days, spanning JS GC, jemalloc, heap free, Intel graphics and
+    Windows display, and we filed TWO bugs out of it on the same day (2062168, 2062173). The same
+    reviewer had already told us on bug 2061124 that "crashes with very few reports in common code
+    paths are often hardware related".
+
+    THREE CONDITIONS, and each is load-bearing (see ``config.get_agent_bad_machine`` for the
+    measurements behind every threshold):
+
+    * ``distinct_signatures`` — DIVERSITY, never volume. One machine crashing 100 times on ONE
+      signature is a reproducible bug: bug 2060924 is exactly that (5 crashes, 1 signature) and is
+      ASSIGNED. Crash count predicts nothing at any threshold.
+    * ``distinct_cpus <= 1`` — the mechanism test. ``install_time`` is a (machine, build) id that
+      COLLIDES; 11% of scattering ids span several CPU models. Bug 2061961's carries 4 CPUs and 3
+      operating systems, so its scatter is an artifact and this gate correctly leaves it to the
+      bit-flip gate, which catches it for the right reason.
+    * ``span_seconds`` — a failing machine scatters over days; a cascading session scatters in
+      minutes. Bug 2047016 (RESOLVED FIXED, 682 crashes, 23 installs) had its first crash on a
+      machine that emitted 5 signatures in 22 minutes as one Wayland/video stack unwound.
+
+    An ABSTAIN, not a downweight, and that is not a preference. A one-rung downweight of a
+    strong-evidence verdict lands on ``probable`` (70) — still exactly ``autofile.min_confidence``
+    — so it would not have stopped bug 2062173, which shipped at 97%. Placed LAST, after the
+    second-opinion fold, for the same reason as ``_apply_backout_gate``: no amount of independent
+    agreement makes a broken machine's crash a code defect.
+
+    Tri-state on every input, all failing toward REPORTING: an absent ``install_time`` (3% of
+    nightly crashes), a failed lookup, or an unknown CPU count each leave the verdict alone. The
+    CPU condition is a POSITIVE requirement precisely so an unknown cannot satisfy it. Reads only
+    seed keys, so it is a natural no-op offline. Mutates in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None:
+        return
+    cfg = config.get_agent_bad_machine()
+    if not cfg["enabled"]:
+        return
+    hist = (seed or {}).get("install_history") or {}
+    sigs = hist.get("distinct_signatures")
+    cpus = hist.get("distinct_cpus")
+    span = hist.get("span_seconds")
+    if sigs is None:
+        return
+    # Recorded for EVERY verdict, fired or not: without the flags there is no way to count how
+    # often the pipeline is looking at a broken machine, and no way to score the threshold
+    # against `models.Feedback` outcomes later.
+    flags = {"machine_distinct_signatures": sigs}
+    if cpus is not None:
+        flags["machine_distinct_cpus"] = cpus
+    if hist.get("crashes") is not None:
+        flags["machine_crash_count"] = hist["crashes"]
+    if span is not None:
+        flags["machine_span_seconds"] = round(span)
+    dossier.corroborations = {**(dossier.corroborations or {}), **flags}
+    if sigs < cfg["min_signatures"]:
+        return
+    if cpus is None or cpus > cfg["max_cpu_infos"]:
+        return
+    if span is None or span < cfg["min_span_seconds"]:
+        return
+    if v.decision == Decision.abstain:
+        return
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=(
+            "this crash came from an installation already producing {} DIFFERENT crash "
+            "signatures over {:.0f}h on a single CPU — the profile of a failing machine, not of "
+            "a code defect; suppressed rather than reported".format(sigs, (span or 0) / 3600.0)
+        ),
+        mechanism=v.mechanism,
+        consistency=v.consistency,
+    )
+    dossier.corroborations = {**dossier.corroborations, "bad_machine_suppressed": True}
+    logger.info(
+        "agent: install has %s distinct signatures over %.0fh on %s cpu(s) -> %s/%s suppressed "
+        "to abstain for %s",
+        sigs, (span or 0) / 3600.0, cpus, v.decision.value, v.confidence.value,
+        (seed or {}).get("uuid"),
+    )
+
+
 def _record_window_membership(dossier, seed):
     """Record whether the chosen candidate was in the build's PUSHLOG WINDOW at all.
 
@@ -1816,6 +1936,11 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # is wrong" — and because the second-opinion boost above it is exactly what pushed bug
         # 2061961 to the filing threshold.
         _apply_bit_flip_gate(result.dossier, seed)
+        # The machine, not the crash: an installation already scattering unrelated signatures is
+        # broken hardware. Alongside the bit-flip gate rather than folded into it because the two
+        # are DISJOINT on real filings — the ones carrying a flip score have a clean machine, and
+        # the scattering ones have no flip score at all.
+        _apply_bad_machine_gate(result.dossier, seed)
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.
         _record_window_membership(result.dossier, seed)

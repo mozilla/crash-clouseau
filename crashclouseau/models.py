@@ -21,6 +21,12 @@ PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
 # the dossier-builder sub-plan (#03); this layer stores the envelope + verdict.
 DOSSIER_SCHEMA_VERSION = 1
 
+# Corroboration flags marking a verdict suppressed for a reason specific to ONE CRASH REPORT —
+# a broken installation, a corrupted fault address — rather than to the signature or the
+# candidate. A run carrying one of these must not close its proto-signature cluster; see
+# ``UUID.proto_already_analyzed``.
+_INSTANCE_SUPPRESSED = ("bad_machine_suppressed", "possible_bit_flip_suppressed")
+
 # How quiet a ``running`` dossier must go before the RQ job that OWNS it may re-take it
 # (``Dossier.claim_running(..., own_job_id=)``). Deliberately a small multiple of
 # ``agent.orchestrator._HEARTBEAT_INTERVAL_S`` (120s): a live run stamps ``updated`` every
@@ -957,7 +963,17 @@ class UUID(db.Model):
         at ``running``). Counting those would let a single failed/stuck run permanently
         drop every other uuid in the cluster; keying on ``done`` instead means an errored
         first run is naturally retried by the next same-proto uuid. Returns False for an
-        unknown/proto-less uuid (so it never blocks a first run)."""
+        unknown/proto-less uuid (so it never blocks a first run).
+
+        A run suppressed for a reason specific to ITS OWN CRASH REPORT does not count either
+        (``_INSTANCE_SUPPRESSED``). This is what stops a bad machine silencing a real bug: the
+        bad-machine and bit-flip gates conclude "this REPORT is noise" — one broken installation,
+        one corrupted fault address — which says nothing about the next report of the same
+        signature from a healthy machine. Without this, one scattergun crash arriving first would
+        close the cluster and every later uuid in it would be skipped, turning a false negative
+        from a delay into a permanent loss. The backout gate is deliberately NOT in the list: it
+        suppresses on the CANDIDATE being gone from the tree, which is equally true for every
+        crash in the cluster."""
         row = (
             db.session.query(UUID.signatureid, UUID.protohash)
             .filter(UUID.uuid == uuid)
@@ -965,6 +981,7 @@ class UUID(db.Model):
         )
         if not row or not row.protohash:
             return False
+        corrob = Dossier.payload["dossier"]["corroborations"]
         q = (
             db.session.query(Dossier.id)
             .join(UUID, Dossier.uuidid == UUID.id)
@@ -972,6 +989,10 @@ class UUID(db.Model):
                 UUID.signatureid == row.signatureid,
                 UUID.protohash == row.protohash,
                 Dossier.status == "done",
+                *[
+                    or_(corrob[flag].astext.is_(None), corrob[flag].astext != "true")
+                    for flag in _INSTANCE_SUPPRESSED
+                ],
             )
         )
         return db.session.query(q.exists()).scalar()
