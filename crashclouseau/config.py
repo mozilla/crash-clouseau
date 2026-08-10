@@ -249,6 +249,21 @@ def get_agent_autofile():
         # An open bug already referencing the signature: comment there instead of filing a
         # duplicate. Turning this off does NOT file anyway — it skips.
         "comment_on_existing": a.get("comment_on_existing", True),
+        # ...but only if that bug can be ABOUT this regression. How many days the suspected
+        # regressor may land AFTER an open bug was filed and still count as that bug's cause;
+        # past it, the bug describes crashes the candidate cannot have caused and we file a
+        # new one (``bugzilla_apply._bug_for_this_regression``).
+        #
+        # 30 days, deliberately LOOSER than the stale-signature gate's 7 even though it is the
+        # same argument, because the cost of being wrong is asymmetric. A bigger number admits
+        # more bugs as the venue, so it errs toward commenting — the pre-existing behaviour,
+        # whose failure is a report buried in an unrelated bug. A smaller one errs toward
+        # filing, whose failure is a near-duplicate on BMO for a human to close, and this
+        # module's standing rule is that a missed filing is recoverable where a duplicate is
+        # not. Nothing in the evidence asks for a tight threshold either: the two real cases
+        # separate by three orders of magnitude — the correct comment landed on a bug filed 9
+        # days AFTER its regressor, the wrong one on a bug filed 1375 days BEFORE.
+        "comment_max_bug_age_days": a.get("comment_max_bug_age_days", 30),
     }
 
 

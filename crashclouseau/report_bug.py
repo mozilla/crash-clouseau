@@ -424,6 +424,7 @@ def build_bug_comment(
     first=True,
     version=None,
     needinfo=None,
+    related_bugs=None,
     max_frames=_MAX_PREVIEW_FRAMES,
 ):
     """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
@@ -435,7 +436,8 @@ def build_bug_comment(
     4. one sentence on how much this signature is crashing;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
-    7. the needinfo ask.
+    7. why this is a new bug rather than a comment on ``related_bugs``, when there are any;
+    8. the needinfo ask.
 
     Sections with no data are dropped, never emitted empty."""
     uuid = (uuid_info or {}).get("uuid", "")
@@ -452,9 +454,32 @@ def build_bug_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel
         ),
         build_code_references((dossier or {}).get("verdict"), channel),
+        build_related_bugs_note(related_bugs),
         needinfo,
     ]
     return "\n\n".join(s for s in sections if s)
+
+
+def build_related_bugs_note(related_bugs):
+    """Why this is a NEW bug when ``related_bugs`` are open on the same signature, or ``""``.
+
+    The filer only ever skips past an open bug because that bug predates the suspected
+    regressor (``bugzilla_apply._bug_for_this_regression``), so say so, in the bug itself,
+    where the triager deciding whether to duplicate it can see the reasoning and overrule it.
+    An unexplained second bug on a live signature just looks like a broken deduplicator."""
+    bugs = [b for b in (related_bugs or []) if b]
+    if not bugs:
+        return ""
+    return (
+        "Filed as a new bug rather than a comment on {} — {} open on this signature, but "
+        "{} filed before the changeset above landed, so {} cannot be about this regression. "
+        "Please duplicate if that is wrong.".format(
+            ", ".join("bug {}".format(b) for b in bugs),
+            "which is" if len(bugs) == 1 else "which are",
+            "it was" if len(bugs) == 1 else "they were",
+            "it" if len(bugs) == 1 else "they",
+        )
+    )
 
 
 def _bug_meta(bugids):
@@ -879,7 +904,7 @@ def _bug_version(channel):
     return "Trunk" if (channel or "").lower() == "nightly" else "unspecified"
 
 
-def build_bug_preview(uuid_info, stack, dossier):
+def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -890,6 +915,11 @@ def build_bug_preview(uuid_info, stack, dossier):
     flag needs (the rendered ``needinfo`` line only carries a display nick).
     product/component are best-effort from the regressor (``resolve_product_component``).
     Returns ``None`` when there is no candidate regressor to file a bug against.
+
+    ``related_bugs`` are open bugs on this signature that the automatic filer decided NOT to
+    comment on because they predate the suspected regressor; passing them puts the reason in
+    the bug. The page preview passes none — it does not know, because deciding needs a
+    Bugzilla search and a changeset's landing date, neither of which belongs in a render.
 
     The metadata below ``component`` is what a hand-filed crash bug carries and what
     ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO,
@@ -934,6 +964,7 @@ def build_bug_preview(uuid_info, stack, dossier):
             first=first,
             version=version,
             needinfo=_needinfo_line(person),
+            related_bugs=related_bugs,
         ),
         "product": product,
         "component": component,

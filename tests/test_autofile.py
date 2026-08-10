@@ -11,6 +11,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import inspect  # noqa: E402
 import requests  # noqa: E402
 import unittest  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, report_bug  # noqa: E402
@@ -33,9 +34,15 @@ _INFO = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "nightly"}
 
 def _cfg(**over):
     base = {"enabled": True, "min_confidence": 70, "verdicts": ["lead", "culprit"],
-            "needinfo": True, "daily_cap": 10, "comment_on_existing": True}
+            "needinfo": True, "daily_cap": 10, "comment_on_existing": True,
+            "comment_max_bug_age_days": 30}
     base.update(over)
     return base
+
+
+def _bug(bid, created=None):
+    """One row of what `_open_bugs_for_signature` returns."""
+    return {"id": bid, "creation_time": created}
 
 
 class _Base(unittest.TestCase):
@@ -56,6 +63,13 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply.models.Dossier, "record_filed_bug",
                               side_effect=lambda u, i: self.filed.append((u, i)) or True),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
+            # Unresolvable by default (it would otherwise ask hg over the network). That is
+            # also the honest default for these tests: with no landing date the filer keeps
+            # its pre-existing "comment on the oldest open bug" behaviour, so every test below
+            # that does not care about timing exercises exactly what it used to.
+            mock.patch.object(bugzilla_apply, "_candidate_landed", return_value=None),
+            # Never reopened, unless a test says otherwise (it is a Bugzilla request).
+            mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None),
             mock.patch.object(bugzilla_apply, "_create_bug",
                               side_effect=lambda p, t: self.created.append(p) or 999),
             mock.patch.object(bugzilla_apply, "_post_comment",
@@ -182,7 +196,7 @@ class TestGates(_Base):
 
 class TestDuplicates(_Base):
     def test_existing_open_bug_gets_a_comment_not_a_duplicate(self):
-        bugzilla_apply._open_bugs_for_signature.return_value = [12345]
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345)]
         res = self._file()
         self.assertTrue(res["filed"])
         self.assertEqual((res["bug"], res["mode"]), (12345, "comment_on_existing"))
@@ -193,7 +207,8 @@ class TestDuplicates(_Base):
     def test_the_oldest_open_bug_is_preferred(self):
         # With several open bugs for one signature the earliest is the canonical one.
         # Newest-first would prefer a recent duplicate — possibly one we filed ourselves.
-        bugzilla_apply._open_bugs_for_signature.return_value = [1990812, 2060922]
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1990812), _bug(2060922)]
         res = self._file()
         self.assertEqual(res["bug"], 1990812)
 
@@ -208,11 +223,192 @@ class TestDuplicates(_Base):
         self.assertEqual(self.comments, [])
 
     def test_comment_on_existing_off_skips_it_does_not_file_anyway(self):
-        bugzilla_apply._open_bugs_for_signature.return_value = [12345]
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345)]
         res = self._file(comment_on_existing=False)
         self.assertFalse(res["filed"])
         self.assertEqual(self.created, [])
         self.assertEqual(self.comments, [])
+
+    def test_comment_on_existing_off_still_skips_a_bug_that_predates_the_cause(self):
+        # The kill-switch keeps its plain meaning — "an open bug exists, do not write" — even
+        # once the age rule would have filed a new bug. Someone who turns it off is asking for
+        # no writes, not for a different kind of write.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        res = self._file(comment_on_existing=False)
+        self.assertFalse(res["filed"])
+        self.assertEqual((self.created, self.comments), ([], []))
+
+
+# Bug 1798397 (`Crash in [@ nsAtom::IsStatic]`, open since 2022, its own comments proposing
+# nsAtom for the irrelevant-signature list) versus the changeset named for crash
+# ddeac1a4-64d1-4413-b03b-f79540260809, which landed 1375 days later. The numbers below are
+# that crash and the one filing this rule must NOT change (bug 2060924, which we had filed
+# ourselves 9 days after its own regressor landed).
+_OLD = "2022-10-31T19:44:56Z"
+_LANDED = datetime(2026, 8, 7, tzinfo=timezone.utc)
+
+
+class TestBugPredatesTheCause(_Base):
+    def test_an_open_bug_older_than_the_regressor_gets_a_new_bug(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "new_bug")
+        self.assertEqual(res["predating_bugs"], [1798397])
+        self.assertEqual(self.comments, [])
+        self.assertEqual(len(self.created), 1)
+
+    def test_the_new_bug_says_why_it_is_not_a_comment(self):
+        # An unexplained second bug on a live signature reads as a broken deduplicator; the
+        # triager who might duplicate it needs the reasoning in front of them.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        with mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        side_effect=lambda *a, **kw: dict(_PREVIEW, related=kw["related_bugs"])
+                        ) as preview:
+            self._file()
+        self.assertEqual(preview.call_args.kwargs["related_bugs"], [1798397])
+
+    def test_a_bug_filed_after_the_regressor_still_gets_the_comment(self):
+        # The real counter-case: bug 2060924 was filed 2026-08-05 for a changeset that landed
+        # 2026-07-27, and commenting there was right. A rule that flipped this one too would
+        # be filing a duplicate every time a crash recurs.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2060924, "2026-08-05T16:09:09Z")]
+        bugzilla_apply._candidate_landed.return_value = datetime(
+            2026, 7, 27, 8, 17, 24, tzinfo=timezone.utc)
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2060924, "comment_on_existing"))
+        self.assertEqual(self.created, [])
+
+    def test_a_bug_filed_just_before_the_regressor_is_within_the_slack(self):
+        # 30 days of slack: a bug filed around the time the regressor landed is plausibly
+        # about it, and a hair-trigger here trades a buried report for a duplicate.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2060924, "2026-07-20T00:00:00Z")]
+        bugzilla_apply._candidate_landed.return_value = _LANDED     # 18 days later
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_a_usable_recent_bug_beats_an_ancient_one_and_no_third_bug_is_filed(self):
+        # Oldest-first is only a tie-break among bugs that could be about this crash. With a
+        # 2022 bug and one we filed last week both open, the answer is last week's.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1798397, _OLD), _bug(2061999, "2026-08-08T00:00:00Z")]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2061999, "comment_on_existing"))
+        self.assertNotIn("predating_bugs", res)
+        self.assertEqual(self.created, [])
+
+    def test_an_unresolved_landing_date_changes_nothing(self):
+        # hg unreachable, or a candidate with no node. Unknown timing must leave the filer on
+        # its previous behaviour rather than invent a duplicate.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = None
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_an_unusable_creation_time_changes_nothing(self):
+        # BMO did not return the field, or returned something unparseable. Same rule: fail
+        # toward commenting.
+        for created in (None, "", "not a date"):
+            with self.subTest(created=created):
+                self.setUp()
+                bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, created)]
+                bugzilla_apply._candidate_landed.return_value = _LANDED
+                self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_the_regressors_own_bug_is_the_venue_whatever_the_dates_say(self):
+        # Crash b66819b5: the candidate `e6335c6fffd3` is literally "Bug 1990812 - handle the
+        # case where switching the decoder state machine fails due to shutdown", and 1990812
+        # was open for this signature. On creation time alone (filed 2025-09-25, candidate
+        # landed 2025-10-26) it missed the window by ONE day and we would have filed the
+        # near-duplicate that `_open_bugs_for_signature` was fixed to prevent.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1990812, "2025-09-25T13:46:32Z")]
+        bugzilla_apply._candidate_landed.return_value = datetime(
+            2025, 10, 26, 20, 42, 57, tzinfo=timezone.utc)
+        res = bugzilla_apply.autofile_bug(
+            "u-1", _INFO, {}, {"candidate": {"node": "e6335c6fffd3", "bug": 1990812}},
+            "lead", 70)
+        self.assertEqual((res["bug"], res["mode"]), (1990812, "comment_on_existing"))
+        self.assertEqual(self.created, [])
+
+    def test_a_reopen_after_the_cause_landed_rescues_the_bug(self):
+        # Same bug, the other way round: 1990812 was reopened 2025-11-14 because the crash came
+        # back. A bug reopened AFTER the candidate landed is live for a crash the candidate
+        # could have caused, whatever year it was originally filed in.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        bugzilla_apply._last_reopened.return_value = datetime(
+            2026, 8, 1, tzinfo=timezone.utc)
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (1798397, "comment_on_existing"))
+        self.assertEqual(self.created, [])
+
+    def test_a_reopen_that_also_predates_the_cause_rescues_nothing(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        bugzilla_apply._last_reopened.return_value = datetime(
+            2024, 5, 22, tzinfo=timezone.utc)
+        self.assertEqual(self._file()["mode"], "new_bug")
+
+    def test_an_unreachable_history_leaves_the_age_verdict_standing(self):
+        # The reopen check is a RESCUE, not a gate: it can only ever save a bug the age test
+        # already rejected, so a BMO blip must not resurrect the burying behaviour.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        bugzilla_apply._last_reopened.return_value = None
+        self.assertEqual(self._file()["mode"], "new_bug")
+
+    def test_every_open_bug_predating_the_cause_is_recorded(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1798397, _OLD), _bug(1900000, "2023-01-01T00:00:00Z")]
+        bugzilla_apply._candidate_landed.return_value = _LANDED
+        self.assertEqual(self._file()["predating_bugs"], [1798397, 1900000])
+
+
+class TestBugForThisRegression(unittest.TestCase):
+    """The predicate on its own."""
+
+    def setUp(self):
+        p = mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_regressors_own_bug_wins_even_when_a_plausible_older_one_exists(self):
+        # Oldest-first would otherwise hand the crash to 1500000 and never reach the bug the
+        # changeset was actually written for.
+        got = bugzilla_apply._bug_for_this_regression(
+            [_bug(1500000, "2026-08-01T00:00:00Z"), _bug(1990812, "2022-01-01T00:00:00Z")],
+            _LANDED, 30, candidate_bug=1990812)
+        self.assertEqual(got, (1990812, []))
+
+    def test_a_regressor_bug_that_is_not_open_for_this_signature_decides_nothing(self):
+        got = bugzilla_apply._bug_for_this_regression(
+            [_bug(1798397, _OLD)], _LANDED, 30, candidate_bug=2043000)
+        self.assertEqual(got, (None, [1798397]))
+
+    def test_no_open_bugs_means_no_venue_and_nothing_skipped(self):
+        self.assertEqual(
+            bugzilla_apply._bug_for_this_regression([], _LANDED, 30), (None, []))
+        self.assertEqual(
+            bugzilla_apply._bug_for_this_regression(None, _LANDED, 30), (None, []))
+
+    def test_the_boundary_is_inclusive(self):
+        created = "2026-07-08T00:00:00Z"                      # exactly 30 days before
+        self.assertEqual(
+            bugzilla_apply._bug_for_this_regression([_bug(1, created)], _LANDED, 30)[0], 1)
+        self.assertIsNone(
+            bugzilla_apply._bug_for_this_regression([_bug(1, created)], _LANDED, 29)[0])
+
+    def test_a_naive_creation_time_is_read_as_utc(self):
+        # BMO returns "2022-10-31T19:44:56Z", but nothing guarantees the Z survives every
+        # round-trip. A tz-naive value must not blow up on the subtraction.
+        got = bugzilla_apply._bug_for_this_regression(
+            [_bug(1, "2022-10-31T19:44:56")], _LANDED, 30)
+        self.assertEqual(got, (None, [1]))
 
 
 class TestPayload(_Base):
@@ -454,7 +650,7 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
     def test_a_failed_needinfo_never_loses_an_already_posted_comment(self):
         # The comment-on-existing path posts FIRST. If the needinfo PUT then raised, the
         # filing went unrecorded and the next run commented on the same bug a second time.
-        bugzilla_apply._open_bugs_for_signature.return_value = [4242]
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(4242)]
         bugzilla_apply._put_bug.side_effect = RuntimeError("code 51, no user named X")
         res = self._file()
         self.assertTrue(res["filed"])

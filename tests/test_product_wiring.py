@@ -1466,6 +1466,33 @@ class TestBugPreview(unittest.TestCase):
         self.assertIn("https://searchfox.org/firefox-main/source/servo/x.rs", refs)
         self.assertNotIn("hg-changeset-metadata", refs)
 
+    def test_the_related_bugs_note_sits_before_the_needinfo_ask(self):
+        # The filer skips past an open bug only when that bug predates the suspected
+        # regressor (bug 1798397, open since 2022, versus a changeset that landed 1375 days
+        # later). The reason belongs in the bug, ahead of the ask, so the triager weighing a
+        # duplicate reads it first.
+        info = {"uuid": "u-1", "channel": "nightly", "buildid": "20260808093004"}
+        c = report_bug.build_bug_comment(
+            info, self._stack3(), {"candidate": {"node": "n"}, "verdict": {}},
+            needinfo=":dev, can you have a look please?", related_bugs=[1798397])
+        self.assertLess(c.find("bug 1798397"), c.find(":dev, can you have a look"))
+        self.assertIn("Please duplicate if that is wrong.", c)
+
+    def test_the_related_bugs_note_is_absent_by_default(self):
+        # Every hand-drafted bug and every page preview goes through here with no related
+        # bugs; none of them may grow a dangling "Filed as a new bug rather than a comment on".
+        for related in (None, [], [None]):
+            with self.subTest(related=related):
+                self.assertEqual(report_bug.build_related_bugs_note(related), "")
+
+    def test_the_related_bugs_note_agrees_with_itself_in_the_plural(self):
+        one = report_bug.build_related_bugs_note([1798397])
+        two = report_bug.build_related_bugs_note([1798397, 1900000])
+        self.assertIn("bug 1798397 — which is open", one)
+        self.assertIn("it was filed before", one)
+        self.assertIn("bug 1798397, bug 1900000 — which are open", two)
+        self.assertIn("they were filed before", two)
+
     def test_build_bug_comment_drops_empty_sections(self):
         # No reason, no stats, no citations, no needinfo -> no empty headings, no blank runs.
         info = {"uuid": "u-1", "channel": "nightly", "buildid": "1"}

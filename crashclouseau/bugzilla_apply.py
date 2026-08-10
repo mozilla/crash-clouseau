@@ -278,7 +278,10 @@ def _is_specific_signature(signature):
 
 
 def _open_bugs_for_signature(signature):
-    """Ids of OPEN bugs referencing *signature*, oldest first.
+    """OPEN bugs referencing *signature* as ``[{"id", "creation_time"}, ...]``, oldest first.
+
+    ``creation_time`` rides along because the oldest open bug is not automatically the right
+    place to comment — see ``_bug_for_this_regression``.
 
     Read-only and unauthenticated (public bugs only, which is the right scope: we must not
     reason about a security bug we can only see because the filing account can).
@@ -289,14 +292,15 @@ def _open_bugs_for_signature(signature):
     same crash. Summaries are searched too, gated on ``_is_specific_signature``, because
     that is where 1990812 carried it.
 
-    Oldest first: with several open bugs for one signature the earliest is the canonical
-    one, carrying whatever discussion already exists. Newest-first would prefer a recent
-    duplicate — including one we filed ourselves."""
+    Oldest first, because among the bugs that could be about this crash the earliest is the
+    canonical one, carrying whatever discussion already exists; newest-first would prefer a
+    recent duplicate, including one we filed ourselves. Only a tie-break, though —
+    ``_bug_for_this_regression`` decides which of them qualify at all."""
     if not signature:
         return []
     sig = signature.strip()
     params = {
-        "include_fields": "id,summary,status,resolution",
+        "include_fields": "id,summary,status,resolution,creation_time",
         "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
         "resolution": "---",
     }
@@ -311,7 +315,141 @@ def _open_bugs_for_signature(signature):
         # duplicate. A missed filing is recoverable; a duplicate on BMO is not.
         logger.warning("autofile: signature bug lookup failed for %r: %s", signature, exc)
         return None
-    return [b["id"] for b in sorted(bugs, key=lambda b: b.get("id", 0))]
+    return [
+        {"id": b["id"], "creation_time": b.get("creation_time")}
+        for b in sorted(bugs, key=lambda b: b.get("id", 0))
+        if b.get("id")
+    ]
+
+
+def _candidate_landed(dossier, channel):
+    """When the suspected regressor landed, as a UTC datetime, or ``None``.
+
+    Not read off the persisted candidate: ``Candidate.pushdate`` is ``null`` on every dossier
+    in prod (nothing fills it once the seed's per-node map is gone) and ``Candidate.channel``
+    is likewise always ``""`` — hence ``uuid_info``'s channel, the same one
+    ``resolve_product_component`` is given.
+
+    Free online, which is why this can sit on the filing path at all: the orchestrator already
+    resolved this node's hg ``json-rev`` during the run (the backout gate and the git-commit
+    link both go through it) and ``sigage`` caches per ``(node, channel)``, so this is a dict
+    hit rather than hg's measured 8-13s. Best-effort — an unresolved date leaves the caller on
+    its pre-existing behaviour."""
+    node = ((dossier or {}).get("candidate") or {}).get("node")
+    if not node:
+        return None
+    from crashclouseau import sigage
+
+    try:
+        return sigage.to_datetime(sigage.pushdate_for_node(node, channel))
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: landing date for %s unresolved: %s", node, exc)
+        return None
+
+
+_CLOSED_STATUSES = {"RESOLVED", "VERIFIED", "CLOSED"}
+
+
+def _last_reopened(bug_id):
+    """When *bug_id* was last REOPENED, or ``None`` if it never was (or we could not tell).
+
+    A crash bug's creation time stops describing it the moment somebody reopens it: bug 1990812
+    was filed in September, fixed in October and reopened in November because the crash came
+    back, and it is the November date that says whether it is the venue for a November cause.
+    BMO exposes this nowhere in a search — only in ``/rest/bug/<id>/history`` — so this is a
+    second request, and it is only ever made for a bug the cheap creation-time test has already
+    rejected (2 of the canary's first 20 filings saw ANY open bug at all).
+
+    Matches on the status LEAVING a closed state rather than on the string ``REOPENED``: bugs
+    are routinely reopened straight to NEW or ASSIGNED.
+
+    Unauthenticated, like the search that produced ``bug_id``. Raises nothing — this is a rescue
+    for a bug we have already decided against, so a failure simply leaves that decision standing
+    rather than flipping it."""
+    try:
+        r = net.get("{}/{}/history".format(_bz_rest(), bug_id), timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        history = ((r.json() or {}).get("bugs") or [{}])[0].get("history") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: history lookup failed for bug %s: %s", bug_id, exc)
+        return None
+    from crashclouseau import sigage
+
+    last = None
+    for entry in history:
+        for change in entry.get("changes") or []:
+            reopen = change.get("field_name") == "status" \
+                and change.get("removed") in _CLOSED_STATUSES
+            if not reopen:
+                continue
+            when = sigage.to_datetime(entry.get("when"))
+            if when is not None and (last is None or when > last):
+                last = when
+    return last
+
+
+def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
+    """Which open bug this crash belongs in: ``(bug_id or None, ids that predate the cause)``.
+
+    The oldest open bug for a signature is the canonical one only when it can be about the same
+    crash, and it often cannot. ``nsAtom::IsStatic`` has had bug 1798397 open since 2022 — a
+    bug whose own comments propose adding ``nsAtom`` to the irrelevant-signature list — while
+    the regressor named for ``ddeac1a4-64d1-4413-b03b-f79540260809`` landed 1375 days later.
+    Commenting there filed a fresh Nightly regression under four years of unrelated discussion,
+    where nobody watching that bug had any reason to read it as new.
+
+    THE TEST IS THE SAME ONE THE STALE-SIGNATURE GATE MAKES, against a different clock. A bug
+    that already existed before the candidate landed describes crashes the candidate cannot
+    have caused, so it is not this crash's venue. Signature reuse is exactly why: an old
+    signature acquiring a new cause is a real and common thing, and the new cause deserves a
+    bug someone will actually look at. ``max_age_days`` of slack keeps a bug filed at around
+    the same time as the regressor — plausibly about it — as the venue.
+
+    TWO THINGS OUTRANK THE AGE TEST, and both were found by replaying it over every filing the
+    canary had already made:
+
+    * ``candidate_bug`` — the bug the suspected regressor was written FOR. If that bug is one of
+      the open ones, it is the venue whatever the dates say: the crash is that work coming back.
+      Crash b66819b5's candidate ``e6335c6fffd3`` is literally "Bug 1990812 - handle the case
+      where switching the decoder state machine fails due to shutdown", and 1990812 was open.
+    * a REOPEN after the candidate landed (``_last_reopened``). A bug's creation stops
+      describing it once someone reopens it, and crash bugs get reopened all the time when a
+      signature comes back. 1990812 again: filed September, fixed by the candidate in October,
+      reopened that November. On creation time alone it missed the 30-day window by ONE day.
+
+    Creation time is otherwise a deliberately CONSERVATIVE proxy for "crashes were already
+    happening": a bug is always filed at or after the crash it reports, so it can only
+    understate the gap, and understating it means commenting rather than filing.
+
+    Every unknown fails the same way, toward COMMENTING, because that is the pre-existing
+    behaviour and a duplicate on BMO costs a human's attention: no landing date (hg
+    unreachable, or an off-stack candidate with no node) keeps the oldest bug, and so does a
+    creation time BMO did not return or that will not parse. The one exception is the reopen
+    rescue, which is a rescue and not a gate — an unreachable history leaves the age verdict
+    standing rather than flipping it.
+
+    Scans oldest-first and takes the first plausible bug rather than testing only the oldest:
+    with a 2022 bug and one we filed last week both open, the right answer is last week's, not
+    a third bug."""
+    from crashclouseau import sigage
+
+    ids = [b["id"] for b in bugs or []]
+    if candidate_bug and candidate_bug in ids:
+        return candidate_bug, []
+    predating = []
+    for bug in bugs or []:
+        if landed is None:
+            return bug["id"], []
+        created = sigage.to_datetime(bug.get("creation_time"))
+        if created is None:
+            return bug["id"], []
+        if (landed - created).total_seconds() / 86400.0 <= max_age_days:
+            return bug["id"], predating
+        reopened = _last_reopened(bug["id"])
+        if reopened is not None and (landed - reopened).total_seconds() / 86400.0 <= max_age_days:
+            return bug["id"], predating
+        predating.append(bug["id"])
+    return None, predating
 
 
 def _execute(action, token):
@@ -361,8 +499,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       orphan reaper re-runs a crashed run and would otherwise re-file on recovery;
     * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
       is a nuisance while a bad gate at 300/day is an incident;
-    * if an OPEN bug already references the signature, comment there instead of filing a
-      duplicate — and if that lookup FAILS we skip entirely rather than risk the duplicate.
+    * if an OPEN bug already references the signature AND that bug can be about this
+      regression (``_bug_for_this_regression``), comment there instead of filing a duplicate —
+      and if that lookup FAILS we skip entirely rather than risk the duplicate.
 
     ``regressed_by`` is still not set (see ``report_bug.build_bug_preview``): the suspected
     regressor is named in the comment prose, where a human can weigh it, and the needinfo
@@ -411,9 +550,31 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     if not token:
         return {"filed": False, "skipped": "no Bugzilla API token configured"}
 
+    signature = (uuid_info.get("signature") or "").strip()
+    existing = _open_bugs_for_signature(signature)
+    if existing is None:
+        return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
+    if existing and not cfg["comment_on_existing"]:
+        return {"filed": False, "skipped": "open bug {} exists".format(existing[0]["id"])}
+    # WHICH of those open bugs, if any, can be about this regression — the oldest one often
+    # cannot (``_bug_for_this_regression``). Resolved before the preview is built so a new bug
+    # filed past an older one can say so in its opening comment.
+    bug_id, predating = _bug_for_this_regression(
+        existing,
+        _candidate_landed(dossier, uuid_info.get("channel")),
+        cfg["comment_max_bug_age_days"],
+        candidate_bug=((dossier or {}).get("candidate") or {}).get("bug"),
+    )
+    if predating and bug_id is None:
+        logger.info("autofile: open bug(s) %s all predate the suspected regressor — filing a "
+                    "new bug for %s rather than commenting there", predating, uuid)
+
     from crashclouseau import report_bug
     try:
-        preview = report_bug.build_bug_preview(uuid_info, stack, dossier)
+        preview = report_bug.build_bug_preview(
+            uuid_info, stack, dossier,
+            related_bugs=predating if bug_id is None else None,
+        )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
         return {"filed": False, "skipped": "preview failed: {}".format(exc)}
@@ -429,19 +590,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "product/component unresolved — refusing to file into the wrong "
                            "component"}
 
-    signature = (uuid_info.get("signature") or "").strip()
-    existing = _open_bugs_for_signature(signature)
-    if existing is None:
-        return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
-
     email = preview.get("needinfo_email") if cfg["needinfo"] else ""
     result = {"filed": False, "uuid": uuid, "signature": signature,
               "at": datetime.now(timezone.utc).isoformat()}
     try:
-        if existing:
-            if not cfg["comment_on_existing"]:
-                return {"filed": False, "skipped": "open bug {} exists".format(existing[0])}
-            bug_id = existing[0]
+        if bug_id is not None:
             _post_comment(bug_id, preview["comment"], False, token)
             # The comment is already posted, so a failing needinfo must not escape: it would
             # skip ``record_filed_bug`` below and the next run would comment a second time on
@@ -463,6 +616,12 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             if dropped:
                 result["needinfo_dropped"] = email
                 email = ""
+            # Filed PAST an open bug on the same signature. Recorded so the choice is
+            # auditable from the dossier — this is the one place the filer knowingly creates
+            # something that looks like a duplicate, and if the age rule is ever wrong these
+            # rows are how we would find out.
+            if predating:
+                result["predating_bugs"] = predating
             # Blockers need a second call — create discards them silently (see
             # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
             wanted = preview.get("blocked") or []
