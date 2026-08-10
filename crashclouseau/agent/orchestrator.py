@@ -1406,6 +1406,41 @@ def _apply_backout_gate(dossier, seed):
     )
 
 
+def _record_window_membership(dossier, seed):
+    """Record whether the chosen candidate was in the build's PUSHLOG WINDOW at all.
+
+    The pipeline's premise is "the regressor is somewhere in this build's pushlog window", and
+    the filed bug asserts it: ``build_bug_preview`` sets the ``regression`` keyword because
+    "the whole pipeline only looks inside a build's pushlog window, so every candidate it names
+    is a suspected regression". Measured over the canary's first 22 filings that premise held
+    THREE times. The rest named code from outside the window — 24 days, 58 days, and in one case
+    a changeset from 2022-12-13, 1335 days before the build.
+
+    Naming old code is not itself the mistake; bug 2062119 did exactly that and still got a real
+    fix written, because a knowledgeable person read it and found the true origin. The mistake is
+    ASSERTING a regression we have no recency evidence for — the `regression` keyword, the
+    blocks-link, and the words "Suspected regressor" all say something the pipeline did not
+    establish, and on bug 2062119 something its own skeptic pass explicitly contradicted ("no
+    landings near 2026-08-08 touching the relevant lines ... a pre-existing latent race, not a
+    new regression"). Jens Stutte's first reply was "I do not think bug 1768581 is the
+    regressor", and the feedback that followed was to be more speculative on the unsure parts.
+
+    So this only labels; it moves no rung. ``seed["candidate_pushdates"]`` holds exactly the
+    seeded window candidates (``build_seed`` builds it from the pushlog), so membership is a dict
+    lookup — no network, offline-safe, and unrecorded (rather than ``False``) when there is no
+    map to consult, because the bug comment must not claim a window it never had."""
+    cand = dossier.candidate if dossier is not None else None
+    if cand is None or not cand.node:
+        return
+    pushdates = (seed or {}).get("candidate_pushdates")
+    if not pushdates:
+        return
+    dossier.corroborations = {
+        **(dossier.corroborations or {}),
+        "candidate_in_pushlog_window": cand.node in pushdates,
+    }
+
+
 def _apply_bit_flip_gate(dossier, seed):
     """SUPPRESS a verdict whose crash was probably a HARDWARE bit flip: there is no bug at all.
 
@@ -1757,6 +1792,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # is wrong" — and because the second-opinion boost above it is exactly what pushed bug
         # 2061961 to the filing threshold.
         _apply_bit_flip_gate(result.dossier, seed)
+        # Not a gate — a label. Whether the candidate came from this build's pushlog window is
+        # what decides if the filed bug may call it a "regression" at all.
+        _record_window_membership(result.dossier, seed)
         # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
         # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
         # must not ship the original strong-evidence action. Idempotent when nothing

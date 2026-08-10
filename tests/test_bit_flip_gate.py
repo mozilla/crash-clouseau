@@ -218,6 +218,45 @@ class TestGateRunsLast(unittest.TestCase):
         self.assertIn("not fileable", res["skipped"])
 
 
+class TestWindowMembership(unittest.TestCase):
+    """Whether the candidate came from this build's pushlog window is the only recency evidence
+    the pipeline has, and it decides whether the filed bug may say "regression" at all. Measured
+    over the first 22 filings the premise held 3 times; bug 2062119 named a changeset from
+    2022-12-13 and the run's own skeptic was recording "not a new regression"."""
+
+    def test_a_seeded_candidate_is_in_the_window(self):
+        d = _lead()
+        orch._record_window_membership(
+            d, {"candidate_pushdates": {"abcdef123456": 1, "other": 2}})
+        self.assertIs(d.corroborations["candidate_in_pushlog_window"], False)
+        d = Dossier(candidate=Candidate(node="abcdef123456"),
+                    verdict=Verdict(decision=Decision.abstain, confidence=Confidence.low,
+                                    abstain_reason="x"))
+        orch._record_window_membership(d, {"candidate_pushdates": {"abcdef123456": 1}})
+        self.assertIs(d.corroborations["candidate_in_pushlog_window"], True)
+
+    def test_a_blame_found_candidate_is_out_of_the_window(self):
+        d = _lead()
+        orch._record_window_membership(d, {"candidate_pushdates": {"someothernode": 1}})
+        self.assertIs(d.corroborations["candidate_in_pushlog_window"], False)
+
+    def test_no_map_records_nothing_rather_than_false(self):
+        # Offline seeds and old runs carry no map. `report_bug.is_suspected_regression` reads an
+        # absent flag as "no", so recording a bare False here would be indistinguishable from a
+        # measured out-of-window -- and this flag is the thing we want to COUNT.
+        for seed in ({}, {"candidate_pushdates": {}}, {"candidate_pushdates": None}):
+            with self.subTest(seed=seed):
+                d = _lead()
+                orch._record_window_membership(d, seed)
+                self.assertEqual(d.corroborations or {}, {})
+
+    def test_it_moves_no_rung(self):
+        d = _lead()
+        orch._record_window_membership(d, {"candidate_pushdates": {"nope": 1}})
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+
+
 class TestCrashBriefCarriesTheEvidence(unittest.TestCase):
     """The gate is the backstop; this is the fix for the reasoning. `_crash_facts` feeds the
     principal, its five subagents AND the blind second opinion (`second_opinion._user_prompt`

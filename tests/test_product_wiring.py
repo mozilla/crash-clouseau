@@ -50,6 +50,9 @@ _FRAME = {
 def _dossier():
     return {
         "crash": {"failure_class": "uaf", "moz_crash_reason": None},
+        # The candidate came from THIS build's pushlog window, which is what earns the filed
+        # bug the words "Suspected regressor" (report_bug.is_suspected_regression).
+        "corroborations": {"candidate_in_pushlog_window": True},
         "candidate": {
             "node": "culpritnode1",
             "bug": 99999,
@@ -1404,7 +1407,9 @@ class TestBugPreview(unittest.TestCase):
         dossier = {
             "candidate": {"node": "abc123", "bug": 7, "author": "Dev",
                           "git_commit": "g1t"},
-            "verdict": {"confidence": "probable",
+            "corroborations": {"candidate_in_pushlog_window": True},
+            "skeptic": [{"status": "pass", "claim_ref": "line_match", "note": "exact."}],
+            "verdict": {"confidence": "probable", "p_worth_investigating": 0.8,
                         "mechanism": {"statement": "null deref of mFoo", "citations": [
                             {"kind": "searchfox", "symbol_id": "A::b",
                              "permalink": "https://searchfox.org/x#1"}]}},
@@ -1420,10 +1425,14 @@ class TestBugPreview(unittest.TestCase):
             "Crash Reason:",
             "Top 3 frames:",
             "There are 2 crashes",
-            "Clouseau analysis (confidence probable): null deref of mFoo",
+            "Clouseau analysis (automated, 80% worth investigating",
+            "null deref of mFoo",
             "Suspected regressor: [abc123](", "([gh](", ") (bug 7) by Dev.",
             "Code references:",
+            "What the automated skeptic pass checked",
             ":dev, can you have a look please?",
+            # Last, so the reader has read the analysis before being told to distrust it.
+            "Filed automatically by [Clouseau]",
         ]
         at = [c.find(x) for x in order]
         self.assertNotIn(-1, at, "missing section in {!r}".format(c))
@@ -1565,6 +1574,7 @@ class TestBugPreview(unittest.TestCase):
         dossier = {
             "candidate": {"node": "n", "bug": 1, "author": "Dev <dev@x.com>",
                           "git_commit": "g1tsha"},
+            "corroborations": {"candidate_in_pushlog_window": True},
             "verdict": {"confidence": "high",
                         "mechanism": {"statement": "UAF of mFoo"},
                         "consistency": {"statement": "matches the crash"}},
@@ -1739,10 +1749,85 @@ class TestBugPreview(unittest.TestCase):
         self.assertIsNone(report_bug._needinfo_line({"nick": "", "name": "", "email": ""}))
 
     def test_explanation_comment_regressor_only(self):
-        # No mechanism -> still names the suspected regressor; nothing at all -> None.
-        exp = report_bug._explanation_comment({}, {"node": "abc", "bug": 7})
+        # No mechanism -> still names the changeset; nothing at all -> None.
+        exp = report_bug._explanation_comment(
+            {}, {"node": "abc", "bug": 7},
+            corroborations={"candidate_in_pushlog_window": True})
         self.assertIn("Suspected regressor: abc (bug 7)", exp)
         self.assertIsNone(report_bug._explanation_comment({}, {}))
+
+    def test_a_candidate_from_outside_the_window_is_not_called_a_regressor(self):
+        # Bug 2062119 named a changeset from 2022-12-13 as the "Suspected regressor" of an
+        # August 2026 nightly crash, with the `regression` keyword and a blocks-link, while the
+        # run's own skeptic pass was recording "a pre-existing latent race, not a new
+        # regression". The reviewer's first reply was "I do not think bug 1768581 is the
+        # regressor" -- and then he found the real one and wrote the patches. Ask for that.
+        exp = report_bug._explanation_comment(
+            {}, {"node": "abc", "bug": 7},
+            corroborations={"candidate_in_pushlog_window": False})
+        self.assertNotIn("Suspected regressor", exp)
+        self.assertIn("Starting point — NOT a suspected cause: abc (bug 7)", exp)
+        self.assertIn("did not land in this build's pushlog window", exp)
+        self.assertIn("most useful thing you could leave on this bug", exp)
+
+    def test_an_unrecorded_window_never_licenses_the_regression_claim(self):
+        # Old dossiers and offline runs carry no flag. An unproven regression claim is the thing
+        # being fixed, so silence must read as "no", not as "sure, go ahead".
+        for corrob in (None, {}, {"something_else": True}):
+            with self.subTest(corrob=corrob):
+                exp = report_bug._explanation_comment({}, {"node": "abc"},
+                                                      corroborations=corrob)
+                self.assertNotIn("Suspected regressor", exp)
+                self.assertFalse(report_bug.is_suspected_regression(corrob))
+
+    def test_the_calibrated_number_replaces_the_rung_name(self):
+        # "confidence high" reads as "I am sure this is the cause". The number the pipeline
+        # actually calibrated is p_worth_investigating, fit at PERSON level.
+        exp = report_bug._explanation_comment(
+            {"confidence": "high", "p_worth_investigating": 0.9714,
+             "mechanism": {"statement": "null deref"}}, {})
+        self.assertIn("97% worth investigating", exp)
+        self.assertIn("not that the changeset below caused it", exp)
+        self.assertNotIn("confidence high", exp)
+
+    def test_no_calibrated_number_claims_nothing(self):
+        # Deliberately no fallback to the rung name: with no calibrated figure the honest thing
+        # is to say nothing, not to reach for the word that caused the problem.
+        exp = report_bug._explanation_comment(
+            {"confidence": "high", "mechanism": {"statement": "null deref"}}, {})
+        self.assertIn("Clouseau analysis (automated)", exp)
+        self.assertNotIn("worth investigating", exp)
+        self.assertNotIn("high", exp)
+
+    def test_the_skeptic_review_travels_with_the_bug(self):
+        # It already existed, was already on crashstack.html, and was already dropped on the way
+        # to Bugzilla -- including the one finding that mattered.
+        block = report_bug.build_skeptic_block({"skeptic": [
+            {"status": "pass", "claim_ref": "field_offset_match",
+             "note": "mMimeService at offset 40 (0x28)."},
+            {"status": "unverifiable", "claim_ref": "restyle_invalidation_gap",
+             "note": "Could not find or rule out an nsChangeHint."},
+            {"status": "pass", "claim_ref": "no_recent_regressor",
+             "note": "a pre-existing latent race, not a new regression."},
+        ]})
+        self.assertIn("no_recent_regressor", block)
+        self.assertIn("not a new regression", block)
+        # Open questions first: they are what a reader can most usefully close, and the cap
+        # must never drop one in favour of a confirmation.
+        self.assertLess(block.find("restyle_invalidation_gap"), block.find("field_offset_match"))
+        self.assertIn("a `pass` means the check succeeded", block)
+
+    def test_the_skeptic_block_is_capped_without_losing_open_questions(self):
+        items = [{"status": "pass", "claim_ref": "p{}".format(i)} for i in range(20)]
+        items.append({"status": "unverifiable", "claim_ref": "the_open_one"})
+        block = report_bug.build_skeptic_block({"skeptic": items})
+        self.assertIn("the_open_one", block)
+        self.assertEqual(block.count("\n- "), report_bug._MAX_SKEPTIC_ITEMS)
+
+    def test_no_skeptic_findings_means_no_section(self):
+        for d in (None, {}, {"skeptic": []}, {"skeptic": ["junk"]}):
+            with self.subTest(d=d):
+                self.assertEqual(report_bug.build_skeptic_block(d), "")
 
 
 class TestNeedinfoAccount(unittest.TestCase):

@@ -182,6 +182,10 @@ _MAX_FUNCTION_CHARS = 80
 # Code references appended after the analysis. Capped so a citation-heavy verdict cannot
 # bury the prose under a wall of links.
 _MAX_CODE_REFS = 6
+# Skeptic findings shown in the bug. A run emits ~6; the cap is there so a verbose review cannot
+# push the needinfo ask off the bottom of what anyone reads, and unverifiable entries sort first
+# so the cap can never drop an open question in favour of a confirmation.
+_MAX_SKEPTIC_ITEMS = 8
 _EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
 # Process cache behind `_bug_meta`: a bug's product::component and the people on it are
 # both stable, and the preview is a hot render path (every crashstack view, not just a
@@ -451,13 +455,28 @@ def build_bug_comment(
         build_frames_block(stack, max_frames=max_frames),
         build_stats_sentence(first, stats, info),
         _explanation_comment(
-            (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel
+            (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,
+            corroborations=(dossier or {}).get("corroborations"),
         ),
         build_code_references((dossier or {}).get("verdict"), channel),
+        build_skeptic_block(dossier),
         build_related_bugs_note(related_bugs),
         needinfo,
+        _PROVENANCE,
     ]
     return "\n\n".join(s for s in sections if s)
+
+
+# Last line of every filed bug. One sentence, not a section: the reviewer of bug 2061961 had to
+# INFER that a machine wrote the analysis ("the automated analysis suspected my patch"), and a
+# reader who knows can discount it themselves without the prose hedging every clause. The
+# invitation to resolve it is not politeness — an INVALID from someone who knows the code is a
+# useful outcome, and the alternative is a stale needinfo nobody wants to be rude about.
+_PROVENANCE = (
+    "_Filed automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), which "
+    "analyses nightly crashes with an LLM. Nothing above was written or checked by a human. "
+    "Please close it as INVALID if it is wrong — that is useful feedback, not a nuisance._"
+)
 
 
 def build_related_bugs_note(related_bugs):
@@ -605,33 +624,116 @@ def resolve_product_component(candidate, channel):
     return None, None
 
 
-def _explanation_comment(verdict, candidate, channel=None):
+def is_suspected_regression(corroborations):
+    """May the filed bug call its candidate a REGRESSOR? Tri-state: ``True``/``False``/``None``.
+
+    True only when the candidate came from the crash build's own pushlog window
+    (``orchestrator._record_window_membership``), because that is the only recency evidence the
+    pipeline ever has. ``None`` means nobody recorded it -- old dossiers, and offline runs -- and
+    is treated as "no" by every caller: an unproven regression claim is the thing being fixed, so
+    silence must not license it.
+
+    Held to a deliberately narrow standard because of what the claim COSTS. It is not a turn of
+    phrase: it sets the ``regression`` keyword that release management triages on, links the bug
+    into a stranger's blocks list, and points a needinfo at the person named. On bug 2062119 all
+    three fired for a changeset from 2022 while the run's own skeptic pass was recording "a
+    pre-existing latent race, not a new regression"."""
+    return (corroborations or {}).get("candidate_in_pushlog_window")
+
+
+def build_skeptic_block(dossier, max_items=_MAX_SKEPTIC_ITEMS):
+    """The skeptic pass's own findings, or ``""`` -- the caveats, in the bug, with the analysis.
+
+    THE POINT OF THIS SECTION. Every claim below already existed, was already shown on
+    crashstack.html, and was already dropped on the way to Bugzilla. Bug 2062119's run recorded
+    "file_history ... shows no landings near 2026-08-08 touching the relevant lines ... This is a
+    pre-existing latent race, not a new regression" and "all three seed changesets ... touch none
+    of the crash-path files" -- and then filed a bug asserting a regressor at "confidence high".
+    The reviewer's first reply disputed exactly that, and the feedback afterwards was to be more
+    speculative about the unsure parts. The unsure parts were known; they just were not sent.
+
+    ``unverifiable`` entries lead, because an open question is what a reader most needs and is
+    the easiest thing for them to close. Statuses are printed verbatim rather than rewritten as
+    prose: ``pass`` on a claim named ``no_recent_regressor`` means the skeptic CONFIRMED there is
+    no recent regressor, which no automatic paraphrase gets right."""
+    items = [s for s in (dossier or {}).get("skeptic") or [] if isinstance(s, dict)]
+    if not items:
+        return ""
+    order = {"unverifiable": 0, "fail": 1, "pass": 2}
+    items = sorted(items, key=lambda s: order.get(s.get("status"), 3))[:max_items]
+    lines = []
+    for item in items:
+        note = (item.get("note") or "").strip()
+        ref = (item.get("claim_ref") or "").strip() or "(unnamed check)"
+        lines.append("- **{}** {}{}".format(
+            item.get("status") or "?", ref, " — " + note if note else ""))
+    return ("What the automated skeptic pass checked (its own words — a `pass` means the check "
+            "succeeded, which is not always support for the conclusion):\n" + "\n".join(lines))
+
+
+def _explanation_comment(verdict, candidate, channel=None, corroborations=None):
     """The Clouseau analysis comment we'd post to the filed bug: the crash mechanism (and,
-    when present, why it is consistent with the crash) plus the suspected regressor -- the
+    when present, why it is consistent with the crash) plus the candidate changeset -- the
     latter carrying an hg and a GitHub link when ``channel`` tells us which repo it is in.
-    ``None`` when there is nothing substantive to say."""
+    ``None`` when there is nothing substantive to say.
+
+    Two things are deliberately NOT stated the way the pipeline stores them:
+
+    * the rung. ``confidence high`` reads as "I am sure this is the cause"; the number the
+      pipeline actually calibrated is ``p_worth_investigating``, and it was fit at PERSON level
+      -- "worth someone's time", not "this changeset did it". crashstack.html has rendered it as
+      "N% worth investigating" since the calibration landed; the bug said "confidence high".
+    * the candidate. "Suspected regressor" is a causal claim, and one the pipeline earns only
+      inside the build's pushlog window (``is_suspected_regression``). Outside it, the changeset
+      is a place to start looking, and saying so is what invites the correction that makes these
+      bugs work: on bug 2062119 the reviewer rejected the named changeset, found the real origin
+      himself and attached two patches."""
     verdict = verdict or {}
     lines = []
     mech = ((verdict.get("mechanism") or {}).get("statement") or "").strip()
     cons = ((verdict.get("consistency") or {}).get("statement") or "").strip()
-    conf = verdict.get("confidence") or ""
     if mech:
-        lines.append("Clouseau analysis{}: {}".format(
-            " (confidence {})".format(conf) if conf else "", mech))
+        lines.append("Clouseau analysis (automated{}). The mechanism below fits the evidence "
+                     "but is not proven end-to-end:\n\n{}".format(
+                         _worth_phrase(verdict), mech))
     if cons:
         lines.append(cons)
     c = candidate or {}
     if c.get("node"):
-        detail = "Suspected regressor: {}".format(
-            changeset_links(c["node"], channel, c.get("git_commit") or "")
-        )
+        link = changeset_links(c["node"], channel, c.get("git_commit") or "")
         if c.get("bug"):
-            detail += " (bug {})".format(c["bug"])
+            link += " (bug {})".format(c["bug"])
         author = (c.get("author") or "").strip()
         if author:
-            detail += " by {}".format(author)
-        lines.append(detail + ".")
+            link += " by {}".format(author)
+        if is_suspected_regression(corroborations):
+            lines.append("Suspected regressor: {}.".format(link))
+        else:
+            # Everything the pipeline has here is "this code is on the crash path", which is a
+            # starting point and not an origin. Ask for the correction outright -- it is the
+            # single most useful thing the reader can give back, and on bug 2062119 it is what
+            # produced the fix.
+            lines.append(
+                "Starting point — NOT a suspected cause: {}.\n\nThis changeset did not land in "
+                "this build's pushlog window, so there is no evidence here that the crash is a "
+                "recent regression from it; it is named only as the closest thing found on the "
+                "crash path. If you know where this actually comes from, that correction is the "
+                "most useful thing you could leave on this bug.".format(link))
     return "\n\n".join(lines) if lines else None
+
+
+def _worth_phrase(verdict):
+    """`` — N% worth investigating`` from the calibrated probability, or ``""``.
+
+    The rung name is deliberately not offered as a fallback: with no calibrated number the honest
+    thing is to claim nothing, not to fall back on the word that caused the problem."""
+    p = (verdict or {}).get("p_worth_investigating")
+    try:
+        pct = round(float(p) * 100)
+    except (TypeError, ValueError):
+        return ""
+    return (", {}% worth investigating — a calibrated estimate that this is worth someone's "
+            "time, not that the changeset below caused it".format(pct))
 
 
 _USER_CACHE: dict = {}   # email -> {"exists", "nick"}
@@ -950,6 +1052,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
         except Exception:
             version = None
     first, stats = fetch_signature_stats(uuid, uuid_info)
+    suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -971,17 +1074,25 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
         # --- metadata a create_bug needs / a hand-filed crash bug carries ---
         "version": _bug_version(channel),
         "type": "defect",
-        # `regression` alongside `crash`: the whole pipeline only looks inside a build's
-        # pushlog window, so every candidate it names is a suspected regression.
-        "keywords": ["crash", "regression"],
+        # `regression` ONLY when the candidate actually came from this build's pushlog window.
+        # The old justification here was "the whole pipeline only looks inside a build's pushlog
+        # window, so every candidate it names is a suspected regression" — measured over the
+        # first 22 filings, that held 3 times. The keyword drives release management's triage
+        # and uplift decisions, so claiming it for a changeset from 2022 (bug 2062119) is not a
+        # wording problem.
+        "keywords": (["crash", "regression"] if suspected_regression else ["crash"]),
         # Bugzilla's crash-signature field, same `[@ ...]` syntax as the title. This is what
         # makes the bug show up against the signature in Socorro and in BMO's crash queries.
         "cf_crash_signature": "[@ {}]".format((uuid_info.get("signature") or "").strip()),
-        # Mirrors `improve`: the crash bug blocks the `clouseau` tracking bug, plus the
-        # suspected regressor's own bug when we know it. An alias and a bug id are both
-        # accepted here. Association, NOT a causal claim (see the docstring on regressed_by).
+        # Mirrors `improve`: the crash bug blocks the `clouseau` tracking bug, plus the suspected
+        # regressor's own bug when there IS one. Meant as association rather than a causal claim
+        # (see the docstring on regressed_by) — but it does not read that way from the other end:
+        # it puts a crash bug in a stranger's blocks list, and on bug 2062119 it did that to a
+        # 2022 bug of Jens Stutte's that the run's own skeptic had ruled out. Outside the pushlog
+        # window the changeset stays named in the prose, and the structured link is not made.
         "blocked": (
-            ["clouseau", candidate["bug"]] if candidate.get("bug") else ["clouseau"]
+            ["clouseau", candidate["bug"]]
+            if (candidate.get("bug") and suspected_regression) else ["clouseau"]
         ),
         "needinfo": _needinfo_line(person),
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
