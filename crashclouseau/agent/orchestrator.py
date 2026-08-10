@@ -651,7 +651,31 @@ def build_seed(uuid):
         # ``None`` means the lookup failed and must never read as "a singleton".
         "signature_report_count": sig_report_count,
         "candidate_pushdates": candidate_pushdates,
+        # Learned crash archetypes that match this crash (`models.Archetype`): a recurring
+        # shape plus what a reviewer told us to check when we see it. Handed to the agent as a
+        # HINT — see `triage._archetype_lines`. Empty on any failure.
+        "archetypes": _matching_archetypes(info, stack_text, raw_crash),
     }
+
+
+def _matching_archetypes(info, stack_text, raw_crash):
+    """Archetypes matching this crash, as ``[{slug, title, guidance}, ...]``.
+
+    Matched HERE rather than in the gates because the point is to change how the agent
+    investigates, not how its answer is scored — a rule that only ran after the verdict would be
+    a critic, and what bug 2062119 needed was a different first move. Never raises: a hint that
+    cannot be fetched is a hint we do without."""
+    try:
+        crash_info = ((raw_crash or {}).get("json_dump") or {}).get("crash_info") or {}
+        return models.Archetype.for_crash({
+            "signature": info.get("signature", ""),
+            "stack": stack_text,
+            "crash_type": crash_info.get("type") or (raw_crash or {}).get("reason") or "",
+            "fault_address": crash_info.get("address") or (raw_crash or {}).get("address"),
+        })
+    except Exception:                                   # pragma: no cover - defensive
+        logger.warning("agent: archetype match failed", exc_info=True)
+        return []
 
 
 def _gather_evidence(dossier):
@@ -1795,6 +1819,13 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.
         _record_window_membership(result.dossier, seed)
+        # Which learned archetypes were in front of the agent. Recorded even when none matched
+        # (as an empty list) so "this run saw no hints" and "this run predates the feature" stay
+        # distinguishable — `Feedback` joins on this to score a rule against real outcomes.
+        fired = [h.get("slug") for h in (seed.get("archetypes") or []) if h.get("slug")]
+        if seed.get("archetypes") is not None:
+            result.dossier.corroborations = {
+                **(result.dossier.corroborations or {}), "archetypes": fired}
         # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
         # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
         # must not ship the original strong-evidence action. Idempotent when nothing

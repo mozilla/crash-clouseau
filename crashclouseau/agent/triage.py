@@ -216,6 +216,39 @@ def _bit_flip_summary(info: dict) -> str:
     return "; ".join(parts)
 
 
+def _archetype_lines(crash: dict) -> list[str]:
+    """Learned archetypes matching this crash (``models.Archetype``), as prompt lines, or ``[]``.
+
+    WHERE A REVIEWER'S CORRECTION COMES BACK IN. Jens Stutte, after rejecting the changeset the
+    pipeline named on bug 2062119 and finding the real origin himself: "maybe a general 'is a
+    singleton involved that may not have a good/complete shutdown handling?'". That is an
+    investigation rule, and the only place it can change anything is here, before the agent
+    picks its first move — a rule applied after the verdict would be a critic, not a lead.
+
+    Framed as a PRIOR TO TEST, never a conclusion, and it says so in the text. These rows are
+    added from feedback without the review a patch gets, so the standing grounding rule has to
+    keep doing the work: an archetype may tell the agent where to look and can never be cited as
+    why it concluded something. `_user_prompt` is shared with the blind second opinion, so a
+    hint reaches both — which is right for a search hint and would NOT be for evidence."""
+    hints = crash.get("archetypes") or []
+    if not hints:
+        return []
+    lines = [
+        "",
+        "KNOWN ARCHETYPES matching this crash. Each is a pattern a reviewer taught us after a "
+        "previous bug, with what they said to check. Treat every one as a PRIOR TO TEST, not a "
+        "finding: confirm it against real code before it changes your conclusion, and say so "
+        "plainly if it does not hold here.",
+    ]
+    for hint in hints:
+        if not isinstance(hint, dict) or not hint.get("guidance"):
+            continue
+        lines.append("- {}: {}".format(
+            (hint.get("title") or hint.get("slug") or "archetype").strip(),
+            str(hint["guidance"]).strip()))
+    return lines if len(lines) > 2 else []
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
@@ -302,6 +335,7 @@ def _user_prompt(crash: dict) -> str:
     facts = _crash_facts(crash)
     if facts:
         lines += ["", "Crash facts:", *facts]
+    lines += _archetype_lines(crash)
     if stack:
         lines += ["", "Stack:", str(stack)]
     candidates = crash.get("candidates") or []

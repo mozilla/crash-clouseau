@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import re
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
@@ -2022,6 +2023,32 @@ class Dossier(db.Model):
             .scalar()
         ) or 0
 
+    @staticmethod
+    def filed_bug_rows():
+        """``[{uuid, filed_bug, dossier}]`` for every dossier a bug was actually filed from,
+        oldest first — the input to ``feedback.refresh``.
+
+        Returns the whole payload rather than plucking JSONB paths because the caller wants
+        three unrelated parts of it (what was filed, which changeset was named, which
+        archetypes fired) and the row count is in the tens. ``filed_bug`` is also written for
+        the SKIPPED cases, so filter on its ``filed`` flag rather than on the key existing."""
+        qs = (
+            db.session.query(UUID.uuid, Dossier.payload)
+            .select_from(Dossier)
+            .join(UUID, UUID.id == Dossier.uuidid)
+            .filter(Dossier.payload.has_key("filed_bug"))  # noqa: W601 - JSONB ? operator
+            .order_by(Dossier.updated)
+        )
+        out = []
+        for uuid, payload in qs:
+            payload = payload or {}
+            filed = payload.get("filed_bug") or {}
+            if not filed.get("filed"):
+                continue
+            out.append({"uuid": uuid, "filed_bug": filed,
+                        "dossier": payload.get("dossier") or {}})
+        return out
+
 
 class Verdict(db.Model):
     __tablename__ = "verdicts"
@@ -2168,6 +2195,236 @@ class Verdict(db.Model):
         }
 
 
+class Archetype(db.Model):
+    """A recurring crash SHAPE and what a reviewer taught us to check when we see it.
+
+    THE FEEDBACK LOOP THIS EXISTS FOR. Bug 2062119 was filed naming a changeset from 2022 as
+    the regressor of a shutdown-phase null deref. Jens Stutte replied that it was the wrong
+    changeset, found the real origin himself (bug 1412726 converted `gJarHandler` to a
+    `StaticRefPtr` cleared by `ClearOnShutdown`, decoupling nulling from destruction) and wrote
+    the patches -- then said: "maybe a general 'is a singleton involved that may not have a
+    good/complete shutdown handling?'". That is a reusable investigation rule, and it should not
+    have to be rediscovered per crash.
+
+    ROWS, NOT CODE, because these accumulate from feedback: a reviewer's correction arrives
+    weeks after the deploy that would have carried it, and the point is to add one the day it is
+    learned. The precedent for the SHAPE is `_looks_pref_flip` + the LINKED-CAUSE prompt block,
+    which encode exactly this kind of rule (learned from bug 2056116) but are hardcoded.
+
+    WHAT A ROW MAY AND MAY NOT DO, because a row is not reviewed the way a patch is:
+
+    * ``guidance`` is injected into the agent's brief as a HINT and labelled as one. It is
+      never evidence, never a citation, and never a gate. The grounding rule still applies --
+      the agent must cite real code for anything it concludes -- so the worst a wrong row can do
+      is waste effort or suggest a dead end. It cannot file a bug or move a rung by itself.
+    * ``matcher`` is DECLARATIVE, not code: lists of regexes over named crash fields plus a
+      couple of scalars (see ``matches``). A rule cannot run arbitrary logic, and a pattern that
+      does not compile disables its own row rather than breaking a run.
+
+    Which rows fired is recorded on the dossier and copied onto ``Feedback``, so "did this rule
+    help?" is answerable from the outcomes rather than from intuition."""
+
+    __tablename__ = "archetypes"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    slug = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    title = db.Column(db.String(200), nullable=False)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    matcher = db.Column(pg.JSONB, nullable=False, default=dict)
+    guidance = db.Column(db.Text, nullable=False)
+    # The bug that taught us this, so a row is never anonymous folklore.
+    source_bug = db.Column(db.Integer, nullable=True)
+    created = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
+    )
+    updated = db.Column(
+        db.DateTime(timezone=True), nullable=False,
+        server_default=db.func.now(), onupdate=db.func.now(),
+    )
+
+    # A pathological pattern would hang a worker inside `re` with no timeout available, so
+    # patterns are length-capped. Rows are ops-authored, not user input, but a run must not be
+    # lossable to a typo.
+    MAX_PATTERN = 200
+
+    @staticmethod
+    def _any_match(patterns, text_):
+        if not patterns:
+            return True
+        if not text_:
+            return False
+        for pattern in patterns:
+            if not isinstance(pattern, str) or len(pattern) > Archetype.MAX_PATTERN:
+                continue
+            try:
+                if re.search(pattern, text_, re.I):
+                    return True
+            except re.error:
+                continue
+        return False
+
+    def matches(self, facts):
+        """Does this archetype apply to a crash? ``facts`` is
+        ``{signature, stack, crash_type, fault_address}``.
+
+        AND across the keys a row specifies, OR within each key's list, and an unspecified key
+        is not a constraint. Deliberately boring: a rule an operator cannot predict the firing
+        of is worse than no rule.
+
+        ``max_fault_address`` is the one non-regex condition, because "a small address" is the
+        signature of a null base plus a field offset and no regex expresses it. Missing or
+        unparseable, it does not match -- an unknown must not satisfy a condition."""
+        m = self.matcher or {}
+        if not self._any_match(m.get("signature"), (facts or {}).get("signature")):
+            return False
+        if not self._any_match(m.get("stack"), (facts or {}).get("stack")):
+            return False
+        if not self._any_match(m.get("crash_type"), (facts or {}).get("crash_type")):
+            return False
+        limit = m.get("max_fault_address")
+        if limit is not None:
+            try:
+                if int(str((facts or {}).get("fault_address") or ""), 16) > int(limit):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
+
+    @staticmethod
+    def for_crash(facts):
+        """``[{slug, title, guidance}, ...]`` for the enabled archetypes matching this crash.
+
+        Never raises: an unreachable table (or one that predates this feature) must degrade to
+        "no hints", not lose the run."""
+        try:
+            rows = (
+                db.session.query(Archetype)
+                .filter(Archetype.enabled.is_(True))
+                .order_by(Archetype.slug)
+                .all()
+            )
+        except Exception as exc:                            # pragma: no cover - defensive
+            logger.warning("archetypes: lookup failed (%s); continuing with none", exc)
+            db.session.rollback()
+            return []
+        out = []
+        for row in rows:
+            try:
+                if row.matches(facts):
+                    out.append({"slug": row.slug, "title": row.title,
+                                "guidance": row.guidance})
+            except Exception:                               # pragma: no cover - defensive
+                logger.warning("archetypes: %s failed to match", row.slug, exc_info=True)
+        return out
+
+    @staticmethod
+    def upsert(slug, title, guidance, matcher, source_bug=None, enabled=True, commit_=True):
+        """Create or update one archetype by slug. Used by the seeder and by hand."""
+        row = db.session.query(Archetype).filter(Archetype.slug == slug).one_or_none()
+        if row is None:
+            row = Archetype(slug=slug)
+            db.session.add(row)
+        row.title = title
+        row.guidance = guidance
+        row.matcher = matcher
+        row.source_bug = source_bug
+        row.enabled = enabled
+        if commit_:
+            db.session.commit()
+        return row
+
+
+class Feedback(db.Model):
+    """What actually happened to a bug the pipeline filed.
+
+    The other half of the loop, and the half that makes the first half honest: without it, an
+    archetype is a guess nobody can score. ``Dossier.payload["filed_bug"]`` records what we DID;
+    nothing has ever recorded what came of it.
+
+    ``regressed_by`` is why this is cheap rather than a labelling project. When a reviewer
+    corrects the attribution they set BMO's own field -- bug 2062119 carries
+    ``regressed_by: [1412726]`` against the ``1768581`` we named -- so "were we right?" is a
+    machine comparison on a bug we already know the id of, not an inference from prose."""
+
+    __tablename__ = "feedback"
+
+    # What we claimed, at filing time
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    bug_id = db.Column(db.Integer, unique=True, nullable=False, index=True)
+    uuid = db.Column(db.String(36), nullable=True, index=True)
+    named_bug = db.Column(db.Integer, nullable=True)
+    named_node = db.Column(db.String(40), nullable=True)
+    # Which archetypes fired on the run that produced it — the join that scores a rule.
+    archetypes = db.Column(pg.JSONB, nullable=False, default=list)
+
+    # What Bugzilla says now
+    status = db.Column(db.String(32), nullable=True)
+    resolution = db.Column(db.String(32), nullable=True)
+    dupe_of = db.Column(db.Integer, nullable=True)
+    regressed_by = db.Column(pg.JSONB, nullable=False, default=list)
+    # correct | wrong | crash_invalid | unknown — see `classify`
+    attribution = db.Column(db.String(16), nullable=False, default="unknown")
+
+    filed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    checked_at = db.Column(
+        db.DateTime(timezone=True), nullable=False,
+        server_default=db.func.now(), onupdate=db.func.now(),
+    )
+
+    @staticmethod
+    def classify(resolution, named_bug, regressed_by):
+        """The verdict on OUR verdict.
+
+        Four states, and the middle two are the ones worth separating: a bug can be a real crash
+        we were useful about while still naming the wrong changeset, which is exactly bug 2062119
+        and exactly what the worth-investigating pivot says is an acceptable outcome. Collapsing
+        it into "wrong" would make the pipeline look worse than it is; collapsing it into
+        "correct" would hide the attribution problem that is genuinely there.
+
+        ``unknown`` covers not-yet-triaged and, deliberately, a bug nobody has set
+        ``regressed_by`` on: silence is not agreement."""
+        if (resolution or "").upper() in ("INVALID", "WORKSFORME", "INCOMPLETE"):
+            return "crash_invalid"
+        known = [int(b) for b in (regressed_by or []) if str(b).isdigit()]
+        if not known:
+            return "unknown"
+        if named_bug is not None and int(named_bug) in known:
+            return "correct"
+        return "wrong"
+
+    @staticmethod
+    def record(bug_id, **fields):
+        """Create or refresh one row by bug id; recomputes ``attribution``."""
+        row = db.session.query(Feedback).filter(Feedback.bug_id == bug_id).one_or_none()
+        if row is None:
+            row = Feedback(bug_id=bug_id)
+            db.session.add(row)
+        for key, value in fields.items():
+            if hasattr(row, key):
+                setattr(row, key, value)
+        row.attribution = Feedback.classify(
+            row.resolution, row.named_bug, row.regressed_by)
+        row.checked_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return row
+
+    @staticmethod
+    def scoreboard():
+        """``{attribution -> count}`` plus per-archetype tallies, for the page and the CLI."""
+        out = {"total": 0, "by_attribution": {}, "by_archetype": {}}
+        for row in db.session.query(Feedback).all():
+            out["total"] += 1
+            out["by_attribution"][row.attribution] = (
+                out["by_attribution"].get(row.attribution, 0) + 1)
+            for slug in row.archetypes or []:
+                tally = out["by_archetype"].setdefault(
+                    slug, {"filed": 0, "correct": 0, "wrong": 0, "crash_invalid": 0})
+                tally["filed"] += 1
+                if row.attribution in tally:
+                    tally[row.attribution] += 1
+        return out
+
+
 def commit():
     db.session.commit()
 
@@ -2227,7 +2484,41 @@ def create():
     # Idempotently add post-deploy enum values to a long-lived DB (no-op when fresh,
     # since create_all just built the enums from their current definitions).
     _ensure_enum_values()
+    _ensure_tables()
     return fresh
+
+
+# Tables added after the initial deploy. `create()` only calls `create_all()` on a FRESH
+# database, so a long-lived one would never grow a new table and every read of it would fail at
+# runtime — the same gap `_ensure_enum_values` exists to close for enum values.
+_ADDED_TABLES = ("archetypes", "feedback")
+
+
+def _ensure_tables():
+    """Create post-deploy tables that a long-lived DB is missing. Idempotent, and never raises.
+
+    Checks with `inspect` first and only then issues the DDL, so a hardened DML-only role whose
+    migrations run separately is not hit by a CREATE on every startup. A failure is logged, not
+    raised: a missing feedback table must not stop the pipeline triaging crashes — every reader
+    of these tables already degrades to "no data"."""
+    try:
+        existing = set(inspect(db.engine).get_table_names())
+    except Exception as exc:                                # pragma: no cover - defensive
+        logger.warning("could not list tables to add %s: %s", _ADDED_TABLES, exc)
+        return
+    missing = [db.Model.metadata.tables[name]
+               for name in _ADDED_TABLES
+               if name not in existing and name in db.Model.metadata.tables]
+    if not missing:
+        return
+    try:
+        db.Model.metadata.create_all(bind=db.engine, tables=missing, checkfirst=True)
+        db.session.commit()
+        logger.info("created missing tables: %s", [t.name for t in missing])
+    except Exception as exc:                                # pragma: no cover - defensive
+        db.session.rollback()
+        logger.warning("could not create tables %s (create them manually): %s",
+                       [t.name for t in missing], exc)
 
 
 def clear():
