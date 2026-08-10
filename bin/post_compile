@@ -13,7 +13,13 @@
 # dev / CI keep using the cargo-installed binary on PATH.
 set -euo pipefail
 
-SFX_VERSION="0.18.0"
+# Bumped 0.18.0 -> 0.20.1. Verified compatible by running the REAL adapter
+# (crashclouseau/searchfox.py) against both binaries and diffing the PARSED results:
+# calls_from / calls_to / calls_between / define / field_layout are byte-identical. `-q` search
+# differs run-to-run on ONE binary too (searchfox.org reorders equal-scoring hits), so it is not
+# a version difference. 0.20.1 also stops emitting the "a newer version is available" notice that
+# 0.18.0 appended to normal command output.
+SFX_VERSION="0.20.1"
 SFX_TARBALL="searchfox-cli-${SFX_VERSION}-x86_64-unknown-linux-musl.tar.gz"
 SFX_URL="https://github.com/padenot/searchfox-cli/releases/download/v${SFX_VERSION}/${SFX_TARBALL}"
 DEST="bin/searchfox-cli"
