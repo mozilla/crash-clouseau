@@ -592,17 +592,24 @@ def build_seed(uuid):
     # Offline the seed simply lacks these keys and the gate no-ops (a documented fidelity gap).
     # Best-effort: a lookup failure must never break a seed.
     sig_first_seen = None
-    if config.get_agent_signature_age()["enabled"]:
+    sig_report_count = None
+    # ONE request serves two gates. `first_seen` is the stale-signature downweight's clock;
+    # `total` is how many reports the signature has ever had, which is the bit-flip gate's other
+    # half (a flip score on a busy signature means one bad machine among many, not a bad crash).
+    # Asked when EITHER gate is on, so disabling one does not silently blind the other.
+    if config.get_agent_signature_age()["enabled"] or config.get_agent_bit_flip()["enabled"]:
         try:
             from crashclouseau import sigage
 
-            sig_first_seen = sigage.first_seen_buildid(
+            history = sigage.signature_history(
                 info.get("signature", ""),
                 info.get("product") or uuid_info.get("product", "") or "Firefox",
                 channel,
             )
+            sig_first_seen = history["first_seen"]
+            sig_report_count = history["total"]
         except Exception as exc:  # pragma: no cover - defensive; never break a seed
-            logger.warning("agent: signature first-seen lookup failed for %s: %s", uuid, exc)
+            logger.warning("agent: signature history lookup failed for %s: %s", uuid, exc)
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
     # runs — so hand it the map for every seeded candidate. Both candidate builders already
     # carry `pushdate` (DB datetime on-stack, hg [epoch, tz] off-stack), so this costs nothing.
@@ -639,6 +646,10 @@ def build_seed(uuid):
         # signature was FIRST seen in, plus each seeded candidate's landing date, so the gate can
         # ask whether the chosen candidate landed after the crash already existed.
         "signature_first_seen_buildid": sig_first_seen,
+        # How many reports this signature has EVER had (whole window, not from this build on —
+        # `report_bug.fetch_signature_stats` computes that other quantity for the bug comment).
+        # ``None`` means the lookup failed and must never read as "a singleton".
+        "signature_report_count": sig_report_count,
         "candidate_pushdates": candidate_pushdates,
     }
 
@@ -1395,6 +1406,89 @@ def _apply_backout_gate(dossier, seed):
     )
 
 
+def _apply_bit_flip_gate(dossier, seed):
+    """SUPPRESS a verdict whose crash was probably a HARDWARE bit flip: there is no bug at all.
+
+    Bug 2061961 is why. Crash ff888d42-ce3e-4308-8c2f-b3f060260807 faulted at
+    ``0x00000001000000d0`` — one flipped bit from ``0xd0``, i.e. a NULL base plus a struct offset,
+    and had the pointer really been null the code would have taken its ``None`` branch and not
+    crashed. Socorro had already worked this out and published
+    ``possible_bit_flips_max_confidence: 62``. Nothing in the pipeline read it, so the agent
+    produced a fluent, fully-cited use-after-free story, the blind second opinion (which shares
+    the same crash brief, and so the same blind spot) agreed and BOOSTED the rung from medium to
+    probable — exactly the filing threshold — and a developer was needinfo'd about a mechanical
+    refactor of his. Two people closed it INVALID in two days on this one field.
+
+    THE CONJUNCTION IS THE RULE. A flip score alone is not enough: the same score is common on
+    high-volume signatures, where it means one flaky machine among many rather than a bad crash.
+    So this fires only when Socorro's confidence clears ``min_confidence`` AND the signature has
+    never crashed more than ``max_reports`` people. Of the 21 bugs the canary had filed when this
+    was written, 3 carried the field (66, 62, 25) and the rule fires on 2 — 2061961, and 2061726,
+    which is a single crash on a signature whose other reports are on RELEASE and predate the
+    nightly changeset it blames.
+
+    An ABSTAIN, not a downweight, for the same reason as ``_apply_backout_gate``: this is not a
+    question of how confident to be in the candidate, it is that there is nothing to act on. And
+    LAST, after the second-opinion fold, because no amount of independent agreement can turn a
+    hardware fault into a software bug — the fold is precisely what pushed 2061961 over the line.
+
+    NOT a volume gate in disguise. A single crash is normal and is the whole point of triaging
+    nightly: bug 2062119 named the wrong changeset on a one-report signature and still got a real
+    fix written. Volume only ever qualifies the flip signal here; it never suppresses on its own.
+
+    Tri-state on both inputs, and both fail toward REPORTING. Socorro omits the field entirely
+    (it is never 0) when the stackwalker found no candidate, and ``signature_report_count`` is
+    ``None`` when the lookup failed — neither may read as a hit. Reads ``seed["raw_crash"]``,
+    already in hand, so no network call and a natural no-op offline where the corpus's stub
+    crashes carry no ``crash_info``. Mutates in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None:
+        return
+    cfg = config.get_agent_bit_flip()
+    if not cfg["enabled"]:
+        return
+    raw = (seed or {}).get("raw_crash") or {}
+    try:
+        confidence = raw.get("possible_bit_flips_max_confidence")
+        confidence = None if confidence is None else int(confidence)
+    except (TypeError, ValueError):
+        return
+    if confidence is None:
+        return
+    reports = (seed or {}).get("signature_report_count")
+    # Recorded for EVERY verdict, including the ones left alone: without the flag there is no way
+    # to count how often the pipeline is looking at probable hardware, which is the measurement
+    # that would settle the threshold.
+    flags = {"possible_bit_flip_confidence": confidence}
+    if reports is not None:
+        flags["signature_report_count"] = reports
+    dossier.corroborations = {**(dossier.corroborations or {}), **flags}
+    if confidence < cfg["min_confidence"]:
+        return
+    if reports is None or reports > cfg["max_reports"]:
+        return
+    if v.decision == Decision.abstain:
+        return
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=(
+            "Socorro rates the faulting address a possible hardware BIT FLIP (confidence {}%) "
+            "and this signature has only ever been reported {} time(s) — the likeliest "
+            "explanation is one bad machine, not a bug anyone can fix; suppressed rather than "
+            "reported".format(confidence, reports)
+        ),
+        mechanism=v.mechanism,
+        consistency=v.consistency,
+    )
+    dossier.corroborations = {**dossier.corroborations, "possible_bit_flip_suppressed": True}
+    logger.info(
+        "agent: possible bit flip (confidence %s, %s report(s) for this signature) -> %s/%s "
+        "suppressed to abstain for %s",
+        confidence, reports, v.decision.value, v.confidence.value, (seed or {}).get("uuid"),
+    )
+
+
 def _apply_is_backout_gate(dossier, seed):
     """The candidate IS ITSELF a backout. Two different things follow, so this is two rules.
 
@@ -1584,9 +1678,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
     outside-the-LLM gates: attach area-experts, then the SF-3 call-path gate (off-stack
     only), the exposer classifier (all crashes), the corroboration gate (fault-offset /
     prior-signature lead->probable bump) and the stale-signature downweight; fold the blind
-    second opinion when one was run; re-derive the bridged needinfo from the FINAL verdict; and
-    apply off-stack observe-only last. Mutates ``result`` / ``result.dossier`` in place and
-    returns it.
+    second opinion when one was run; suppress a backed-out candidate and a probable hardware bit
+    flip; re-derive the bridged needinfo from the FINAL verdict; and apply off-stack observe-only
+    last. Mutates ``result`` / ``result.dossier`` in place and returns it.
 
     Extracted so the OFFLINE eval runner applies the exact same post-verdict reshaping as
     ``run_evidence_agent`` — the calibration must score the pipeline we SHIP, not the raw
@@ -1657,6 +1751,12 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # decision at `lead`, because a backout restores behaviour and is never an origin.
         # After `_apply_backout_gate` so a WAS-backed-out abstain keeps its own reason.
         _apply_is_backout_gate(result.dossier, seed)
+        # Hardware, not software: Socorro says the fault address is one flipped bit from a
+        # plausible value and nobody else has ever hit this signature. Last of all, because it
+        # is the only gate whose finding is "there is no bug here" rather than "this candidate
+        # is wrong" — and because the second-opinion boost above it is exactly what pushed bug
+        # 2061961 to the filing threshold.
+        _apply_bit_flip_gate(result.dossier, seed)
         # A gate may have downgraded the verdict (exposer can fire on-stack too now), so
         # re-derive the auto-bridged needinfo from the FINAL verdict — a downgraded verdict
         # must not ship the original strong-evidence action. Idempotent when nothing

@@ -417,6 +417,39 @@ def get_agent_signature_age():
     }
 
 
+def get_agent_bit_flip():
+    """Hardware bit-flip suppression knobs.
+
+    Socorro's stackwalker checks, for the faulting address and each register the crashing
+    instruction names, whether flipping ONE bit yields a plausible value (NULL, or mapped
+    memory), and publishes the best score as ``possible_bit_flips_max_confidence``. When it says
+    yes and the signature has never crashed anyone else, the likeliest explanation is a bad
+    machine — there is no software bug for anybody to fix. Bug 2061961 was filed and needinfo'd
+    at a developer on exactly such a crash (confidence 62, one report) and closed INVALID two
+    days later, by two people citing this field.
+
+    ``min_confidence`` 50 is a structural line, not a tuned one. rust-minidump combines
+    hand-picked weights with a noisy-OR over a 0.25 baseline, so 25 means only "some single-bit
+    variant happens to be mapped" — near noise on a 64-bit heap — and a poison register (which
+    argues for a use-after-free, i.e. SOFTWARE) multiplies the result by 0.5. Above 50 sits
+    exactly the un-detracted evidence: non-canonical, or NULL-and-not-low, or a nearby register.
+    Production values cluster with a gap between 43 and 62, so the threshold is not on a knife
+    edge.
+
+    ``max_reports`` 1 is the other half, and it is load-bearing rather than belt-and-braces: the
+    same score is common on high-volume signatures (one flaky machine can contribute hundreds of
+    reports), so confidence ALONE would suppress busy, real crashes. Both must hold.
+
+    An env kill-switch rather than a plain constant, matching ``SIGNATURE_AGE_ENABLED``: this one
+    can silence a verdict outright, so it has to be stoppable without a deploy."""
+    a = get_agent().get("bit_flip", {})
+    return {
+        "enabled": _env_bool("BIT_FLIP_GATE_ENABLED", a.get("enabled", True)),
+        "min_confidence": a.get("min_confidence", 50),
+        "max_reports": a.get("max_reports", 1),
+    }
+
+
 def _normalize_calibration_table(raw):
     """Coerce a rung -> P map to ``{int rung score: float P}``; drop non-numeric entries.
     Accepts either the flat map or ``eval.calibrate``'s wrapper (a ``calibration_table`` key)."""

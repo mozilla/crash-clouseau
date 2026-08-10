@@ -49,12 +49,24 @@ def _buildid_to_dt(buildid):
         return None
 
 
-def first_seen_buildid(signature, product="Firefox", channel="nightly",
-                       days=MAX_WINDOW_DAYS):
-    """The OLDEST buildid this signature appears in, within ``days``. ``None`` when the lookup
-    finds nothing or fails. Raises nothing."""
+def signature_history(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
+    """``{"first_seen": buildid or None, "total": int or None}`` for a signature, in ONE request.
+
+    Both numbers come off the same SuperSearch because both callers want them on the same run
+    and the response already carries each: ``hits`` (sorted ascending, one row) gives the oldest
+    build, ``total`` gives how many crash reports the signature has at all. Nothing here costs
+    more than the first-seen lookup used to.
+
+    ``total`` is the count over the WHOLE window, not from this build forward, and that is the
+    point: it answers "has this signature ever been anything but a one-off?", which is what the
+    bit-flip gate needs. ``report_bug.fetch_signature_stats`` computes the other quantity (from
+    this buildid on) for the bug comment; they are deliberately different questions.
+
+    ``None`` for either field means we could not find out — never zero. A failed lookup must not
+    read as "brand new" to the stale-signature gate nor as "a singleton" to the bit-flip gate."""
+    empty = {"first_seen": None, "total": None}
     if not signature:
-        return None
+        return empty
     days = max(1, min(int(days or MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     params = {
@@ -77,12 +89,24 @@ def first_seen_buildid(signature, product="Firefox", channel="nightly",
     try:
         socorro.SuperSearch(params=params, handler=handler, handlerdata=got).wait()
     except Exception as exc:  # pragma: no cover - network; never break a seed
-        logger.warning("sigage: first-seen lookup failed for %r: %s", signature, exc)
-        return None
-    for hit in (got.get("result") or {}).get("hits") or []:
+        logger.warning("sigage: signature history lookup failed for %r: %s", signature, exc)
+        return empty
+    result = got.get("result") or {}
+    first_seen = None
+    for hit in result.get("hits") or []:
         if hit.get("build_id"):
-            return str(hit["build_id"])
-    return None
+            first_seen = str(hit["build_id"])
+            break
+    total = result.get("total")
+    return {"first_seen": first_seen,
+            "total": int(total) if isinstance(total, int) else None}
+
+
+def first_seen_buildid(signature, product="Firefox", channel="nightly",
+                       days=MAX_WINDOW_DAYS):
+    """The OLDEST buildid this signature appears in, within ``days``. ``None`` when the lookup
+    finds nothing or fails. Raises nothing."""
+    return signature_history(signature, product, channel, days)["first_seen"]
 
 
 _JSON_REV_CACHE: dict = {}

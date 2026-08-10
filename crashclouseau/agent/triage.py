@@ -163,6 +163,59 @@ def _gpu_summary(raw: dict) -> str:
     return " ".join(parts)
 
 
+# rust-minidump emits one candidate per register it can correct; more than a few says the
+# heuristic is casting a wide net, not that the case is stronger.
+_MAX_BIT_FLIPS = 3
+
+
+def _bit_flip_summary(info: dict) -> str:
+    """Socorro's stackwalker verdict on whether the FAULT ADDRESS is trustworthy at all, or "".
+
+    THE FACT THAT WAS MISSING. Bug 2061961 was filed, and needinfo'd at a developer, for crash
+    ff888d42-ce3e-4308-8c2f-b3f060260807 -- whose processed crash said, in this very dict,
+    ``possible_bit_flips: [{address: 0x0, confidence: 0.625, source_register: rax,
+    details: {is_null: true}}]``. The reported address ``0x00000001000000d0`` is one flipped bit
+    from ``0xd0``, i.e. a NULL base plus a struct offset, and had the pointer really been null the
+    code would have taken its ``None`` branch and not crashed at all. It was hardware. The
+    agent, its five subagents and the blind second opinion (which shares this function -- see
+    ``second_opinion._user_prompt``) all reasoned about a wild pointer because this dict was
+    opened for ``type``/``address``/``crashing_thread`` and nothing else, so a fluent
+    use-after-free story had nothing to contradict it. Two developers closed it INVALID in two
+    days using precisely this field.
+
+    Renders the DISCRIMINATING detail rather than the bare score, because the flags are what
+    make the number readable: ``is_null``/``was_non_canonical`` argue for a flip, while
+    ``poison_registers`` argues AGAINST one (a poison value means a use-after-free -- software)
+    and ``was_low`` means the corrected value is small enough to have arisen many other ways.
+
+    Kept SHORT on purpose: ``_short_value`` truncates every fact at 300 chars, and the flags are
+    the part that must survive."""
+    flips = info.get("possible_bit_flips")
+    if not isinstance(flips, list) or not flips:
+        return ""
+    parts = []
+    for flip in flips[:_MAX_BIT_FLIPS]:
+        if not isinstance(flip, dict):
+            continue
+        details = flip.get("details") or {}
+        notes = [name for name, key in (
+            ("NULL", "is_null"),
+            ("non-canonical", "was_non_canonical"),
+            ("low, so weak", "was_low"),
+            ("POISON, so likelier a UAF than a flip", "poison_registers"),
+        ) if details.get(key)]
+        try:
+            pct = "{:.0f}%".format(float(flip.get("confidence")) * 100)
+        except (TypeError, ValueError):
+            pct = "?"
+        parts.append("{} should have been {} (conf {}{})".format(
+            flip.get("source_register") or "fault address",
+            flip.get("address") or "?", pct,
+            "; " + ", ".join(notes) if notes else "",
+        ))
+    return "; ".join(parts)
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
@@ -195,6 +248,12 @@ def _crash_facts(crash: dict) -> list[str]:
         ("GPU", _gpu_summary(raw)),
         ("Crash type", _first_present(info.get("type"), raw.get("reason"))),
         ("Fault address", _first_present(info.get("address"), raw.get("address"))),
+        # The instruction that faulted, so "which pointer was this" is a fact rather than an
+        # inference: "mov rax, qword [rax + 0xd0]" says the base was a pointer and 0xd0 a
+        # field offset, which is what makes the bit-flip line below checkable.
+        ("Faulting instruction", info.get("instruction")),
+        ("POSSIBLE BIT FLIP (the fault address may be hardware corruption, not a real pointer)",
+         _bit_flip_summary(info)),
         ("Crashing thread", _first_present(
             info.get("crashing_thread"), raw.get("crashing_thread")
         )),
