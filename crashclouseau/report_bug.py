@@ -360,6 +360,33 @@ _REASON_CACHE: dict = {}
 _STATS_CACHE: dict = {}
 
 
+def _day_str(buildid):
+    """``YYYY-MM-DD`` from a 14-char buildid, for a SuperSearch ``date`` bound."""
+    bid = str(buildid)
+    return "{}-{}-{}".format(bid[0:4], bid[4:6], bid[6:8])
+
+
+# The report date a Socorro uuid ends with (``...0260726`` -> 2026-07-26).
+_UUID_DAY_RE = re.compile(r"(\d{2})(\d{2})(\d{2})$")
+
+
+def _uuid_day(uuid):
+    """``YYYY-MM-DD`` from a uuid's trailing ``YYMMDD``, or ``None``.
+
+    Needed for the same reason as the ``date`` bound in ``fetch_signature_stats``:
+    SuperSearch with no ``date`` searches only the last ~8 days, so looking a crash up by
+    uuid alone answers NOTHING once it is older than that (measured 2026-08-11: a
+    2026-07-26 uuid returned 0 hits bare and 1 hit with the anchor). Before the nightly
+    window widened, every analysed crash was days old and this could not bite."""
+    match = _UUID_DAY_RE.search(uuid or "")
+    if match is None:
+        return None
+    year, month, day = match.groups()
+    if not ("01" <= month <= "12" and "01" <= day <= "31"):
+        return None
+    return "20{}-{}-{}".format(year, month, day)
+
+
 def fetch_crash_reason(uuid):
     """``{moz_crash_reason, reason, address}`` for ONE crash, from Socorro. Cached +
     best-effort: ``{}`` on failure, which simply omits the reason section."""
@@ -372,9 +399,14 @@ def fetch_crash_reason(uuid):
         if hits:
             data.update(hits[0])
 
+    params = {"uuid": uuid, "_columns": _REASON_COLUMNS, "_results_number": 1}
+    day = _uuid_day(uuid)
+    if day is not None:
+        params["date"] = ">=" + day
+
     try:
         socorro.SuperSearch(
-            params={"uuid": uuid, "_columns": _REASON_COLUMNS, "_results_number": 1},
+            params=params,
             handler=handler,
             handlerdata=got,
         ).wait()
@@ -402,6 +434,15 @@ def fetch_signature_stats(uuid, info):
             params={
                 "signature": "=" + (info.get("signature") or ""),
                 "build_id": ">=" + str(buildid),
+                # Anchored at the build, because SuperSearch with NO `date` silently
+                # returns only the last ~8 days of REPORT dates (measured 2026-08-11:
+                # a bare nightly query answered 2026-08-04..08-11 and nothing older).
+                # A build whose crashes arrived longer ago than that answered `total=0`,
+                # get_stats fell to its summing branch, and the filed bug said "0 crashes
+                # on 0 installations" -- a needinfo about a crash it claims never
+                # happened. Unreachable while every analysed build was <=5 days old;
+                # reachable as soon as the nightly window widened to 21 days.
+                "date": ">=" + _day_str(buildid),
                 "product": info.get("product"),
                 "release_channel": info.get("channel"),
                 "_aggs.build_id": ["install_time", "_cardinality.install_time"],
