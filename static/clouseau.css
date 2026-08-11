@@ -450,6 +450,16 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 .tc-num small { font-size: 0.55em; font-weight: normal; color: #555; }
 .tc-label { display: block; font-size: 0.8em; color: #666; }
 
+/* Selection log (/selection.html): why a signature was, or was not, analysed.
+   untestable_prefix is the one to notice -- it would have spiked but its build-day sat in
+   the never-tested head of the window. */
+.sel-selected { color: #2e7d32; font-weight: bold; }
+.sel-untestable_prefix { color: #b71c1c; font-weight: bold; }
+.sel-immature { color: #ef6c00; }
+.sel-below_install_threshold { color: #ef6c00; }
+.sel-not_spiking { color: #666; }
+.sel-picked { font-weight: bold; }
+
 .task-progress {
     height: 8px;
     background-color: #e0e0e0;

@@ -839,6 +839,236 @@ class Stats(db.Model):
             db.session.commit()
 
 
+# Sourced from utils so the API's validation and the writer can never drift apart.
+SELECTION_OUTCOMES = frozenset(
+    {
+        utils.SELECTED,
+        utils.NOT_SPIKING,
+        utils.UNTESTABLE_PREFIX,
+        utils.BELOW_INSTALL_THRESHOLD,
+        utils.IMMATURE,
+    }
+)
+
+
+class Selection(db.Model):
+    """What the spike selector decided about a (signature, build-day) pair — including the
+    pairs it DECLINED.
+
+    ``stats`` records decisions taken and never decisions declined: ``datacollector``
+    computes a count and an install cardinality for every signature on every build in the
+    window, then drops the non-spiking ones with ``data[sgn] = None``. So "why is there no
+    analysis for signature X?" had no answer inside the system — the only way to settle it
+    was to rebuild the selector's inputs from Socorro by hand, which is exactly how
+    ``mozilla::places::History::History`` was diagnosed on 2026-08-11.
+
+    Deliberately NOT a full census. A row is written for any outcome other than
+    ``not_spiking``, plus loud days that did not spike (``count >= floor``); quieter
+    non-events are dropped because they are the overwhelming majority and carry no signal.
+    ``signature`` is stored as text rather than a FK: ``Signature.get_id`` INSERTS, and
+    logging a declined signature must not manufacture rows in a table other queries join
+    against.
+
+    One row per pair, upserted — the clock runs ``update_all`` every 20 minutes, so
+    anything keyed per-run would write the same fact 72 times a day."""
+
+    __tablename__ = "selection"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    signature = db.Column(db.String(512), nullable=False)
+    product = db.Column(db.String(32), nullable=False)
+    channel = db.Column(db.String(16), nullable=False)
+    build_day = db.Column(db.Date, nullable=False)
+    # selected | untestable_prefix | below_install_threshold | immature | not_spiking
+    outcome = db.Column(db.String(24), nullable=False)
+    number = db.Column(db.Integer, nullable=False, default=0)
+    # Position in the build-day series and whether that position is testable at all
+    # (the first `ndays` never are) — the pair that explains an untestable_prefix row.
+    position = db.Column(db.Integer, nullable=False, default=0)
+    evaluable = db.Column(db.Boolean, nullable=False, default=False)
+    baseline = db.Column(pg.JSONB, nullable=False, default=list)
+    # {buildid: {"count": n, "installs": k}} — self-describing, so a reader does not need
+    # to re-derive which build of that day carried the crashes.
+    bids = db.Column(pg.JSONB, nullable=False, default=dict)
+    picked = db.Column(db.String(14), nullable=True)
+    run_date = db.Column(db.DateTime(timezone=True), nullable=False)
+    # `outcome` is the LATEST verdict, and a pair's verdict legitimately changes as its
+    # build ages past `mature_after_days` (selected -> immature on the same inputs). These
+    # two are sticky, because the upsert would otherwise overwrite the answer this table
+    # exists to give: a week later the log would say we declined a signature we had in
+    # fact analysed, and possibly filed a bug for.
+    ever_selected = db.Column(db.Boolean, nullable=False, default=False)
+    first_run_date = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "signature", "product", "channel", "build_day", name="selection_pair"
+        ),
+        db.Index("selection_build_day_idx", "build_day"),
+        db.Index("selection_outcome_idx", "outcome"),
+    )
+
+    @staticmethod
+    def _row(record, product, channel, run_date):
+        bids = {
+            utils.get_buildid(bid): {
+                "count": count,
+                "installs": record["installs"].get(bid, 0),
+            }
+            for bid, count in record["bids"].items()
+        }
+        picked = record.get("picked")
+        return {
+            "signature": record["signature"][:512],
+            "product": product,
+            "channel": channel,
+            "build_day": record["day"].date(),
+            "outcome": record["outcome"],
+            "number": record["count"],
+            "position": record["index"],
+            "evaluable": record["evaluable"],
+            "baseline": list(record["baseline"]),
+            "bids": bids,
+            "picked": utils.get_buildid(picked) if picked else None,
+            "run_date": run_date,
+            "ever_selected": record["outcome"] == utils.SELECTED,
+            "first_run_date": run_date,
+        }
+
+    # Postgres caps a statement at 65535 bind parameters. A live nightly run emits ~2600
+    # records x 15 columns = ~39k, which fits -- but only 2.5x under the cliff, and the row
+    # count grows with the window and the signature count. Chunked so the ceiling is a
+    # property of this constant instead of a latent failure at some future volume.
+    _CHUNK = 1000
+
+    @staticmethod
+    def record_many(records, product, channel, run_date=None, commit=True):
+        """Upsert one row per record. Never raises: observability must not be able to stop
+        the pipeline triaging crashes."""
+        if not records:
+            return 0
+        if run_date is None:
+            run_date = datetime.now(timezone.utc)
+        try:
+            values = [
+                Selection._row(record, product, channel, run_date)
+                for record in records
+            ]
+            written = 0
+            for start in range(0, len(values), Selection._CHUNK):
+                written += Selection._upsert(values[start:start + Selection._CHUNK])
+            if commit:
+                db.session.commit()
+            return written
+        except Exception:
+            logger.error("Cannot record the selection log", exc_info=True)
+            db.session.rollback()
+            return 0
+
+    @staticmethod
+    def _upsert(values):
+        if not values:
+            return 0
+        ins = pg.insert(Selection).values(values)
+        upd = ins.on_conflict_do_update(
+            constraint="selection_pair",
+            set_=dict(
+                outcome=ins.excluded.outcome,
+                number=ins.excluded.number,
+                position=ins.excluded.position,
+                evaluable=ins.excluded.evaluable,
+                baseline=ins.excluded.baseline,
+                bids=ins.excluded.bids,
+                # Sticky: never lose the fact that we DID analyse this pair, nor which
+                # build carried it, when a later run downgrades the verdict.
+                picked=func.coalesce(ins.excluded.picked, Selection.picked),
+                ever_selected=or_(ins.excluded.ever_selected, Selection.ever_selected),
+                run_date=ins.excluded.run_date,
+                first_run_date=func.coalesce(
+                    Selection.first_run_date, ins.excluded.first_run_date
+                ),
+            ),
+        )
+        db.session.execute(upd)
+        return len(values)
+
+    @staticmethod
+    def prune(days=60):
+        """Drop rows for build-days older than ``days``. The log is a live view of the
+        window, not an archive; without this it grows without bound."""
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+            n = (
+                db.session.query(Selection)
+                .filter(Selection.build_day < cutoff)
+                .delete(synchronize_session=False)
+            )
+            db.session.commit()
+            return n
+        except Exception:
+            logger.error("Cannot prune the selection log", exc_info=True)
+            db.session.rollback()
+            return 0
+
+    @staticmethod
+    def for_signature(signature, product=None, channel=None, limit=200):
+        """Every recorded decision about a signature, most recent build-day first."""
+        query = db.session.query(Selection).filter(Selection.signature == signature)
+        if product is not None:
+            query = query.filter(Selection.product == product)
+        if channel is not None:
+            query = query.filter(Selection.channel == channel)
+        rows = query.order_by(Selection.build_day.desc()).limit(limit).all()
+        return [row.to_dict() for row in rows]
+
+    @staticmethod
+    def recent(outcome=None, days=14, limit=500):
+        """Recent decisions, optionally of one outcome — ``untestable_prefix`` is the
+        blind-spot feed, ``immature`` is what the maturity bar is costing."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        query = db.session.query(Selection).filter(Selection.build_day >= cutoff)
+        if outcome is not None:
+            query = query.filter(Selection.outcome == outcome)
+        rows = (
+            query.order_by(Selection.build_day.desc(), Selection.number.desc())
+            .limit(limit)
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+    @staticmethod
+    def summary(days=14):
+        """``{outcome: count}`` over the last ``days`` build-days."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        rows = (
+            db.session.query(Selection.outcome, func.count(Selection.id))
+            .filter(Selection.build_day >= cutoff)
+            .group_by(Selection.outcome)
+            .all()
+        )
+        return {outcome: count for outcome, count in rows}
+
+    def to_dict(self):
+        return {
+            "signature": self.signature,
+            "product": self.product,
+            "channel": self.channel,
+            "build_day": self.build_day.isoformat() if self.build_day else None,
+            "outcome": self.outcome,
+            "number": self.number,
+            "position": self.position,
+            "evaluable": self.evaluable,
+            "baseline": self.baseline,
+            "bids": self.bids,
+            "picked": self.picked,
+            "run_date": self.run_date.isoformat() if self.run_date else None,
+            "ever_selected": self.ever_selected,
+            "first_run_date": (
+                self.first_run_date.isoformat() if self.first_run_date else None
+            ),
+        }
+
+
 class UUID(db.Model):
     __tablename__ = "uuids"
 
@@ -2512,7 +2742,7 @@ def create():
 # Tables added after the initial deploy. `create()` only calls `create_all()` on a FRESH
 # database, so a long-lived one would never grow a new table and every read of it would fail at
 # runtime — the same gap `_ensure_enum_values` exists to close for enum values.
-_ADDED_TABLES = ("archetypes", "feedback")
+_ADDED_TABLES = ("archetypes", "feedback", "selection")
 
 
 def _ensure_tables():

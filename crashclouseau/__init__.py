@@ -145,6 +145,13 @@ def tasks_html():
     return html.tasks()
 
 
+@app.route("/selection.html")
+def selection_html():
+    from crashclouseau import html
+
+    return html.selection()
+
+
 @app.route("/bug.html")
 def bug_html():
     from crashclouseau import html
@@ -206,6 +213,14 @@ def api_reports():
     from crashclouseau import api
 
     return api.reports()
+
+
+@app.route("/api/selection", methods=["GET"])
+@cross_origin()
+def api_selection():
+    from crashclouseau import api
+
+    return api.selection()
 
 
 @app.route("/api/evidence", methods=["GET"])

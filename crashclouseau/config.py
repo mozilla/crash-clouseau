@@ -53,8 +53,29 @@ def get_limit_facets():
     return _get_global()["facets_limit"]
 
 
+def get_build_facets_limit():
+    """Facet size for the ``build_id`` facet that enumerates a window's builds
+    (``datacollector.get_buildids_from_socorro``). Socorro's terms facets are
+    COUNT-ordered, so a window with more builds than this silently loses the
+    quietest ones -- and a build we never list is a build we never query."""
+    return _get_global().get("build_facets_limit", 500)
+
+
 def get_ndays():
+    """Baseline length for the spike detector, and (deliberately, elsewhere) the
+    buildhub backfill and the regressor pushlog window. Widening the *build* window
+    is ``get_nightly_window_ndays``; this one must not be used for it."""
     return _get_global()["backward_lookup_ndays"]
+
+
+def get_nightly_window_ndays():
+    """How far back ``datacollector.get_builds`` looks for nightly builds.
+
+    Separate from ``get_ndays`` on purpose: that value is also the baseline length, the
+    buildhub backfill and the regressor pushlog window, so widening the build window
+    through it would also widen what the agent may blame. Kill switch for the wider
+    window: set this back to 8 (the old ``ndays + 5``)."""
+    return _get_global().get("nightly_window_ndays", 21)
 
 
 def get_ndays_of_data():
@@ -132,7 +153,25 @@ def get_threshold(typ, product, channel):
 
 # Fallback when the ``spike`` block (or a product/channel within it) is absent: bias to
 # FEWER detections so a stripped config stays quiet rather than flooding the pipeline.
-_SPIKE_DEFAULTS = {"floor": 5, "ratio": 3}
+_SPIKE_DEFAULTS = {
+    "floor": 5,
+    "ratio": 3,
+    # A build older than this many days is "mature": most of its crashes have already
+    # arrived, so a spike on it is judged against a stricter bar (see utils.evaluate_days).
+    "mature_after_days": 5,
+    # ...that bar: a mature build-day must clear `floor` outright (the from-zero rule
+    # alone is not enough) and its buildid must carry at least this many distinct
+    # installations. 1 would be inert -- `cardinality_install_time` is never 0 here
+    # (datacollector coerces it to 1). Measured on the 2026-08-11 nightly window, this
+    # is the dial that prices the wider window: against the old 8-day window it lets
+    # through 59 extra signatures at 2, 37 at 3, 15 at 4 and 5 at 6, and everything it
+    # drops between 2 and 4 was a two-installation third-party driver signature
+    # (igdusc64.dll, mfx_mft_h264ve_64.dll, ...). This half of the bar is inert on
+    # beta/release, whose install thresholds (6/50) are already higher -- see `needed` in
+    # utils.evaluate_days -- but the `floor` half is NOT, so datacollector applies the
+    # whole bar to nightly only.
+    "mature_installs": 4,
+}
 
 
 def get_spike(typ, product, channel):

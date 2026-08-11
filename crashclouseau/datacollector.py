@@ -9,6 +9,7 @@ from dateutil.relativedelta import relativedelta
 import functools
 from libmozdata import socorro, utils as lmdutils
 from libmozdata.connection import Connection, Query
+import pytz
 import re
 from . import config, models, utils
 from .logger import logger
@@ -19,9 +20,18 @@ def get_builds(product, channel, date):
     if channel == "nightly":
         # for nightly, the strategy is pretty simple:
         #  - just get builds few day before (and update the old one too)
-        ndays = config.get_ndays()
-        few_days_ago = date - relativedelta(days=ndays + 5)
-        few_days_ago = datetime(few_days_ago.year, few_days_ago.month, few_days_ago.day)
+        # The window is much wider than the `ndays` baseline on purpose. A build-day is
+        # only spike-TESTABLE while at least `ndays` earlier build-days sit ahead of it
+        # in the window (utils.evaluate_days), so the old `ndays + 5` gave each build
+        # about six run-days of cover -- and crashes concentrating on it after that were
+        # structurally invisible. Kill switch: config `nightly_window_ndays` back to 8.
+        few_days_ago = date - relativedelta(days=config.get_nightly_window_ndays())
+        # Localized, not naive: utils.get_buildid() calls astimezone(), which reads a
+        # naive datetime as LOCAL time -- correct on the UTC dynos, two hours off when
+        # this is replayed anywhere else, which silently moves the window's lower edge.
+        few_days_ago = pytz.utc.localize(
+            datetime(few_days_ago.year, few_days_ago.month, few_days_ago.day)
+        )
         search_buildid = [
             ">=" + utils.get_buildid(few_days_ago),
             "<=" + utils.get_buildid(date),
@@ -63,7 +73,7 @@ def get_buildids_from_socorro(search_buildid, search_date, product):
         "build_id": search_buildid,
         "_facets": "build_id",
         "_results_number": 0,
-        "_facets_size": 100,
+        "_facets_size": config.get_build_facets_limit(),
     }
 
     data = []
@@ -74,18 +84,49 @@ def get_buildids_from_socorro(search_buildid, search_date, product):
     return data
 
 
+def get_maturity_bar(product, channel):
+    """``(mature_after_days, mature_installs)`` for ``utils.evaluate_days`` — **nightly
+    only**, which is why this is a function and not two config reads.
+
+    The bar exists to price the wider nightly build window, and only nightly's window
+    widened (beta/release take their builds from ``Build.get_last_versions(n=3)``).
+    Applying it everywhere silently over-gated beta, whose spike floor (10) sits ABOVE its
+    install threshold (6), so a mature build-day with 6-9 crashes went from selected to
+    ``immature``. Only the INSTALL half of the bar is inert off nightly (via
+    ``max(threshold, mature_installs)``); the floor half is not, so the gate has to be
+    here rather than in the config values."""
+    if channel != "nightly":
+        return None, 1
+    return (
+        config.get_spike("mature_after_days", product, channel),
+        config.get_spike("mature_installs", product, channel),
+    )
+
+
 def get_new_signatures(product, channel, date):
     """Collect the crash signatures worth triaging for a product/channel. A signature is
     kept when its per-day crash count SPIKES -- it clears an absolute floor and jumps well
     above the loudest of the preceding ``ndays`` days (see ``utils.is_spike``). This
     catches both a signature appearing from ~zero and a sudden worsening of an existing
-    one, without firing on low-volume churn."""
+    one, without firing on low-volume churn.
+
+    Note the axis: the series is counts per BUILD-day, not per crash-day, and a build's
+    count keeps growing as its reports arrive. So this answers "is this build crashier
+    than the ones before it", which is the regression question -- not "did this signature
+    spike today", which is what a human means by the word.
+
+    Returns ``(data, selection)``: the signatures to analyse, and one record per near-miss
+    build-day for ``models.Selection``, so a declined signature leaves a trace."""
 
     limit = config.get_limit_facets()
     bids, search_date = get_builds(product, channel, date)
     if not bids:
         logger.warning("No buildids for {}-{}.".format(product, channel))
-        return {}
+        # Two values, like the tail of this function: put_crashes unpacks the pair, and a
+        # bare {} here raised "not enough values to unpack". Reachable persistently on
+        # beta/release, whose branch of get_builds reads the `builds` table -- empty after
+        # a DB wipe or a buildhub gap, not just on a Socorro blip.
+        return {}, []
 
     base = {}
     for bid in bids:
@@ -142,11 +183,31 @@ def get_new_signatures(product, channel, date):
     threshold = config.get_threshold("installs", product, channel)
     floor = config.get_spike("floor", product, channel)
     ratio = config.get_spike("ratio", product, channel)
+    mature_after, mature_installs = get_maturity_bar(product, channel)
     big_data = {}
     small_data = {}
+    selection = []
 
     for sgn, numbers in data.items():
-        bids, big = utils.get_new_crashing_bids(numbers, shift, threshold, floor, ratio)
+        bids, big, records = utils.evaluate_days(
+            numbers,
+            shift,
+            threshold,
+            floor,
+            ratio,
+            today=date,
+            mature_after=mature_after,
+            mature_installs=mature_installs,
+        )
+        # Keep every decision that is not a plain "nothing happened", plus the loud days
+        # that did not spike -- "we had N crashes and you did nothing" is a question the
+        # pipeline could not answer before. Everything quieter is dropped: it is the
+        # overwhelming majority and it carries no signal.
+        selection.extend(
+            dict(rec, signature=sgn)
+            for rec in records
+            if rec["outcome"] != utils.NOT_SPIKING or rec["count"] >= floor
+        )
         if bids:
             d = {
                 "bids": bids,
@@ -176,7 +237,7 @@ def get_new_signatures(product, channel, date):
         # Java crashes don't have any proto-signature...
         get_uuids_fennec(data, search_date, channel)
 
-    return data
+    return data, selection
 
 
 def get_proto_small(product, signatures, search_date, channel):

@@ -168,7 +168,13 @@ def put_crashes(date, channel, product):
     """Get and put crashes data in the database"""
     if not date:
         date = pytz.utc.localize(datetime.utcnow())
-    data = dc.get_new_signatures(product, channel, date)
+    data, selection = dc.get_new_signatures(product, channel, date)
+
+    # Record what the selector DECLINED before anything else can fail: `stats` below only
+    # ever holds the pairs we kept, so without this a signature we passed over leaves no
+    # trace at all. Failure here is swallowed inside record_many/prune.
+    models.Selection.record_many(selection, product, channel, run_date=date)
+    models.Selection.prune()
 
     errors = set()
     for sgn, i in data.items():

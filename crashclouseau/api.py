@@ -64,6 +64,43 @@ def reports():
     return jsonify(res)
 
 
+def selection():
+    """Read-only: what the spike selector decided, including what it declined.
+
+    ``?signature=X`` answers "why is there no analysis for X"; without one it returns the
+    recent feed, optionally filtered by ``?outcome=`` (``untestable_prefix`` is the
+    blind-spot feed). Reads the log only — it never re-runs the selector."""
+    # Stripped: a pasted signature usually carries whitespace, and an unstripped miss
+    # answers `{"rows": []}` -- indistinguishable from "never considered", which is the
+    # one thing this endpoint exists to tell apart.
+    sgn = request.args.get("signature", "").strip()
+    product = request.args.get("product") or None
+    channel = request.args.get("channel") or None
+    if product and product not in models.PRODUCT_TYPE.enums:
+        abort(400, f"The product must be one of: {models.PRODUCT_TYPE.enums}")
+    if channel and channel not in models.CHANNEL_TYPE.enums:
+        abort(400, f"The channel must be one of: {models.CHANNEL_TYPE.enums}")
+    if sgn:
+        rows = models.Selection.for_signature(sgn, product, channel)
+        return jsonify({"signature": sgn, "rows": rows})
+
+    outcome = request.args.get("outcome") or None
+    if outcome is not None and outcome not in models.SELECTION_OUTCOMES:
+        abort(400, f"The outcome must be one of: {sorted(models.SELECTION_OUTCOMES)}")
+    try:
+        days = int(request.args.get("days", 14))
+    except ValueError:
+        abort(400, "days must be an integer")
+    days = max(1, min(days, 90))
+    return jsonify(
+        {
+            "summary": models.Selection.summary(days),
+            "days": days,
+            "rows": models.Selection.recent(outcome, days),
+        }
+    )
+
+
 def evidence():
     """Read-only verdict/dossier/recorded-actions JSON for the evidence panel (#12).
     Writes nothing to Bugzilla or the DB. ``verdict`` is ``None`` when no row exists."""

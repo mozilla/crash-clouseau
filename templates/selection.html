@@ -1,0 +1,107 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/clouseau.css?v=8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Selection log</title>
+    <script src="/clouseau.js"></script>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <ul class="nav">
+          <li>
+            <a href="https://www.mozilla.org/" class="brand">mozilla</a>
+          </li>
+          <li>
+            <a href="/reports.html" class="navlink">Reports</a>
+          </li>
+          <li>
+            <a href="/tasks.html" class="navlink">Tasks</a>
+          </li>
+          <li style="float:right;">
+            <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    <h2 class="task-title">Selection log{% if signature %} — {{ signature }}{% endif %}</h2>
+
+    <p class="tc-label">
+      What the spike selector did with each (signature, build-day) pair, including the ones
+      it declined. Near-misses and loud non-events only — quiet pairs are not recorded.
+    </p>
+
+    <form method="get" action="/selection.html">
+      <input type="text" name="signature" size="60" value="{{ signature or '' }}"
+             placeholder="signature (exact), or leave empty for the recent feed">
+      <select name="outcome">
+        <option value="">any outcome</option>
+        {% for o in outcomes %}
+        <option value="{{ o }}" {% if o == outcome %}selected{% endif %}>{{ o }}</option>
+        {% endfor %}
+      </select>
+      <input type="submit" value="Show">
+    </form>
+
+    {% if summary %}
+    <div class="task-cards">
+      {% for name, count in summary %}
+      <div class="task-card">
+        <span class="tc-num">{{ count }}</span>
+        <span class="tc-label">{{ name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <table class="table">
+      <thead>
+        <tr>
+          <th>build day</th>
+          <th>signature</th>
+          <th>chan</th>
+          <th>count</th>
+          <th>outcome</th>
+          <th>analysed</th>
+          <th>pos</th>
+          <th>testable</th>
+          <th>baseline</th>
+          <th>builds (count / installs)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.build_day }}</td>
+          <td>
+            <a href="/selection.html?signature={{ row.signature | urlencode }}">{{ row.signature }}</a>
+          </td>
+          <td>{{ row.channel }}</td>
+          <td>{{ row.number }}</td>
+          <td class="sel-{{ row.outcome }}">{{ row.outcome }}</td>
+          <td>{{ "yes" if row.ever_selected else "no" }}</td>
+          <td>{{ row.position }}</td>
+          <td>{{ "yes" if row.evaluable else "no" }}</td>
+          <td>{{ row.baseline | join(", ") }}</td>
+          <td>
+            {% for bid, info in (row.bids or {}) | dictsort %}
+            <span {% if bid == row.picked %}class="sel-picked"{% endif %}>
+              {{ bid }}: {{ info.count }} / {{ info.installs }}
+            </span>{% if not loop.last %}<br>{% endif %}
+            {% endfor %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10">No recorded decisions.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </body>
+</html>

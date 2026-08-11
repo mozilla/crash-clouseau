@@ -10,7 +10,9 @@
         "release"
     ],
     "facets_limit": 10000,
+    "build_facets_limit": 500,
     "backward_lookup_ndays": 3,
+    "nightly_window_ndays": 21,
     "max_ndays": 30,
     "score":
     {
@@ -56,6 +58,24 @@
                 "nightly": 3,
                 "beta": 3,
                 "release": 3
+            }
+        },
+        "mature_after_days":
+        {
+            "Firefox":
+            {
+                "nightly": 5,
+                "beta": 5,
+                "release": 5
+            }
+        },
+        "mature_installs":
+        {
+            "Firefox":
+            {
+                "nightly": 4,
+                "beta": 4,
+                "release": 4
             }
         }
     },

@@ -260,6 +260,36 @@ def tasks():
         abort(404)
 
 
+def selection():
+    """The selection log: why a signature was, or was not, analysed.
+
+    Answers the question the pipeline could not answer about itself. With a signature it
+    shows every recorded decision for it; without one, the recent feed —
+    ``untestable_prefix`` rows are the ones a wider window is meant to eliminate."""
+    try:
+        sgn = request.args.get("signature", "").strip()
+        outcome = request.args.get("outcome", "").strip() or None
+        if outcome is not None and outcome not in models.SELECTION_OUTCOMES:
+            outcome = None
+        if sgn:
+            rows = models.Selection.for_signature(sgn)
+            summary = None
+        else:
+            rows = models.Selection.recent(outcome)
+            summary = sorted(models.Selection.summary().items())
+        return render_template(
+            "selection.html",
+            signature=sgn,
+            outcome=outcome,
+            outcomes=sorted(models.SELECTION_OUTCOMES),
+            rows=rows,
+            summary=summary,
+        )
+    except Exception:
+        logger.error("Invalid URL: {}".format(request.url), exc_info=True)
+        abort(404)
+
+
 def reports_no_score():
     try:
         prod = request.args.get("product", "Firefox")

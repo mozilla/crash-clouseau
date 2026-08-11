@@ -196,24 +196,122 @@ def get_spike_indices(numbers, ndays, floor, ratio):
             yield i
 
 
-def get_new_crashing_bids(numbers, ndays, threshold, floor, ratio):
-    """Get the crashing buildids for the spike days (see ``get_spike_indices``); within a
-    spike day keep the first buildid whose install count reaches ``threshold``."""
-    data = [(k, v["count"]) for k, v in numbers.items()]
-    data = sorted(data)
+"""Why a build-day was, or was not, selected. Recorded for every near-miss so
+``models.Selection`` can answer "we had a spike and you did nothing" — see
+``evaluate_days``."""
+SELECTED = "selected"
+NOT_SPIKING = "not_spiking"
+UNTESTABLE_PREFIX = "untestable_prefix"
+BELOW_INSTALL_THRESHOLD = "below_install_threshold"
+IMMATURE = "immature"
+
+
+def _as_date(when):
+    """A ``date`` from a date/datetime (tz-aware or not); ``None`` passes through."""
+    if when is None:
+        return None
+    return when.date() if isinstance(when, datetime) else when
+
+
+def evaluate_days(
+    numbers,
+    ndays,
+    threshold,
+    floor,
+    ratio,
+    today=None,
+    mature_after=None,
+    mature_installs=1,
+):
+    """Decide, per build-day, whether it is a spike worth analysing — and say why not.
+
+    Returns ``(picked, big, records)``. ``picked`` is the ``{buildid: count}`` the caller
+    analyses; ``records`` is one dict per build-day describing the decision, so a declined
+    day leaves a trace instead of vanishing (``datacollector`` used to drop it with
+    ``data[sgn] = None``).
+
+    Two rules beyond the plain spike test:
+
+    * **The un-evaluable prefix.** ``get_spike_indices`` starts at ``ndays`` because the
+      first days of the window have no full baseline. Those days are NOT tested, and a
+      build sliding through that prefix as its crashes arrive is how
+      ``mozilla::places::History::History`` was missed: on the 2026-08-07 run its
+      build-day held 4 crashes and ``is_spike(4, [0])`` was already True, but it sat at
+      index 1. The prefix stays (a partial baseline is not a baseline), but a day that
+      would have spiked there is now RECORDED as ``untestable_prefix`` — at ``count >=
+      floor``, so a lone crash at index 0 (empty baseline, so the from-zero rule always
+      fires) does not flood the log.
+    * **Maturity.** With a wider build window, most newly-visible build-days are old ones
+      whose crashes have long since arrived. A day older than ``mature_after`` must clear
+      ``floor`` outright — the from-zero rule alone is not enough — and its buildid must
+      carry ``mature_installs`` distinct installations. That second half is what keeps one
+      imaged fleet out: 24 installs created inside 24 minutes still counts as 24 here, but
+      a single machine flooding one signature counts as 1. Passing ``today=None`` disables
+      maturity entirely and restores the pre-window behaviour."""
+    data = sorted((k, v["count"]) for k, v in numbers.items())
     nums = [n for _, n in data]
-    res = {}
+    today = _as_date(today)
+    picked = {}
     big = False
-    for i in get_spike_indices(nums, ndays, floor, ratio):
-        day, count = data[i]
+    records = []
+
+    for i, (day, count) in enumerate(data):
+        before = nums[max(0, i - ndays):i]
+        spiked = is_spike(count, before, floor, ratio)
+        bids = numbers[day]["bids"]
+        installs = numbers[day]["installs"]
+        record = {
+            "day": day,
+            "count": count,
+            "index": i,
+            "baseline": before,
+            "evaluable": i >= ndays,
+            "spiked": spiked,
+            "bids": dict(bids),
+            "installs": dict(installs),
+            "picked": None,
+            "outcome": NOT_SPIKING,
+        }
+        records.append(record)
+
+        if i < ndays:
+            # Never tested — but say so when it WOULD have fired, which is the blind spot.
+            if spiked and count >= floor:
+                record["outcome"] = UNTESTABLE_PREFIX
+            continue
+
+        if not spiked:
+            continue
+
         if count >= 500:
             big = True
-        bids = numbers[day]["bids"]
+
+        age = None if today is None else (today - _as_date(day)).days
+        mature = mature_after is not None and age is not None and age > mature_after
+        record["age"] = age
+        if mature and count < floor:
+            record["outcome"] = IMMATURE
+            continue
+
+        needed = max(threshold, mature_installs) if mature else threshold
         for bid, n in sorted(bids.items()):
-            if n and numbers[day]["installs"][bid] >= threshold:
-                res[bid] = n
+            if n and installs.get(bid, 0) >= needed:
+                picked[bid] = n
+                record["picked"] = bid
+                record["outcome"] = SELECTED
                 break
-    return res, big
+        else:
+            record["outcome"] = IMMATURE if mature else BELOW_INSTALL_THRESHOLD
+
+    return picked, big, records
+
+
+def get_new_crashing_bids(numbers, ndays, threshold, floor, ratio, **kwargs):
+    """Get the crashing buildids for the spike days; within a spike day keep the first
+    buildid whose install count reaches ``threshold``. Thin wrapper over
+    ``evaluate_days`` — see there for the prefix and maturity rules."""
+    picked, big, _ = evaluate_days(numbers, ndays, threshold, floor, ratio, **kwargs)
+    return picked, big
 
 
 def get_sgns_by_bids(signatures):
