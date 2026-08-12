@@ -18,7 +18,7 @@ from unittest import mock  # noqa: E402
 
 from flask import render_template  # noqa: E402
 
-from crashclouseau import app, bugzilla_apply, config, html, report_bug  # noqa: E402
+from crashclouseau import app, bugzilla_apply, config, html, population, report_bug  # noqa: E402
 
 
 _SEARCHFOX = {
@@ -229,7 +229,7 @@ class TestCrashstackPanel(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
 
-    def _get(self, evidence, pc=("Core", "DOM: Core & HTML"), nick="stransky"):
+    def _get(self, evidence, pc=("Core", "DOM: Core & HTML"), nick="stransky", pop=None):
         # The bug-preview product::component + Bugzilla-nick lookups are networked; mock
         # Everything networked in the bug preview is mocked so the panel renders offline and
         # deterministically: product::component, the Bugzilla nick, Socorro's crash
@@ -248,7 +248,10 @@ class TestCrashstackPanel(unittest.TestCase):
                                   return_value={"reason": "SIGSEGV", "address": "0x10"}), \
                 mock.patch.object(report_bug, "fetch_signature_stats",
                                   return_value=(True, {"count": 3, "installs": 2})), \
-                mock.patch.object(report_bug, "resolve_product_component", return_value=pc):
+                mock.patch.object(report_bug, "resolve_product_component", return_value=pc), \
+                mock.patch.object(population, "for_crash", return_value=pop):
+            # population.for_crash is mocked for the same reason as everything else here: it is
+            # two live SuperSearches, and the panel tests must not touch the network.
             return self.client.get("/crashstack.html?uuid=u-1")
 
     def test_unknown_uuid_404(self):
@@ -533,6 +536,77 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("ABSTAIN", html)
         # abstain never offers an apply control
         self.assertNotIn("applyActionsBtn", html)
+
+    # --- crash population block (reports vs install_time) ---
+
+    def _pop(self, **over):
+        base = {
+            "crashes": 15, "faceted_crashes": 15, "installs": 3, "dropped": 0,
+            "per_install": 5.0, "top_crashes": 10, "top_share": 10 / 15,
+            "median_gap_s": 86400, "own": None, "single_install": False,
+            "concentrated": False, "clustered": False, "truncated": False,
+            "since": "2026-08-11", "channel": "nightly", "product": "Firefox",
+            "build": {"crashes": 3, "installs": 2},
+        }
+        base.update(over)
+        return base
+
+    def test_population_block_absent_without_data(self):
+        # No population -> no block at all, and no empty frame left behind.
+        self.assertNotIn("pop-block", self._get(None).get_data(as_text=True))
+
+    def test_population_numbers_rendered(self):
+        body = self._get(None, pop=self._pop()).get_data(as_text=True)
+        self.assertIn("pop-block", body)
+        self.assertIn("crash reports", body)
+        self.assertIn("install_time values", body)
+        self.assertIn("5.0", body)              # reports per install
+        self.assertIn("67", body)               # busiest install's share, rounded
+        self.assertIn("1.0d", body)             # median gap through the human_gap filter
+        self.assertIn("2026-08-11", body)       # the window is stated, not implied
+        self.assertIn("3<small> / 2</small>", body)  # this build's reports/installs
+        # A healthy population raises no flag chip.
+        self.assertNotIn("corrob-chip refute", body)
+
+    def test_single_install_flagged(self):
+        body = self._get(None, pop=self._pop(
+            crashes=1066, faceted_crashes=1066, installs=1, per_install=1066.0,
+            top_crashes=1066, top_share=1.0, median_gap_s=None,
+            single_install=True, concentrated=True)).get_data(as_text=True)
+        self.assertIn("ONE install_time", body)
+        self.assertIn("tc-warn", body)
+        # The single-install chip replaces the concentration one rather than doubling up.
+        self.assertNotIn("supplies 100%", body)
+        # No gap card when there is only one install (no gap exists, and 0 would read as
+        # "clustered" -- the exact misreading the block exists to prevent).
+        self.assertNotIn("median gap between installs", body)
+
+    def test_clustered_installs_flagged(self):
+        body = self._get(None, pop=self._pop(
+            installs=25, crashes=25, faceted_crashes=25, per_install=1.0,
+            top_crashes=2, top_share=0.08, median_gap_s=20,
+            clustered=True)).get_data(as_text=True)
+        self.assertIn("not independent users", body)
+        self.assertIn("20s", body)
+
+    def test_own_install_and_caveats_rendered(self):
+        body = self._get(None, pop=self._pop(
+            own={"crashes": 10, "share": 10 / 15, "rank": 1, "install_time": 1},
+            dropped=2, truncated=True)).get_data(as_text=True)
+        self.assertIn("This report's own installation accounts for 10", body)
+        self.assertIn("#1 busiest", body)
+        self.assertIn("dropped as unreadable", body)
+        self.assertIn("install count is a floor", body)
+
+    def test_population_lookup_failure_does_not_break_the_page(self):
+        # html.crashstack wraps the call; a raising lookup must still render the stack.
+        with mock.patch.object(population, "for_crash", side_effect=RuntimeError("boom")), \
+                mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
+                           return_value=(_stack(), _uuid_info())), \
+                mock.patch.object(bugzilla_apply, "build_evidence", return_value=None):
+            rv = self.client.get("/crashstack.html?uuid=u-1")
+        self.assertEqual(rv.status_code, 200)
+        self.assertNotIn("pop-block", rv.get_data(as_text=True))
 
 
 class TestApplyRecordedActions(unittest.TestCase):

@@ -89,6 +89,24 @@ def linkify(text, repo_url=""):
     return Markup("".join(parts))
 
 
+@app.template_filter("human_gap")
+def human_gap(seconds):
+    """A gap between two install_time values, in the largest unit that keeps it readable
+    ("20s", "2.4min", "8.0h", "3.1d"). The interesting values span five orders of magnitude —
+    the measured median is 8 hours and the flagged cases are tens of seconds — so a single unit
+    would make one end or the other unreadable."""
+    if seconds is None:
+        return "—"
+    s = float(seconds)
+    if s < 90:
+        return "{:.0f}s".format(s)
+    if s < 5400:
+        return "{:.1f}min".format(s / 60)
+    if s < 86400:
+        return "{:.1f}h".format(s / 3600)
+    return "{:.1f}d".format(s / 86400)
+
+
 @app.teardown_request
 def _remove_db_session(exc=None):
     # The module-level app.app_context().push() above gives the worker/clock a

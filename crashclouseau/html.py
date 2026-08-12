@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import json
 import re
 from libmozdata.hgmozilla import Mercurial
-from . import utils, models, report_bug, bugzilla_apply, config
+from . import utils, models, population, report_bug, bugzilla_apply, config
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
@@ -54,6 +54,14 @@ def crashstack():
                 )
             except Exception:
                 logger.error("crashstack bug preview failed for %s", uuid, exc_info=True)
+        # How many machines this signature is really coming from. Shown for every crash,
+        # verdict or not — the report count is on the page whether or not the agent ran, and
+        # it is the number most likely to be misread. Best-effort, same as the preview.
+        pop = None
+        try:
+            pop = population.for_crash(uuid_info)
+        except Exception:
+            logger.error("crashstack population failed for %s", uuid, exc_info=True)
         return render_template(
             "crashstack.html",
             uuid_info=uuid_info,
@@ -66,6 +74,7 @@ def crashstack():
             evidence=evidence,
             show_evidence=show_evidence,
             bug_preview=bug_preview,
+            population=pop,
         )
     abort(404)
 

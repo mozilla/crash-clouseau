@@ -450,6 +450,20 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 .tc-num small { font-size: 0.55em; font-weight: normal; color: #555; }
 .tc-label { display: block; font-size: 0.8em; color: #666; }
 
+/* Crash population (crashstack.html): reports vs install_time values. Boxed and set apart from
+   the stack below it, because it describes the signature's whole population rather than this one
+   report -- reading a per-signature number as a per-crash one is the mistake the block exists to
+   prevent. */
+.pop-block {
+    margin: 0.6em 0 1.2em 0;
+    padding: 0.5em 0.8em 0.2em;
+    border: 1px solid #e0e4ea;
+    border-radius: 6px;
+    background-color: #fcfdff;
+}
+.pop-note { font-size: 0.8em; color: #555; margin: 0.2em 0 0.6em; }
+.pop-note em { color: #777; }
+
 /* Selection log (/selection.html): why a signature was, or was not, analysed.
    untestable_prefix is the one to notice -- it would have spiked but its build-day sat in
    the never-tested head of the window. */

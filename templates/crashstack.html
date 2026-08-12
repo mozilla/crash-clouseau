@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=10">
+    <link rel="stylesheet" href="/clouseau.css?v=11">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script src="/clouseau.js"></script>
@@ -32,6 +32,74 @@
     </header>
     <p>Open the crash report on crash-stats: <a href="https://crash-stats.mozilla.org/report/index/{{ uuid_info['uuid'] }}">{{ uuid_info['uuid'] }}</a>.</p>
     <p>The crash signature is <a href="{{ sgn_url }}">{{ uuid_info['signature']|e }}</a>.</p>
+    {% if population -%}
+    {#- Reports next to INSTALLATIONS. 7 of the 59 loudest nightly signatures in one sample week
+        came from a single installation (the worst: 1066 reports, one machine), so a report count
+        on its own is the number most likely to be misread on this page. -#}
+    <div class="pop-block">
+      <div class="task-cards">
+        <div class="task-card">
+          <span class="tc-num">{{ population['crashes'] }}{% if population['truncated'] %}<small>+</small>{% endif %}</span>
+          <span class="tc-label">crash reports</span>
+        </div>
+        <div class="task-card{% if population['single_install'] or population['concentrated'] %} tc-warn{% endif %}">
+          <span class="tc-num">{{ population['installs'] }}{% if population['truncated'] %}<small>&ge;</small>{% endif %}</span>
+          <span class="tc-label">install_time values</span>
+        </div>
+        <div class="task-card{% if population['single_install'] or population['concentrated'] %} tc-warn{% endif %}">
+          <span class="tc-num">{{ "%.1f"|format(population['per_install']) }}</span>
+          <span class="tc-label">reports per install</span>
+        </div>
+        <div class="task-card{% if population['concentrated'] %} tc-warn{% endif %}">
+          <span class="tc-num">{{ (100 * population['top_share'])|round|int }}<small>%</small></span>
+          <span class="tc-label">from the busiest install ({{ population['top_crashes'] }})</span>
+        </div>
+        {% if population['median_gap_s'] is not none -%}
+        <div class="task-card{% if population['clustered'] %} tc-warn{% endif %}">
+          <span class="tc-num">{{ population['median_gap_s']|human_gap }}</span>
+          <span class="tc-label">median gap between installs</span>
+        </div>
+        {%- endif %}
+        {% if population['build'] -%}
+        <div class="task-card">
+          <span class="tc-num">{{ population['build']['crashes'] }}<small> / {{ population['build']['installs'] if population['build']['installs'] is not none else '?' }}</small></span>
+          <span class="tc-label">this build: reports / installs</span>
+        </div>
+        {%- endif %}
+      </div>
+
+      {% if population['single_install'] or population['concentrated'] or population['clustered'] -%}
+      <div class="corrob-chips">
+        {% if population['single_install'] -%}
+        <span class="corrob-chip refute">every report comes from ONE install_time — one machine, not a population</span>
+        {%- elif population['concentrated'] -%}
+        <span class="corrob-chip refute">one install_time supplies {{ (100 * population['top_share'])|round|int }}% of the reports</span>
+        {%- endif %}
+        {% if population['clustered'] -%}
+        <span class="corrob-chip refute">installs are {{ population['median_gap_s']|human_gap }} apart — not independent users (shared image / one install second)</span>
+        {%- endif %}
+      </div>
+      {%- endif %}
+
+      <p class="pop-note">
+        {{ population['product'] }}{% if population['channel'] %}&nbsp;{{ population['channel'] }}{% endif %},
+        this signature since {{ population['since'] }}{% if population['since_is_build'] %} (this build's date){% endif %}.
+        {% if population['own'] -%}
+        <strong>This report's own installation accounts for {{ population['own']['crashes'] }}
+        of them ({{ (100 * population['own']['share'])|round|int }}%, #{{ population['own']['rank'] }} busiest).</strong>
+        {%- endif %}
+        {% if population['dropped'] -%}
+        {{ population['dropped'] }} install_time value(s) dropped as unreadable.
+        {%- endif %}
+        {% if population['truncated'] -%}
+        The facet list was capped, so the install count is a floor.
+        {%- endif %}
+        <br>
+        <em>install_time is a (machine, build) id — the updater resets it, so over several days
+        this counts installations rather than machines, and it can collide.</em>
+      </p>
+    </div>
+    {%- endif %}
     {% macro cite(c, node, chan, uuid) -%}
       {% if c and c['kind'] == 'searchfox' -%}
         {% set pl = c['permalink'] or '' -%}

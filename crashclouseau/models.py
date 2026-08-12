@@ -840,6 +840,35 @@ class Stats(db.Model):
         self.installs = installs
 
     @staticmethod
+    def get_for(signature, buildid, channel, product):
+        """``{crashes, installs}`` for one (signature, build), or None — what ingestion measured
+        for this exact build, for ``population.for_crash`` to show next to the wider
+        signature-level numbers without spending a query on it.
+
+        ``installs`` is stored as -1 when unknown (the column default), so it is returned as None
+        rather than passed through: a stats block that prints "-1 installations" is worse than one
+        that admits it does not know."""
+        row = (
+            db.session.query(Stats.number, Stats.installs)
+            .select_from(Stats)
+            .join(Signature, Signature.id == Stats.signatureid)
+            .join(Build, Build.id == Stats.buildid)
+            .filter(
+                Signature.signature == signature,
+                Build.buildid == buildid,
+                Build.channel == channel,
+                Build.product == product,
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        return {
+            "crashes": row.number,
+            "installs": row.installs if (row.installs or -1) >= 0 else None,
+        }
+
+    @staticmethod
     def add(signatureid, buildid, number, installs, commit=True):
         ins = pg.insert(Stats).values(
             signatureid=signatureid, buildid=buildid, number=number, installs=installs

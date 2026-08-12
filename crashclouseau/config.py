@@ -141,6 +141,42 @@ def get_bugzilla_token():
     return libmozdata.config.get("Bugzilla", "token", "") or ""
 
 
+_POPULATION_DEFAULTS = {
+    "enabled": True,
+    # The window reaches back to the build's date, clamped to [min, max] — see
+    # ``population._window_start`` for why both ends are needed.
+    "min_lookback_days": 7,
+    "max_lookback_days": 30,
+    "facets_size": 1000,
+    # Thresholds MEASURED on the 59 loudest Firefox nightly signatures of 2026-08-05..12; see
+    # the ``population`` module docstring for the sample.
+    #  - top share: median 0.18, p75 0.47 -> 0.5 sits just above the third quartile (fired on
+    #    13/59), so the flag means "unusually concentrated", not "more than a couple".
+    #  - median gap between consecutive installs: p10 4430s (74 min), median 8h -> 300s is far
+    #    below the tenth percentile (fired on 4/59). Those four are 20s, 62s, 89s and 142s:
+    #    populations that cannot be independent users.
+    "concentrated_share": 0.5,
+    "clustered_gap_s": 300,
+    # Minimum n for a flag. The shape of two reports is not a shape: top_share on 2 crashes is
+    # 0.5 or 1.0 regardless, and the "median" of a single gap is that gap.
+    "min_crashes": 5,
+    "min_installs_for_gap": 3,
+}
+
+
+def get_population():
+    """Crash-population knobs for the crashstack.html stats block (``population.for_crash``).
+
+    Reporting only — nothing here can gate, score or suppress anything, which is why the
+    thresholds are looser than ``get_agent_bad_machine``'s (that one suppresses a verdict, so it
+    also demands the single-CPU mechanism test). Returned as one normalized dict so callers never
+    re-derive a default."""
+    cfg = dict(_POPULATION_DEFAULTS)
+    cfg.update(_get_global().get("population", {}) or {})
+    cfg["enabled"] = _env_bool("POPULATION_STATS", cfg["enabled"])
+    return cfg
+
+
 def get_threshold(typ, product, channel):
     return (
         _get_global()

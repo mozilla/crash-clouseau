@@ -79,6 +79,17 @@
             }
         }
     },
+    "population":
+    {
+        "enabled": true,
+        "min_lookback_days": 7,
+        "max_lookback_days": 30,
+        "facets_size": 1000,
+        "concentrated_share": 0.5,
+        "clustered_gap_s": 300,
+        "min_crashes": 5,
+        "min_installs_for_gap": 3
+    },
     "agent":
     {
         "schema_version": 1,
