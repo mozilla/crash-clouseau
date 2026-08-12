@@ -330,6 +330,107 @@ class TestPersistenceRoundTrip(unittest.TestCase):
             )
             db.session.commit()
 
+    def _broken_payload(self, reason):
+        return {"dossier": {"verdict": {"decision": "abstain", "abstain_reason": reason}}}
+
+    def test_proto_broken_run_does_not_close_the_cluster(self):
+        # A DONE dossier that BROKE (no readable handoff / failed validation) examined
+        # nothing, so it must not suppress the rest of its proto cluster — the bug that kept
+        # 15 crashes unanalysed for a month. Bounded by agent.proto_max_unusable: the second
+        # broken run in one cluster gives up rather than re-paying forever.
+        sib = "test-7777-aaaa-bbbb-ccccddddeeee"
+        sib2 = "test-6666-aaaa-bbbb-ccccddddeeee"
+        db.session.add(UUID(sib, None, "hash", None))   # same proto cluster as self.UUID
+        db.session.add(UUID(sib2, None, "hash", None))
+        db.session.commit()
+        try:
+            for reason in (
+                "dossier validation failed (verdict unusable): 1 malformed field: "
+                "verdict.consistency",
+                "dossier validation failed: 2 malformed fields: a.b, c.d",
+                "no parseable ```json block in the agent result",
+            ):
+                Dossier.upsert(sib, payload=self._broken_payload(reason), status="done")
+                self.assertFalse(
+                    UUID.proto_already_analyzed(self.UUID),
+                    "a broken run must not close the cluster: {}".format(reason),
+                )
+            # A REAL abstain does close it: the crash was examined and nothing was pinned on
+            # anything. This is the line the fix must not cross.
+            Dossier.upsert(
+                sib,
+                payload=self._broken_payload("no candidate touches the crashing frame"),
+                status="done",
+            )
+            self.assertTrue(UUID.proto_already_analyzed(self.UUID))
+            # ...as does a verdict with no abstain_reason at all (a culprit/lead). NULL must
+            # read as usable, or every cluster closed by a successful run silently reopens.
+            Dossier.upsert(
+                sib,
+                payload={"dossier": {"verdict": {"decision": "culprit"}}},
+                status="done",
+            )
+            self.assertTrue(UUID.proto_already_analyzed(self.UUID))
+
+            # The cap. One broken run in the cluster -> keep going (asserted above); a
+            # second -> give up, so a stack that reliably breaks the schema costs 2 runs and
+            # not one per crash forever.
+            Dossier.upsert(
+                sib,
+                payload=self._broken_payload("dossier validation failed: 1 malformed field: x.y"),
+                status="done",
+            )
+            self.assertFalse(UUID.proto_already_analyzed(self.UUID))
+            Dossier.upsert(
+                sib2,
+                payload=self._broken_payload("no parseable ```json block in the agent result"),
+                status="done",
+            )
+            self.assertTrue(UUID.proto_already_analyzed(self.UUID))
+            # Cap 0 = retry without a bound, and must not mean "give up on the first one".
+            with mock.patch.object(
+                models.config, "get_agent_proto_max_unusable", return_value=0
+            ):
+                self.assertFalse(UUID.proto_already_analyzed(self.UUID))
+        finally:
+            db.session.query(UUID).filter(UUID.uuid.in_([sib, sib2])).delete(
+                synchronize_session=False
+            )
+            db.session.commit()
+
+
+class TestUnusableVerdictPrefixes(unittest.TestCase):
+    """Needs no backend — the prefixes are literals, and that is exactly the risk."""
+
+    def test_unusable_prefixes_match_the_agent_schema(self):
+        # models.py cannot import agent.schema (pydantic / claude-agent-sdk must stay off the
+        # web+ingestion import path), so the reasons it matches on are literals. Pin them to
+        # the strings the agent actually writes, or a schema.py reword silently restores the
+        # bug: every broken run would close its cluster again, and nothing would fail.
+        from crashclouseau.agent import schema
+
+        # Driven through the REAL parse path rather than compared against copies of the
+        # format strings — a test that restates schema.py's literals pins nothing. Both
+        # branches that can persist a Clouseau-side failure as `done`: no readable handoff,
+        # and a handoff whose verdict did not survive validation. (The third branch,
+        # "nothing salvageable", writes the same "dossier validation failed" prefix.)
+        written = [
+            schema.parse_and_validate("no json block in here at all"),
+            schema.parse_and_validate({"verdict": "not-a-dict"}),
+        ]
+        for d in written:
+            reason = d.verdict.abstain_reason
+            self.assertTrue(
+                reason.startswith(models._UNUSABLE_VERDICT_PREFIXES),
+                "{!r} matches no prefix in _UNUSABLE_VERDICT_PREFIXES".format(reason),
+            )
+        # ...and a real analytical abstain must NOT match any of them.
+        self.assertFalse(
+            "no candidate touches the crashing frame".startswith(
+                models._UNUSABLE_VERDICT_PREFIXES
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

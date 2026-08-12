@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy import and_, inspect, func, or_, text
+from sqlalchemy import and_, inspect, func, not_, or_, text
 import pytz
 from . import config, db, utils
 from .logger import logger
@@ -26,6 +26,20 @@ DOSSIER_SCHEMA_VERSION = 1
 # candidate. A run carrying one of these must not close its proto-signature cluster; see
 # ``UUID.proto_already_analyzed``.
 _INSTANCE_SUPPRESSED = ("bad_machine_suppressed", "possible_bit_flip_suppressed")
+
+# ``abstain_reason`` prefixes meaning CLOUSEAU broke — the agent's handoff had no readable
+# JSON block, or the dossier failed validation and the verdict was dropped. Such a run
+# reached ``done`` without examining anything, so it must not close its proto-signature
+# cluster either (see ``UUID.proto_already_analyzed``): measured on prod 2026-08-12, 107 of
+# 2178 done dossiers are one of these, and they had permanently suppressed 15 later crashes
+# across 11 clusters — five of them carrying a real on-stack score.
+#
+# Prefixes of the reasons ``agent.schema`` builds (``NO_HANDOFF_REASON`` and the two
+# "dossier validation failed" branches of ``parse_and_validate``), spelled out here rather than
+# imported: models.py is on the web/ingestion import path and must not pull in
+# pydantic/claude-agent-sdk. ``tests/test_persistence`` pins the two together so they
+# cannot drift apart.
+_UNUSABLE_VERDICT_PREFIXES = ("dossier validation failed", "no parseable ```json block")
 
 # How quiet a ``running`` dossier must go before the RQ job that OWNS it may re-take it
 # (``Dossier.claim_running(..., own_job_id=)``). Deliberately a small multiple of
@@ -1203,7 +1217,20 @@ class UUID(db.Model):
         close the cluster and every later uuid in it would be skipped, turning a false negative
         from a delay into a permanent loss. The backout gate is deliberately NOT in the list: it
         suppresses on the CANDIDATE being gone from the tree, which is equally true for every
-        crash in the cluster."""
+        crash in the cluster.
+
+        Nor does a run that BROKE (``_UNUSABLE_VERDICT_PREFIXES``) — reaching ``done`` is not
+        the same as having triaged anything. A dossier that failed validation, or whose agent
+        returned no readable handoff, carries a forced abstain that says nothing whatsoever
+        about the crash; counting it closed the cluster over a CLOUSEAU-side failure, which is
+        the one reason that has nothing to do with the crash at all. This was live for a
+        month: a $4.35 run on 2026-07-20 died on a ``stack_frame.node`` field that commit
+        421e484 has since made optional, and it was still, on 2026-08-12, the reason three
+        later indexedDB crashes were never looked at.
+
+        Bounded, though, by ``agent.proto_max_unusable``: a cluster whose stack reliably
+        breaks the schema would otherwise re-pay ~$3 for every new uuid in it forever. Once
+        that many broken runs have accumulated the cluster is treated as triaged, loudly."""
         row = (
             db.session.query(UUID.signatureid, UUID.protohash)
             .filter(UUID.uuid == uuid)
@@ -1212,6 +1239,16 @@ class UUID(db.Model):
         if not row or not row.protohash:
             return False
         corrob = Dossier.payload["dossier"]["corroborations"]
+        reason = Dossier.payload["dossier"]["verdict"]["abstain_reason"].astext
+        # NULL-safe by construction: for a verdict with no abstain_reason -- a culprit, a
+        # lead -- and for a `done` row with no dossier payload at all, the first term is
+        # FALSE, so `and_` is FALSE rather than NULL and `not_(unusable)` keeps the row. A
+        # bare `reason NOT LIKE ...` would evaluate to NULL there and drop from BOTH arms,
+        # silently reopening every cluster ever closed by a successful run.
+        unusable = and_(
+            reason.isnot(None),
+            or_(*[reason.like(p + "%") for p in _UNUSABLE_VERDICT_PREFIXES]),
+        )
         q = (
             db.session.query(Dossier.id)
             .join(UUID, Dossier.uuidid == UUID.id)
@@ -1225,7 +1262,24 @@ class UUID(db.Model):
                 ],
             )
         )
-        return db.session.query(q.exists()).scalar()
+        if db.session.query(q.filter(not_(unusable)).exists()).scalar():
+            return True
+        broken = q.filter(unusable).count()
+        cap = config.get_agent_proto_max_unusable()
+        # `cap and ...`, not `broken and ...`: cap 0 means "retry without a bound", so it has
+        # to disable the check rather than satisfy `broken >= 0` on the first failure.
+        if cap and broken >= cap:
+            # Not silent: this is the cluster being abandoned, and the only place it is
+            # visible. A cap that fires unseen reads exactly like the bug fixed above.
+            logger.warning(
+                "agent: %d broken run(s) on this proto-signature (cap %d); "
+                "treating the cluster as triaged and skipping %s",
+                broken,
+                cap,
+                uuid,
+            )
+            return True
+        return False
 
     @staticmethod
     def add_stack_hash(uuid, sh, jsh, commit=True):

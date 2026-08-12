@@ -91,6 +91,7 @@
         "skip_if_existing": true,
         "max_seed_frames": 40,
         "reap_max_attempts": 2,
+        "proto_max_unusable": 2,
         "agent_version": 1,
         "calibration":
         {

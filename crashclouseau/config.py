@@ -250,6 +250,19 @@ def get_agent_reap_max_attempts():
     return get_agent().get("reap_max_attempts", 2)
 
 
+def get_agent_proto_max_unusable():
+    """How many BROKEN runs (``models._UNUSABLE_VERDICT_PREFIXES``: no readable handoff, or a
+    dossier that failed validation) one proto-signature cluster may pay for before
+    ``UUID.proto_already_analyzed`` treats the cluster as triaged anyway.
+
+    A broken run examined nothing, so it must not close its cluster — but the failure is not
+    guaranteed to be independent of the crash either: a stack that reliably makes the model
+    omit a cited field would re-break on every new uuid in the cluster, at ~$3 a time,
+    forever. Default 2, matching ``reap_max_attempts``: retry once, then give up loudly
+    rather than pay indefinitely. Set to 0 to retry without a bound."""
+    return get_agent().get("proto_max_unusable", 2)
+
+
 def get_agent_version():
     return get_agent().get("agent_version", 1)
 
