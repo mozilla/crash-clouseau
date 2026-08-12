@@ -35,6 +35,29 @@ class TestSchemaDefinition(unittest.TestCase):
         self.assertIn("dossiers", db.metadata.tables)
         self.assertIn("verdicts", db.metadata.tables)
 
+    def test_a_new_table_must_be_registered_for_long_lived_dbs(self):
+        # A TRIPWIRE, not a schema check. `models.create()` calls `create_all()` only when the
+        # database is FRESH (no `lastdate` table), so a model added later exists in prod only if
+        # `_ADDED_TABLES` names it — otherwise every read raises UndefinedTable forever, and any
+        # caller with a defensive `except Exception` (the sweep has one) turns that into a silent
+        # no-op that looks like "nothing to do". Nearly shipped exactly that with `sweepmarks`.
+        # If this fails you added a model: decide whether prod needs the table created, add it to
+        # `_ADDED_TABLES`, then add it here.
+        known = {
+            "archetypes", "builds", "changesets", "crashstack", "dossiers", "feedback",
+            "files", "hgauthors", "lastdate", "nodes", "scores", "selection",
+            "signatures", "stats", "sweepmarks", "uuids", "verdicts",
+        }
+        self.assertEqual(
+            set(db.metadata.tables) - known, set(),
+            "new table(s) — add them to models._ADDED_TABLES, then to `known` here",
+        )
+        # And every post-deploy table named must actually exist as a model, or _ensure_tables
+        # silently skips it (`name in db.Model.metadata.tables`).
+        for name in models._ADDED_TABLES:
+            self.assertIn(name, db.metadata.tables,
+                          "_ADDED_TABLES names {!r}, which is not a model".format(name))
+
     def test_dossier_columns(self):
         cols = {c.name for c in db.metadata.tables["dossiers"].columns}
         self.assertEqual(

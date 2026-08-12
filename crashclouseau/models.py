@@ -9,6 +9,7 @@ from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy import and_, inspect, func, not_, or_, text
+from sqlalchemy.orm import aliased
 import pytz
 from . import config, db, utils
 from .logger import logger
@@ -1112,6 +1113,100 @@ class Selection(db.Model):
         }
 
 
+def _unusable_verdict():
+    """SQL for "this dossier's verdict says CLOUSEAU broke, not what the crash was"
+    (``_UNUSABLE_VERDICT_PREFIXES``).
+
+    NULL-SAFE BY CONSTRUCTION, and that is the whole point of writing it once. 565 of the ~2200
+    ``done`` dossiers in prod have no ``abstain_reason`` at all — they are the culprits and the
+    leads. A bare ``reason NOT LIKE 'dossier validation failed%'`` evaluates to NULL for those, so
+    the row would satisfy neither ``unusable`` nor ``not_(unusable)`` and drop out of BOTH arms:
+    every cluster ever closed by a SUCCESSFUL run would silently reopen and be re-analysed at ~$3
+    a time. ``reason IS NOT NULL AND (...)`` is FALSE rather than NULL there, so the negation
+    keeps the row. Same for a ``done`` row with no dossier payload at all, which is what an
+    operator marking a row done by hand leaves behind."""
+    reason = Dossier.payload["dossier"]["verdict"]["abstain_reason"].astext
+    return and_(
+        reason.isnot(None),
+        or_(*[reason.like(p + "%") for p in _UNUSABLE_VERDICT_PREFIXES]),
+    )
+
+
+def _cluster_dossiers(signatureid, protohash):
+    """Query of the ``done`` dossiers on one proto-signature cluster that are allowed to speak
+    for it: instance-suppressed runs (``_INSTANCE_SUPPRESSED``) are excluded, since a broken
+    machine or a corrupted fault address says nothing about the next report of the same
+    signature. Shared by ``UUID.proto_already_analyzed`` (which asks "has this cluster been
+    triaged?") and ``UUID.untriaged`` (which asks the same question of every crash at once), so
+    the sweeper can never disagree with the gate about what counts as triaged.
+
+    The sibling join is ALIASED, which is load-bearing for the second caller: ``untriaged``
+    correlates this as a subquery against its own ``uuids`` row, and without an alias
+    ``UUID.signatureid == signatureid`` would resolve both sides to the same table and be
+    trivially true — the cluster test would then match any dossier at all."""
+    corrob = Dossier.payload["dossier"]["corroborations"]
+    sib = aliased(UUID)
+    return (
+        db.session.query(Dossier.id)
+        .join(sib, Dossier.uuidid == sib.id)
+        .filter(
+            sib.signatureid == signatureid,
+            sib.protohash == protohash,
+            Dossier.status == "done",
+            *[
+                or_(corrob[flag].astext.is_(None), corrob[flag].astext != "true")
+                for flag in _INSTANCE_SUPPRESSED
+            ],
+        )
+    )
+
+
+class SweepMark(db.Model):
+    """A named cursor, so a periodic sweep can offer each crash to the agent AT MOST ONCE.
+
+    The bound has to be persistent, and it cannot be inferred from the data. The sweep's own
+    candidates are crashes with NO dossier row (``UUID.untriaged``), and the two reasons a crash
+    ends up there are not distinguishable after the fact: a job lost from Redis (recoverable —
+    the Mini plan has no persistence, so a restart drops the queue silently) and a run that
+    returned before writing anything (``build_seed`` found nothing to reason about, which will
+    happen again identically). Re-offering the first is the point; re-offering the second every
+    six hours forever is an unbounded hg/pushlog cost for a guaranteed no-op. Since neither
+    leaves a trace, only a cursor can tell them apart from "not yet examined"."""
+
+    __tablename__ = "sweepmarks"
+
+    name = db.Column(db.String(32), primary_key=True)
+    position = db.Column(db.Integer, default=0)
+    updated = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now(),
+        onupdate=db.func.now(),
+    )
+
+    def __init__(self, name, position=0):
+        self.name = name
+        self.position = position
+
+    @staticmethod
+    def get(name):
+        row = db.session.query(SweepMark.position).filter(SweepMark.name == name).first()
+        return row.position if row else 0
+
+    @staticmethod
+    def set(name, position, commit=True):
+        """Advance the cursor. Never moves BACKWARDS: two sweeps overlapping (a slow pass and the
+        next tick) would otherwise let the later-but-behind one rewind the mark and re-offer
+        everything between."""
+        ins = pg.insert(SweepMark).values(name=name, position=position)
+        upd = ins.on_conflict_do_update(
+            index_elements=["name"],
+            set_={"position": position, "updated": db.func.now()},
+            where=SweepMark.position < position,
+        )
+        db.session.execute(upd)
+        if commit:
+            db.session.commit()
+
+
 class UUID(db.Model):
     __tablename__ = "uuids"
 
@@ -1267,33 +1362,10 @@ class UUID(db.Model):
         )
         if not row or not row.protohash:
             return False
-        corrob = Dossier.payload["dossier"]["corroborations"]
-        reason = Dossier.payload["dossier"]["verdict"]["abstain_reason"].astext
-        # NULL-safe by construction: for a verdict with no abstain_reason -- a culprit, a
-        # lead -- and for a `done` row with no dossier payload at all, the first term is
-        # FALSE, so `and_` is FALSE rather than NULL and `not_(unusable)` keeps the row. A
-        # bare `reason NOT LIKE ...` would evaluate to NULL there and drop from BOTH arms,
-        # silently reopening every cluster ever closed by a successful run.
-        unusable = and_(
-            reason.isnot(None),
-            or_(*[reason.like(p + "%") for p in _UNUSABLE_VERDICT_PREFIXES]),
-        )
-        q = (
-            db.session.query(Dossier.id)
-            .join(UUID, Dossier.uuidid == UUID.id)
-            .filter(
-                UUID.signatureid == row.signatureid,
-                UUID.protohash == row.protohash,
-                Dossier.status == "done",
-                *[
-                    or_(corrob[flag].astext.is_(None), corrob[flag].astext != "true")
-                    for flag in _INSTANCE_SUPPRESSED
-                ],
-            )
-        )
-        if db.session.query(q.filter(not_(unusable)).exists()).scalar():
+        q = _cluster_dossiers(row.signatureid, row.protohash)
+        if db.session.query(q.filter(not_(_unusable_verdict())).exists()).scalar():
             return True
-        broken = q.filter(unusable).count()
+        broken = q.filter(_unusable_verdict()).count()
         cap = config.get_agent_proto_max_unusable()
         # `cap and ...`, not `broken and ...`: cap 0 means "retry without a bound", so it has
         # to disable the check rather than satisfy `broken >= 0` on the first failure.
@@ -1309,6 +1381,62 @@ class UUID(db.Model):
             )
             return True
         return False
+
+    @staticmethod
+    def untriaged(after_id, min_age_s, max_age_s, limit, channels=None):
+        """Ingested crashes that have NO dossier at all and whose proto-signature cluster has
+        never been usably triaged — i.e. the ones the pipeline would analyse if it were offered
+        them again. Returns ``[(id, uuid, channel)]`` in id order.
+
+        Measured on prod 2026-08-12: 86 of these, ~3.4/day, arriving in bursts (8 on 07-24, 8 on
+        08-07). 16 carried an on-stack score, which means ``build_seed`` would have produced a
+        seed and the run would have written a dossier — so for those the JOB never ran at all.
+        With Redis on the Mini plan (``Persistence: None``) a restart drops the whole queue, and a
+        job lost that way leaves no trace anywhere: no dossier, no error, nothing in the log. A
+        periodic sweep is the only thing that can notice.
+
+        ``min_age_s`` is a grace period, and it is not optional: a crash whose job is simply
+        QUEUED also has no dossier row (``claim_running`` is what inserts one), and the queue runs
+        hours deep — three workers at ~16 minutes drain ~11/hour, so the tail of one ingestion
+        batch legitimately waits well over an hour. Without the grace the sweep would re-enqueue
+        the entire live queue on every tick.
+
+        ``max_age_s`` bounds the other end: a crash from a month ago is on a build nobody is
+        shipping any more, and paying ~$3 to triage it is worth less than the same money spent on
+        today's.
+
+        ``channels`` restricts to the channels the agent will actually accept. Filtered HERE
+        rather than after the query so the caller's per-tick cap is spent on crashes that can be
+        enqueued: with beta ingestion on, an unfiltered ``limit`` of 3 could return three beta
+        crashes, which ``enqueue_agent`` drops on the floor — starving the nightly ones behind
+        them while the log claims three were swept."""
+        now = datetime.now(timezone.utc)
+        rows = (
+            db.session.query(UUID.id, UUID.uuid, Build.channel)
+            .select_from(UUID)
+            .join(Build, Build.id == UUID.buildid)
+            .outerjoin(Dossier, Dossier.uuidid == UUID.id)
+            .filter(
+                Dossier.id.is_(None),
+                UUID.id > after_id,
+                UUID.useless.is_(False),
+                UUID.analyzed.is_(True),
+                UUID.protohash.isnot(None),
+                UUID.created <= now - timedelta(seconds=min_age_s),
+                UUID.created >= now - timedelta(seconds=max_age_s),
+                # The cluster test, as a correlated NOT EXISTS so one query answers it for every
+                # candidate. Deliberately the SAME predicate `proto_already_analyzed` uses, minus
+                # the broken-run cap: a cluster at the cap is closed by the gate anyway, so
+                # enqueuing it would just be skipped — harmlessly, and one log line louder.
+                ~_cluster_dossiers(UUID.signatureid, UUID.protohash)
+                .filter(not_(_unusable_verdict()))
+                .exists(),
+            )
+        )
+        if channels:
+            rows = rows.filter(Build.channel.in_(list(channels)))
+        rows = rows.order_by(UUID.id).limit(limit).all()
+        return [(r.id, r.uuid, r.channel) for r in rows]
 
     @staticmethod
     def add_stack_hash(uuid, sh, jsh, commit=True):
@@ -2825,7 +2953,7 @@ def create():
 # Tables added after the initial deploy. `create()` only calls `create_all()` on a FRESH
 # database, so a long-lived one would never grow a new table and every read of it would fail at
 # runtime — the same gap `_ensure_enum_values` exists to close for enum values.
-_ADDED_TABLES = ("archetypes", "feedback", "selection")
+_ADDED_TABLES = ("archetypes", "feedback", "selection", "sweepmarks")
 
 
 def _ensure_tables():

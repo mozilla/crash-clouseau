@@ -286,6 +286,35 @@ def get_agent_reap_max_attempts():
     return get_agent().get("reap_max_attempts", 2)
 
 
+_SWEEP_DEFAULTS = {
+    # A GENUINE kill-switch, not dead config: this is the one periodic job that spends money with
+    # nobody watching, so there has to be a way to stop it without a deploy.
+    "enabled": True,
+    # 3 per tick. At the clock's 6-hourly interval that is 12/day — comfortably above the ~3.4/day
+    # these arrive at, so the steady-state cost is ~$10/day and the measured 86-crash backlog
+    # drains in about a week rather than in one bill.
+    "max_per_run": 3,
+    # A merely-QUEUED crash has no dossier row either (claim_running is what inserts one), and the
+    # queue runs hours deep: three workers at ~16 minutes drain ~11/hour, so the tail of one
+    # ingestion batch waits well over an hour by design. Six hours is comfortably past any real
+    # queue delay; being conservative here only costs latency.
+    "min_age_s": 21600,
+    # A crash on a build from a month ago is not worth ~$3 — the build is long gone and the same
+    # money buys a triage of today's.
+    "max_age_s": 1209600,
+}
+
+
+def get_agent_sweep():
+    """Untriaged-crash sweep knobs (``agent.orchestrator.sweep_untriaged_crashes``). Returned as
+    one normalized dict so callers never re-derive a default. ``AGENT_SWEEP`` is the env kill
+    switch, like ``OFFSTACK_ENABLED``."""
+    cfg = dict(_SWEEP_DEFAULTS)
+    cfg.update(get_agent().get("sweep", {}) or {})
+    cfg["enabled"] = _env_bool("AGENT_SWEEP", cfg["enabled"])
+    return cfg
+
+
 def get_agent_proto_max_unusable():
     """How many BROKEN runs (``models._UNUSABLE_VERDICT_PREFIXES``: no readable handoff, or a
     dossier that failed validation) one proto-signature cluster may pay for before

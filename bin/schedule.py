@@ -22,4 +22,12 @@ def reap_orphans_job():
     orchestrator.reap_stale_agent_jobs()
 
 
+@sched.scheduled_job("interval", hours=6)
+def sweep_untriaged_job():
+    # Offer the agent the crashes it was never given at all — a job lost with the Redis queue
+    # leaves no dossier for the reaper to find. Deliberately six-hourly rather than 15-minutely:
+    # this one SPENDS (~$3 a crash), it is bounded per tick, and nothing about it is urgent.
+    orchestrator.sweep_untriaged_crashes()
+
+
 sched.start()

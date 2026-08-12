@@ -2504,6 +2504,93 @@ def enqueue_agent(uuid, channel=None, force=False):
     )
 
 
+_SWEEP_MARK = "untriaged"
+
+
+def sweep_untriaged_crashes():
+    """Offer the agent the crashes it was never given: ingested, has a stack, no dossier at all,
+    and a proto-signature cluster that has never been usably triaged. Called periodically by the
+    clock. Best-effort (never raises out); returns how many were enqueued.
+
+    THIS RECOVERS A LOSS THAT LEAVES NO TRACE. A queued agent job lives only in Redis, and this
+    deployment's Redis is the Mini plan — ``Persistence: None`` — so a restart drops the queue
+    entirely. Nothing records it: the dossier row is created by ``claim_running`` when a worker
+    PICKS UP the job, so a job that never runs leaves no row, no error, and no log line. On prod
+    2026-08-12 there were 86 such crashes (~3.4/day, in bursts of 8 — the shape of a discrete loss
+    event), and 16 of them carried an on-stack score, meaning ``build_seed`` would have produced a
+    seed and the run WOULD have written a dossier. Those 16 were dropped, not declined. The
+    reaper cannot help: it works from dossier rows, and there are none.
+
+    BOUNDED THREE WAYS, because this spends money unattended:
+
+    * ``SweepMark`` — each crash is offered at most ONCE, ever. The candidate set cannot
+      distinguish a lost job from a run that returned before writing anything (``build_seed``
+      found nothing to reason about), and the latter would be re-offered on every tick forever
+      for a guaranteed no-op. See ``models.SweepMark``.
+    * ``sweep_max_per_run`` — a cap per tick, so the backlog drains at a rate an operator chose
+      rather than as one surprise bill.
+    * ``sweep_min_age_s`` — a grace period, so the sweep never re-enqueues the LIVE queue. A
+      merely-queued crash also has no dossier row.
+
+    Enqueued NOT forced: the proto gate gets to refuse, which is what keeps this from paying for a
+    cluster something else has triaged in the meantime."""
+    try:
+        with app.app_context():  # clock thread has no Flask app context; see the reaper
+            cfg = config.get_agent_sweep()
+            if not cfg["enabled"]:
+                return 0
+            after = models.SweepMark.get(_SWEEP_MARK)
+            candidates = models.UUID.untriaged(
+                after, cfg["min_age_s"], cfg["max_age_s"], cfg["max_per_run"],
+                channels=config.get_agent_channels(),
+            )
+            if not candidates:
+                return 0
+
+            # Belt and braces over the grace period: a candidate whose job is genuinely still on
+            # the queue must not be enqueued twice. Fails SAFE the same way the reaper's pending
+            # sweep does — if the queue cannot be read we do not know, so we skip this pass
+            # rather than risk duplicating work. Skipping costs one tick; the mark is not
+            # advanced, so nothing is lost.
+            queue = worker.get_queue(config.get_agent_queue())
+            try:
+                live = _live_job_uuids(queue)
+            except Exception:
+                logger.warning(
+                    "agent: sweep could not read the queue; skipping this pass (%d "
+                    "candidate(s)) rather than risk a duplicate run", len(candidates),
+                    exc_info=True,
+                )
+                return 0
+
+            enqueued, skipped = [], []
+            for _id, uuid, channel in candidates:
+                if uuid in live:
+                    skipped.append(uuid)
+                    continue
+                try:
+                    enqueue_agent(uuid, channel)
+                    enqueued.append(uuid)
+                except Exception:
+                    logger.warning("agent: sweep could not enqueue %s", uuid, exc_info=True)
+
+            # Advance past everything CONSIDERED, including what the gate or the queue filter
+            # declined: they were examined, and re-examining them next tick is the loop this
+            # mark exists to prevent. A crash still queued now would have been analysed by then
+            # anyway.
+            models.SweepMark.set(_SWEEP_MARK, max(c[0] for c in candidates))
+            logger.info(
+                "agent: sweep enqueued %d untriaged crash(es) past id %d%s%s",
+                len(enqueued), after,
+                "; still queued: {}".format(", ".join(skipped)) if skipped else "",
+                ": {}".format(", ".join(enqueued)) if enqueued else "",
+            )
+            return len(enqueued)
+    except Exception:  # pragma: no cover - defensive; the clock must survive
+        logger.error("agent: sweep failed", exc_info=True)
+        return 0
+
+
 def _record_job_id(uuid):
     """Store this run's RQ job id on the dossier (best-effort), so a tasks-view
     retrigger can stop it mid-flight. Only meaningful inside an RQ worker (where

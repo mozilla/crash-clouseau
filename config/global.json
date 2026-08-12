@@ -103,6 +103,13 @@
         "max_seed_frames": 40,
         "reap_max_attempts": 2,
         "proto_max_unusable": 2,
+        "sweep":
+        {
+            "enabled": true,
+            "max_per_run": 3,
+            "min_age_s": 21600,
+            "max_age_s": 1209600
+        },
         "agent_version": 1,
         "calibration":
         {
