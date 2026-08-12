@@ -228,8 +228,16 @@ def _archetype_lines(crash: dict) -> list[str]:
     Framed as a PRIOR TO TEST, never a conclusion, and it says so in the text. These rows are
     added from feedback without the review a patch gets, so the standing grounding rule has to
     keep doing the work: an archetype may tell the agent where to look and can never be cited as
-    why it concluded something. `_user_prompt` is shared with the blind second opinion, so a
-    hint reaches both — which is right for a search hint and would NOT be for evidence."""
+    why it concluded something.
+
+    THE BLIND SECOND OPINION IS NOT GIVEN THESE, and that is the opposite of the bit-flip fix:
+    there both models were blind to something TRUE and telling both constrained them toward the
+    same right answer, whereas an archetype is a suggested DIRECTION, and pointing the independent
+    reviewer the same way correlates the two analyses' mistakes — it would agree because it was
+    primed, and the SO's whole measured value (it refutes 74% of leads, specificity 1.00) is that
+    it was not. ``second_opinion._user_prompt`` is a SEPARATE function from this module's and adds
+    no archetype lines; ``tests/test_feedback_archetypes`` pins that it never sees the guidance.
+    (This paragraph previously claimed the two shared one prompt, which was never true.)"""
     hints = crash.get("archetypes") or []
     if not hints:
         return []

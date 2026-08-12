@@ -208,6 +208,39 @@ class TestSeeding(unittest.TestCase):
              mock.patch.object(models.db, "session", mock.Mock()):
             self.assertEqual(archetypes.seed_quietly(), [])
 
+    def test_the_deploy_path_seeds_them(self):
+        """The whole feature was dead in prod for want of this call.
+
+        `seed_quietly()` was reachable only from bin/init.py — the docker-compose entrypoint —
+        so no Heroku release ever wrote the rows: measured 2026-08-12, prod's `archetypes` table
+        held 0 rows and every dossier recorded `"archetypes": []`. Nothing failed, nothing
+        logged, and Jens Stutte's rule from bug 2062119 had never been in front of a single
+        production run. Read as source rather than executed because bin/release.py is a script
+        that talks to the database at import time."""
+        import ast
+        import os
+
+        path = os.path.join(os.path.dirname(__file__), "..", "bin", "release.py")
+        with open(path) as f:
+            src = f.read()
+        calls = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call)]
+
+        def names(call):
+            f = call.func
+            return ast.dump(f)
+
+        self.assertTrue(
+            any("seed_quietly" in names(c) for c in calls),
+            "bin/release.py must seed archetypes, or the table stays empty in prod forever",
+        )
+        # AFTER models.create(): `archetypes` is a post-deploy table (models._ADDED_TABLES), so
+        # seeding first would write to a relation that does not exist yet on a long-lived DB —
+        # swallowed by seed_quietly into a warning, i.e. straight back to an empty table.
+        self.assertLess(
+            src.index("models.create()"), src.index("seed_quietly"),
+            "seed archetypes AFTER models.create(), which is what creates the table",
+        )
+
 
 class TestScoreboard(unittest.TestCase):
     def test_it_tallies_per_archetype(self):
