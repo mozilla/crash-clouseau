@@ -191,21 +191,52 @@ def _link_blockers(bug_id, blockers, token):
     filings came back 200 with an empty blocks list. Only ``PUT {"blocks": {"add": [...]}}``
     works.
 
-    The PUT is atomic and strict: one unknown id rejects the WHOLE list with code 101, so a
-    regressor bug that is restricted, wrong, or simply not visible to this account would
-    otherwise also cost us the ``clouseau`` meta-bug link. Hence the retry with the meta-bug
-    alone. Best-effort throughout — a bug that is filed but unlinked is a small loss; an
-    exception here would strand a filing we have already made."""
+    The PUT is atomic and strict: one unknown id rejects the WHOLE list with code 101, so a bug
+    that is restricted, wrong, or simply not visible to this account would otherwise also cost us
+    the ``clouseau`` meta-bug link. Hence the retry with the aliases alone — dormant while the
+    preview sends ``["clouseau"]`` and nothing else (the regressor is linked by ``regressed_by``
+    now), which is why identical attempts are collapsed rather than posted twice.
+
+    Best-effort throughout — a bug that is filed but unlinked is a small loss; an exception here
+    would strand a filing we have already made."""
     if not blockers:
         return []
-    for attempt in (list(blockers), [b for b in blockers if isinstance(b, str)]):
-        if not attempt:
-            continue
+    attempts = [list(blockers)]
+    aliases = [b for b in blockers if isinstance(b, str)]
+    if aliases and aliases != attempts[0]:
+        attempts.append(aliases)
+    for attempt in attempts:
         try:
             _put_bug(bug_id, {"blocks": {"add": attempt}}, token)
             return attempt
         except Exception as exc:
             logger.warning("autofile: linking bug %s to %s failed: %s", bug_id, attempt, exc)
+    return []
+
+
+def _link_regressed_by(bug_id, regressors, token):
+    """Set ``regressed_by`` on a freshly-created bug. Returns what actually got linked.
+
+    Its OWN PUT, deliberately not another key in the one ``_link_blockers`` sends. Create discards
+    ``regressed_by`` exactly as silently as it discards ``blocks`` (probed on allizom: 200, and
+    the field comes back empty), and the PUT is atomic ACROSS fields as well as within one --
+    ``{"blocks": {"add": ["clouseau"]}, "regressed_by": {"add": [<unknown bug>]}}`` came back
+    404/code 101 with the perfectly good blocks add dropped too. A regressor bug we cannot read
+    is the ordinary case rather than the exotic one (BMO answers 102 for 2043188, which cost 2 of
+    the first 3 filings their blocker link), so sharing one PUT would put the meta-bug link back
+    at the mercy of the field likeliest to fail.
+
+    No retry with a shorter list, because there is nothing to shorten: the pipeline names one
+    changeset, so a rejection means the claim cannot land at all. Best-effort like the blockers —
+    the bug is already filed and the changeset is named in the comment prose."""
+    if not regressors:
+        return []
+    try:
+        _put_bug(bug_id, {"regressed_by": {"add": list(regressors)}}, token)
+        return list(regressors)
+    except Exception as exc:
+        logger.warning("autofile: setting regressed_by %s on bug %s failed: %s",
+                       regressors, bug_id, exc)
     return []
 
 
@@ -532,10 +563,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       (``_bug_for_this_regression``), comment there instead of filing a duplicate — and if that
       lookup FAILS we skip entirely rather than risk the duplicate.
 
-    ``regressed_by`` is still not set (see ``report_bug.build_bug_preview``): the suspected
-    regressor is named in the comment prose, where a human can weigh it, and the needinfo
-    asks that human directly. The blocker link records the association without asserting
-    cause."""
+    ``regressed_by`` is set — under the pushlog-window gate, on a bug we filed ourselves, and in
+    its own PUT (see ``_link_regressed_by`` and ``report_bug.build_bug_preview``). Because we now
+    write the field the feedback loop reads, ``models.Feedback.classify`` is told what we claimed:
+    our own write agreeing with us is ``unconfirmed``, not ``correct``."""
     cfg = config.get_agent_autofile()
     if not cfg["enabled"]:
         return {"filed": False, "skipped": "autofile disabled"}
@@ -684,6 +715,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 result["blocks_unlinked"] = missing
                 logger.warning("autofile: bug %s could not link %s (restricted or unknown)",
                                bug_id, missing)
+            # The structured causal claim, in its own PUT (see ``_link_regressed_by``). Only on
+            # a bug we FILED: on somebody else's open bug the field is often already curated —
+            # 2 of the 6 filings that commented on an existing bug found a human-set
+            # ``regressed_by`` there, and on bug 2057980 ours would have contradicted it.
+            regressors = preview.get("regressed_by") or []
+            result["regressed_by"] = _link_regressed_by(bug_id, regressors, token)
+            unset = [b for b in regressors if b not in result["regressed_by"]]
+            if unset:
+                result["regressed_by_unlinked"] = unset
+                logger.warning("autofile: bug %s could not be marked regressed_by %s",
+                               bug_id, unset)
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
         return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}

@@ -1121,17 +1121,24 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     render.
 
     The metadata below ``component`` is what a hand-filed crash bug carries and what
-    ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO,
-    and ``keywords``/``cf_crash_signature``/``blocked`` mirror what the hand-draft path sets
-    in ``improve`` -- so the preview shows the whole bug rather than the parts a filer would
-    then have to supply by hand.
+    ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO, and
+    ``keywords``/``cf_crash_signature`` mirror what the hand-draft path sets in ``improve`` -- so
+    the preview shows the whole bug rather than the parts a filer would then have to supply by
+    hand.
 
-    Deliberately NOT set: ``regressed_by``. It is the field that would assert "this crash was
-    caused by that bug" as structured, tooling-visible data, and the pipeline is not accurate
-    enough to claim it unattended -- the blind second opinion refutes ~74% of leads, and the
-    corrected instrument puts only ~28% of them on the true regressor. The suspected regressor
-    is stated in the comment prose, where a human can weigh it, and ``blocked`` records the
-    association without asserting causation."""
+    The regressor is linked by ``regressed_by`` ALONE. ``blocked`` carries the ``clouseau``
+    tracking bug and nothing else: the regressor's bug used to be added there as well, which
+    asserted the same thing twice in two shapes, one of them backwards (a blocks entry says that
+    bug cannot be closed until this crash is fixed).
+
+    ``regressed_by`` asserts causation as structured, tooling-visible data, so it is set only
+    under the same gate as the ``regression`` keyword (``link_regressor`` below). It was withheld
+    entirely while the only precision figure was the ~28% of leads the corrected second-opinion
+    instrument put on the true regressor -- measured across ALL leads, before the stale-signature
+    and backout gates. The filings answer it directly now: of the 39 bugs filed at rung 70 up to
+    2026-08-17, 12 have a ``regressed_by`` a human set, and 11 of those name the bug we named. The
+    one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
+    excludes."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     if not candidate or not candidate.get("node"):
@@ -1151,6 +1158,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             version = None
     first, stats = fetch_signature_stats(uuid, uuid_info)
     suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
+    # May the bug make a STRUCTURED claim about the regressor at all: a candidate from outside
+    # this build's pushlog window is named in the prose and nowhere else.
+    link_regressor = bool(candidate.get("bug") and suspected_regression)
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -1183,16 +1193,16 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # Bugzilla's crash-signature field, same `[@ ...]` syntax as the title. This is what
         # makes the bug show up against the signature in Socorro and in BMO's crash queries.
         "cf_crash_signature": "[@ {}]".format((uuid_info.get("signature") or "").strip()),
-        # Mirrors `improve`: the crash bug blocks the `clouseau` tracking bug, plus the suspected
-        # regressor's own bug when there IS one. Meant as association rather than a causal claim
-        # (see the docstring on regressed_by) — but it does not read that way from the other end:
-        # it puts a crash bug in a stranger's blocks list, and on bug 2062119 it did that to a
-        # 2022 bug of Jens Stutte's that the run's own skeptic had ruled out. Outside the pushlog
-        # window the changeset stays named in the prose, and the structured link is not made.
-        "blocked": (
-            ["clouseau", candidate["bug"]]
-            if (candidate.get("bug") and suspected_regression) else ["clouseau"]
-        ),
+        # The `clouseau` tracking bug, and ONLY that. The regressor's own bug used to be added
+        # here too, which said something we never meant: that the regressor bug cannot be closed
+        # until this crash is fixed. It also put a crash bug in a stranger's blocks list — on bug
+        # 2062119, a 2022 bug of Jens Stutte's that the run's own skeptic had ruled out.
+        # `regressed_by` below is the relation that actually describes a regression.
+        "blocked": ["clouseau"],
+        # The regression relation BMO's own tooling reads, and the one a triager expects to find
+        # on a regression bug. Gated on `link_regressor`, and a list because the field is one --
+        # the pipeline only ever names a single changeset.
+        "regressed_by": [candidate["bug"]] if link_regressor else [],
         "needinfo": _needinfo_line(person),
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the

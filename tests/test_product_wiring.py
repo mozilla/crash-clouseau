@@ -1768,10 +1768,12 @@ class TestBugPreview(unittest.TestCase):
         self.assertEqual(prev["type"], "defect")
         self.assertEqual(prev["keywords"], ["crash", "regression"])
         self.assertEqual(prev["cf_crash_signature"], "[@ Foo::bar]")
-        self.assertEqual(prev["blocked"], ["clouseau", 1])   # tracking bug + the regressor's
-        # NEVER asserted automatically: the pipeline is not accurate enough to claim causation
-        # as structured data (the blind review refutes ~74% of leads).
-        self.assertNotIn("regressed_by", prev)
+        # The tracking bug, and ONLY that: linking the regressor here as well asserted the same
+        # thing twice, one of them backwards (that bug 1 cannot be closed until this crash is).
+        self.assertEqual(prev["blocked"], ["clouseau"])
+        # The regression relation BMO's own tooling reads, under the same gate as the keyword:
+        # this candidate IS in the build's pushlog window.
+        self.assertEqual(prev["regressed_by"], [1])
 
     def test_build_bug_preview_version_off_nightly(self):
         """`Trunk` is only right for nightly; every product also has `unspecified`, whereas a
@@ -1798,6 +1800,32 @@ class TestBugPreview(unittest.TestCase):
                                   return_value={"exists": True, "nick": ""}):
             prev = report_bug.build_bug_preview(ui, self._stack3(), dossier)
         self.assertEqual(prev["blocked"], ["clouseau"])
+        self.assertEqual(prev["regressed_by"], [])
+
+    def test_build_bug_preview_claims_nothing_outside_the_pushlog_window(self):
+        """Bug 2062119's candidate was a changeset from 2022. The structured claims -- the
+        `regression` keyword, the blocks link and now `regressed_by` -- all hang off ONE gate, so
+        a candidate the pipeline has no recency evidence for stays in the prose alone."""
+        ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",
+              "buildid": "20260727081724"}
+        base = {"candidate": {"node": "n", "bug": 1, "author": "Dev <dev@x.com>"},
+                "verdict": {"confidence": "high"}}
+        for corrob in ({"candidate_in_pushlog_window": False}, {}, None):
+            with self.subTest(corrob=corrob), \
+                    mock.patch.object(report_bug, "resolve_product_component",
+                                      return_value=("Core", "DOM")), \
+                    mock.patch.object(report_bug, "fetch_crash_reason", return_value={}), \
+                    mock.patch.object(report_bug, "fetch_signature_stats",
+                                      return_value=(True, {})), \
+                    mock.patch("crashclouseau.models.UUID.get_info", return_value={}), \
+                    mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                    mock.patch.object(report_bug, "_bugzilla_user",
+                                      return_value={"exists": True, "nick": ""}):
+                prev = report_bug.build_bug_preview(
+                    ui, self._stack3(), dict(base, corroborations=corrob))
+            self.assertEqual(prev["regressed_by"], [])
+            self.assertEqual(prev["blocked"], ["clouseau"])
+            self.assertEqual(prev["keywords"], ["crash"])
 
     def test_needinfo_person_uses_the_bugzilla_account(self):
         # email/name from the hgauthor record; the ACCOUNT and its nick from Bugzilla. The

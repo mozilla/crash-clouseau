@@ -16,6 +16,10 @@ Two things make this cheap rather than a labelling project:
   ``regressed_by``. Bug 2062119 carries ``regressed_by: [1412726]`` against the ``1768581`` we
   named, so "were we right?" is a comparison, not an inference from prose.
 
+Since the filer began setting ``regressed_by`` itself, that comparison needs one more input: what
+WE wrote there. A field that agrees with us because we wrote it is not a reviewer agreeing with
+us, so it scores ``unconfirmed`` rather than ``correct`` — see ``models.Feedback.classify``.
+
 Read-only and unauthenticated: everything needed is public on a bug we filed publicly.
 
 The reason this module exists at all is ``models.Archetype``. A learned rule is a guess until
@@ -36,8 +40,13 @@ _FIELDS = "id,status,resolution,dupe_of,regressed_by"
 
 
 def _filed_bugs():
-    """``[{bug_id, uuid, named_bug, named_node, archetypes, filed_at}]`` for every bug the
-    pipeline has filed, newest last. Sourced from the dossiers, which are the only record."""
+    """``[{bug_id, uuid, named_bug, named_node, archetypes, claimed, filed_at}]`` for every bug
+    the pipeline has filed, newest last. Sourced from the dossiers, which are the only record.
+
+    ``claimed`` is the ``regressed_by`` the FILER set on that bug, and it is what stops this
+    module from marking its own homework: see ``models.Feedback.classify``. Absent on anything
+    filed before the filer started setting the field, which reads as "we claimed nothing" and
+    leaves those rows scored exactly as they were."""
     out = []
     for row in models.Dossier.filed_bug_rows():
         info = row.get("filed_bug") or {}
@@ -53,6 +62,7 @@ def _filed_bugs():
             "named_bug": candidate.get("bug"),
             "named_node": candidate.get("node"),
             "archetypes": corrob.get("archetypes") or [],
+            "claimed": info.get("regressed_by") or [],
             "filed_at": info.get("at"),
         })
     return out
@@ -102,6 +112,7 @@ def refresh():
             continue
         models.Feedback.record(
             entry["bug_id"],
+            claimed_regressed_by=entry["claimed"],
             uuid=entry["uuid"],
             named_bug=entry["named_bug"],
             named_node=entry["named_node"],

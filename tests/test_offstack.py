@@ -646,7 +646,7 @@ class TestPriorSig(unittest.TestCase):
             {"id": 300, "resolution": "FIXED", "regressed_by": [555], "summary": "sib C"},
         ]
 
-    def _patch_lookup(self, sig_to_ids):
+    def _patch_lookup(self, sig_to_ids, own_claims=frozenset()):
         from crashclouseau import priorsig as P
         fake = self._fake_bugs()
 
@@ -662,13 +662,15 @@ class TestPriorSig(unittest.TestCase):
             def wait(self):
                 return self
 
+        # `_our_own_claims` reads the dossiers; these tests are about the Bugzilla side.
         return (mock.patch.object(P.SocorroBugs, "get_bugs", return_value=sig_to_ids),
-                mock.patch.object(P, "Bugzilla", FakeBZ))
+                mock.patch.object(P, "Bugzilla", FakeBZ),
+                mock.patch.object(P, "_our_own_claims", return_value=set(own_claims)))
 
     def test_hints_from_fixed_siblings(self):
         from crashclouseau import priorsig as P
-        s, b = self._patch_lookup({"SIG": [100, 200, 300]})
-        with s, b:
+        s, b, o = self._patch_lookup({"SIG": [100, 200, 300]})
+        with s, b, o:
             hints = P.prior_regressor_hints(["SIG"])
         regs = sorted(h["regressor_bug"] for h in hints)
         self.assertEqual(regs, [555, 2011326])          # 200 (WONTFIX) excluded
@@ -676,15 +678,39 @@ class TestPriorSig(unittest.TestCase):
 
     def test_exclude_bug_drops_self(self):
         from crashclouseau import priorsig as P
-        s, b = self._patch_lookup({"SIG": [100, 300]})
-        with s, b:
+        s, b, o = self._patch_lookup({"SIG": [100, 300]})
+        with s, b, o:
             hints = P.prior_regressor_hints(["SIG"], exclude_bug=300)
         self.assertEqual([h["regressor_bug"] for h in hints], [2011326])   # 300 excluded
+
+    def test_our_own_regressed_by_is_not_a_prior(self):
+        """The pipeline SETS `regressed_by` now, so `FIXED` + `regressed_by` no longer implies a
+        human vouched for the attribution — somebody may just have fixed the crash. Bug 2043000
+        drew three filings off one signature cluster; without this the second would read the
+        first's claim as an independent prior and the caller would BUMP confidence on it."""
+        from crashclouseau import priorsig as P
+        s, b, o = self._patch_lookup({"SIG": [100, 300]}, own_claims={(100, 2011326)})
+        with s, b, o:
+            hints = P.prior_regressor_hints(["SIG"])
+        self.assertEqual([h["regressor_bug"] for h in hints], [555])       # 100 -> 2011326 is ours
+        # Only the exact pair: once a reviewer REPLACES our value it is a human's again.
+        s, b, o = self._patch_lookup({"SIG": [100, 300]}, own_claims={(100, 999)})
+        with s, b, o:
+            hints = P.prior_regressor_hints(["SIG"])
+        self.assertEqual(sorted(h["regressor_bug"] for h in hints), [555, 2011326])
 
     def test_empty_and_failure_are_graceful(self):
         from crashclouseau import priorsig as P
         self.assertEqual(P.prior_regressor_hints([]), [])
         with mock.patch.object(P.SocorroBugs, "get_bugs", side_effect=RuntimeError("boom")):
+            self.assertEqual(P.prior_regressor_hints(["SIG"]), [])
+
+    def test_not_knowing_our_own_claims_yields_no_hints(self):
+        # Fails CLOSED: this module already degrades to "no prior" on any hiccup, and re-admitting
+        # our own claim as corroboration is the failure nobody can see from the outside.
+        from crashclouseau import priorsig as P
+        s, b, _ = self._patch_lookup({"SIG": [100, 300]})
+        with s, b, mock.patch.object(P, "_our_own_claims", side_effect=RuntimeError("no db")):
             self.assertEqual(P.prior_regressor_hints(["SIG"]), [])
 
     def test_the_sibling_cap_keeps_the_NEWEST_bugs(self):

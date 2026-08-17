@@ -172,6 +172,35 @@ class TestAttributionClassifier(unittest.TestCase):
                 self.assertEqual(models.Feedback.classify(None, 1768581, rb), "unknown")
         self.assertEqual(models.Feedback.classify("FIXED", None, [1412726]), "wrong")
 
+    def test_our_own_regressed_by_is_not_a_verdict_on_itself(self):
+        # The filer now SETS regressed_by. Scoring the field we wrote as "correct" would have
+        # every archetype reading 100% from the day it first fired.
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=7, regressed_by=[7], claimed=[7]),
+            "unconfirmed")
+        # Same field, put there by somebody else -> a real endorsement.
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=7, regressed_by=[7], claimed=[]),
+            "correct")
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=7, regressed_by=[7], claimed=None),
+            "correct")
+
+    def test_a_reviewer_who_replaces_ours_still_counts_as_wrong(self):
+        # The half of the loop that improves anything: writing the field invites the correction
+        # that prose in a comment can absorb silently. 2062119 with the claim now made by us.
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=1768581, regressed_by=[1412726],
+                                     claimed=[1768581]),
+            "wrong")
+
+    def test_a_second_regressor_added_beside_ours_is_still_unconfirmed(self):
+        # Somebody adding another cause did not necessarily look at ours; the module's rule is
+        # that silence is not agreement, and leaving it in ours is silence.
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=7, regressed_by=[7, 9], claimed=[7]),
+            "unconfirmed")
+
 
 class TestSeeding(unittest.TestCase):
     def test_the_shipped_archetype_names_the_bug_that_taught_it(self):
@@ -249,15 +278,19 @@ class TestScoreboard(unittest.TestCase):
             mock.Mock(attribution="correct", archetypes=["shutdown-singleton"]),
             mock.Mock(attribution="crash_invalid", archetypes=[]),
             mock.Mock(attribution="unknown", archetypes=["shutdown-singleton"]),
+            # A row whose regressed_by is only OUR claim. It must show up under its own name
+            # rather than vanishing from the archetype's tally.
+            mock.Mock(attribution="unconfirmed", archetypes=["shutdown-singleton"]),
         ]
         query = mock.Mock()
         query.all.return_value = rows
         with mock.patch.object(models.db, "session", mock.Mock(query=mock.Mock(return_value=query))):
             board = models.Feedback.scoreboard()
-        self.assertEqual(board["total"], 4)
+        self.assertEqual(board["total"], 5)
         self.assertEqual(board["by_attribution"]["wrong"], 1)
         self.assertEqual(board["by_archetype"]["shutdown-singleton"],
-                         {"filed": 3, "correct": 1, "wrong": 1, "crash_invalid": 0})
+                         {"filed": 4, "correct": 1, "wrong": 1, "unconfirmed": 1,
+                          "crash_invalid": 0})
 
 
 _EMPTY_BOARD = {"total": 0, "by_attribution": {}, "by_archetype": {}}
@@ -270,9 +303,9 @@ class TestRefresh(unittest.TestCase):
         from crashclouseau import feedback as fb
 
         filed = [{"bug_id": 1, "uuid": "u-1", "named_bug": 7, "named_node": "n",
-                  "archetypes": [], "filed_at": "2026-08-10T00:00:00+00:00"},
+                  "archetypes": [], "claimed": [], "filed_at": "2026-08-10T00:00:00+00:00"},
                  {"bug_id": 2, "uuid": "u-2", "named_bug": 8, "named_node": "m",
-                  "archetypes": [], "filed_at": None}]
+                  "archetypes": [], "claimed": [], "filed_at": None}]
         with mock.patch.object(fb, "_filed_bugs", return_value=filed), \
              mock.patch.object(fb, "_fetch", return_value={
                  1: {"id": 1, "status": "RESOLVED", "resolution": "INVALID",
@@ -289,13 +322,42 @@ class TestRefresh(unittest.TestCase):
         from crashclouseau import feedback as fb
 
         filed = [{"bug_id": 9, "uuid": "u", "named_bug": 1, "named_node": "n",
-                  "archetypes": ["shutdown-singleton"], "filed_at": None}]
+                  "archetypes": ["shutdown-singleton"], "claimed": [], "filed_at": None}]
         with mock.patch.object(fb, "_filed_bugs", return_value=filed), \
              mock.patch.object(fb, "_fetch", return_value={9: {"id": 9, "status": "NEW"}}), \
              mock.patch.object(models.Feedback, "record") as record, \
              mock.patch.object(models.Feedback, "scoreboard", return_value=_EMPTY_BOARD):
             fb.refresh()
         self.assertEqual(record.call_args.kwargs["archetypes"], ["shutdown-singleton"])
+
+    def test_what_the_filer_claimed_reaches_the_classifier(self):
+        # Without this the loop scores our own regressed_by write as a reviewer agreeing with us.
+        from crashclouseau import feedback as fb
+
+        filed = [{"bug_id": 9, "uuid": "u", "named_bug": 42, "named_node": "n",
+                  "archetypes": [], "claimed": [42], "filed_at": None}]
+        with mock.patch.object(fb, "_filed_bugs", return_value=filed), \
+             mock.patch.object(fb, "_fetch", return_value={
+                 9: {"id": 9, "status": "NEW", "regressed_by": [42]}}), \
+             mock.patch.object(models.Feedback, "record") as record, \
+             mock.patch.object(models.Feedback, "scoreboard", return_value=_EMPTY_BOARD):
+            fb.refresh()
+        self.assertEqual(record.call_args.kwargs["claimed_regressed_by"], [42])
+
+    def test_the_claim_is_read_off_the_filing_record(self):
+        # `filed_bug["regressed_by"]` is what `bugzilla_apply` recorded as actually linked.
+        from crashclouseau import feedback as fb
+
+        rows = [{"uuid": "u-1",
+                 "filed_bug": {"bug": 9, "filed": True, "regressed_by": [42], "at": None},
+                 "dossier": {"candidate": {"bug": 42, "node": "n"}}},
+                # An older filing, from before the filer set the field at all.
+                {"uuid": "u-2",
+                 "filed_bug": {"bug": 8, "filed": True, "at": None},
+                 "dossier": {"candidate": {"bug": 7, "node": "m"}}}]
+        with mock.patch.object(models.Dossier, "filed_bug_rows", return_value=rows):
+            got = fb._filed_bugs()
+        self.assertEqual([e["claimed"] for e in got], [[42], []])
 
 
 if __name__ == "__main__":

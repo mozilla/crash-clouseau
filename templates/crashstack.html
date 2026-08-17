@@ -312,6 +312,16 @@
         {% endif -%}
         </p>
         <p><strong>Summary:</strong> {{ bug_preview['title']|e }}</p>
+        {# The one field on the filed bug that other tooling ACTS on, so it is worth reading
+           before it is asserted. Absent exactly when the bug will not make the claim: a
+           candidate that did not land in this build's pushlog window is named in the comment
+           and nowhere else. #}
+        {% if bug_preview.get('regressed_by') -%}
+        <p><strong>Regressed by:</strong>
+        {% for b in bug_preview['regressed_by'] -%}
+        <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b|e }}">bug {{ b|e }}</a>{% if not loop.last %}, {% endif %}
+        {%- endfor %}</p>
+        {% endif -%}
         {# ONE comment, verbatim: stack + crash reason + volume + analysis + needinfo ask.
            Shown unrendered (escaped, not linkified) because it IS the markdown we post --
            what you read here is byte-for-byte what lands in the bug. #}

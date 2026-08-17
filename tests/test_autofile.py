@@ -25,7 +25,9 @@ _PREVIEW = {
     "version": "Trunk", "type": "defect",
     "keywords": ["crash", "regression"],
     "cf_crash_signature": "[@ Foo::Bar]",
-    "blocked": ["clouseau", 42],
+    # The tracking bug alone: the regressor is linked by `regressed_by`, not by blocks.
+    "blocked": ["clouseau"],
+    "regressed_by": [42],
     "needinfo": ":dev, can you have a look please?",
     "needinfo_email": "dev@moz.example",
 }
@@ -539,9 +541,9 @@ class TestPayload(_Base):
         self.assertNotIn("flags", self.created[0])
         self.assertIsNone(res["needinfo"])
 
-    def test_regressed_by_is_never_set(self):
-        # The field that would assert causation as structured data. The suspected regressor
-        # is named in the comment prose instead, where a human can weigh it.
+    def test_regressed_by_is_never_sent_on_create(self):
+        # Create DISCARDS it, silently and with a 200, exactly as it discards blocks (probed on
+        # allizom). Sending it there would read as "we set the field" while setting nothing.
         self._file()
         self.assertNotIn("regressed_by", self.created[0])
 
@@ -558,25 +560,45 @@ class TestBlockerLinking(_Base):
 
     def test_blockers_are_linked_by_a_follow_up_put(self):
         res = self._file()
-        self.assertEqual(self.puts, [(999, {"blocks": {"add": ["clouseau", 42]}})])
-        self.assertEqual(res["blocks"], ["clouseau", 42])
+        self.assertEqual(self.puts[0], (999, {"blocks": {"add": ["clouseau"]}}))
+        self.assertEqual(res["blocks"], ["clouseau"])
 
-    def test_an_unknown_regressor_bug_does_not_cost_the_meta_link(self):
-        # The PUT rejects the WHOLE list on one bad id (code 101), so a restricted or wrong
-        # regressor bug would otherwise also drop the `clouseau` link.
+    def test_an_unknown_bug_in_the_list_does_not_cost_the_meta_link(self):
+        # The PUT rejects the WHOLE list on one bad id (code 101). The filer no longer sends a
+        # bug id here at all — the regressor is `regressed_by` — so this guard is dormant; it is
+        # kept, and tested, because the failure it prevents is silent and the list is a parameter.
         calls = []
 
         def put(bug, changes, token):
+            if "blocks" not in changes:
+                return bug
             calls.append(changes)
             if 42 in changes["blocks"]["add"]:
                 raise RuntimeError("Bug 42 does not exist.")
             return bug
 
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=["clouseau", 42])
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
         self.assertTrue(res["filed"])
         self.assertEqual(res["blocks"], ["clouseau"])
         self.assertEqual([c["blocks"]["add"] for c in calls], [["clouseau", 42], ["clouseau"]])
+
+    def test_a_failing_alias_only_list_is_not_posted_twice(self):
+        # With the regressor gone from `blocked` the retry list is identical to the first attempt,
+        # and a "recovery" that re-sends exactly what just failed is not a recovery.
+        calls = []
+
+        def put(bug, changes, token):
+            if "blocks" in changes:
+                calls.append(changes)
+                raise RuntimeError("bugzilla 500")
+            return bug
+
+        bugzilla_apply._put_bug.side_effect = put
+        res = self._file()
+        self.assertEqual(res["blocks"], [])
+        self.assertEqual(len(calls), 1)
 
     def test_a_failed_link_never_unfiles_the_bug(self):
         bugzilla_apply._put_bug.side_effect = RuntimeError("bugzilla 500")
@@ -586,12 +608,13 @@ class TestBlockerLinking(_Base):
         self.assertEqual(res["blocks"], [])
 
     def test_what_failed_to_link_is_recorded(self):
-        # A restricted regressor bug (BMO answers 102) silently cost 2 of the first 3 real
-        # filings their regressor link. The gap has to be auditable.
+        # A restricted bug (BMO answers 102) silently cost 2 of the first 3 real filings their
+        # regressor link. Whatever drops out of the list has to be auditable.
         def put(bug, changes, token):
-            if 42 in changes["blocks"]["add"]:
+            if 42 in changes.get("blocks", {}).get("add", []):
                 raise RuntimeError("Bug 42 does not exist.")
             return bug
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=["clouseau", 42])
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
         self.assertEqual(res["blocks"], ["clouseau"])
@@ -600,6 +623,79 @@ class TestBlockerLinking(_Base):
     def test_nothing_unlinked_records_nothing(self):
         res = self._file()
         self.assertNotIn("blocks_unlinked", res)
+
+
+class TestRegressedBy(_Base):
+    """The structured causal claim. Set since 2026-08-17, under the pushlog-window gate that
+    `report_bug.build_bug_preview` applies (the preview is mocked here, so these tests are about
+    the WRITE: the create discards the field, and one PUT must not cost the other)."""
+
+    def test_it_is_set_by_its_own_put_after_the_blockers(self):
+        res = self._file()
+        self.assertEqual(self.puts, [(999, {"blocks": {"add": ["clouseau"]}}),
+                                     (999, {"regressed_by": {"add": [42]}})])
+        self.assertEqual(res["regressed_by"], [42])
+        # ...and the regressor is claimed ONCE, not also as a blocker.
+        self.assertEqual(res["blocks"], ["clouseau"])
+
+    def test_a_rejected_regressed_by_does_not_cost_the_blocker_link(self):
+        # The reason it is a separate PUT: a combined one is atomic ACROSS fields, and on
+        # allizom `{"blocks": …, "regressed_by": {"add": [<unknown>]}}` dropped the valid blocks
+        # add along with the bad regressed_by (404, code 101).
+        def put(bug, changes, token):
+            if "regressed_by" in changes:
+                raise RuntimeError("Bug 42 does not exist.")
+            return bug
+        bugzilla_apply._put_bug.side_effect = put
+        res = self._file()
+        self.assertEqual(res["blocks"], ["clouseau"])
+        self.assertEqual(res["regressed_by"], [])
+        self.assertEqual(res["regressed_by_unlinked"], [42])
+
+    def test_a_rejected_blocker_link_still_sets_regressed_by(self):
+        # And the other way round: the `clouseau` link failing is no reason to drop the claim
+        # a triager actually reads.
+        def put(bug, changes, token):
+            if "blocks" in changes:
+                raise RuntimeError("bugzilla 500")
+            return bug
+        bugzilla_apply._put_bug.side_effect = put
+        res = self._file()
+        self.assertEqual(res["blocks"], [])
+        self.assertEqual(res["regressed_by"], [42])
+
+    def test_a_failed_claim_never_unfiles_the_bug(self):
+        bugzilla_apply._put_bug.side_effect = RuntimeError("bugzilla 500")
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["regressed_by"], [])
+
+    def test_an_ungated_candidate_claims_nothing(self):
+        # `build_bug_preview` returns [] for a candidate outside the build's pushlog window (and
+        # for one with no bug at all). Nothing to add means no PUT, not a PUT with an empty list.
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, regressed_by=[])
+        res = self._file()
+        self.assertEqual(self.puts, [(999, {"blocks": {"add": ["clouseau"]}})])
+        self.assertEqual(res["regressed_by"], [])
+        self.assertNotIn("regressed_by_unlinked", res)
+
+    def test_commenting_on_an_existing_bug_never_touches_the_field(self):
+        # Somebody else's open bug often has a curated regressed_by already: 2 of the 6 filings
+        # that commented on an existing bug found one, and on bug 2057980 ours would have
+        # contradicted it.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234, "2026-08-01T00:00:00Z")]
+        res = self._file()
+        self.assertEqual((res["mode"], res["bug"]), ("comment_on_existing", 1234))
+        # The needinfo flag is a PUT too, so it is the FIELD that must never appear.
+        self.assertEqual([c for _, c in self.puts if "regressed_by" in c], [])
+        self.assertNotIn("regressed_by", res)
+
+    def test_what_we_claimed_is_recorded_for_the_feedback_loop(self):
+        # `models.Feedback.classify` needs it: our own write agreeing with us is `unconfirmed`,
+        # not a reviewer confirming the attribution.
+        self._file()
+        uuid, info = self.filed[0]
+        self.assertEqual(info["regressed_by"], [42])
 
 
 class TestSignatureMatching(_Base):

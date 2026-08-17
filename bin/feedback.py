@@ -19,8 +19,9 @@ def _print(board):
     print("\nfiled bugs tracked: {}".format(total))
     by = board.get("by_attribution") or {}
     # `unknown` is the honest majority early on: most filings are simply not triaged yet, and a
-    # scoreboard that hid it would read as a precision figure it is not.
-    for key in ("correct", "wrong", "crash_invalid", "unknown"):
+    # scoreboard that hid it would read as a precision figure it is not. `unconfirmed` is the
+    # same caution about a `regressed_by` the filer set itself — nobody has agreed with it yet.
+    for key in ("correct", "wrong", "unconfirmed", "crash_invalid", "unknown"):
         if key in by:
             print("  {:<14} {}".format(key, by[key]))
     adjudicated = by.get("correct", 0) + by.get("wrong", 0)
@@ -31,8 +32,9 @@ def _print(board):
     if arch:
         print("\narchetypes that fired on a filed bug:")
         for slug, t in sorted(arch.items()):
-            print("  {:<24} filed {:<4} correct {:<4} wrong {:<4} invalid {}".format(
-                slug, t["filed"], t["correct"], t["wrong"], t["crash_invalid"]))
+            print("  {:<24} filed {:<4} correct {:<4} wrong {:<4} unconfirmed {:<4} "
+                  "invalid {}".format(slug, t["filed"], t["correct"], t["wrong"],
+                                      t["unconfirmed"], t["crash_invalid"]))
     else:
         print("\nno archetype has fired on a filed bug yet")
 

@@ -2824,7 +2824,7 @@ class Feedback(db.Model):
     resolution = db.Column(db.String(32), nullable=True)
     dupe_of = db.Column(db.Integer, nullable=True)
     regressed_by = db.Column(pg.JSONB, nullable=False, default=list)
-    # correct | wrong | crash_invalid | unknown — see `classify`
+    # correct | wrong | unconfirmed | crash_invalid | unknown — see `classify`
     attribution = db.Column(db.String(16), nullable=False, default="unknown")
 
     filed_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -2834,29 +2834,45 @@ class Feedback(db.Model):
     )
 
     @staticmethod
-    def classify(resolution, named_bug, regressed_by):
+    def classify(resolution, named_bug, regressed_by, claimed=None):
         """The verdict on OUR verdict.
 
-        Four states, and the middle two are the ones worth separating: a bug can be a real crash
+        Five states, and the middle ones are the ones worth separating: a bug can be a real crash
         we were useful about while still naming the wrong changeset, which is exactly bug 2062119
         and exactly what the worth-investigating pivot says is an acceptable outcome. Collapsing
         it into "wrong" would make the pipeline look worse than it is; collapsing it into
         "correct" would hide the attribution problem that is genuinely there.
 
         ``unknown`` covers not-yet-triaged and, deliberately, a bug nobody has set
-        ``regressed_by`` on: silence is not agreement."""
+        ``regressed_by`` on: silence is not agreement.
+
+        ``unconfirmed`` is what keeps the loop honest now that the FILER sets ``regressed_by``
+        itself (``bugzilla_apply._link_regressed_by``). A field that agrees with us because we
+        wrote it is not a reviewer agreeing with us, and scoring it ``correct`` would have every
+        archetype reading 100% from the day it first fired — the exact self-congratulation this
+        table exists to prevent. ``claimed`` is what we set at filing time; only a value somebody
+        else put there counts. A reviewer who REPLACES ours still lands in ``wrong``, which is the
+        half of the loop that improves anything: writing the field invites that correction, where
+        prose in a comment could be ignored silently."""
         if (resolution or "").upper() in ("INVALID", "WORKSFORME", "INCOMPLETE"):
             return "crash_invalid"
         known = [int(b) for b in (regressed_by or []) if str(b).isdigit()]
         if not known:
             return "unknown"
+        ours = [int(b) for b in (claimed or []) if str(b).isdigit()]
         if named_bug is not None and int(named_bug) in known:
-            return "correct"
+            return "unconfirmed" if int(named_bug) in ours else "correct"
         return "wrong"
 
     @staticmethod
-    def record(bug_id, **fields):
-        """Create or refresh one row by bug id; recomputes ``attribution``."""
+    def record(bug_id, claimed_regressed_by=None, **fields):
+        """Create or refresh one row by bug id; recomputes ``attribution``.
+
+        ``claimed_regressed_by`` (what the filer itself set on the bug, from
+        ``Dossier.payload['filed_bug']``) is an input to the verdict and is deliberately NOT
+        stored: it is a fact about our filing, which the dossier already holds, and a new column
+        on a long-lived table would need a migration this project has no framework for. Every
+        caller reads the dossier anyway, so it is always available where it is needed."""
         row = db.session.query(Feedback).filter(Feedback.bug_id == bug_id).one_or_none()
         if row is None:
             row = Feedback(bug_id=bug_id)
@@ -2865,7 +2881,7 @@ class Feedback(db.Model):
             if hasattr(row, key):
                 setattr(row, key, value)
         row.attribution = Feedback.classify(
-            row.resolution, row.named_bug, row.regressed_by)
+            row.resolution, row.named_bug, row.regressed_by, claimed_regressed_by)
         row.checked_at = datetime.now(timezone.utc)
         db.session.commit()
         return row
@@ -2880,7 +2896,8 @@ class Feedback(db.Model):
                 out["by_attribution"].get(row.attribution, 0) + 1)
             for slug in row.archetypes or []:
                 tally = out["by_archetype"].setdefault(
-                    slug, {"filed": 0, "correct": 0, "wrong": 0, "crash_invalid": 0})
+                    slug, {"filed": 0, "correct": 0, "wrong": 0, "unconfirmed": 0,
+                           "crash_invalid": 0})
                 tally["filed"] += 1
                 if row.attribution in tally:
                     tally[row.attribution] += 1
