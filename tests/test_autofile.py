@@ -29,7 +29,7 @@ _PREVIEW = {
     "needinfo": ":dev, can you have a look please?",
     "needinfo_email": "dev@moz.example",
 }
-_INFO = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "nightly"}
+_INFO = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "nightly", "product": "Firefox"}
 
 
 def _cfg(**over):
@@ -40,9 +40,10 @@ def _cfg(**over):
     return base
 
 
-def _bug(bid, created=None):
-    """One row of what `_open_bugs_for_signature` returns."""
-    return {"id": bid, "creation_time": created}
+def _bug(bid, created=None, product="Core"):
+    """One row of what `_open_bugs_for_signature` returns. A Firefox-side product by default:
+    the age tests are about dates, and a bug in somebody else's product never reaches them."""
+    return {"id": bid, "creation_time": created, "product": product}
 
 
 class _Base(unittest.TestCase):
@@ -238,6 +239,121 @@ class TestDuplicates(_Base):
         res = self._file(comment_on_existing=False)
         self.assertFalse(res["filed"])
         self.assertEqual((self.created, self.comments), ([], []))
+
+
+class TestOtherApplications(_Base):
+    """Every application built on mozilla-central shares our signatures; none of them shares
+    our crashes.
+
+    Crash 05381864 (Firefox nightly 155, `mozilla::ipc::FatalError | ... |
+    nsDocShellLoadState::nsDocShellLoadState`) had exactly ONE open bug anywhere on BMO for its
+    signature: 2057980, `MailNews Core :: Networking: Exchange`, a Thunderbird 153 crash
+    triggered by a proprietary Exchange add-on, filed 16 days before the suspected regressor
+    landed — so the age rule accepted it and the regression was reported into a Thunderbird bug,
+    needinfo included."""
+
+    def test_a_thunderbird_bug_is_not_a_venue_for_a_firefox_crash(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2057980, product="MailNews Core")]
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (999, "new_bug"))
+        self.assertEqual(self.comments, [])
+        self.assertEqual(res["other_app_bugs"], [2057980])
+
+    def _one(self, bug):
+        """One filing against a single open bug, from a clean slate."""
+        for recorded in (self.created, self.comments, self.puts, self.filed):
+            recorded.clear()
+        bugzilla_apply._open_bugs_for_signature.return_value = [bug]
+        return self._file()
+
+    def test_every_other_gecko_application_is_excluded(self):
+        for product in ("Thunderbird", "MailNews Core", "Calendar", "Chat Core", "SeaMonkey"):
+            with self.subTest(product=product):
+                self.assertEqual(self._one(_bug(2057980, product=product))["mode"], "new_bug")
+                self.assertEqual(self.comments, [])
+
+    def test_a_firefox_side_bug_still_gets_the_comment(self):
+        # The whole Firefox side is defined by exclusion, so anything not named as another
+        # application's remains a venue — Core here, but equally Toolkit, GeckoView, NSS.
+        for product in ("Core", "Firefox", "Toolkit", "GeckoView", "Fenix"):
+            with self.subTest(product=product):
+                res = self._one(_bug(12345, product=product))
+                self.assertEqual((res["bug"], res["mode"]), (12345, "comment_on_existing"))
+                self.assertNotIn("other_app_bugs", res)
+
+    def test_a_bug_with_no_product_is_still_a_venue(self):
+        # Only a positively identified foreign product may cost a bug its venue: every default
+        # in the filer is to comment, and an include_fields change must not silently start
+        # filing duplicates.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345, product=None)]
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_the_new_bug_cross_references_what_it_filed_past(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2057980, product="MailNews Core")]
+        with mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        side_effect=lambda *a, **kw: dict(_PREVIEW, other=kw["other_app_bugs"])
+                        ) as preview:
+            self._file()
+        self.assertEqual([b["id"] for b in preview.call_args.kwargs["other_app_bugs"]],
+                         [2057980])
+
+    def test_a_comment_venue_needs_no_cross_reference(self):
+        # Both an old Thunderbird bug and a usable Core one: we comment on ours and the filed
+        # bug that would have explained itself does not exist.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2057980, product="MailNews Core"), _bug(12345, product="Core")]
+        with mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        return_value=_PREVIEW) as preview:
+            res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (12345, "comment_on_existing"))
+        self.assertIsNone(preview.call_args.kwargs["other_app_bugs"])
+
+    def test_comment_on_existing_off_is_not_tripped_by_another_application(self):
+        # The kill-switch means "an open bug exists, do not write". Somebody else's open bug is
+        # not one, and counting it would have turned this fix into a silently unfiled crash.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2057980, product="MailNews Core")]
+        res = self._file(comment_on_existing=False)
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "new_bug")
+
+    def test_the_split_is_keyed_on_the_crashing_application(self):
+        # Symmetric by construction: a product is foreign to every application but its own.
+        tb = _bug(2057980, product="MailNews Core")
+        self.assertEqual(bugzilla_apply._split_by_application([tb], "Firefox"), ([], [tb]))
+        self.assertEqual(bugzilla_apply._split_by_application([tb], "Thunderbird"), ([tb], []))
+        # An unknown crash product exempts nobody — a missing product cannot switch this off.
+        self.assertEqual(bugzilla_apply._split_by_application([tb], None), ([], [tb]))
+
+
+class TestTheLookupCarriesTheProduct(unittest.TestCase):
+    """The venue filter is blind unless BMO is asked for the product, and that request is the
+    one place it can be lost."""
+
+    def test_the_search_asks_for_it_and_the_rows_carry_it(self):
+        params = []
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"bugs": [{"id": 2057980, "product": "MailNews Core",
+                                  "creation_time": "2026-07-27T07:40:41Z"}]}
+
+        def fake_get(url, **kw):
+            params.append(kw.get("params"))
+            return _Resp()
+
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=fake_get):
+            rows = bugzilla_apply._open_bugs_for_signature("mozilla::ipc::FatalError | Foo::Bar")
+        self.assertIn("product", params[0]["include_fields"])
+        self.assertEqual(rows, [{"id": 2057980, "product": "MailNews Core",
+                                 "creation_time": "2026-07-27T07:40:41Z"}])
 
 
 # Bug 1798397 (`Crash in [@ nsAtom::IsStatic]`, open since 2022, its own comments proposing

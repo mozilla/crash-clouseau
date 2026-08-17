@@ -1626,6 +1626,83 @@ class TestBugPreview(unittest.TestCase):
                 {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly")
         self.assertEqual(pc, ("Toolkit", "Y"))             # newest wins the tie
 
+    def test_resolve_pc_refuses_another_applications_component(self):
+        # A mozilla-central changeset written FOR a Thunderbird bug is a normal thing — that is
+        # most of what MailNews Core is — and inheriting its component drops a Firefox crash on
+        # Thunderbird's triage queue. Unresolvable is the right answer: autofile_bug then
+        # refuses to file at all, which this module prefers to filing into the wrong component.
+        with mock.patch.object(report_bug, "_bugs_product_component",
+                               return_value={123: ("MailNews Core", "Networking: Exchange")}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author", return_value=[]):
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n"}, "nightly", "Firefox")
+        self.assertEqual(pc, (None, None))
+
+    def test_resolve_pc_drops_foreign_pairs_from_the_author_fallback(self):
+        # The fallback tallies the author's recent bugs, and a comm-central-adjacent author's
+        # most FREQUENT component is exactly the one that must not win.
+        def fake_pc(bugids):
+            bugids = list(bugids)
+            if bugids == [123]:
+                return {}                                  # regressor unreadable
+            return {1: ("MailNews Core", "Backend"), 2: ("MailNews Core", "Backend"),
+                    3: ("Core", "DOM: Navigation")}
+        with mock.patch.object(report_bug, "_bugs_product_component", side_effect=fake_pc), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
+                           return_value=[1, 2, 3]):
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly", "Firefox")
+        self.assertEqual(pc, ("Core", "DOM: Navigation"))
+
+    def test_resolve_pc_with_no_crash_product_exempts_nobody(self):
+        # The gate must not be switchable off by an absent product (page previews and old
+        # dossiers both reach here without one).
+        with mock.patch.object(report_bug, "_bugs_product_component",
+                               return_value={123: ("Thunderbird", "General")}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author", return_value=[]):
+            self.assertEqual(
+                report_bug.resolve_product_component({"bug": 123, "node": "n"}, "nightly"),
+                (None, None))
+
+    def test_the_other_app_note_cross_references_the_bug_it_filed_past(self):
+        note = report_bug.build_other_app_bugs_note(
+            [{"id": 2057980, "product": "MailNews Core"}])
+        self.assertIn("bug 2057980 references this signature too", note)
+        self.assertIn("it is filed in MailNews Core", note)
+        self.assertIn("please duplicate if it is the same defect", note)
+
+    def test_the_other_app_note_is_absent_by_default(self):
+        # Every page preview and every hand-drafted bug comes through here with none.
+        for other in (None, [], [None], [{}]):
+            with self.subTest(other=other):
+                self.assertEqual(report_bug.build_other_app_bugs_note(other), "")
+
+    def test_the_other_app_note_agrees_with_itself_in_the_plural(self):
+        two = report_bug.build_other_app_bugs_note(
+            [{"id": 1, "product": "MailNews Core"}, {"id": 2, "product": "SeaMonkey"}])
+        self.assertIn("bug 1, bug 2 reference this signature too", two)
+        self.assertIn("they are filed in MailNews Core, SeaMonkey", two)
+        self.assertIn("other applications", two)
+
+    def test_the_draft_url_keeps_socorros_product_over_a_foreign_one(self):
+        # The legacy hand-draft path: Socorro pre-fills the product from the CRASH, and the
+        # regressor bug may only refine it, never move it to another application.
+        socorro = {"product": ["Firefox"], "component": ["General"], "keywords": ["crash"]}
+        foreign = {"bugs": [{"product": "MailNews Core", "component": "Networking: Exchange",
+                             "assigned_to": "dev@x.com"}]}
+        query = dict(socorro)
+        self.assertEqual(report_bug.improve(query, foreign, 123, product="Firefox"), "dev@x.com")
+        self.assertEqual((query["product"], query["component"]), (["Firefox"], ["General"]))
+        self.assertEqual(query["blocked"], "clouseau,123")      # the rest still happens
+        ours = {"bugs": [{"product": "Core", "component": "DOM: Navigation",
+                          "assigned_to": "dev@x.com"}]}
+        query = dict(socorro)
+        report_bug.improve(query, ours, 123, product="Firefox")
+        self.assertEqual((query["product"], query["component"]), ("Core", "DOM: Navigation"))
+
     def test_resolve_pc_none_when_unresolvable(self):
         with mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
                 mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \

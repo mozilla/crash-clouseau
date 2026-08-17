@@ -141,6 +141,35 @@ def get_bugzilla_token():
     return libmozdata.config.get("Bugzilla", "token", "") or ""
 
 
+# BMO products belonging to an application OTHER than the one whose crashes we triage, keyed
+# by that application. Every one of them is built on mozilla-central, so every one of them
+# shares our crash SIGNATURES — and nothing on a Bugzilla bug says which application crashed:
+# not ``cf_crash_signature``, not the summary, not a regressor bug's own component.
+#
+# Defined by exclusion (the other applications) rather than by inclusion (ours) deliberately.
+# The Firefox side is twenty-odd products — Core, Firefox, Toolkit, DevTools, WebExtensions,
+# GeckoView, Fenix, NSS, External Software Affecting Firefox, the graveyards — and an inclusion
+# list that fell one product behind BMO would quietly start filing duplicates. This list is
+# short, stable, and complete in the only sense that matters: these are the only non-Firefox
+# products whose application reports crashes to Socorro at all.
+_OTHER_APP_PRODUCTS = {
+    "Thunderbird": ["Thunderbird", "MailNews Core", "Calendar", "Chat Core"],
+    "SeaMonkey": ["SeaMonkey"],
+}
+
+
+def get_other_app_products(product=None):
+    """The BMO products a bug about *product*'s crashes cannot belong to.
+
+    *product* is the crash's own Socorro product (``uuid_info["product"]``). A product the map
+    does not name — Firefox, Fenix — gets every entry, and so does ``None``: an unknown product
+    exempts nothing, so a missing one can never silently switch the check off.
+    """
+    return frozenset(
+        p for app, products in _OTHER_APP_PRODUCTS.items() if app != product for p in products
+    )
+
+
 _POPULATION_DEFAULTS = {
     "enabled": True,
     # The window reaches back to the build's date, clamped to [min, max] — see

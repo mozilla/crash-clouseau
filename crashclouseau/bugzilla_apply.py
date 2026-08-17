@@ -278,10 +278,12 @@ def _is_specific_signature(signature):
 
 
 def _open_bugs_for_signature(signature):
-    """OPEN bugs referencing *signature* as ``[{"id", "creation_time"}, ...]``, oldest first.
+    """OPEN bugs referencing *signature* as ``[{"id", "creation_time", "product"}, ...]``,
+    oldest first.
 
-    ``creation_time`` rides along because the oldest open bug is not automatically the right
-    place to comment — see ``_bug_for_this_regression``.
+    ``creation_time`` and ``product`` ride along because the oldest open bug is not
+    automatically the right place to comment — see ``_bug_for_this_regression`` for the date
+    and ``_split_by_application`` for the product.
 
     Read-only and unauthenticated (public bugs only, which is the right scope: we must not
     reason about a security bug we can only see because the filing account can).
@@ -300,7 +302,7 @@ def _open_bugs_for_signature(signature):
         return []
     sig = signature.strip()
     params = {
-        "include_fields": "id,summary,status,resolution,creation_time",
+        "include_fields": "id,summary,status,resolution,creation_time,product",
         "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
         "resolution": "---",
     }
@@ -316,10 +318,36 @@ def _open_bugs_for_signature(signature):
         logger.warning("autofile: signature bug lookup failed for %r: %s", signature, exc)
         return None
     return [
-        {"id": b["id"], "creation_time": b.get("creation_time")}
+        {"id": b["id"], "creation_time": b.get("creation_time"),
+         "product": b.get("product")}
         for b in sorted(bugs, key=lambda b: b.get("id", 0))
         if b.get("id")
     ]
+
+
+def _split_by_application(bugs, product):
+    """``(venues, other_app)`` — the open bugs that can be about a *product* crash, and the
+    ones that belong to a different application built on Gecko.
+
+    Gecko is shared, so the signature is shared; the crash is not. Crash
+    ``05381864-aa6e-402f-a1fd-56a3e0260816`` (Firefox nightly 155) had exactly ONE open bug
+    anywhere on BMO for its signature — 2057980, ``MailNews Core :: Networking: Exchange``, a
+    Thunderbird 153 crash triggered by a proprietary Exchange add-on and already understood
+    there — and the age test happily accepted it, so the regression was reported into a
+    Thunderbird bug, needinfo included. Same Gecko assertion, different application, different
+    cause, and a team with no reason to read it.
+
+    Not a duplicate risk either, which is what makes this a clean drop rather than a trade: a
+    Firefox crash bug and a Thunderbird crash bug on one shared signature are two bugs by
+    construction. The new bug cross-references what it filed past
+    (``report_bug.build_other_app_bugs_note``).
+
+    A bug with NO product counts as a venue. The caller's every default is to comment, so this
+    may only drop what it can positively identify as somebody else's."""
+    foreign = config.get_other_app_products(product)
+    ours = [b for b in bugs or [] if (b.get("product") or "") not in foreign]
+    theirs = [b for b in bugs or [] if (b.get("product") or "") in foreign]
+    return ours, theirs
 
 
 def _candidate_landed(dossier, channel):
@@ -499,9 +527,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       orphan reaper re-runs a crashed run and would otherwise re-file on recovery;
     * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
       is a nuisance while a bad gate at 300/day is an incident;
-    * if an OPEN bug already references the signature AND that bug can be about this
-      regression (``_bug_for_this_regression``), comment there instead of filing a duplicate —
-      and if that lookup FAILS we skip entirely rather than risk the duplicate.
+    * if an OPEN bug already references the signature AND that bug belongs to this crash's own
+      application (``_split_by_application``) AND it can be about this regression
+      (``_bug_for_this_regression``), comment there instead of filing a duplicate — and if that
+      lookup FAILS we skip entirely rather than risk the duplicate.
 
     ``regressed_by`` is still not set (see ``report_bug.build_bug_preview``): the suspected
     regressor is named in the comment prose, where a human can weigh it, and the needinfo
@@ -554,6 +583,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     existing = _open_bugs_for_signature(signature)
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
+    # An open bug on this signature that belongs to ANOTHER application built on Gecko is not
+    # a venue, however well it matches (``_split_by_application``) — and it must not read as
+    # "an open bug exists" to the check below either, or a Thunderbird-only match would skip
+    # the filing outright.
+    existing, other_app = _split_by_application(existing, uuid_info.get("product"))
+    if other_app:
+        logger.info("autofile: open bug(s) %s reference this signature but belong to another "
+                    "application (%s) — not a venue for a %s crash",
+                    [b["id"] for b in other_app],
+                    ", ".join(sorted({b.get("product") or "?" for b in other_app})),
+                    uuid_info.get("product") or "?")
     if existing and not cfg["comment_on_existing"]:
         return {"filed": False, "skipped": "open bug {} exists".format(existing[0]["id"])}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
@@ -574,6 +614,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         preview = report_bug.build_bug_preview(
             uuid_info, stack, dossier,
             related_bugs=predating if bug_id is None else None,
+            other_app_bugs=other_app if bug_id is None else None,
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
@@ -622,6 +663,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             # rows are how we would find out.
             if predating:
                 result["predating_bugs"] = predating
+            # Same audit trail for the other reason we file past an open bug: it is somebody
+            # else's application. If that judgement is ever wrong, these rows are how we find
+            # out — the mistake it replaces was invisible from every side but the bug's.
+            if other_app:
+                result["other_app_bugs"] = [b["id"] for b in other_app]
             # Blockers need a second call — create discards them silently (see
             # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
             wanted = preview.get("blocked") or []

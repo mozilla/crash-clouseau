@@ -184,6 +184,21 @@ class TestBugzillaTool(unittest.TestCase):
         self.assertIn("bug 10 [RESOLVED DUPLICATE]", out)
         self.assertEqual(_FakeBugzilla.last["params"]["v1"], "Foo::Bar")   # scoped to the signature
 
+    def test_signature_bugs_name_the_product(self):
+        # Every application built on mozilla-central shares Gecko's signatures, and this search
+        # spans all of BMO: without the product the model cannot tell a Firefox bug from the
+        # Thunderbird one that matched (bug 2057980, `MailNews Core :: Networking: Exchange`).
+        _FakeBugzilla.BUGS = {
+            2057980: {"id": 2057980, "summary": "opening PDF", "status": "NEW", "resolution": "",
+                      "product": "MailNews Core", "component": "Networking: Exchange"},
+        }
+        with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):
+            out = asyncio.run(signature_bugs(BugzillaCtx(), "Foo::Bar"))
+        self.assertIn("bug 2057980 [NEW] MailNews Core :: Networking: Exchange — opening PDF",
+                      out)
+        for field in ("product", "component"):
+            self.assertIn(field, _FakeBugzilla.last["params"]["include_fields"])
+
     def test_signature_bugs_none(self):
         _FakeBugzilla.BUGS = {}
         with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):

@@ -43,12 +43,18 @@ def get_bz_query(data):
     return {}
 
 
-def improve(query, bzdata, bugid):
-    """Improve the Bugzilla query we found with other useful info"""
+def improve(query, bzdata, bugid, product=None):
+    """Improve the Bugzilla query we found with other useful info.
+
+    The regressor bug's product::component is adopted only when it belongs to the crashing
+    application. A mozilla-central changeset written for a Thunderbird bug would otherwise
+    retarget this draft at ``MailNews Core``, overriding the product Socorro itself pre-filled
+    from the crash — see ``config.get_other_app_products``."""
     if "bugs" in bzdata and len(bzdata["bugs"]) == 1:
         bzdata = bzdata["bugs"][0]
-        query["product"] = bzdata["product"]
-        query["component"] = bzdata["component"]
+        pc = (bzdata.get("product"), bzdata.get("component"))
+        if all(pc) and pc[0] not in config.get_other_app_products(product):
+            query["product"], query["component"] = pc
         query["keywords"] = "{},regression".format(query["keywords"][0])
         query["blocked"] = "clouseau,{}".format(bugid)
         return bzdata["assigned_to"]
@@ -150,7 +156,7 @@ async def get_info_helper(uuid, changeset, evidence_summary=None):
     bzquery = get_bz_query(r1.text)
     first, stats = get_stats(r3.json(), int(info["buildid"]))
     bzdata = r2.json() if bugid else {}
-    ni = improve(bzquery, bzdata, bugid)
+    ni = improve(bzquery, bzdata, bugid, product=info.get("product"))
     url = finalize_comment(
         bzquery, first, stats, info, changeset, bugid, evidence_summary=evidence_summary
     )
@@ -470,6 +476,7 @@ def build_bug_comment(
     version=None,
     needinfo=None,
     related_bugs=None,
+    other_app_bugs=None,
     max_frames=_MAX_PREVIEW_FRAMES,
 ):
     """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
@@ -481,7 +488,8 @@ def build_bug_comment(
     4. one sentence on how much this signature is crashing;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
-    7. why this is a new bug rather than a comment on ``related_bugs``, when there are any;
+    7. why this is a new bug rather than a comment on ``related_bugs`` /
+       ``other_app_bugs``, when there are any;
     8. the needinfo ask.
 
     Sections with no data are dropped, never emitted empty."""
@@ -502,6 +510,7 @@ def build_bug_comment(
         build_code_references((dossier or {}).get("verdict"), channel),
         build_skeptic_block(dossier),
         build_related_bugs_note(related_bugs),
+        build_other_app_bugs_note(other_app_bugs),
         needinfo,
         _PROVENANCE,
     ]
@@ -538,6 +547,36 @@ def build_related_bugs_note(related_bugs):
             "which is" if len(bugs) == 1 else "which are",
             "it was" if len(bugs) == 1 else "they were",
             "it" if len(bugs) == 1 else "they",
+        )
+    )
+
+
+def build_other_app_bugs_note(other_app_bugs):
+    """Cross-reference the open bugs on this signature that belong to ANOTHER application built
+    on Gecko, or ``""``.
+
+    Same purpose as ``build_related_bugs_note`` and a different reason: those bugs predate the
+    cause, these ones are somebody else's product (``bugzilla_apply._split_by_application``).
+    Worth saying rather than silently dropping, because the shared signature IS a real link —
+    bug 2057980 spent a day settling whether ``nsDocShellLoadState`` was Thunderbird's or
+    Gecko's — and a second bug on a live signature otherwise just looks like a broken
+    deduplicator.
+
+    Rows are ``{"id", "product", ...}`` as the lookup returns them; the application is named
+    through its product, which is what BMO actually gives us."""
+    bugs = [b for b in (other_app_bugs or []) if (b or {}).get("id")]
+    if not bugs:
+        return ""
+    products = sorted({b.get("product") for b in bugs if b.get("product")})
+    return (
+        "{} {} this signature too, but {} filed in {} — {} built on the same Gecko, which "
+        "shares the signature and not this crash. Filed here rather than commented there; "
+        "please duplicate if it is the same defect.".format(
+            ", ".join("bug {}".format(b["id"]) for b in bugs),
+            "references" if len(bugs) == 1 else "reference",
+            "it is" if len(bugs) == 1 else "they are",
+            ", ".join(products) or "another product",
+            "another application" if len(products) < 2 else "other applications",
         )
     )
 
@@ -631,20 +670,34 @@ def _first_email(author):
     return author if ("@" in author and " " not in author) else ""
 
 
-def resolve_product_component(candidate, channel):
+def resolve_product_component(candidate, channel, product=None):
     """``(product, component)`` for the bug we would file, best-effort + never raises:
 
     1. the REGRESSOR bug's own product::component;
     2. if that bug is unreadable (e.g. a security regressor bug), the MOST FREQUENT
        product::component across the regressor author's recent patches' bugs;
     3. ``(None, None)`` when neither resolves.
-    """
+
+    A pair belonging to another application built on Gecko is never returned, at either rung:
+    a mozilla-central changeset is regularly written FOR a Thunderbird bug — that is what
+    ``MailNews Core`` mostly is — and inheriting its component would drop a Firefox crash on
+    Thunderbird's triage queue. ``product`` is the crash's own Socorro product; leaving it
+    unset exempts nobody (``config.get_other_app_products``).
+
+    Resolving to nothing is an acceptable outcome of that, not a failure to paper over:
+    ``bugzilla_apply.autofile_bug`` refuses to file without a pair, which is this module's
+    standing preference over filing into a component that has no idea why it got the bug."""
     if not candidate:
         return None, None
+    foreign = config.get_other_app_products(product)
     try:
         bug = candidate.get("bug")
         if bug:
             pc = _bugs_product_component([bug]).get(int(bug))
+            if pc and pc[0] in foreign:
+                logger.info("bug preview: regressor bug %s lives in %s, another application's "
+                            "product — not filing a %s crash there", bug, pc[0], product or "?")
+                pc = None
             if pc:
                 return pc
         node = candidate.get("node")
@@ -652,7 +705,8 @@ def resolve_product_component(candidate, channel):
         email = info.get("email") or _first_email(candidate.get("author"))
         if email:
             bugs = models.Node.recent_bugs_by_author(email, channel)
-            pcs = _bugs_product_component(bugs)
+            pcs = {b: pc for b, pc in _bugs_product_component(bugs).items()
+                   if pc[0] not in foreign}
             if pcs:
                 # Tally in recent_bugs_by_author's NEWEST-FIRST order (not the cache's
                 # cache-hits-first dict order): Counter.most_common breaks a count tie by
@@ -1047,7 +1101,7 @@ def _bug_version(channel):
     return "Trunk" if (channel or "").lower() == "nightly" else "unspecified"
 
 
-def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
+def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -1059,10 +1113,12 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
     product/component are best-effort from the regressor (``resolve_product_component``).
     Returns ``None`` when there is no candidate regressor to file a bug against.
 
-    ``related_bugs`` are open bugs on this signature that the automatic filer decided NOT to
-    comment on because they predate the suspected regressor; passing them puts the reason in
-    the bug. The page preview passes none — it does not know, because deciding needs a
-    Bugzilla search and a changeset's landing date, neither of which belongs in a render.
+    ``related_bugs`` and ``other_app_bugs`` are open bugs on this signature that the automatic
+    filer decided NOT to comment on — the first because they predate the suspected regressor,
+    the second because they belong to another application built on Gecko; passing them puts the
+    reason in the bug. The page preview passes neither — it does not know, because deciding
+    needs a Bugzilla search and a changeset's landing date, neither of which belongs in a
+    render.
 
     The metadata below ``component`` is what a hand-filed crash bug carries and what
     ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO,
@@ -1082,7 +1138,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
         return None
     channel = uuid_info.get("channel")
     uuid = uuid_info.get("uuid", "")
-    product, component = resolve_product_component(candidate, channel)
+    product, component = resolve_product_component(
+        candidate, channel, uuid_info.get("product"))
     person = _needinfo_person(candidate, channel)
     # Version lives on the build row, not on the page's uuid_info; best-effort, and the
     # stats sentence simply omits it when unavailable.
@@ -1109,6 +1166,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None):
             version=version,
             needinfo=_needinfo_line(person),
             related_bugs=related_bugs,
+            other_app_bugs=other_app_bugs,
         ),
         "product": product,
         "component": component,

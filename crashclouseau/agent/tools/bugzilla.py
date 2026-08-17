@@ -26,7 +26,7 @@ _BUG_FIELDS = [
     "id", "summary", "status", "resolution", "product", "component",
     "keywords", "regressed_by", "regressions", "dupe_of",
 ]
-_SEARCH_FIELDS = ["id", "summary", "status", "resolution"]
+_SEARCH_FIELDS = ["id", "summary", "status", "resolution", "product", "component"]
 _MAX_SIG_BUGS = 15
 
 
@@ -88,7 +88,13 @@ async def signature_bugs(
 ) -> str:
     """Find existing Bugzilla bugs whose crash-signature field matches this signature. Use it
     to see whether the crash is already reported / known — reuse prior analysis and avoid a
-    duplicate — before proposing a fresh mechanism. Read-only."""
+    duplicate — before proposing a fresh mechanism. Read-only.
+
+    Each row names the bug's product::component, and you have to read it: every application
+    built on mozilla-central (Thunderbird — ``MailNews Core``, ``Calendar``, ``Chat Core`` —
+    and SeaMonkey) shares Gecko's crash signatures, so a matching bug in one of THEIR products
+    is a different application's crash population with its own cause, however well the stack
+    matches. It is context, not this crash's bug."""
     params = {
         "include_fields": _SEARCH_FIELDS,
         "f1": "cf_crash_signature", "o1": "substring", "v1": signature,
@@ -102,7 +108,10 @@ async def signature_bugs(
     rows = []
     for b in sorted(data.values(), key=lambda x: x.get("id", 0), reverse=True)[:_MAX_SIG_BUGS]:
         state = "{} {}".format(b.get("status", ""), b.get("resolution", "") or "").strip()
-        rows.append("bug {} [{}] — {}".format(b.get("id"), state, b.get("summary", "")))
+        where = " {} :: {}".format(b["product"], b.get("component", "?")) \
+            if b.get("product") else ""
+        rows.append("bug {} [{}]{} — {}".format(
+            b.get("id"), state, where, b.get("summary", "")))
     return "\n".join(rows)
 
 
