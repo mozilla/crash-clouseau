@@ -32,7 +32,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from crashclouseau import config
+from crashclouseau import config, sigage
 from crashclouseau.agent import roles
 from crashclouseau.logger import logger
 from crashclouseau.agent.errors import MissingHandoffError
@@ -216,6 +216,87 @@ def _bit_flip_summary(info: dict) -> str:
     return "; ".join(parts)
 
 
+def _cpu_summary(raw: dict, sysinfo: dict) -> str:
+    """The crashing machine's CPU, with a warning when the silicon itself is the likely culprit.
+
+    THE FIELD USED TO BE UNREACHABLE. This line was ``("CPU arch", _first_present(cpu_arch, ...,
+    cpu_info, ...))`` — and ``cpu_arch`` is populated on essentially every crash, so the
+    ``cpu_info`` fallbacks behind it could never be taken and the agent has never once seen which
+    processor a crash came from. Timothy Nikkel, on bug 2064600: "there is also several of the
+    known buggy family 6 model 183 stepping 1 without a bit flip annotation. Something else you
+    might want to add to your llm prompt. I always look for these two things in crash reports."
+    The first of his two things was already here; the second was three fallbacks deep in a
+    ``_first_present`` that always short-circuited before reaching it.
+
+    ``amd64`` and ``family 6 model 183 stepping 1`` answer different questions, so both are
+    shown rather than the first one found."""
+    arch = _first_present(raw.get("cpu_arch"), sysinfo.get("cpu_arch"))
+    info = _first_present(raw.get("cpu_info"), sysinfo.get("cpu_info"))
+    parts = [str(p) for p in (arch, info) if p]
+    if not parts:
+        return ""
+    out = ", ".join(parts)
+    if str(info or "").strip() in sigage.BROKEN_CPUS:
+        # Kept short deliberately: `_short_value` truncates every fact at 300 chars, and the
+        # warning is the part that must survive next to a 36-char CPU string.
+        out += (" — KNOWN-DEFECTIVE CPU (Intel Raptor Lake, meta bug 1975808): its documented "
+                "instability corrupts computation on correct software, so a wild pointer or "
+                "impossible state here may be the processor, not the code.")
+    return out
+
+
+def _hardware_noise_lines(crash: dict) -> list[str]:
+    """How much of this SIGNATURE is hardware error, as prompt lines, or ``[]``.
+
+    THE SECOND HALF OF THE BUG-2064600 FIX, and the half that needed a new measurement. The
+    ``POSSIBLE BIT FLIP`` fact above reads the ONE report being triaged. Timothy Nikkel's reply
+    to that filing was about the signature: "About 50% of the crashes with this signature have
+    non-zero bit flip probability. That might be something you want to include in your llm prompt
+    to consider." He was right, and the report we had triaged was clean on both counts — no flip
+    annotation, an ordinary Rocket Lake CPU — so nothing a per-report check could ever read would
+    have revealed that 71% of the signature is hardware noise.
+
+    Stated WITH the population rate, because a bare "50%" is unreadable: a model cannot know
+    whether that is alarming without knowing that nightly as a whole runs at 2.5%.
+
+    Ends on the question Nikkel says comes next — "Determining if there is a signal in the
+    remaining crashes that isn't hardware error is the next step" — because that, and not
+    "is this signature noisy", is the thing the agent is actually being asked to decide.
+
+    THE BLIND SECOND OPINION GETS THESE TOO, via the shared ``_crash_facts``, and that is
+    deliberate: it is the ``_archetype_lines`` reasoning in reverse. An archetype is a suggested
+    DIRECTION, so priming both models with it would correlate their mistakes; this is a FACT that
+    both were blind to, and the original bit-flip fix established that the right move there is to
+    tell both. A second opinion that independently re-derives a use-after-free story from a
+    corrupted address is not independent, it is uninformed."""
+    noise = crash.get("hardware_noise") or {}
+    sample = noise.get("reports")
+    flip = noise.get("bit_flip_rate")
+    cpu = noise.get("broken_cpu_rate")
+    if not sample or (flip is None and cpu is None):
+        return []
+    bits = []
+    if flip is not None:
+        bits.append("{:.0f}% carry a Socorro bit-flip annotation (crash population: "
+                    "{:.0f}%)".format(100 * flip, 100 * sigage.POPULATION_BIT_FLIP_RATE))
+    if cpu is not None:
+        bits.append("{:.0f}% come from a known-defective Intel Raptor Lake CPU (family 6 model "
+                    "183 stepping 1, meta bug 1975808; crash population: {:.0f}%)".format(
+                        100 * cpu, 100 * sigage.POPULATION_BROKEN_CPU_RATE))
+    return [
+        "",
+        "HARDWARE-ERROR SHARE OF THIS SIGNATURE, on this crash's own channel over the last "
+        "year. Of its {} reports, {}. The two rarely overlap, so they add up.".format(
+            sample, "; and ".join(bits)),
+        "What to do with that: the higher these are, the likelier it is that this signature is "
+        "a failing-hardware artefact with no software defect behind it at all, and that any "
+        "mechanism you can construct for it will be fiction that fits. Say so plainly if you "
+        "think that is what you are looking at. If you do still believe there is a real bug "
+        "here, the burden is to show a signal in the crashes that are NOT hardware error — this "
+        "report's own CPU and bit-flip fields above are the first place to check.",
+    ]
+
+
 def _archetype_lines(crash: dict) -> list[str]:
     """Learned archetypes matching this crash (``models.Archetype``), as prompt lines, or ``[]``.
 
@@ -265,6 +346,11 @@ def _crash_facts(crash: dict) -> list[str]:
     environment facets (OS / CPU / process type / GPU) that let the agent disambiguate
     candidates off-stack — e.g. a Windows-only or GPU-driver regressor for a Windows/GPU
     crash (the RULES_REPORT bug-2014723 data gap).
+
+    Shared verbatim with the blind second opinion (``second_opinion._user_prompt``), which is
+    why the bug-2064600 hardware block lives here rather than in the triage prompt beside
+    ``_archetype_lines``: an archetype is a suggested direction and must not prime the
+    independent reviewer, whereas a fact both models are blind to has to reach both of them.
     """
     raw = crash.get("raw_crash") or {}
     dump = raw.get("json_dump") or {}
@@ -281,10 +367,7 @@ def _crash_facts(crash: dict) -> list[str]:
             " ".join(v for v in (raw.get("os_name"), raw.get("os_version")) if v).strip(),
             sysinfo.get("os"),
         )),
-        ("CPU arch", _first_present(
-            raw.get("cpu_arch"), sysinfo.get("cpu_arch"),
-            raw.get("cpu_info"), sysinfo.get("cpu_info"),
-        )),
+        ("CPU", _cpu_summary(raw, sysinfo)),
         ("Process type", raw.get("process_type")),
         ("GPU", _gpu_summary(raw)),
         ("Crash type", _first_present(info.get("type"), raw.get("reason"))),
@@ -316,6 +399,9 @@ def _crash_facts(crash: dict) -> list[str]:
         value = _short_value(value)
         if value:
             lines.append(f"{label}: {value}")
+    # Signature-level, and therefore last: everything above describes THIS report, and the point
+    # of the block below is that the report can look clean while the signature does not.
+    lines += _hardware_noise_lines(crash)
     return lines
 
 

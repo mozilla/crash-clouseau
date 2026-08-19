@@ -658,7 +658,40 @@ def build_seed(uuid):
         # What else the machine that produced this crash has been crashing on — the bad-machine
         # gate's input (`machine.install_history`). Every value None when unknown.
         "install_history": _install_history(raw_crash),
+        # What share of this SIGNATURE is hardware error rather than a software defect — the
+        # signature-level half of the bit-flip gate (`sigage.hardware_noise`). All None when
+        # unknown.
+        "hardware_noise": _hardware_noise(info, channel),
     }
+
+
+def _hardware_noise(info, channel):
+    """This signature's hardware-error share, for ``_apply_bit_flip_gate``.
+
+    ONE SuperSearch, alongside the two the seed already makes. Asked only when the gate that
+    consumes it is on, and never raises — an unknown share leaves every verdict alone.
+
+    Scoped to the crash's OWN product and channel, which is the whole rule rather than a
+    refinement: measured over the canary's first 47 filings, the same thresholds applied to an
+    all-products/all-channels rate suppress bug 2062219 (``nsAtom::IsStatic``, RESOLVED FIXED),
+    because release carries years of failing consumer hardware on a hot signature. See
+    ``sigage.hardware_noise``. Passing the channel through rather than defaulting also keeps this
+    correct for the non-Firefox products the pipeline is being extended to."""
+    empty = {"reports": None, "bit_flip_reports": None, "broken_cpu_reports": None,
+             "bit_flip_rate": None, "broken_cpu_rate": None}
+    if not config.get_agent_bit_flip()["enabled"]:
+        return empty
+    try:
+        from crashclouseau import sigage
+
+        return sigage.hardware_noise(
+            info.get("signature", ""),
+            product=info.get("product") or "Firefox",
+            channel=channel or "nightly",
+        )
+    except Exception as exc:                            # pragma: no cover - never break a seed
+        logger.warning("agent: hardware-noise lookup failed: %s", exc)
+        return empty
 
 
 def _install_history(raw_crash):
@@ -1585,8 +1618,24 @@ def _record_window_membership(dossier, seed):
     }
 
 
+def _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
+    """Has this signature's hardware-error share cleared bugbot's line, on a big enough sample?
+
+    Both rate tests are POSITIVE requirements and the sample test is a floor, so every unknown
+    (a failed ``sigage.hardware_noise`` leaves all three ``None``) answers False and the verdict
+    is reported. Either rate alone is enough: the two signals are nearly disjoint, so requiring
+    both would miss each other's cases: measured over the canary's filings, bug 2064600 trips only
+    the flip rate (50% flips, 17% Raptor Lake) and `js::jit::CompilerFrameInfo::sync` trips only
+    the CPU rate (0% flips, 71% Raptor Lake)."""
+    if sample is None or sample < cfg["min_signature_reports"]:
+        return False
+    if flip_rate is not None and flip_rate >= cfg["max_bit_flip_rate"]:
+        return True
+    return cpu_rate is not None and cpu_rate >= cfg["max_broken_cpu_rate"]
+
+
 def _apply_bit_flip_gate(dossier, seed):
-    """SUPPRESS a verdict whose crash was probably a HARDWARE bit flip: there is no bug at all.
+    """SUPPRESS a verdict whose crash was probably HARDWARE, not software: there is no bug at all.
 
     Bug 2061961 is why. Crash ff888d42-ce3e-4308-8c2f-b3f060260807 faulted at
     ``0x00000001000000d0`` — one flipped bit from ``0xd0``, i.e. a NULL base plus a struct offset,
@@ -1598,73 +1647,162 @@ def _apply_bit_flip_gate(dossier, seed):
     probable — exactly the filing threshold — and a developer was needinfo'd about a mechanical
     refactor of his. Two people closed it INVALID in two days on this one field.
 
-    THE CONJUNCTION IS THE RULE. A flip score alone is not enough: the same score is common on
-    high-volume signatures, where it means one flaky machine among many rather than a bad crash.
-    So this fires only when Socorro's confidence clears ``min_confidence`` AND the signature has
-    never crashed more than ``max_reports`` people. Of the 21 bugs the canary had filed when this
-    was written, 3 carried the field (66, 62, 25) and the rule fires on 2 — 2061961, and 2061726,
-    which is a single crash on a signature whose other reports are on RELEASE and predate the
-    nightly changeset it blames.
+    THREE INDEPENDENT TRIGGERS, in order. The first two ask about the ONE report being triaged;
+    the third asks about the signature, and they are not interchangeable — bug 2064600 is a
+    report with no flip annotation, on a healthy CPU, sitting on a signature that is mostly
+    hardware noise, and only the third sees it.
 
-    An ABSTAIN, not a downweight, for the same reason as ``_apply_backout_gate``: this is not a
+    (1) FLIP SCORE + SINGLETON, the original rule. A flip score alone is not enough: the same
+    score is common on high-volume signatures, where it means one flaky machine among many rather
+    than a bad crash. So this fires only when Socorro's confidence clears ``min_confidence`` AND
+    the signature has never crashed more than ``max_reports`` people. Of the 21 bugs the canary
+    had filed when this was written, 3 carried the field (66, 62, 25) and the rule fires on 2 —
+    2061961, and 2061726, which is a single crash on a signature whose other reports are on
+    RELEASE and predate the nightly changeset it blames.
+
+    (2) THIS MACHINE'S CPU IS DEFECTIVE + SINGLETON. ``sigage.BROKEN_CPUS`` is Intel Raptor Lake,
+    whose documented instability corrupts computation on healthy software (meta bug 1975808).
+    The SAME conjunction as (1), for the same reason and it is just as load-bearing: 4.1% of
+    nightly crash reports come from one of these machines, so suppressing on the CPU alone would
+    throw away roughly one real bug in twenty-four. Paired with "nobody else has ever hit this", it
+    identifies the case where the only evidence of a bug is one report from a machine known to
+    invent them.
+
+    (3) THE SIGNATURE IS MOSTLY HARDWARE NOISE — new, and the one bug 2064600 needed. Timothy
+    Nikkel, twenty minutes after we filed: "About 50% of the crashes with this signature have
+    non-zero bit flip probability. That might be something you want to include in your llm prompt
+    to consider. And there is also several of the known buggy family 6 model 183 stepping 1
+    without a bit flip annotation. ... I always look for these two things in crash reports."
+    Neither check was reachable from what this gate read: the flip field was consulted for the
+    triaged report only, and ``cpu_info`` was not consulted at all. Measured on that signature,
+    3 of its 6 nightly reports carry a flip annotation and 1 is a Raptor Lake, versus a nightly
+    background of 2.5% and 4.1%. ``sigage.hardware_noise`` computes both, on the crash's OWN
+    product and channel — read that function before touching the denominator, because the wider
+    one suppresses bug 2062219, which was FIXED. The thresholds are bugbot's, not ours (see
+    ``config.get_agent_bit_flip``).
+
+    AN ABSTAIN, not a downweight, for the same reason as ``_apply_backout_gate``: this is not a
     question of how confident to be in the candidate, it is that there is nothing to act on. And
     LAST, after the second-opinion fold, because no amount of independent agreement can turn a
     hardware fault into a software bug — the fold is precisely what pushed 2061961 over the line.
 
+    TRIGGER (3) IS DELIBERATELY NOT IN ``models._INSTANCE_SUPPRESSED``, and (1) and (2) are.
+    That list exists so a verdict suppressed for a reason peculiar to ONE report leaves the
+    proto-signature cluster open for the next one — a broken installation says nothing about the
+    next crash from a healthy machine. A signature that is half bit flips is not that: the finding
+    is equally true for every report in the cluster, so it closes it, exactly as the backout gate
+    does and for exactly the same reason. Getting this backwards would make us re-pay ~$3 a
+    report to re-derive the same answer forever.
+
     NOT a volume gate in disguise. A single crash is normal and is the whole point of triaging
     nightly: bug 2062119 named the wrong changeset on a one-report signature and still got a real
-    fix written. Volume only ever qualifies the flip signal here; it never suppresses on its own.
+    fix written. Volume only ever QUALIFIES a hardware signal here — in (1) and (2) as a ceiling
+    on how many people have seen the crash, in (3) as ``min_signature_reports``, a floor below
+    which a percentage computed from three reports is not evidence of anything.
 
-    Tri-state on both inputs, and both fail toward REPORTING. Socorro omits the field entirely
-    (it is never 0) when the stackwalker found no candidate, and ``signature_report_count`` is
-    ``None`` when the lookup failed — neither may read as a hit. Reads ``seed["raw_crash"]``,
-    already in hand, so no network call and a natural no-op offline where the corpus's stub
-    crashes carry no ``crash_info``. Mutates in place; never raises."""
+    Tri-state on every input, and every one fails toward REPORTING. Socorro omits the flip field
+    entirely (it is never 0) when the stackwalker found no candidate, ``signature_report_count``
+    is ``None`` when that lookup failed, ``cpu_info`` can be absent, and every
+    ``hardware_noise`` value is ``None`` when its query failed — none of them may read as a hit,
+    and the two rate tests are POSITIVE requirements so an unknown cannot satisfy them. Reads
+    only the seed, so it is a natural no-op offline where the corpus's stub crashes carry no
+    ``crash_info`` and no hardware read was ever made. Mutates in place; never raises."""
     v = dossier.verdict if dossier is not None else None
     if v is None:
         return
     cfg = config.get_agent_bit_flip()
     if not cfg["enabled"]:
         return
+    from crashclouseau import sigage
+
     raw = (seed or {}).get("raw_crash") or {}
     try:
         confidence = raw.get("possible_bit_flips_max_confidence")
         confidence = None if confidence is None else int(confidence)
     except (TypeError, ValueError):
-        return
-    if confidence is None:
-        return
+        confidence = None
     reports = (seed or {}).get("signature_report_count")
-    # Recorded for EVERY verdict, including the ones left alone: without the flag there is no way
-    # to count how often the pipeline is looking at probable hardware, which is the measurement
-    # that would settle the threshold.
-    flags = {"possible_bit_flip_confidence": confidence}
+    # `cpu_info` lives at the top level of the processed crash and again under the minidump's
+    # `system_info`; take either, because the offline corpus's stubs carry only the latter.
+    sysinfo = (raw.get("json_dump") or {}).get("system_info") or {}
+    cpu = str(raw.get("cpu_info") or sysinfo.get("cpu_info") or "").strip()
+    noise = (seed or {}).get("hardware_noise") or {}
+    sample = noise.get("reports")
+    flip_rate = noise.get("bit_flip_rate")
+    cpu_rate = noise.get("broken_cpu_rate")
+
+    # Recorded for EVERY verdict, fired or not: without the flags there is no way to count how
+    # often the pipeline is looking at probable hardware, which is the measurement that would
+    # settle these thresholds against `models.Feedback` outcomes later.
+    flags = {}
+    if confidence is not None:
+        flags["possible_bit_flip_confidence"] = confidence
     if reports is not None:
         flags["signature_report_count"] = reports
+    if cpu:
+        flags["cpu_info"] = cpu
+        flags["report_on_broken_cpu"] = cpu in sigage.BROKEN_CPUS
+    if sample is not None:
+        flags["signature_hardware_sample"] = sample
+    if flip_rate is not None:
+        flags["signature_bit_flip_rate"] = round(flip_rate, 3)
+    if cpu_rate is not None:
+        flags["signature_broken_cpu_rate"] = round(cpu_rate, 3)
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
-    if confidence < cfg["min_confidence"]:
-        return
-    if reports is None or reports > cfg["max_reports"]:
-        return
     if v.decision == Decision.abstain:
         return
-    dossier.verdict = Verdict(
-        decision=Decision.abstain,
-        confidence=Confidence.low,
-        abstain_reason=(
+
+    # "Nobody else has ever hit this", which is what makes a per-report hardware signal decisive
+    # rather than incidental. `None` (the lookup failed) is NOT a singleton.
+    singleton = reports is not None and reports <= cfg["max_reports"]
+    key = reason = None
+    if confidence is not None and confidence >= cfg["min_confidence"] and singleton:
+        key = "possible_bit_flip_suppressed"
+        reason = (
             "Socorro rates the faulting address a possible hardware BIT FLIP (confidence {}%) "
             "and this signature has only ever been reported {} time(s) — the likeliest "
             "explanation is one bad machine, not a bug anyone can fix; suppressed rather than "
             "reported".format(confidence, reports)
-        ),
+        )
+    elif flags.get("report_on_broken_cpu") and singleton:
+        key = "broken_cpu_suppressed"
+        reason = (
+            "this crash came from a {} CPU — Intel Raptor Lake, whose documented instability "
+            "corrupts computation on healthy software (meta bug 1975808) — and this signature "
+            "has only ever been reported {} time(s); the likeliest explanation is the hardware, "
+            "not a bug anyone can fix; suppressed rather than reported".format(cpu, reports)
+        )
+    elif _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
+        key = "hardware_noise_signature_suppressed"
+        reason = (
+            "this SIGNATURE is mostly hardware error, whatever this particular report looks "
+            "like: of its {} reports on this channel, {:.0f}% carry a Socorro bit-flip "
+            "annotation (nightly background {:.0f}%) and {:.0f}% come from a known-defective "
+            "Raptor Lake CPU (background {:.0f}%, meta bug 1975808). mozilla/bugbot declines to "
+            "file past these same thresholds; suppressed rather than reported".format(
+                sample, 100 * (flip_rate or 0), 100 * sigage.POPULATION_BIT_FLIP_RATE,
+                100 * (cpu_rate or 0), 100 * sigage.POPULATION_BROKEN_CPU_RATE,
+            )
+        )
+    if key is None:
+        return
+    # A NEW Verdict, not ``model_copy``: an abstain must not carry the needinfo_draft
+    # (``Verdict._consistency_rule`` rejects that outright) nor inherit ``p_worth_investigating``.
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=reason,
         mechanism=v.mechanism,
         consistency=v.consistency,
     )
-    dossier.corroborations = {**dossier.corroborations, "possible_bit_flip_suppressed": True}
+    dossier.corroborations = {**dossier.corroborations, key: True}
     logger.info(
-        "agent: possible bit flip (confidence %s, %s report(s) for this signature) -> %s/%s "
+        "agent: %s (flip conf %s, cpu %r, %s report(s), signature %s/%s hardware) -> %s/%s "
         "suppressed to abstain for %s",
-        confidence, reports, v.decision.value, v.confidence.value, (seed or {}).get("uuid"),
+        key, confidence, cpu, reports,
+        "?" if flip_rate is None else "{:.0%}".format(flip_rate),
+        "?" if cpu_rate is None else "{:.0%}".format(cpu_rate),
+        v.decision.value, v.confidence.value, (seed or {}).get("uuid"),
     )
 
 

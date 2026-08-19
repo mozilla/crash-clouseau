@@ -466,6 +466,64 @@ def fetch_signature_stats(uuid, info):
     return out
 
 
+# How far above the crash-population rate a signature's hardware-error share has to be before
+# the filed bug mentions it. 2x is a low bar on purpose: this paragraph never suppresses
+# anything (`_apply_bit_flip_gate` does that, at bugbot's much higher thresholds), it only tells
+# the reader something they would otherwise have to go and measure. Timothy Nikkel, on bug
+# 2064600: "I always look for these two things in crash reports."
+_HARDWARE_NOTE_LIFT = 2.0
+
+
+def build_hardware_note(corroborations):
+    """One paragraph on how much of this signature is hardware error, or ``""``.
+
+    WHAT BUG 2064600 SHOULD HAVE SAID. We filed a display-list crash at 97% worth-investigating;
+    Timothy Nikkel answered twenty minutes later with two facts about the signature that we had
+    not looked up and he checks by hand every time — 50% of its crashes carry a bit-flip
+    probability, and many of the rest are on the known-defective Raptor Lake CPU. Both were a
+    single Socorro aggregation away, and printing them is worth more than the paragraph costs:
+    it is the first thing the recipient will want to know, and if we are wrong about the crash
+    it is also the fastest route to finding that out.
+
+    Costs NOTHING to produce. ``_apply_bit_flip_gate`` already measured all of this and left it
+    in ``corroborations`` (see ``sigage.hardware_noise``); a bug that gets filed at all is by
+    construction one whose shares were UNDER the suppression thresholds, so this is the residual
+    doubt rather than a contradiction of the filing.
+
+    Says explicitly whether THIS report is implicated, because that is the distinction the
+    numbers otherwise hide and the one that decides what the reader should do next: on bug
+    2064600 the signature was 71% hardware and the triaged report was clean, which is precisely
+    the case Nikkel called "the next step"."""
+    c = corroborations or {}
+    sample = c.get("signature_hardware_sample")
+    flip = c.get("signature_bit_flip_rate")
+    cpu = c.get("signature_broken_cpu_rate")
+    if not sample or (flip is None and cpu is None):
+        return ""
+    from crashclouseau import sigage
+
+    parts = []
+    if flip is not None and flip >= _HARDWARE_NOTE_LIFT * sigage.POPULATION_BIT_FLIP_RATE:
+        parts.append("{:.0f}% carry a possible-bit-flip annotation (crash population: "
+                     "{:.0f}%)".format(100 * flip, 100 * sigage.POPULATION_BIT_FLIP_RATE))
+    if cpu is not None and cpu >= _HARDWARE_NOTE_LIFT * sigage.POPULATION_BROKEN_CPU_RATE:
+        parts.append("{:.0f}% come from the known-buggy Intel Raptor Lake (family 6 model 183 "
+                     "stepping 1, bug 1975808; crash population: {:.0f}%)".format(
+                         100 * cpu, 100 * sigage.POPULATION_BROKEN_CPU_RATE))
+    if not parts:
+        return ""
+    # Whether the crash we actually analysed is one of the suspect ones. Both flags are recorded
+    # for every verdict, so an absent one means "not established" and is left unsaid.
+    cpu_known = "report_on_broken_cpu" in c
+    clean = cpu_known and not c["report_on_broken_cpu"]
+    clean = clean and c.get("possible_bit_flip_confidence") is None
+    tail = (" The report analysed above is not one of them — it has no bit-flip annotation and "
+            "did not come from one of those CPUs — so if this signature is worth anything, it "
+            "is worth it on crashes like that one." if clean else "")
+    return ("Hardware-error share of this signature: of its {} reports on this channel over the "
+            "last year, {}.{}".format(sample, "; and ".join(parts), tail))
+
+
 def build_bug_comment(
     uuid_info,
     stack,
@@ -486,6 +544,7 @@ def build_bug_comment(
     2. the crash reason (``MOZ_CRASH Reason:`` for a panic, else the OS reason + address);
     3. the top ``max_frames`` frames, fenced, with the module column;
     4. one sentence on how much this signature is crashing;
+    4b. how much of the signature is hardware error, when that is above background;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
     7. why this is a new bug rather than a comment on ``related_bugs`` /
@@ -503,6 +562,7 @@ def build_bug_comment(
         build_reason_block(details),
         build_frames_block(stack, max_frames=max_frames),
         build_stats_sentence(first, stats, info),
+        build_hardware_note((dossier or {}).get("corroborations")),
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,
             corroborations=(dossier or {}).get("corroborations"),

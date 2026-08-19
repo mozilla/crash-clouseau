@@ -587,12 +587,39 @@ def get_agent_bit_flip():
     reports), so confidence ALONE would suppress busy, real crashes. Both must hold.
 
     An env kill-switch rather than a plain constant, matching ``SIGNATURE_AGE_ENABLED``: this one
-    can silence a verdict outright, so it has to be stoppable without a deploy."""
+    can silence a verdict outright, so it has to be stoppable without a deploy.
+
+    THE SIGNATURE-LEVEL HALF (bug 2064600) asks a different question with different knobs. The
+    two above read the ONE report being triaged; these read the signature, because Timothy Nikkel
+    pointed out that a signature can be mostly hardware while the particular report in hand looks
+    fine -- as his did. See ``sigage.hardware_noise`` for both measurements.
+
+    ``max_bit_flip_rate`` 0.2 and ``max_broken_cpu_rate`` 0.7 ARE NOT TUNED HERE, and that is the
+    point of choosing them: they are the two thresholds mozilla/bugbot already applies in
+    ``bugbot/crash/analyzer.py`` to decide it will not file on a signature. Clouseau filed bug
+    2064600 on a signature 50% of whose nightly reports carry a bit-flip annotation; bugbot, over
+    its own line at 0.2, would not have. Matching the numbers ends a disagreement between two filers
+    rather than inventing a third opinion, and the asymmetry between them is real -- a bit-flip
+    annotation is already a positive finding by the stackwalker, whereas merely owning a Raptor
+    Lake is common enough (4.1% of nightly reports) that it takes a landslide to mean anything.
+
+    ``min_signature_reports`` 5 is the sample floor, and it is MEASURED rather than picked. On the
+    47 bugs the canary had filed, floors of 3 and 5 give identical answers -- 0 of the 18
+    FIXED/DUPLICATE/ASSIGNED filings suppressed, the INVALID bug 2062173 caught -- while a floor
+    of 8 or more loses bug 2064600 itself, whose signature has just 6 nightly reports in a year.
+    It is far below bugbot's own low-volume line of 20 because ``sigage.hardware_noise`` counts
+    only the crash's OWN product and channel, where volumes are an order of magnitude smaller;
+    see that function for why the wider denominator is not usable (it kills bug 2062219, FIXED).
+    A floor there must be, though: below it any percentage is noise, 1 of 3 being "33%", and a
+    brand-new nightly regression is exactly the small-sample case this pipeline exists for."""
     a = get_agent().get("bit_flip", {})
     return {
         "enabled": _env_bool("BIT_FLIP_GATE_ENABLED", a.get("enabled", True)),
         "min_confidence": a.get("min_confidence", 50),
         "max_reports": a.get("max_reports", 1),
+        "min_signature_reports": a.get("min_signature_reports", 5),
+        "max_bit_flip_rate": a.get("max_bit_flip_rate", 0.2),
+        "max_broken_cpu_rate": a.get("max_broken_cpu_rate", 0.7),
     }
 
 

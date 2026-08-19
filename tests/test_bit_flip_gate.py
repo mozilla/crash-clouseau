@@ -20,7 +20,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import config  # noqa: E402
+from crashclouseau import config, sigage  # noqa: E402
 from crashclouseau.agent import orchestrator as orch, triage  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
     Candidate,
@@ -55,10 +55,12 @@ _CRASH_INFO = {
 }
 
 
-def _seed(confidence=62, reports=1, **over):
+def _seed(confidence=62, reports=1, cpu=None, **over):
     raw = {"json_dump": {"crash_info": dict(_CRASH_INFO)}}
     if confidence is not None:
         raw["possible_bit_flips_max_confidence"] = confidence
+    if cpu is not None:
+        raw["cpu_info"] = cpu
     seed = {"uuid": "u-1", "signature": "S", "channel": "nightly", "is_offstack": False,
             "raw_crash": raw, "signature_report_count": reports}
     seed.update(over)
@@ -75,9 +77,20 @@ def _lead(confidence=Confidence.probable):
 
 
 def _cfg(**over):
-    base = {"enabled": True, "min_confidence": 50, "max_reports": 1}
+    base = {"enabled": True, "min_confidence": 50, "max_reports": 1,
+            "min_signature_reports": 5, "max_bit_flip_rate": 0.2, "max_broken_cpu_rate": 0.7}
     base.update(over)
     return base
+
+
+def _noise(reports=6, flip=0.5, cpu=0.167):
+    """`sigage.hardware_noise` for bug 2064600's signature on Firefox nightly over 364 days,
+    measured 2026-08-19: 6 reports, 3 of them flip-annotated -- which is exactly the "about 50%"
+    Timothy Nikkel quoted at us."""
+    def _n(rate):
+        return None if (rate is None or reports is None) else int(reports * rate)
+    return {"reports": reports, "bit_flip_rate": flip, "broken_cpu_rate": cpu,
+            "bit_flip_reports": _n(flip), "broken_cpu_reports": _n(cpu)}
 
 
 class TestBitFlipGate(unittest.TestCase):
@@ -119,7 +132,9 @@ class TestBitFlipGate(unittest.TestCase):
         d = _lead()
         orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=1))
         self.assertEqual(d.verdict.decision, Decision.lead)
-        self.assertEqual(d.corroborations or {}, {})
+        # The report count IS recorded (three branches now qualify on it, and counting how often
+        # we triage a singleton is worth having); what must be absent is any suppression.
+        self.assertEqual(d.corroborations, {"signature_report_count": 1})
 
     def test_a_baseline_score_is_recorded_but_does_not_fire(self):
         # 25 is rust-minidump's floor -- "some single-bit variant happens to be mapped", which
@@ -143,7 +158,8 @@ class TestBitFlipGate(unittest.TestCase):
         d = _lead()
         orch._apply_bit_flip_gate(d, _seed(confidence=None))
         self.assertEqual(d.verdict.decision, Decision.lead)
-        self.assertEqual(d.corroborations or {}, {})
+        self.assertNotIn("possible_bit_flip_confidence", d.corroborations)
+        self.assertNotIn("possible_bit_flip_suppressed", d.corroborations)
 
     def test_offline_seeds_are_a_no_op(self):
         # The eval corpus's frozen crashes are stubs with no `crash_info`, so the gate must be
@@ -354,3 +370,250 @@ class TestSignatureHistory(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSignatureIsMostlyHardware(unittest.TestCase):
+    """Bug 2064600. Clouseau filed `mozilla::ActiveScrolledRoot::GetNearestScrollASR` at 97%
+    worth-investigating; Timothy Nikkel replied 20 minutes later: "About 50% of the crashes with
+    this signature have non-zero bit flip probability. That might be something you want to
+    include in your llm prompt to consider. And there is also several of the known buggy family 6
+    model 183 stepping 1 without a bit flip annotation."
+
+    Neither fact was reachable from what the gate read. The triaged report
+    (92ce80ce-3c58-4fc3-ae1f-8ffde0260819) has NO flip annotation and an ordinary Rocket Lake
+    CPU, so every per-report check passes it; the signature it sits on is 29% bit flips and 42%
+    Raptor Lake over 180 days, against a crash-population background of 7.6% and 3.8%."""
+
+    def setUp(self):
+        p = mock.patch.object(config, "get_agent_bit_flip", return_value=_cfg())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_2064600_case_is_suppressed(self):
+        # The exact seed of the crash we filed: clean report, compromised signature.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=6, hardware_noise=_noise(),
+                                           cpu="family 6 model 167 stepping 1"))
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertTrue(d.corroborations["hardware_noise_signature_suppressed"])
+        self.assertIs(d.corroborations["report_on_broken_cpu"], False)
+        self.assertEqual(d.corroborations["signature_bit_flip_rate"], 0.5)
+        self.assertIn("mostly hardware error", d.verdict.abstain_reason)
+        self.assertIsNone(d.verdict.needinfo_draft)
+
+    def test_the_thresholds_are_bugbots(self):
+        # mozilla/bugbot skips a signature at >= 0.2 bit flips or >= 0.7 broken CPU
+        # (bugbot/crash/analyzer.py). Either alone is enough; just under either is not.
+        cases = [(0.20, 0.0, True), (0.19, 0.0, False), (0.0, 0.70, True), (0.0, 0.69, False)]
+        for flip, cpu, fires in cases:
+            with self.subTest(flip=flip, cpu=cpu):
+                d = _lead()
+                orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=99,
+                                                   hardware_noise=_noise(reports=99, flip=flip,
+                                                                         cpu=cpu)))
+                self.assertEqual(d.verdict.decision,
+                                 Decision.abstain if fires else Decision.lead)
+
+    def test_a_small_sample_can_never_fire(self):
+        # A brand-new nightly regression has a handful of reports and 1-of-3 is "33%". Below the
+        # floor the rule is off, which is what stops this eating the pipeline's whole purpose.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=4,
+                                           hardware_noise=_noise(reports=4, flip=0.75, cpu=1.0)))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertNotIn("hardware_noise_signature_suppressed", d.corroborations)
+        # Measured anyway, so the threshold can be scored against outcomes later.
+        self.assertEqual(d.corroborations["signature_hardware_sample"], 4)
+
+    def test_an_unknown_share_never_suppresses(self):
+        # The lookup failing must not read as "clean" OR as "hardware" -- the rate tests are
+        # positive requirements precisely so a None cannot satisfy them.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=99,
+                                           hardware_noise=_noise(reports=None, flip=None,
+                                                                 cpu=None)))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertNotIn("signature_bit_flip_rate", d.corroborations)
+
+    def test_a_busy_healthy_signature_is_untouched(self):
+        # `IPCError-browser | ShutDownKill`, measured: 50,101 reports, 0% flips, 2% Raptor Lake.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=50101,
+                                           hardware_noise=_noise(reports=50101, flip=0.0,
+                                                                 cpu=0.02)))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+
+    def test_the_nightly_denominator_spares_bug_2062219(self):
+        # THE CASE THAT SETTLED THE DENOMINATOR. `nsAtom::IsStatic` (bug 2062219, RESOLVED FIXED)
+        # runs 49% bit flips across all products and channels over 180 days and 13% on Firefox
+        # nightly over a year. The wider rate suppresses a bug that was real and got FIXED; the
+        # nightly rate leaves it alone. Measured over the canary's first 47 filings, the nightly
+        # denominator kills 0 of the 18 FIXED/DUPLICATE/ASSIGNED ones and the wider one kills this.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=255,
+                                           hardware_noise=_noise(reports=255, flip=0.13,
+                                                                 cpu=0.31)))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.corroborations["signature_bit_flip_rate"], 0.13)
+
+    def test_it_does_not_reopen_the_cluster(self):
+        # THE DISTINCTION THAT MATTERS. `_INSTANCE_SUPPRESSED` keeps a proto-signature cluster
+        # OPEN when a verdict was killed for a reason peculiar to one report, so the next crash
+        # still gets looked at. "This signature is 29% bit flips" is not such a reason -- it is
+        # equally true of every report in the cluster -- so it must close it, exactly as the
+        # backout gate does, or we re-pay ~$3 a report to re-derive the same answer forever.
+        from crashclouseau import models
+        self.assertNotIn("hardware_noise_signature_suppressed", models._INSTANCE_SUPPRESSED)
+        self.assertIn("broken_cpu_suppressed", models._INSTANCE_SUPPRESSED)
+        self.assertIn("possible_bit_flip_suppressed", models._INSTANCE_SUPPRESSED)
+
+
+class TestReportIsOnADefectiveCpu(unittest.TestCase):
+    """The per-report half of Nikkel's second point: this crash came from an Intel Raptor Lake,
+    whose documented instability corrupts computation on correct software (meta bug 1975808)."""
+
+    def setUp(self):
+        p = mock.patch.object(config, "get_agent_bit_flip", return_value=_cfg())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_a_singleton_on_a_broken_cpu_is_suppressed(self):
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=1,
+                                           cpu="family 6 model 183 stepping 1"))
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertTrue(d.corroborations["broken_cpu_suppressed"])
+        self.assertIn("Raptor Lake", d.verdict.abstain_reason)
+
+    def test_a_broken_cpu_alone_never_suppresses(self):
+        # 3.8% of ALL crash reports come from one of these machines, so suppressing on the CPU
+        # alone would throw away roughly one real bug in twenty-six. The conjunction with
+        # "nobody else has ever hit this" is load-bearing, exactly as it is for the flip score.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=42,
+                                           cpu="family 6 model 183 stepping 1"))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertIs(d.corroborations["report_on_broken_cpu"], True)
+
+    def test_a_healthy_cpu_is_recorded_and_left_alone(self):
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=1,
+                                           cpu="family 6 model 167 stepping 1"))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertIs(d.corroborations["report_on_broken_cpu"], False)
+
+    def test_an_unknown_cpu_is_not_a_broken_one(self):
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=1))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertNotIn("report_on_broken_cpu", d.corroborations)
+
+    def test_the_flip_score_wins_when_both_apply(self):
+        # Ordering is not cosmetic: the reason lands in the filed/abstained verdict and in
+        # `models.Feedback`, so the more specific finding has to be the one reported.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=62, reports=1,
+                                           cpu="family 6 model 183 stepping 1"))
+        self.assertTrue(d.corroborations["possible_bit_flip_suppressed"])
+        self.assertNotIn("broken_cpu_suppressed", d.corroborations)
+
+
+class TestTheBriefCarriesTheHardware(unittest.TestCase):
+    """Nikkel's actual request was about the prompt: "That might be something you want to include
+    in your llm prompt to consider." """
+
+    def test_cpu_info_reaches_the_prompt_at_all(self):
+        # REGRESSION TEST. The fact was `("CPU arch", _first_present(cpu_arch, ..., cpu_info,
+        # ...))` and `cpu_arch` is set on essentially every crash, so the `cpu_info` fallbacks
+        # behind it were unreachable and no agent had ever seen which processor a crash came
+        # from -- the exact fact Nikkel says he checks every time.
+        facts = triage._crash_facts(
+            {"raw_crash": {"cpu_arch": "amd64", "cpu_info": "family 6 model 60 stepping 3"}})
+        cpu = [f for f in facts if f.startswith("CPU")]
+        self.assertEqual(len(cpu), 1)
+        self.assertIn("amd64", cpu[0])
+        self.assertIn("family 6 model 60 stepping 3", cpu[0])
+
+    def test_a_defective_cpu_is_called_out_and_survives_truncation(self):
+        facts = triage._crash_facts(
+            {"raw_crash": {"cpu_arch": "amd64", "cpu_info": "family 6 model 183 stepping 1"}})
+        cpu = [f for f in facts if f.startswith("CPU")][0]
+        self.assertIn("KNOWN-DEFECTIVE", cpu)
+        self.assertIn("1975808", cpu)
+        # `_short_value` truncates at 300; the warning is the part that must survive.
+        self.assertNotIn("...", cpu)
+
+    def test_the_signature_share_is_stated_against_the_population(self):
+        # A bare "50%" is unreadable: the model cannot know it is alarming without the 2.5%.
+        lines = "\n".join(triage._crash_facts({"raw_crash": {}, "hardware_noise": _noise()}))
+        self.assertIn("50% carry a Socorro bit-flip annotation (crash population: 2%)", lines)
+        self.assertIn("17% come from a known-defective Intel Raptor Lake", lines)
+        self.assertIn("crash population: 4%", lines)  # nightly Raptor Lake background
+        self.assertIn("NOT hardware error", lines)    # Nikkel's "next step"
+
+    def test_the_blind_second_opinion_is_told_too(self):
+        # The opposite of `_archetype_lines`, and deliberately: an archetype is a suggested
+        # DIRECTION, so priming both models correlates their mistakes, whereas this is a FACT
+        # both were blind to. On bug 2061961 the SO shared the blind spot and BOOSTED the rung.
+        from crashclouseau.agent import second_opinion
+        prompt = second_opinion._user_prompt(
+            {"signature": "S", "raw_crash": {}, "hardware_noise": _noise()}, None)
+        self.assertIn("HARDWARE-ERROR SHARE OF THIS SIGNATURE", prompt)
+
+    def test_nothing_is_said_when_nothing_was_measured(self):
+        self.assertEqual(triage._hardware_noise_lines({}), [])
+        self.assertEqual(triage._hardware_noise_lines({"hardware_noise": _noise(reports=None)}),
+                         [])
+
+
+class TestHardwareNoiseLookup(unittest.TestCase):
+    """`sigage.hardware_noise` -- one SuperSearch, both shares."""
+
+    def _run(self, payload):
+        with mock.patch.object(sigage.socorro, "SuperSearch") as ss:
+            def ctor(params=None, handler=None, handlerdata=None, **kw):
+                handler(payload, handlerdata)
+                return mock.Mock(wait=mock.Mock())
+            ss.side_effect = ctor
+            out = sigage.hardware_noise("S")
+            return out, ss.call_args.kwargs["params"]
+
+    def test_it_sums_both_facets(self):
+        out, params = self._run({
+            "total": 100,
+            "facets": {"possible_bit_flips_max_confidence": [{"term": 25, "count": 20},
+                                                             {"term": 62, "count": 10}],
+                       "cpu_info": [{"term": "family 6 model 183 stepping 1", "count": 40},
+                                    {"term": "family 6 model 60 stepping 3", "count": 30}]}})
+        self.assertEqual(out["reports"], 100)
+        self.assertEqual(out["bit_flip_reports"], 30)
+        self.assertEqual(out["broken_cpu_reports"], 40)
+        self.assertAlmostEqual(out["bit_flip_rate"], 0.3)
+        self.assertAlmostEqual(out["broken_cpu_rate"], 0.4)
+
+    def test_it_asks_only_about_this_product_and_channel(self):
+        # Not a detail: the same thresholds on an all-products/all-channels rate suppress bug
+        # 2062219, which was FIXED. Release carries years of failing consumer hardware on a hot
+        # signature and it says nothing about whether a nightly crash is real.
+        _, params = self._run({"total": 1, "facets": {}})
+        self.assertEqual(params["product"], "Firefox")
+        self.assertEqual(params["release_channel"], "nightly")
+        self.assertEqual(params["signature"], "=S")
+        self.assertEqual(params["date"][:2], ">=")
+
+    def test_zero_rows_is_unknown_not_clean(self):
+        # An empty response is equally what a malformed or throttled query returns, and this
+        # feeds a suppression.
+        out, _ = self._run({"total": 0, "facets": {}})
+        self.assertIsNone(out["reports"])
+        self.assertIsNone(out["bit_flip_rate"])
+
+    def test_a_missing_facet_is_unknown_not_zero(self):
+        out, _ = self._run({"total": 100, "facets": {"cpu_info": []}})
+        self.assertIsNone(out["bit_flip_rate"])
+        self.assertEqual(out["broken_cpu_rate"], 0.0)
+
+    def test_a_failed_lookup_never_raises(self):
+        with mock.patch.object(sigage.socorro, "SuperSearch", side_effect=RuntimeError("boom")):
+            self.assertEqual(sigage.hardware_noise("S")["reports"], None)
+        self.assertEqual(sigage.hardware_noise("")["reports"], None)

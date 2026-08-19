@@ -23,10 +23,17 @@ PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
 DOSSIER_SCHEMA_VERSION = 1
 
 # Corroboration flags marking a verdict suppressed for a reason specific to ONE CRASH REPORT —
-# a broken installation, a corrupted fault address — rather than to the signature or the
-# candidate. A run carrying one of these must not close its proto-signature cluster; see
-# ``UUID.proto_already_analyzed``.
-_INSTANCE_SUPPRESSED = ("bad_machine_suppressed", "possible_bit_flip_suppressed")
+# a broken installation, a corrupted fault address, a defective CPU — rather than to the
+# signature or the candidate. A run carrying one of these must not close its proto-signature
+# cluster; see ``UUID.proto_already_analyzed``.
+#
+# ``hardware_noise_signature_suppressed`` is deliberately ABSENT, though it comes from the same
+# gate as ``possible_bit_flip_suppressed``: it says the SIGNATURE is mostly hardware error, which
+# is equally true of every report in the cluster, so it closes the cluster exactly as the backout
+# gate does. Re-deriving that answer costs ~$3 a report and cannot come out differently.
+_INSTANCE_SUPPRESSED = (
+    "bad_machine_suppressed", "possible_bit_flip_suppressed", "broken_cpu_suppressed",
+)
 
 # ``abstain_reason`` prefixes meaning CLOUSEAU broke — the agent's handoff had no readable
 # JSON block, or the dossier failed validation and the verdict was dropped. Such a run

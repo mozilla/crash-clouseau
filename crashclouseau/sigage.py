@@ -109,6 +109,134 @@ def first_seen_buildid(signature, product="Firefox", channel="nightly",
     return signature_history(signature, product, channel, days)["first_seen"]
 
 
+# The CPU models whose OWN defects make a crash report untrustworthy. One entry, and it is not a
+# guess: Intel Raptor Lake desktop parts (13th/14th gen) have a documented instability that
+# corrupts computation on perfectly healthy software, and Mozilla tracks the fallout in meta bug
+# 1975808, "[meta] Raptor Lake (family 6 model 183 stepping 1) bugs" -- 48 dependent bugs when
+# this was written, several of them layout/display-list crashes indistinguishable from a real one.
+#
+# Matched EXACTLY, against the same string mozilla/bugbot matches in `bugbot/crash/analyzer.py`,
+# so the two filers cannot disagree about which hardware to distrust. Socorro renders `cpu_info`
+# as a stable "family F model M stepping S", so an exact comparison is the right one.
+BROKEN_CPUS = ("family 6 model 183 stepping 1",)
+
+# What the same two measurements read across the NIGHTLY population, so a signature's share can
+# be judged rather than merely quoted. Measured 2026-08-19 over 696,901 Firefox nightly reports
+# in a 364-day window: 2.5% carry a bit-flip annotation, 4.1% come from a `BROKEN_CPUS` machine.
+# Nightly-specific on purpose, to match the denominator `hardware_noise` uses -- the all-channel
+# flip rate is 7.6%, three times higher, because release accumulates hardware noise that says
+# nothing about a nightly crash. Constants rather than a second query: they move slowly, and the
+# alternative is a 700k-document aggregation per run to refine a number used only to say "this is
+# high".
+POPULATION_BIT_FLIP_RATE = 0.025
+POPULATION_BROKEN_CPU_RATE = 0.041
+
+
+def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
+    """How much of this SIGNATURE is hardware error rather than a bug anyone can fix?
+
+    ``{"reports", "bit_flip_reports", "broken_cpu_reports", "bit_flip_rate", "broken_cpu_rate"}``,
+    every value ``None`` when we could not find out.
+
+    WRITTEN FOR BUG 2064600. Clouseau filed a display-list crash at 97% worth-investigating and
+    Timothy Nikkel replied within twenty minutes: "About 50% of the crashes with this signature
+    have non-zero bit flip probability. That might be something you want to include in your llm
+    prompt to consider. And there is also several of the known buggy family 6 model 183 stepping 1
+    without a bit flip annotation. ... I always look for these two things in crash reports." Both
+    numbers check out -- 3 of the signature's 6 nightly reports carry a flip annotation, and 139
+    of its 142 Raptor Lake reports carry none -- and Clouseau could see neither, because it read
+    the flip field only for the ONE report it was triaging and never read ``cpu_info`` at all.
+
+    THE TWO SIGNALS ARE NEARLY DISJOINT, which is why both are measured rather than one. Across
+    all channels that signature has 107 reports with a flip annotation and 142 on a Raptor Lake,
+    and just 3 that are BOTH: the stackwalker's heuristic wants a faulting address one bit away
+    from something plausible, and a Raptor Lake miscomputation rarely looks like that. Each covers
+    a different third of the signature. A per-report flip check -- all Clouseau had -- sees
+    neither.
+
+    THE DENOMINATOR IS THE WHOLE RULE, and getting it wrong is not a detail. Computed across all
+    products and channels over 180 days this fires on 6 of the 47 bugs the canary had filed, and
+    one of them is bug 2062219 (``nsAtom::IsStatic``), RESOLVED FIXED -- a real defect, killed,
+    because that signature runs 49% bit flips over a release population and only 13% in nightly.
+    Restricted to the crash's OWN product and channel it fires on 6 different signatures and kills
+    ZERO of the 18 filings that are FIXED, DUPLICATE or ASSIGNED, while still catching the INVALID
+    one (bug 2062173) and bug 2064600 itself. Release accumulates years of failing consumer
+    hardware on a hot signature; that says nothing about whether a nightly crash is real, and
+    averaging the two populations together lets the larger one decide.
+
+    THE FULL 364-DAY WINDOW, unlike bugbot's few weeks, for the same reason in reverse: a nightly
+    slice is SMALL. Bug 2064600's signature has 6 nightly reports in a year and 1 in the last 28
+    days, so bugbot's window would see no sample at all here. bugbot can afford a short one
+    because it is scanning for busy signatures worth filing; we are handed one crash and have to
+    judge it. Window truncation can only shrink the sample, never inflate a rate.
+
+    Reports, not machines -- and checked. A single failing machine filing hundreds of reports
+    would fake any share computed this way, so the confound was measured on the signature that
+    prompted this: its flip-annotated reports span more than 100 distinct ``install_time`` values,
+    the largest contributing 3. Read ``distinct_signatures`` in ``machine.py`` for the
+    complementary rule that catches the one-broken-machine case directly.
+
+    ONE SuperSearch, ~300ms, on a run that already takes ~20 minutes. ``None`` rather than 0 on
+    every failure path, because this feeds a suppression and "we could not find out" must never
+    be able to satisfy a threshold."""
+    empty = {"reports": None, "bit_flip_reports": None, "broken_cpu_reports": None,
+             "bit_flip_rate": None, "broken_cpu_rate": None}
+    if not signature:
+        return empty
+    days = max(1, min(int(days or MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    params = {
+        "signature": "=" + signature,
+        "product": product or "Firefox",
+        "date": ">=" + since,
+        "_facets": ["possible_bit_flips_max_confidence", "cpu_info"],
+        # `possible_bit_flips_max_confidence` takes 17 distinct values across the entire corpus,
+        # so summing its facet is exact. `cpu_info` has a long tail, but truncation is SAFE here
+        # for a reason worth stating: facets come back COUNT-ORDERED, so a model holding a
+        # material share of a signature is always near the top, and anything the cut hides is by
+        # construction too small to clear a threshold. That is the exact inverse of the `build_id`
+        # trap documented at the top of this module, where the row we needed was the rarest.
+        "_facets_size": 200,
+        "_results_number": 0,
+    }
+    if channel:
+        params["release_channel"] = channel
+    got = {}
+
+    def handler(json_, data):
+        data["result"] = json_
+
+    try:
+        socorro.SuperSearch(params=params, handler=handler, handlerdata=got).wait()
+    except Exception as exc:  # pragma: no cover - network; never break a seed
+        logger.warning("sigage: hardware-noise lookup failed for %r: %s", signature, exc)
+        return empty
+    result = got.get("result") or {}
+    total = result.get("total")
+    if not isinstance(total, int) or total <= 0:
+        # Zero rows is NOT "a clean signature": an empty response is equally what a malformed or
+        # throttled query returns, and this feeds a suppression. Say we do not know.
+        return empty
+    facets = result.get("facets") or {}
+
+    def _sum(field, keep=None):
+        rows = facets.get(field)
+        if not isinstance(rows, list):
+            return None
+        return sum(r.get("count") or 0 for r in rows
+                   if isinstance(r, dict) and (keep is None or r.get("term") in keep))
+
+    flips = _sum("possible_bit_flips_max_confidence")
+    broken = _sum("cpu_info", keep=set(BROKEN_CPUS))
+    return {
+        "reports": total,
+        "bit_flip_reports": flips,
+        "broken_cpu_reports": broken,
+        "bit_flip_rate": None if flips is None else flips / total,
+        "broken_cpu_rate": None if broken is None else broken / total,
+    }
+
+
 _JSON_REV_CACHE: dict = {}
 
 

@@ -197,6 +197,7 @@ class TestBuildOptions(unittest.TestCase):
         crash = dict(_CRASH, raw_crash={
             "os_name": "Windows NT", "os_version": "10.0.19045",
             "os_pretty_version": "Windows 10", "cpu_arch": "amd64", "process_type": "gpu",
+            "cpu_info": "family 6 model 158 stepping 10",
             "adapter_vendor_id": "0x10de", "adapter_device_id": "0x2504",
             "adapter_driver_version": "31.0.15.3141",
             "json_dump": {"crash_info": {"type": "EXCEPTION_ACCESS_VIOLATION_READ"}},
@@ -204,7 +205,10 @@ class TestBuildOptions(unittest.TestCase):
         facts = triage._crash_facts(crash)
         blob = "\n".join(facts)
         self.assertIn("OS: Windows 10", blob)
-        self.assertIn("CPU arch: amd64", blob)
+        # One "CPU" fact carrying BOTH the arch and the model, because they answer different
+        # questions and the model used to be unreachable behind `cpu_arch` in a `_first_present`
+        # (bug 2064600 -- see tests/test_bit_flip_gate.py).
+        self.assertIn("CPU: amd64, family 6 model 158 stepping 10", blob)
         self.assertIn("Process type: gpu", blob)
         self.assertIn("GPU: NVIDIA device 0x2504 driver 31.0.15.3141", blob)  # vendor id mapped
 
