@@ -71,7 +71,10 @@ def _is_target_crash(data):
     if (data.get("product") or "Firefox") != "Firefox":
         return False
     dump = data.get("json_dump") or {}
-    ct = (dump.get("crash_info") or {}).get("crashing_thread", 0) or 0
+    # See `inspector.thread_for_analysis`: on a hang, `crash_info.crashing_thread` is the
+    # watchdog, whose stack has no Firefox file at all — asking it here would drop every
+    # shutdownhang from the corpus as "system-only".
+    ct = inspector.thread_for_analysis(data) or 0
     threads = dump.get("threads") or []
     frames = threads[ct]["frames"] if ct < len(threads) else []
     return any(f.get("file") for f in frames)
@@ -82,7 +85,7 @@ def _stack_files(data):
     (the source-link suffix), so strip the rev with ``inspector.get_path_node`` before
     taking the basename — otherwise nothing matches a changeset's clean filenames."""
     dump = data.get("json_dump") or {}
-    ct = (dump.get("crash_info") or {}).get("crashing_thread", 0) or 0
+    ct = inspector.thread_for_analysis(data) or 0
     threads = dump.get("threads") or []
     frames = threads[ct]["frames"] if ct < len(threads) else []
     files = set()

@@ -136,17 +136,32 @@ def _seed_score(uuid):
 
 
 def _inlines_by_stackpos(raw_crash):
-    """Map stackpos -> [inlined function names] from the processed crash's crashing
+    """Map stackpos -> [inlined function names] from the processed crash's analysed
     thread. The crash's real leaf functions are inlined and otherwise never reach the
     agent. Best-effort across the Socorro shapes (``json_dump.crashing_thread`` or
-    ``json_dump.threads[crashing_thread]``); returns {} on any mismatch (never raises)."""
+    ``json_dump.threads[crashing_thread]``); returns {} on any mismatch (never raises).
+
+    Keyed on ``inspector.thread_for_analysis``, which is the SAME selection the frames
+    themselves came from. It has to be: on a hang that function deliberately picks the hung
+    main thread over the watchdog, and reading inlines from the watchdog would graft one
+    thread's inlined leaf names onto another thread's frames by position — a wrong fact
+    presented as a grounded one. Socorro's real payload expands ``json_dump.crashing_thread``
+    into the full thread OBJECT, so the dict branch below would silently keep doing exactly
+    that; the index lookup is tried first for that reason."""
     out: dict = {}
     try:
+        from crashclouseau import inspector
+
         dump = (raw_crash or {}).get("json_dump") or {}
-        thread = dump.get("crashing_thread")
+        threads = dump.get("threads")
+        thread = None
+        idx = inspector.thread_for_analysis(raw_crash or {})
+        if isinstance(idx, int) and isinstance(threads, list) and 0 <= idx < len(threads):
+            thread = threads[idx]
+        if not isinstance(thread, dict):
+            thread = dump.get("crashing_thread")
         if not isinstance(thread, dict):
             idx = dump.get("crashing_thread")
-            threads = dump.get("threads")
             if isinstance(idx, int) and isinstance(threads, list) and idx < len(threads):
                 thread = threads[idx]
         if not isinstance(thread, dict):
@@ -1496,6 +1511,139 @@ def _apply_backout_gate(dossier, seed):
     )
 
 
+# A thread named in prose, in either order: `"MediaTrackGrph"` thread / thread named `Foo`. Up to
+# two delimiter characters each side because the agent nests them — bug 2064436's mechanism wrote
+# ``the `"MediaTrackGrph"` thread``. QUOTED is the whole point: quoting a name is the model
+# asserting a literal runtime identifier, which is checkable, whereas prose about a subsystem
+# ("a MediaTrackGraph would be shut down here") is not and must not be gated on.
+_QUOTED_THREAD_RE = re.compile(
+    r"""(?: ["'`]{1,2}([^"'`\n]{2,40})["'`]{1,2}\s+threads?\b
+          | \bthreads?(?:\s+named)?\s+["'`]{1,2}([^"'`\n]{2,40})["'`]{1,2} )""",
+    re.I | re.X,
+)
+# Below this, a squashed name is too generic to check ("ui", "io", "gpu").
+_MIN_THREAD_NAME = 4
+# Linux caps a pthread name at 15 bytes and Socorro elides the middle ("Shutdow~minator"), so an
+# inventory name may be a HEAD fragment of what the agent wrote. Compare that many leading chars.
+_TRUNCATED_PREFIX = 6
+
+
+def _squash(text):
+    return "".join(c for c in str(text).lower() if c.isalnum())
+
+
+def _thread_name_matches(claimed, known):
+    """Does a squashed claimed name refer to the squashed inventory name ``known``?
+
+    Substring either way, so ``"BgIOThreadPool"`` matches ``BgIOThreadPool #2`` and ``"main"``
+    matches ``MainThread``; plus a head-prefix test for the Linux 15-byte truncation, where the
+    inventory holds ``Shutdow~minator`` for what the agent would call
+    ``"Shutdown Hang Terminator"``."""
+    if claimed in known or known in claimed:
+        return True
+    if len(known) < _TRUNCATED_PREFIX:
+        return False
+    return claimed.startswith(known[:_TRUNCATED_PREFIX])
+
+
+def _process_thread_names(seed):
+    """``(set of squashed thread names, complete)`` for the crashing process.
+
+    ``complete`` mirrors ``triage._thread_inventory``: the absence half of this check is only
+    sound over a full list, and the two must not disagree about what the agent was shown."""
+    threads = (((seed or {}).get("raw_crash") or {}).get("json_dump") or {}).get("threads") or []
+    names = set()
+    for thread in threads:
+        name = (thread or {}).get("thread_name") if isinstance(thread, dict) else None
+        if name:
+            squashed = _squash(name)
+            if squashed:
+                names.add(squashed)
+    # The SAME ceiling the prompt block uses, so the gate and the agent cannot disagree about
+    # whether the list the agent saw was complete enough to argue an absence from.
+    from crashclouseau.agent import triage
+
+    return names, len(names) <= triage._MAX_THREAD_NAMES
+
+
+def _absent_named_threads(dossier, seed):
+    """Thread names the verdict asserts that are NOT in this process, as written. ``[]`` when the
+    inventory is missing or truncated (an incomplete list proves no absence)."""
+    names, complete = _process_thread_names(seed)
+    if not names or not complete:
+        return []
+    v = dossier.verdict
+    texts = [
+        (v.mechanism.statement if v.mechanism else "") or "",
+        (v.consistency.statement if v.consistency else "") or "",
+        (dossier.data_flow.summary if dossier.data_flow else "") or "",
+    ]
+    absent = []
+    for text in texts:
+        for match in _QUOTED_THREAD_RE.finditer(text):
+            claimed = match.group(1) or match.group(2) or ""
+            squashed = _squash(claimed)
+            if len(squashed) < _MIN_THREAD_NAME:
+                continue
+            if any(_thread_name_matches(squashed, n) for n in names):
+                continue
+            if claimed.strip() not in absent:
+                absent.append(claimed.strip())
+    return absent
+
+
+def _apply_absent_thread_gate(dossier, seed):
+    """DOWNWEIGHT a verdict whose mechanism runs through a thread this process never had.
+
+    Bug 2064436. The verdict explained a shutdown hang through "the `MediaTrackGrph` thread owned
+    by `ThreadedDriver`" and shipped at 97% worth-investigating. Andreas Pehrson closed it INVALID
+    the same evening: "No MediaTrackGrph thread, no GraphRunner thread." The minidump's own list of
+    46 threads was in the payload the whole time; nothing read it, and the "skeptic" that signed
+    the mechanism off checks plausibility, not existence.
+
+    The primary fixes for that bug are elsewhere and are the ones that matter:
+    ``inspector.thread_for_analysis`` stops handing the agent the watchdog's stack, and
+    ``triage._thread_inventory`` puts the thread list in front of BOTH the agent and the blind
+    second opinion. This gate is the backstop for when they are ignored — a prompt is advice and a
+    named entity that does not exist is a fact.
+
+    A CLAMP, NOT AN ABSTAIN, and never below a reportable ``medium`` lead, because the check reads
+    prose and can be wrong in one specific way: a mechanism may legitimately name a thread in
+    ANOTHER process ("the content process's `MediaDecoderStateMachine` thread"), which this
+    process's inventory says nothing about. Andreas raised exactly that caveat — "There may be a
+    MediaTrackGraph in a content process but then the shutdown blocker would live there too" — so
+    the possibility is real even though it did not save this verdict. Bounding the action to one
+    rung means a false fire costs an automatic FILING (rung 70) and not the lead itself, while the
+    2064436 case, which shipped at the top of the scale, is still caught.
+
+    Only QUOTED names are considered (see ``_QUOTED_THREAD_RE``) and only against a COMPLETE
+    inventory, so this is a no-op on the offline eval, on Java crashes and on any payload without
+    ``json_dump.threads``. Mutates ``dossier`` in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None or v.decision == Decision.abstain:
+        return
+    absent = _absent_named_threads(dossier, seed)
+    if not absent:
+        return
+    dossier.corroborations = {
+        **(dossier.corroborations or {}), "absent_named_threads": absent}
+    logger.info(
+        "agent: verdict names thread(s) %s absent from this process's %d threads for %s",
+        absent, len((((seed or {}).get("raw_crash") or {}).get("json_dump") or {})
+                    .get("threads") or []), (seed or {}).get("uuid"))
+    if v.decision == Decision.strong_evidence:
+        _downgrade_to_lead_or_abstain(
+            dossier, seed, "mechanism names a thread absent from this process",
+            "the mechanism relies on a thread that is not running in this process")
+        return
+    if v.confidence in (Confidence.probable, Confidence.high):
+        dossier.verdict = v.model_copy(update={"confidence": Confidence.medium})
+        dossier.corroborations = {
+            **dossier.corroborations, "absent_thread_clamped": True}
+        logger.info("agent: lead %s clamped to medium (absent thread) for %s",
+                    v.confidence.value, (seed or {}).get("uuid"))
+
+
 def _apply_bad_machine_gate(dossier, seed):
     """SUPPRESS a verdict whose crash came from a machine that is scattering unrelated
     signatures: the machine is broken, not the code.
@@ -2079,6 +2227,10 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # are DISJOINT on real filings — the ones carrying a flip score have a clean machine, and
         # the scattering ones have no flip score at all.
         _apply_bad_machine_gate(result.dossier, seed)
+        # The mechanism runs through a thread this process never had (bug 2064436). After the
+        # hardware gates because it is a weaker instrument than they are — it reads the verdict's
+        # prose rather than a Socorro field — and so it is a clamp, not a suppression.
+        _apply_absent_thread_gate(result.dossier, seed)
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.
         _record_window_membership(result.dossier, seed)

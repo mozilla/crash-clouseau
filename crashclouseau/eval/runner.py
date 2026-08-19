@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from crashclouseau import config
+from crashclouseau import config, inspector
 from crashclouseau.logger import logger
 
 
@@ -55,7 +55,10 @@ def _load_crash(crash_json_path):
 
 def _render_stack(data):
     dump = data.get("json_dump", {})
-    ct = dump.get("crash_info", {}).get("crashing_thread", 0) or 0
+    # `inspector.thread_for_analysis`, not `crash_info.crashing_thread`: on a hang the latter is
+    # the watchdog that crashed on purpose. The offline eval must render the stack the SHIPPED
+    # pipeline analyses or the calibration scores a different input than production sees.
+    ct = inspector.thread_for_analysis(data) or 0
     threads = dump.get("threads", [])
     frames = threads[ct]["frames"] if ct < len(threads) else []
     return "\n".join(

@@ -65,7 +65,53 @@ _SHUTDOWN_SINGLETON = {
     ),
 }
 
-SEED_ARCHETYPES = (_SHUTDOWN_SINGLETON,)
+# Bug 2064436. The pipeline filed a `shutdownhang` at 97% worth-investigating and explained it
+# through "the `MediaTrackGrph` thread owned by `ThreadedDriver`". Andreas Pehrson closed it
+# INVALID in three hours: "I see no proof in the profile that this parent process is using or has
+# used a MediaTrackGraph. No MediaTrackGrph thread, no GraphRunner thread. And the graph has a
+# timer that clears the shutdown blocker if the audio hw is blocked. The AudioIPC server threads
+# seem to be doing something, but there are no AudioIPC client threads like there would be if we
+# were doing audio in this process. There may be a MediaTrackGraph in a content process but then
+# the shutdown blocker would live there too."
+#
+# The thread-existence half of that is NOT here: it is a checkable list, so it ships as a FACT
+# (`triage._thread_inventory`) that also reaches the blind second opinion, and the analysed-thread
+# half is a code fix (`inspector.thread_for_analysis`). What is left over is genuinely a prior —
+# how to work a shutdown hang once you can see one properly — and that is what this row carries.
+_SHUTDOWN_HANG = {
+    "slug": "shutdown-hang",
+    "title": "Shutdown hang — the blocked spin-loop names the subsystem; check it exists here",
+    "source_bug": 2064436,
+    "matcher": {
+        # Socorro prefixes the signature of every shutdown hang, whatever the frames under it.
+        "signature": [r"^shutdownhang \|"],
+    },
+    "guidance": (
+        "A shutdown hang is not a fault: nothing crashed, a watchdog killed the process because "
+        "the main thread stopped making progress. So do NOT look for a bad pointer or a recent "
+        "edit to a stack frame. WHERE TO START, in order: (1) the `BLOCKED SPIN-EVENT-LOOP STACK` "
+        "crash fact, when present — that is Socorro telling you the exact call the main thread is "
+        "parked in and usually the named pool/service it is waiting for (e.g. "
+        "`nsThreadPool::ShutdownWithTimeout BgIOThreadPool`), which is the single most "
+        "informative line available and beats anything you can infer from the frames; "
+        "(2) `Shutdown phase reached`, which bounds what can still be running; (3) the stack "
+        "itself, which is the HUNG MAIN THREAD (not the watchdog) and reads outside-in — the "
+        "innermost Gecko frame is who is waiting, not who is stuck. "
+        "BEFORE YOU NAME A SUBSYSTEM, find its thread in the `THREADS IN THIS PROCESS` fact. If "
+        "it is not there it was not running here and the mechanism is refuted. Two traps that "
+        "cost bug 2064436: a subsystem present in a CONTENT process says nothing about a hang in "
+        "the PARENT — its shutdown blocker would live in that process too, so a parent-process "
+        "hang is not evidence about it; and many subsystems hold a TIMER that clears their own "
+        "shutdown blocker on a stall, which means they cannot hang shutdown indefinitely, so "
+        "check for one (searchfox the blocker's registration) before blaming them. "
+        "Finally, expect NO regressor. A shutdown hang is usually a latent ordering or "
+        "wait-for-ever bug that needed a timing change to become visible, so 'this is a real "
+        "shutdown-ordering defect in X, no changeset in this window introduced it' is a good "
+        "verdict — better than naming a changeset because the window had to contain one."
+    ),
+}
+
+SEED_ARCHETYPES = (_SHUTDOWN_SINGLETON, _SHUTDOWN_HANG)
 
 
 def seed(overwrite=False):

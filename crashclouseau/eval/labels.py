@@ -30,7 +30,9 @@ def _stack_basenames(case):
     except (OSError, json.JSONDecodeError):
         return set()
     dump = data.get("json_dump", {})
-    ct = dump.get("crash_info", {}).get("crashing_thread", 0) or 0
+    # See `inspector.thread_for_analysis`: the watchdog thread of a hang carries no source
+    # file, so labelling off it would silently produce an empty file set.
+    ct = inspector.thread_for_analysis(data) or 0
     threads = dump.get("threads", [])
     frames = threads[ct]["frames"] if ct < len(threads) else []
     names = set()

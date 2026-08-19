@@ -206,10 +206,16 @@ def _fenced(text):
     return "```\n{}\n```".format(text.strip("\n"))
 
 
-def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES):
+def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES, details=None):
     """The ``Top N frames:`` section, in the format Socorro pre-fills into a crash bug:
     ``<stackpos>  <module>  <function>  <file>:<line>``, fenced. Sourced from the frames we
-    already hold (``models.CrashStack.get_by_uuid``), so no Socorro round-trip is needed."""
+    already hold (``models.CrashStack.get_by_uuid``), so no Socorro round-trip is needed.
+
+    NAMES THE THREAD on a hang. Nothing crashed there: a watchdog killed the process because the
+    main thread stopped making progress, so these frames are what the main thread is WAITING on
+    and they read outside-in. Bug 2064436 was filed showing the watchdog thread's seven frames of
+    boilerplate under a bare "Top 9 frames:", which told the reviewer nothing about which thread he
+    was looking at — `inspector.thread_for_analysis` now picks the hung thread, and this says so."""
     frames = (stack or {}).get("frames") or []
     top = frames[:max_frames]
     lines = []
@@ -225,7 +231,10 @@ def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES):
         if not desc:
             desc = (f.get("original") or "").strip()
         lines.append("{}  {}".format(f.get("stackpos"), desc).rstrip())
-    return "Top {} frames:\n{}".format(len(top), _fenced("\n".join(lines)))
+    what = ("frames of the hung main thread (nothing crashed here — a watchdog killed the "
+            "process; these are what the main thread is waiting on)"
+            if (details or {}).get("report_type") == "hang" else "frames")
+    return "Top {} {}:\n{}".format(len(top), what, _fenced("\n".join(lines)))
 
 
 def build_reason_block(details):
@@ -357,7 +366,10 @@ def build_code_references(verdict, channel, max_refs=_MAX_CODE_REFS):
     return "Code references:\n{}".format("\n".join(refs)) if refs else None
 
 
-_REASON_COLUMNS = ["moz_crash_reason", "reason", "address"]
+# `report_type` so the frames block can say WHICH thread it is showing: on a hang the frames
+# are the hung main thread, not a crashing one, and a reader who assumes otherwise reads the
+# stack backwards. Bug 2064436 — see `inspector.thread_for_analysis`.
+_REASON_COLUMNS = ["moz_crash_reason", "reason", "address", "report_type"]
 # Process caches: the comment is rendered on every page view of a culprit/lead crash, and
 # neither of these moves in a way that matters for a preview (a crash's reason is
 # immutable; the counts only creep up). uuid -> value; keeps the render to one fetch per
@@ -560,7 +572,7 @@ def build_bug_comment(
     sections = [
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         build_reason_block(details),
-        build_frames_block(stack, max_frames=max_frames),
+        build_frames_block(stack, max_frames=max_frames, details=details),
         build_stats_sentence(first, stats, info),
         build_hardware_note((dossier or {}).get("corroborations")),
         _explanation_comment(

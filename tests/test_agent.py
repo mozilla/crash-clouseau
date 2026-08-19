@@ -186,7 +186,11 @@ class TestBuildOptions(unittest.TestCase):
         self.assertIn("Build ID: 20260708000000", p)
         self.assertIn("Crash type: EXCEPTION_ACCESS_VIOLATION_READ", p)
         self.assertIn("Fault address: 0x0", p)
-        self.assertIn("Crashing thread: 0", p)
+        # Renamed from "Crashing thread" in bug 2064436: on a hang the crashing thread is
+        # the watchdog and NOT the thread whose stack is printed below it, so the label has
+        # to describe the stack the agent is actually looking at.
+        self.assertIn("Analysed thread (the stack below is THIS thread): 0", p)
+        self.assertNotIn("Crashing thread:", p)
         self.assertIn("MOZ_CRASH_REASON: MOZ_DIAGNOSTIC_ASSERT(mThing)", p)
         self.assertIn("PHC alloc stack: False", p)
 

@@ -229,7 +229,9 @@ class TestSeeding(unittest.TestCase):
         query.filter.return_value.one_or_none.return_value = existing
         with mock.patch.object(models.db, "session", mock.Mock(query=mock.Mock(return_value=query))), \
              mock.patch.object(models.Archetype, "upsert") as upsert:
-            self.assertEqual(archetypes.seed(overwrite=True), ["shutdown-singleton"])
+            # Every shipped row, not a frozen literal: adding one must not need this edit.
+            self.assertEqual(archetypes.seed(overwrite=True),
+                             [s["slug"] for s in archetypes.SEED_ARCHETYPES])
         self.assertIs(upsert.call_args.kwargs["enabled"], False)
 
     def test_seed_quietly_never_raises(self):

@@ -338,6 +338,102 @@ def _archetype_lines(crash: dict) -> list[str]:
     return lines if len(lines) > 2 else []
 
 
+def _analysed_thread(raw: dict) -> str:
+    """``"0 (MainThread)"`` — the index and name of the thread whose stack the agent is shown.
+
+    Was ``crash_info.crashing_thread``, which on a hang is the watchdog and NOT the thread the
+    stack comes from (see ``inspector.thread_for_analysis``). Printing the un-analysed index next
+    to another thread's frames is worse than printing nothing: on bug 2064436 the same report
+    would have said "Crashing thread: 45" above thread 0's stack."""
+    threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
+    try:
+        from crashclouseau import inspector
+
+        idx = inspector.thread_for_analysis(raw or {})
+    except Exception:                                   # pragma: no cover - defensive
+        idx = ((raw or {}).get("json_dump") or {}).get("crash_info", {}).get("crashing_thread")
+    if not isinstance(idx, int):
+        return ""
+    name = threads[idx].get("thread_name") if 0 <= idx < len(threads) else None
+    return "{} ({})".format(idx, name) if name else str(idx)
+
+
+# Prompt budget for the thread inventory. Generous on purpose: the widest hang report sampled ran
+# 113 threads, so this lists every real process in full, and ~120 short names cost well under a
+# kilobyte beside a 50-frame stack and a pushlog window. Past it the list is truncated and the
+# block DROPS its absence claim — see `_thread_inventory`.
+_MAX_THREAD_NAMES = 120
+
+
+def _thread_inventory(raw: dict) -> list[str]:
+    """Every named thread alive in the crashing process, as prompt lines, or ``[]``.
+
+    BUG 2064436, and the clearest "the answer was in the payload" case yet. The pipeline filed a
+    shutdown hang and the agent explained it through "the `MediaTrackGrph` thread owned by
+    `ThreadedDriver`". Andreas Pehrson closed it INVALID in three hours: "I see no proof in the
+    profile that this parent process is using or has used a MediaTrackGraph. No MediaTrackGrph
+    thread, no GraphRunner thread. ... The AudioIPC server threads seem to be doing something, but
+    there are no AudioIPC client threads like there would be if we were doing audio in this
+    process."
+
+    Every clause of that is a lookup in the minidump's own thread list, which the pipeline
+    already fetched and had never once shown to a model: 46 threads on that crash, including
+    `AudioIPC Server RPC`/`Server Callback`/`DeviceCollection RPC` with no client counterpart —
+    his exact observation — and no graph thread of any kind. A FACT block rather than an
+    ``_archetype_lines`` hint precisely because it is not a direction to consider but a
+    checkable list, and so it must also reach the blind second opinion, which is the calibrated
+    instrument for refuting a lead (specificity 1.00) and was equally blind here.
+
+    THE ABSENCE IS THE LOAD-BEARING HALF, so it is only claimed when the list is complete. A
+    truncated list licenses no conclusion at all and says so — the failure this block exists to
+    stop is a confident statement about a runtime entity nobody looked for, and an agent
+    reasoning from a silently clipped list would make it again with our encouragement.
+
+    Names come from the OS, so they are subject to its limits: Linux caps a pthread name at 15
+    bytes and Socorro elides the middle ("Shutdow~minator" for "Shutdown Hang Terminator"), which
+    is why the text asks for a substring rather than an exact match."""
+    threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
+    if not threads:
+        return []
+    names, unnamed = [], 0
+    for thread in threads:
+        name = (thread or {}).get("thread_name") if isinstance(thread, dict) else None
+        name = str(name).strip() if name else ""
+        if not name:
+            unnamed += 1
+        elif name not in names:
+            names.append(name)
+    if not names:
+        return []
+    complete = len(names) <= _MAX_THREAD_NAMES
+    shown = names if complete else names[:_MAX_THREAD_NAMES]
+    header = (
+        "THREADS IN THIS PROCESS ({} threads, {} distinct names{}). Names are truncated by the "
+        "OS on Linux (15 bytes, middle elided as \"Shutdow~minator\"), so match on a substring, "
+        "not exactly.".format(
+            len(threads), len(names),
+            ", {} unnamed".format(unnamed) if unnamed else "")
+    )
+    if complete:
+        rule = (
+            "This list is COMPLETE. Use it as a hard check on any mechanism you are considering: "
+            "a subsystem whose thread is NOT here was not running in this process, so a mechanism "
+            "that needs it is REFUTED, not merely unproven — say so and look elsewhere rather "
+            "than reporting it. The converse is weaker: a thread being present means the "
+            "subsystem exists, not that it is involved. Before you name any thread, pool or "
+            "runtime object in a mechanism, find it here; if it is absent, that IS your finding. "
+            "Asymmetries are evidence too — a server-side thread with no client-side counterpart "
+            "means this process was serving that subsystem, not using it."
+        )
+    else:
+        rule = (
+            "This list is TRUNCATED at {} of {} names, so it CANNOT be used to argue that a "
+            "thread is absent — a name you do not see here may simply have been cut. Use it only "
+            "to confirm a thread that IS listed.".format(_MAX_THREAD_NAMES, len(names))
+        )
+    return ["", header, rule, ", ".join(shown)]
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
@@ -378,9 +474,11 @@ def _crash_facts(crash: dict) -> list[str]:
         ("Faulting instruction", info.get("instruction")),
         ("POSSIBLE BIT FLIP (the fault address may be hardware corruption, not a real pointer)",
          _bit_flip_summary(info)),
-        ("Crashing thread", _first_present(
-            info.get("crashing_thread"), raw.get("crashing_thread")
-        )),
+        # "hang" means nothing faulted: a watchdog killed the process because the main thread
+        # stopped making progress. Never reached a prompt before bug 2064436, so an agent handed
+        # a hang's stack had no way to know it was not looking at a fault.
+        ("Report type", raw.get("report_type")),
+        ("Analysed thread (the stack below is THIS thread)", _analysed_thread(raw)),
         ("MOZ_CRASH_REASON", _first_present(
             raw.get("moz_crash_reason"), dump.get("moz_crash_reason")
         )),
@@ -394,11 +492,25 @@ def _crash_facts(crash: dict) -> list[str]:
             raw.get("phc_free_stack"), info.get("phc_free_stack")
         )),
         ("Async shutdown timeout", raw.get("async_shutdown_timeout")),
+        # THE three shutdown-hang fields, none of which had ever reached a prompt. On bug
+        # 2064436's crash the spin-loop stack read `default: nsThreadPool::ShutdownWithTimeout
+        # BgIOThreadPool` — Socorro naming the exact pool the main thread was blocked on, while
+        # the agent, blind to it, invented a MediaTrackGraph. Present on 6 of 9 sampled
+        # diverging hangs, each naming a different subsystem (nsHttpConnectionMgr::Shutdown,
+        # QuotaManager::Observer::Observe, ParentImpl::ShutdownBackgroundThread, ...), so this is
+        # the highest-value line in the block for a hang and it is nearly free.
+        ("Shutdown phase reached", raw.get("shutdown_progress")),
+        ("Why shutdown started", raw.get("shutdown_reason")),
+        ("BLOCKED SPIN-EVENT-LOOP STACK (what the main thread is waiting for, innermost last "
+         "— this NAMES the stuck subsystem; treat it as the primary lead for a shutdown hang)",
+         raw.get("xpcom_spin_event_loop_stack")),
     ]
     for label, value in facts:
         value = _short_value(value)
         if value:
             lines.append(f"{label}: {value}")
+    # Before the signature-level block below, because it is still a fact about THIS report.
+    lines += _thread_inventory(raw)
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _hardware_noise_lines(crash)

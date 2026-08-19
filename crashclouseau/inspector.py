@@ -152,6 +152,67 @@ def get_path_node(uri):
     return name, node
 
 
+# The shutdown-hang watchdog's top frame. `nsTerminator.cpp`'s `RunWatchdog` calls MOZ_CRASH on
+# purpose once shutdown overruns its deadline, so on a hang report `crash_info.crashing_thread`
+# names the thread that crashed DELIBERATELY, not the one that is stuck. Matched on the FUNCTION
+# and not on `thread_name`: Linux caps a pthread name at 15 bytes, so "Shutdown Hang Terminator"
+# arrives as "Shutdow~minator" there (measured), while the symbolized frame is stable.
+_HANG_WATCHDOG_FRAME = "RunWatchdog"
+
+
+def thread_for_analysis(data):
+    """Index of the thread whose stack describes the failure.
+
+    Normally ``json_dump.crash_info.crashing_thread`` — the thread that faulted. A HANG is the
+    exception, and bug 2064436 is why: on crash ec1ff67a that field pointed at thread 45, the
+    "Shutdown Hang Terminator", whose seven frames are ``RunWatchdog -> _PR_NativeRunThread ->
+    pr_root -> thread_start -> BaseThreadInitThunk -> RtlUserThreadStart`` and carry no
+    information about the hang whatsoever. The only files it scores are thread-plumbing boilerplate
+    — ``nsTerminator.cpp``, nspr's ``pruthr.c``/``w95thred.c``, ``WindowsDllBlocklist.cpp`` — which
+    no window changeset touches, so nothing was interesting, the crash went OFF-STACK, and the
+    agent was handed the whole pushlog window with no stack signal at all. From that it produced a
+    fluent mechanism about a "MediaTrackGrph" thread this process never had, and Andreas Pehrson
+    closed it INVALID: "I see no proof in the profile that this parent process is using or has
+    used a MediaTrackGraph. No MediaTrackGrph thread, no GraphRunner thread."
+
+    The hung main thread's stack was in the same payload all along, as thread 0, and it names the
+    real blocker: ``ConditionVariableImpl::wait -> NS_ProcessNextEvent ->
+    nsThreadPool::ShutdownWithTimeout -> ShutdownXPCOM``. Measured on that crash, this function
+    turns 4 boilerplate files into 6 real ones (``nsThreadPool.cpp``, ``XPCOMInit.cpp``,
+    ``nsThreadUtils.cpp``, ``nsAppRunner.cpp``, ...), which is the difference between an off-stack
+    guess and a scored candidate set.
+
+    Socorro already knows this: its own TOP-LEVEL ``crashing_thread`` reads 0 on that crash, and
+    the ``shutdownhang | ...`` signature we triage is generated from the main thread. So the field
+    to follow is the top-level one, and the invariant restored here is that OUR stack describes
+    the same thread as the SIGNATURE we are triaging — on 2064436 the bug's ``cf_crash_signature``
+    was thread 0's while the comment's "Top 9 frames" were thread 45's.
+
+    Narrow on purpose — three conditions, all required, so an ordinary crash is untouched:
+    ``report_type == "hang"``, the two fields disagree, and the ``crash_info`` thread's top frame
+    is the watchdog. Measured over 40 sampled nightly hang reports: 9 diverge, every one of them a
+    ``shutdownhang`` with ``RunWatchdog`` on top and the top-level field pointing at the main
+    thread; the other 31 agree and are left alone. Falls back to ``crash_info`` on anything
+    unexpected — a bad index must not lose the stack."""
+    dump = data.get("json_dump") or {}
+    threads = dump.get("threads") or []
+    n = (dump.get("crash_info") or {}).get("crashing_thread")
+    if not isinstance(n, int) or not 0 <= n < len(threads):
+        return n
+    if (data.get("report_type") or "") != "hang":
+        return n
+    alt = data.get("crashing_thread")
+    if not isinstance(alt, int) or alt == n or not 0 <= alt < len(threads):
+        return n
+    top = ((threads[n].get("frames") or [{}])[0] or {}).get("function") or ""
+    if _HANG_WATCHDOG_FRAME not in top:
+        return n
+    logger.info(
+        "hang: analysing thread %s (%s) instead of the watchdog thread %s (%s)",
+        alt, threads[alt].get("thread_name"), n, threads[n].get("thread_name"))
+    return alt
+
+
 def inspect_stacktrace(data, build_node):
     """Inspect the stack from the data and the check that the hg node
     from the build is the same that the one we have in stack data
@@ -161,7 +222,9 @@ def inspect_stacktrace(data, build_node):
     dump = data["json_dump"]
     max_frames = 50
     if "threads" in dump:
-        N = dump["crash_info"].get("crashing_thread")
+        # NOT `crash_info.crashing_thread` directly: on a hang that is the watchdog thread that
+        # crashed on purpose, and its stack says nothing. See `thread_for_analysis`.
+        N = thread_for_analysis(data)
         if N is not None:
             frames = dump["threads"][N]["frames"]
             frames = frames[0:max_frames]
