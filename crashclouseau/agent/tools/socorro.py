@@ -74,22 +74,37 @@ def _facet_line(facets: dict, key: str, label: str, n: int = 6) -> str | None:
 async def _first_seen_line(ctx: SocorroCtx, signature: str) -> str:
     """The signature's age, as ONE line of agent-facing text.
 
-    Asks ``sigage.first_seen_buildid`` — the same implementation the deterministic
+    Asks ``sigage.signature_history`` — the same implementation the deterministic
     stale-signature gate uses, so the agent and the gate cannot disagree about how old a
     signature is. Its window truncation can only make first-seen look NEWER, so the answer is
     a LOWER bound on the age and the text says so: the model must not read it as "the signature
-    is exactly this old"."""
-    first_seen = await asyncio.to_thread(
-        sigage.first_seen_buildid, signature, ctx.product, ctx.channel)
+    is exactly this old".
+
+    When the answer came from the OTHER channels, the channel's own first-seen is named too.
+    The model needs the difference: "new on nightly, a year old on release" is the shape of a
+    crash that a recent changeset merely exposed, and it is the shape reviewers keep having to
+    point out by hand (bug 2063902: "crash stats shows this is an existing crash signature")."""
+    hist = await asyncio.to_thread(
+        sigage.signature_history, signature, ctx.product, ctx.channel)
+    first_seen = hist["first_seen"]
     if not first_seen:
         return ("first-seen buildid: unknown (lookup found nothing / failed) — do NOT infer "
                 "the signature's age from the crash counts, which cover a short window")
     seen_dt = sigage.to_datetime(first_seen)
     age = "" if seen_dt is None else " (that build is {}d old)".format(
         (datetime.now(timezone.utc) - seen_dt).days)
-    return ("first-seen buildid: {}{} — the OLDEST build this signature crashes in; crash "
+    scope = ""
+    if hist["first_seen_channel"] and hist["first_seen_channel"] != first_seen:
+        scope = ("; ACROSS ALL CHANNELS — on {} alone the oldest is only {} ({} of this "
+                 "signature's {} reports are on other channels), so the crash goes back to {} "
+                 "and a changeset that landed after that can at most have EXPOSED it"
+                 .format(ctx.channel, hist["first_seen_channel"],
+                         hist["total_other_channels"],
+                         (hist["total"] or 0) + (hist["total_other_channels"] or 0),
+                         first_seen))
+    return ("first-seen buildid: {}{} — the OLDEST build this signature crashes in{}; crash "
             "reports were searched over the last {}d, so the signature can only be this old "
-            "or older".format(first_seen, age, sigage.MAX_WINDOW_DAYS))
+            "or older".format(first_seen, age, scope, sigage.MAX_WINDOW_DAYS))
 
 
 @tool

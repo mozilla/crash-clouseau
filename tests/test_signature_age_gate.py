@@ -283,12 +283,16 @@ class TestSigageLookup(unittest.TestCase):
         seen = {}
 
         class _FakeSearch:
-            def __init__(self, params=None, handler=None, handlerdata=None):
-                seen["params"] = params
-                self._h, self._d = handler, handlerdata
+            URL = "https://crash-stats.mozilla.org/api/SuperSearch/"
+
+            def __init__(self, queries=None, **kw):
+                self._q = queries or []
 
             def wait(self):
-                self._h({"hits": [{"build_id": 20260101000000}]}, self._d)
+                for q in self._q:
+                    seen.setdefault("params", q.params)
+                    seen.setdefault("all", []).append(q.params)
+                    q.handler({"hits": [{"build_id": 20260101000000}]}, q.handlerdata)
 
         with mock.patch.object(sigage.socorro, "SuperSearch", _FakeSearch):
             sigage.first_seen_buildid("S", days=10_000)
@@ -300,10 +304,15 @@ class TestSigageLookup(unittest.TestCase):
         # And it must sort ascending by build_id rather than page a count-ordered facet.
         self.assertEqual(seen["params"]["_sort"], "build_id")
         self.assertEqual(seen["params"]["_results_number"], 1)
-        self.assertNotIn("_facets", seen["params"])
+        # No channel filter: first-seen is the ORIGIN question and spans every channel. The
+        # `release_channel` facet is what still scopes the bit-flip gate's count.
+        self.assertNotIn("release_channel", seen["params"])
+        self.assertEqual(seen["params"]["_facets"], "release_channel")
 
     def test_lookup_failure_returns_none_instead_of_raising(self):
         class _Boom:
+            URL = "https://crash-stats.mozilla.org/api/SuperSearch/"
+
             def __init__(self, **kw):
                 pass
 

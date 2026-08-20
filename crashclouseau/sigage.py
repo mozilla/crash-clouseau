@@ -32,7 +32,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
+from libmozdata.connection import Query
 
+from crashclouseau import config, utils
 from crashclouseau.logger import logger
 
 # Socorro hard-rejects more than 365 days; the implicit "to now" upper bound pushes an exact
@@ -49,27 +51,94 @@ def _buildid_to_dt(buildid):
         return None
 
 
-def signature_history(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
-    """``{"first_seen": buildid or None, "total": int or None}`` for a signature, in ONE request.
+def _channel_total(result, channel):
+    """How many reports *channel* has, off the response's ``release_channel`` facet.
 
-    Both numbers come off the same SuperSearch because both callers want them on the same run
-    and the response already carries each: ``hits`` (sorted ascending, one row) gives the oldest
-    build, ``total`` gives how many crash reports the signature has at all. Nothing here costs
-    more than the first-seen lookup used to.
+    The query is no longer channel-filtered (see ``signature_history``), so the count the
+    bit-flip gate needs has to be recovered from the facet rather than read off ``total``.
 
-    ``total`` is the count over the WHOLE window, not from this build forward, and that is the
-    point: it answers "has this signature ever been anything but a one-off?", which is what the
-    bit-flip gate needs. ``report_bug.fetch_signature_stats`` computes the other quantity (from
-    this buildid on) for the bug comment; they are deliberately different questions.
+    ``beta`` is summed over BOTH terms ``utils.get_search_channel`` maps it to: Socorro still
+    stores part of beta under ``aurora``, and dropping it loses about a third of the channel."""
+    if not channel:
+        total = result.get("total")
+        return int(total) if isinstance(total, int) else None
+    wanted = utils.get_search_channel(channel)
+    wanted = {wanted} if isinstance(wanted, str) else set(wanted)
+    rows = (result.get("facets") or {}).get("release_channel") or []
+    if not rows:
+        # An empty RESULT SET is a real zero; a missing facet on a non-empty one is not.
+        return 0 if result.get("total") == 0 else None
+    return sum(int(r.get("count") or 0) for r in rows if r.get("term") in wanted)
 
-    ``None`` for either field means we could not find out — never zero. A failed lookup must not
+
+def _oldest_build(result):
+    """The oldest buildid in an ascending-sorted, one-row result. ``None`` when there is none."""
+    for hit in (result or {}).get("hits") or []:
+        if hit.get("build_id"):
+            return str(hit["build_id"])
+    return None
+
+
+def signature_history(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS,
+                      other_channel_floor=None):
+    """How old a signature is and how much it crashes:
+    ``{"first_seen", "first_seen_channel", "total", "total_other_channels"}``.
+
+    ``first_seen`` is the ANSWER — the buildid the stale-signature gate and the agent should
+    both reason from. The other three are the parts it is built out of, returned so the choice
+    is inspectable rather than hidden.
+
+    WHY THE ANSWER IS NOT SIMPLY THE CHANNEL'S OWN FIRST-SEEN. "Could this candidate be the
+    crash's ORIGIN?" is not a per-channel question. Scoped to nightly it read exactly backwards
+    for ``nsStyleContent::NonAltContentItems``: esr back to build 20251009121631 and release to
+    20251106194447, 32 reports across the two — but its first NIGHTLY report is build
+    20260811085340, so the gate saw a nine-day-old signature, stayed silent, and bug 2062934 was
+    filed at 97% naming a four-week-old changeset into a bug where a human had already written
+    "there's no recent regressor/regression-range to cast blame on here".
+
+    WHY IT IS NOT SIMPLY THE ALL-CHANNEL FIRST-SEEN EITHER. Signature reuse is real, and an old
+    report on another channel can be a different defect wearing the same name. Replayed over the
+    35 filings the canary had made by 2026-08-20, the unfloored all-channel rule fired on 12 that
+    the nightly one spared — and those 12 split roughly evenly into filings a human refuted and
+    filings a human FIXED. It is not usable as-is.
+
+    SO: the other channels' history is admitted only once there is enough of it to be evidence —
+    ``other_channel_floor`` reports outside ``channel``, else the channel's own first-seen. On
+    those same 12 the separation is clean: every filing a human refuted had 21 or more
+    off-channel reports (2062934: 26, 2064137: 21, 2062335: 26, 2063003: 43, 2063902: 80 — the
+    last two refuted in almost these words, "RESOLVED DUPLICATE" and "crash stats shows this is
+    an existing crash signature"), and all three a human acted on had 9 or fewer (2063892: 9,
+    2062286: 3, 2063864: 1). The default sits at the conservative end of that gap. Release is
+    10%-sampled, so 20 reports there is nearer 200 real crashes — an established crash, not a
+    stray. CALIBRATED ON TEN POINTS, though: re-measure it before trusting it far.
+
+    The fallback is what makes this purely ADDITIVE. Below the floor the answer is byte-for-byte
+    the value this returned before, so the change can only ever add a firing, never remove one —
+    all six leads the gate already caught still trip it.
+
+    ``total`` stays on ``channel``, because its consumer needs the opposite scope. It answers
+    "has this signature ever been anything but a one-off?" for the bit-flip gate, whose
+    population rates (``POPULATION_BIT_FLIP_RATE``) are nightly-measured precisely because
+    release accumulates hardware noise that says nothing about a nightly crash — the all-channel
+    flip rate is three times higher. Widening it would silently move that gate's denominator.
+    ``report_bug.fetch_signature_stats`` computes yet another quantity (from this buildid on)
+    for the bug comment; all three are deliberately different questions.
+
+    TWO requests, issued together so they cost one round-trip: the oldest build on ``channel``
+    cannot be read off the all-channel response, because the only ordering Socorro will give is
+    over the whole result set and a count-ordered facet drops the oldest row.
+
+    ``None`` for any field means we could not find out — never zero. A failed lookup must not
     read as "brand new" to the stale-signature gate nor as "a singleton" to the bit-flip gate."""
-    empty = {"first_seen": None, "total": None}
+    empty = {"first_seen": None, "first_seen_channel": None,
+             "total": None, "total_other_channels": None}
     if not signature:
         return empty
+    if other_channel_floor is None:
+        other_channel_floor = config.get_agent_signature_age()["other_channel_floor"]
     days = max(1, min(int(days or MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-    params = {
+    base = {
         "signature": "=" + signature,
         "product": product or "Firefox",
         "date": ">=" + since,
@@ -79,33 +148,56 @@ def signature_history(signature, product="Firefox", channel="nightly", days=MAX_
         "_sort": "build_id",
         "_results_number": 1,
     }
-    if channel:
-        params["release_channel"] = channel
+    # Unfiltered, plus the facet that recovers the per-channel count the filter used to give.
+    any_params = {**base, "_facets": "release_channel"}
     got = {}
 
-    def handler(json_, data):
-        data["result"] = json_
+    def make_handler(key):
+        def handler(json_, data):
+            data[key] = json_
+        return handler
 
+    queries = [Query(socorro.SuperSearch.URL, params=any_params,
+                     handler=make_handler("any"), handlerdata=got)]
+    if channel:
+        queries.append(Query(socorro.SuperSearch.URL,
+                             params={**base, "release_channel": utils.get_search_channel(channel)},
+                             handler=make_handler("channel"), handlerdata=got))
     try:
-        socorro.SuperSearch(params=params, handler=handler, handlerdata=got).wait()
+        socorro.SuperSearch(queries=queries).wait()
     except Exception as exc:  # pragma: no cover - network; never break a seed
         logger.warning("sigage: signature history lookup failed for %r: %s", signature, exc)
         return empty
-    result = got.get("result") or {}
-    first_seen = None
-    for hit in result.get("hits") or []:
-        if hit.get("build_id"):
-            first_seen = str(hit["build_id"])
-            break
-    total = result.get("total")
-    return {"first_seen": first_seen,
-            "total": int(total) if isinstance(total, int) else None}
+
+    any_result = got.get("any") or {}
+    first_seen_any = _oldest_build(any_result)
+    total = _channel_total(any_result, channel)
+    overall = any_result.get("total")
+    overall = int(overall) if isinstance(overall, int) else None
+    other = None if (overall is None or total is None) else max(0, overall - total)
+
+    if not channel:
+        first_seen_channel = first_seen_any
+    else:
+        first_seen_channel = _oldest_build(got.get("channel") or {})
+
+    # The floor. An unknown off-channel count is not a cleared floor: an unresolved lookup must
+    # not be what widens the gate.
+    if other is not None and other >= other_channel_floor and first_seen_any:
+        first_seen = first_seen_any
+    else:
+        first_seen = first_seen_channel
+    return {"first_seen": first_seen, "first_seen_channel": first_seen_channel,
+            "total": total, "total_other_channels": other}
 
 
 def first_seen_buildid(signature, product="Firefox", channel="nightly",
                        days=MAX_WINDOW_DAYS):
-    """The OLDEST buildid this signature appears in, within ``days``. ``None`` when the lookup
-    finds nothing or fails. Raises nothing."""
+    """The oldest buildid this signature appears in, within ``days`` — across EVERY channel
+    once the other channels carry enough reports to be evidence, else within ``channel``. See
+    ``signature_history``, whose choice this returns unchanged so the agent and the
+    deterministic gate can never disagree about how old a signature is. ``None`` when the
+    lookup finds nothing or fails. Raises nothing."""
     return signature_history(signature, product, channel, days)["first_seen"]
 
 

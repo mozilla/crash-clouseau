@@ -59,13 +59,36 @@ class TestSocorroTool(unittest.TestCase):
         _FakeSuperSearch.RESULT = _FACET_RESULT
         _FakeSuperSearch.last_params = None
 
-    def _run(self, *args, first_seen=_OLD_BUILD, search=_FakeSuperSearch, **kwargs):
+    def _run(self, *args, first_seen=_OLD_BUILD, search=_FakeSuperSearch,
+             first_seen_channel=None, total=None, other=None, **kwargs):
         """Drive the tool with both Socorro calls faked: the facet query and the sigage
-        first-seen lookup (which shares `libmozdata.socorro`, hence the explicit mock)."""
+        history lookup (which shares `libmozdata.socorro`, hence the explicit mock).
+
+        ``first_seen_channel`` defaults to ``first_seen`` — i.e. the answer did NOT come from
+        the other channels, so the line stays the plain one."""
+        hist = {"first_seen": first_seen,
+                "first_seen_channel": first_seen if first_seen_channel is None
+                else first_seen_channel,
+                "total": total, "total_other_channels": other}
         with mock.patch.object(socorro_tool.socorro, "SuperSearch", search), \
-                mock.patch.object(socorro_tool.sigage, "first_seen_buildid",
-                                  return_value=first_seen) as fs:
+                mock.patch.object(socorro_tool.sigage, "signature_history",
+                                  return_value=hist) as fs:
             return asyncio.run(crash_stats(*args, **kwargs)), fs
+
+    def test_a_widened_first_seen_names_the_channels_own_too(self):
+        """When the answer came from the OTHER channels the model must be told, or it reads a
+        two-year-old cross-channel crash as new to this build."""
+        out, _ = self._run(SocorroCtx(product="Firefox", channel="nightly"), "Sig",
+                           first_seen="20240829075237",
+                           first_seen_channel="20260815213849", total=1, other=80)
+        self.assertIn("20240829075237", out)
+        self.assertIn("ACROSS ALL CHANNELS", out)
+        self.assertIn("20260815213849", out)
+        self.assertIn("80 of this signature's 81 reports", out)
+
+    def test_an_unwidened_first_seen_says_nothing_about_channels(self):
+        out, _ = self._run(SocorroCtx(product="Firefox", channel="nightly"), "Sig")
+        self.assertNotIn("ACROSS ALL CHANNELS", out)
 
     def test_first_seen_comes_from_sigage_not_the_facet(self):
         """THE regression test. The facet holds only NEW builds; first-seen must be the old

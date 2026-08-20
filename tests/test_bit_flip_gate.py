@@ -326,26 +326,160 @@ class TestCrashBriefCarriesTheEvidence(unittest.TestCase):
         self.assertNotIn("r7", summary)
 
 
+def _fake_search(response, calls, channel_response=None):
+    """A ``socorro.SuperSearch`` stand-in for the two-query form ``signature_history`` uses.
+
+    Records each query's params and replays *response* to the unfiltered one, and
+    *channel_response* (defaulting to *response*) to the ``release_channel``-filtered one."""
+
+    class FakeSearch:
+        URL = "https://crash-stats.mozilla.org/api/SuperSearch/"
+
+        def __init__(self, queries=None, **kw):
+            self.queries = queries or []
+
+        def wait(self):
+            for q in self.queries:
+                calls.append(q.params)
+                filtered = "release_channel" in (q.params or {})
+                body = channel_response if (filtered and channel_response is not None) \
+                    else response
+                q.handler(body, q.handlerdata)
+            return None
+
+    return FakeSearch
+
+
+def _response(total, per_channel, build_id="20260325210205"):
+    return {"hits": [{"build_id": build_id}], "total": total,
+            "facets": {"release_channel": [{"term": t, "count": c}
+                                           for t, c in per_channel.items()]}}
+
+
 class TestSignatureHistory(unittest.TestCase):
-    """One SuperSearch now answers both gates' questions."""
+    """One SuperSearch answers both gates' questions — at DIFFERENT channel scopes.
+
+    ``first_seen`` spans every channel (the origin question is not per-channel), ``total``
+    stays on the requested one (the bit-flip gate's population rates are nightly-measured).
+    That split is the whole point of the facet, so these pin both halves."""
 
     def test_first_seen_and_total_come_from_one_request(self):
         from crashclouseau import sigage
 
         calls = []
-
-        class FakeSearch:
-            def __init__(self, params=None, handler=None, handlerdata=None):
-                calls.append(params)
-                handler({"hits": [{"build_id": "20260325210205"}], "total": 7}, handlerdata)
-
-            def wait(self):
-                return None
-
-        with mock.patch.object(sigage.socorro, "SuperSearch", FakeSearch):
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search(_response(30, {"nightly": 7, "release": 23}), calls)):
             got = sigage.signature_history("S", "Firefox", "nightly")
-        self.assertEqual(got, {"first_seen": "20260325210205", "total": 7})
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(got["first_seen"], "20260325210205")
+        self.assertEqual(got["total"], 7)
+        self.assertEqual(got["total_other_channels"], 23)
+        # Two queries, ONE wait: the channel's own oldest build cannot be read off the
+        # unfiltered response, and it is the fallback below the floor.
+        self.assertEqual(len(calls), 2)
+
+    def test_the_request_is_NOT_channel_filtered(self):
+        # The bug this fixes: scoped to nightly, a signature ten months old on release looked
+        # nine days old, the stale gate stayed silent, and bug 2062934 was filed at 97%.
+        from crashclouseau import sigage
+
+        calls = []
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search(_response(30, {"nightly": 7}), calls)):
+            sigage.signature_history("S", "Firefox", "nightly")
+        self.assertNotIn("release_channel", calls[0])
+        self.assertEqual(calls[0]["_facets"], "release_channel")
+        # ...and the SECOND query is the channel-scoped fallback.
+        self.assertEqual(calls[1]["release_channel"], "nightly")
+        self.assertNotIn("_facets", calls[1])
+
+    def test_total_is_the_channel_slice_not_the_whole_population(self):
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search(_response(500, {"nightly": 3, "release": 497}), [])):
+            got = sigage.signature_history("S", "Firefox", "nightly")
+        # 500 would tell the bit-flip gate this is a busy signature; on nightly it is a
+        # near-singleton, and nightly is the population its rates are measured against.
+        self.assertEqual(got["total"], 3)
+
+    def test_beta_is_summed_over_aurora_too(self):
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search(_response(90, {"beta": 40, "aurora": 20,
+                                                           "release": 30}), [])):
+            self.assertEqual(sigage.signature_history("S", "Firefox", "beta")["total"], 60)
+
+    def test_no_channel_asked_for_means_the_whole_population(self):
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search(_response(90, {"nightly": 90}), [])):
+            self.assertEqual(sigage.signature_history("S", "Firefox", None)["total"], 90)
+
+    def test_a_channel_with_no_reports_is_zero_not_none(self):
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search(_response(23, {"release": 23}), [])):
+            self.assertEqual(sigage.signature_history("S", "Firefox", "nightly")["total"], 0)
+
+    def test_a_missing_facet_on_a_NON_empty_result_is_unknown(self):
+        # Not zero: "we could not find out" must not read as "a singleton" to the bit-flip gate.
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search({"hits": [{"build_id": "20260101000000"}],
+                                             "total": 12}, [])):
+            got = sigage.signature_history("S", "Firefox", "nightly")
+        self.assertEqual(got["first_seen"], "20260101000000")
+        self.assertIsNone(got["total"])
+
+    def test_below_the_floor_the_answer_is_the_CHANNELS_own_first_seen(self):
+        # Purely additive: with too little off-channel history to be evidence, the answer is
+        # byte-for-byte what this returned before, so no firing the gate already had is lost.
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch", _fake_search(
+                _response(12, {"nightly": 9, "release": 3}, build_id="20250101000000"), [],
+                channel_response=_response(9, {"nightly": 9}, build_id="20260801000000"))):
+            got = sigage.signature_history("S", "Firefox", "nightly", other_channel_floor=20)
+        self.assertEqual(got["total_other_channels"], 3)
+        self.assertEqual(got["first_seen"], "20260801000000")
+        self.assertEqual(got["first_seen_channel"], "20260801000000")
+
+    def test_at_the_floor_the_other_channels_history_is_admitted(self):
+        # bug 2062934's shape: three nightly reports, twenty-nine across channels, and a
+        # first-seen ten months older than nightly knows about.
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch", _fake_search(
+                _response(29, {"nightly": 3, "release": 26}, build_id="20251009121631"), [],
+                channel_response=_response(3, {"nightly": 3}, build_id="20260811085340"))):
+            got = sigage.signature_history("S", "Firefox", "nightly", other_channel_floor=20)
+        self.assertEqual(got["total_other_channels"], 26)
+        self.assertEqual(got["first_seen"], "20251009121631")
+        self.assertEqual(got["first_seen_channel"], "20260811085340")
+
+    def test_an_unknown_off_channel_count_is_not_a_cleared_floor(self):
+        # A lookup we could not resolve must not be the thing that widens the gate.
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch", _fake_search(
+                {"hits": [{"build_id": "20250101000000"}], "total": 400}, [],
+                channel_response=_response(3, {"nightly": 3}, build_id="20260801000000"))):
+            got = sigage.signature_history("S", "Firefox", "nightly", other_channel_floor=20)
+        self.assertIsNone(got["total_other_channels"])
+        self.assertEqual(got["first_seen"], "20260801000000")
+
+    def test_an_empty_result_set_is_a_real_zero(self):
+        from crashclouseau import sigage
+
+        with mock.patch.object(sigage.socorro, "SuperSearch",
+                               _fake_search({"hits": [], "total": 0, "facets": {}}, [])):
+            self.assertEqual(sigage.signature_history("S", "Firefox", "nightly"),
+                             {"first_seen": None, "first_seen_channel": None,
+                              "total": 0, "total_other_channels": 0})
 
     def test_a_failed_lookup_is_none_not_zero(self):
         # `total: 0` would read as "a signature nobody has ever hit" and suppress every verdict
@@ -353,12 +487,15 @@ class TestSignatureHistory(unittest.TestCase):
         from crashclouseau import sigage
 
         class Boom:
+            URL = "https://crash-stats.mozilla.org/api/SuperSearch/"
+
             def __init__(self, **kw):
                 raise RuntimeError("socorro down")
 
         with mock.patch.object(sigage.socorro, "SuperSearch", Boom):
             got = sigage.signature_history("S")
-        self.assertEqual(got, {"first_seen": None, "total": None})
+        self.assertEqual(got, {"first_seen": None, "first_seen_channel": None,
+                               "total": None, "total_other_channels": None})
 
     def test_first_seen_buildid_still_answers_the_old_question(self):
         from crashclouseau import sigage

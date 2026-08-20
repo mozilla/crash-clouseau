@@ -555,11 +555,19 @@ def get_agent_signature_age():
 
     A DOWNWEIGHT, deliberately not a drop: signature REUSE is real (an old signature can acquire
     a new cause, and a rare pre-existing crash can be made frequent by a new change), and 1 of 6
-    independently-confirmed leads still trips it — a hard rule would kill real leads."""
+    independently-confirmed leads still trips it — a hard rule would kill real leads.
+
+    ``other_channel_floor`` is how many reports a signature needs OUTSIDE the crash's own channel
+    before that history counts as evidence of the crash's age. First-seen was scoped to nightly,
+    which reads backwards for a defect that is longstanding on release and merely new to nightly;
+    admitting the other channels unconditionally is worse still, splitting evenly between filings
+    a human refuted and filings a human fixed. See ``sigage.signature_history`` for the
+    measurement that put the boundary here, and for why the rule is purely additive."""
     a = get_agent().get("signature_age", {})
     return {
         "enabled": _env_bool("SIGNATURE_AGE_ENABLED", a.get("enabled", True)),
         "min_age_days": a.get("min_age_days", 7),
+        "other_channel_floor": a.get("other_channel_floor", 20),
     }
 
 
