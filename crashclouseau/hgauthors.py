@@ -204,8 +204,14 @@ def cmp_name_email(name, email_name):
     name = to_ascii_form(name.lower())
     email = rm_non_letter(email_name.lower())
 
+    if not email:
+        return False
+
     if " " in name:
-        toks = list(map(rm_non_letter, name.split(" ")))
+        # Keep only the tokens that still hold a letter. An emoji or a CJK given name
+        # leaves an empty token behind (to_ascii_form drops it), and the initial-based
+        # comparisons below index into tok[0].
+        toks = [t for t in map(rm_non_letter, name.split(" ")) if t]
         if "".join(toks) == email:
             return True
         for tok in toks:
@@ -337,7 +343,15 @@ def analyze_author(author, clean=True):
     if clean:
         author = clean_author(author)
 
-    r = analyze_author_helper(author)
+    try:
+        r = analyze_author_helper(author)
+    except Exception:
+        # An author we cannot parse costs us that author's name, nothing more. This runs
+        # inside the pushlog collect, which `update()` calls *before* `put_crashes`, so
+        # letting an exception out stops crash ingestion entirely until someone notices.
+        logger.error("Failed to parse author: {}".format(author), exc_info=True)
+        r = None
+
     if r:
         if not isinstance(r, list):
             return [post_process(r, author)]
