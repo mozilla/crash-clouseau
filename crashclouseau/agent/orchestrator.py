@@ -607,6 +607,7 @@ def build_seed(uuid):
     # Offline the seed simply lacks these keys and the gate no-ops (a documented fidelity gap).
     # Best-effort: a lookup failure must never break a seed.
     sig_first_seen = None
+    sig_first_seen_ever = None
     sig_report_count = None
     # ONE request serves two gates. `first_seen` is the stale-signature downweight's clock;
     # `total` is how many reports the signature has ever had, which is the bit-flip gate's other
@@ -623,6 +624,13 @@ def build_seed(uuid):
             )
             sig_first_seen = history["first_seen"]
             sig_report_count = history["total"]
+            # A THIRD request, and deliberately not folded into `signature_history` above: it is
+            # a different endpoint (`SignatureFirstDate`, a maintained table rather than a
+            # SuperSearch), with its own failure mode, and that function's two queries are
+            # batched into one round-trip on a contract this would quietly break. Its answer
+            # feeds no gate today — see `sigage.first_seen_ever`.
+            sig_first_seen_ever = sigage.first_seen_ever(
+                [info.get("signature", "")]).get(info.get("signature", ""))
         except Exception as exc:  # pragma: no cover - defensive; never break a seed
             logger.warning("agent: signature history lookup failed for %s: %s", uuid, exc)
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
@@ -661,6 +669,13 @@ def build_seed(uuid):
         # signature was FIRST seen in, plus each seeded candidate's landing date, so the gate can
         # ask whether the chosen candidate landed after the crash already existed.
         "signature_first_seen_buildid": sig_first_seen,
+        # The same question asked of Socorro's retention-free `SignatureFirstDate` table rather
+        # than of a 364-day SuperSearch the ~178-day ES wall truncates. NOT the gate's clock —
+        # `sigage.first_seen_ever` documents why substituting it there would clamp eight of the
+        # sixteen filings a human acted on. Carried so the NOVELTY question ("is this signature
+        # brand new?") has an instrument that cannot read 2017 as three days ago, and so the
+        # error in the windowed clock is measurable in prod.
+        "signature_first_seen_ever": sig_first_seen_ever,
         # How many reports this signature has EVER had (whole window, not from this build on —
         # `report_bug.fetch_signature_stats` computes that other quantity for the bug comment).
         # ``None`` means the lookup failed and must never read as "a singleton".
@@ -1766,6 +1781,43 @@ def _record_window_membership(dossier, seed):
     }
 
 
+def _record_signature_age_facts(dossier, seed):
+    """Record how old this signature really was, on BOTH clocks. Moves no rung.
+
+    Recorded rather than acted on, deliberately and in that order. The windowed clock
+    (``signature_first_seen_buildid``, a 364-day SuperSearch that Socorro's ~178-day ES retention
+    truncates further) is the one ``_apply_signature_age_gate`` reasons from, and it is measurably
+    wrong: on the ten `Core :: JavaScript*` filings a module owner rejected it read 2017-10-28 as
+    2025-12-27 and 2023-01-04 as three days ago. The unbounded clock
+    (``signature_first_seen_ever``, Socorro's ``SignatureFirstDate`` table) is right, and cannot
+    simply be substituted — see ``sigage.first_seen_ever`` for the eight FIXED/DUPLICATE filings
+    that would start tripping the gate if it were.
+
+    So both are written on every reported verdict, with the age each implies. That makes "how far
+    apart are the two clocks, and on which crashes?" answerable from prod data before any rung
+    depends on the answer — the `nshare` arrangement, and the lesson of `31b5f3b`, where a gate
+    returned before recording and spent nine days unmeasurable.
+
+    Unrecorded (rather than zero) whenever a lookup did not answer: a signature whose age we could
+    not establish must never read as a new one."""
+    if dossier is None or seed is None:
+        return
+    from crashclouseau import sigage
+
+    buildid = seed.get("buildid")
+    facts = {}
+    for key, first_seen in (("windowed", seed.get("signature_first_seen_buildid")),
+                            ("ever", seed.get("signature_first_seen_ever"))):
+        if not first_seen:
+            continue
+        facts["signature_first_seen_" + key] = first_seen
+        age = sigage.signature_age_days(first_seen, buildid)
+        if age is not None:
+            facts["signature_age_days_" + key] = age
+    if facts:
+        dossier.corroborations = {**(dossier.corroborations or {}), **facts}
+
+
 def _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
     """Has this signature's hardware-error share cleared bugbot's line, on a big enough sample?
 
@@ -2234,6 +2286,11 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.
         _record_window_membership(result.dossier, seed)
+        # Also not a gate: how old the signature was on each of the two clocks. The windowed one
+        # is what `_apply_signature_age_gate` above already reasoned from; the unbounded one says
+        # how wrong that was. Recorded for every verdict so the gap is measurable before any rung
+        # depends on it.
+        _record_signature_age_facts(result.dossier, seed)
         # Which learned archetypes were in front of the agent. Recorded even when none matched
         # (as an empty list) so "this run saw no hints" and "this run predates the feature" stay
         # distinguishable — `Feedback` joins on this to score a rule against real outcomes.

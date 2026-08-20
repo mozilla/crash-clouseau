@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from libmozdata import socorro
 from libmozdata.connection import Query
 
-from crashclouseau import config, utils
+from crashclouseau import config, net, utils
 from crashclouseau.logger import logger
 
 # Socorro hard-rejects more than 365 days; the implicit "to now" upper bound pushes an exact
@@ -199,6 +199,84 @@ def first_seen_buildid(signature, product="Firefox", channel="nightly",
     deterministic gate can never disagree about how old a signature is. ``None`` when the
     lookup finds nothing or fails. Raises nothing."""
     return signature_history(signature, product, channel, days)["first_seen"]
+
+
+# Socorro's own answer to "when did this signature first appear, ever". Not a SuperSearch: it is
+# backed by a maintained table, so it is not bounded by the Elasticsearch retention window that
+# caps everything else in this module.
+SIGNATURE_FIRST_DATE_URL = "https://crash-stats.mozilla.org/api/SignatureFirstDate/"
+
+# Signatures per request. The endpoint takes a repeated `signatures` parameter; 50 keeps the query
+# string well inside any sane URL limit even for the long `a | b | c` signatures.
+_FIRST_DATE_BATCH = 50
+
+
+def first_seen_ever(signatures):
+    """``{signature -> first buildid, ever}`` from Socorro's ``SignatureFirstDate`` API.
+
+    THE MEASUREMENT THAT MOTIVATES THIS. Every other first-seen in this module comes from a
+    SuperSearch bounded by ``MAX_WINDOW_DAYS``, and Socorro's Elasticsearch retention is shorter
+    still — probed at roughly 178 days (the earliest Firefox crash a 2026-08 query can reach is
+    2026-02-23). A signature older than the wall therefore reports its oldest *surviving* build,
+    which makes an ancient signature look recent. Measured on the ten Firefox-nightly bugs the
+    canary filed into `Core :: JavaScript*`, every one of which a module owner rejected:
+
+    ==========  =======================  ==================
+    bug         what the seed recorded   what is true
+    ==========  =======================  ==================
+    2062173     first seen 2025-12-27    **2017-10-28**
+    2063364     candidate landed +68d    first seen 2019-01-24
+    2062168     3 days old               first seen 2023-01-04
+    2062114     first seen 2026-02-13    2025-03-10
+    ==========  =======================  ==================
+
+    The error has a direction: truncation can only move first-seen FORWARD, so a signature reads
+    as newer than it is, never older.
+
+    THIS IS NOT A DROP-IN REPLACEMENT FOR ``signature_history``'s ``first_seen``, and swapping it
+    in would be a regression rather than a fix. ``_apply_signature_age_gate`` compares the
+    candidate's push date against first-seen and downweights the lead when the candidate landed
+    later; with a true, unbounded first-seen that comparison fires on any signature old enough,
+    and a signature being old does not stop a new patch from causing the crash. Measured over the
+    16 FIXED/DUPLICATE filings the canary has produced, true ages run 0, 0, 0, 0, 2, 39, 74, 158,
+    536, 640, 1424, 3317, 3829, 4110, 4581 and 5767 days — so eight of them sit on signatures the
+    unbounded clock calls years old, including ``FindSafeLength`` (first seen 2010-10-26, FIXED)
+    and ``nsJARProtocolHandler::MimeService`` (2014-01-23, FIXED). The truncated instrument keeps
+    those gaps small and is, by accident, the only reason the gate spares them. Changing the
+    gate's clock is a separate decision with its own back-test; this function deliberately does
+    not make it.
+
+    WHAT IT IS FOR: the NOVELTY question — "is this signature brand new?" — where the unbounded
+    value is strictly better and strictly conservative. It can only ever move a signature from
+    "looks new" to "is old", because it sees a superset of the history SuperSearch sees. On the
+    same two populations the separation is wide: the ten rejected JS filings are 283, 425, 514,
+    1304, 1311, 1346, 1364, 1430, 2754 and 3205 days old, while five of the sixteen good filings
+    sit at two days or less.
+
+    Batched, and never raises: an unreachable API yields ``{}`` and a caller that cannot tell how
+    old anything is, which must read as "we could not find out" and never as "brand new".
+    Signatures the API has no row for are absent from the result for the same reason."""
+    out = {}
+    wanted = [s for s in (signatures or []) if s]
+    if not wanted:
+        return out
+    for i in range(0, len(wanted), _FIRST_DATE_BATCH):
+        batch = wanted[i:i + _FIRST_DATE_BATCH]
+        try:
+            r = net.get(SIGNATURE_FIRST_DATE_URL, params={"signatures": batch})
+            r.raise_for_status()
+            hits = (r.json() or {}).get("hits") or []
+        except Exception as exc:  # pragma: no cover - network; never break a seed
+            logger.warning("sigage: SignatureFirstDate lookup failed for %d signature(s): %s",
+                           len(batch), exc)
+            continue
+        for hit in hits:
+            sig, build = hit.get("signature"), hit.get("first_build")
+            # A row with no build is no answer. `first_date` is not a substitute: the whole
+            # module compares BUILD ids, and a crash date can post-date the build by months.
+            if sig and build:
+                out[sig] = str(build)
+    return out
 
 
 # The CPU models whose OWN defects make a crash report untrustworthy. One entry, and it is not a
@@ -579,3 +657,23 @@ def days_landed_after_first_seen(first_seen, pushdate):
     if seen_dt is None or push_dt is None:
         return None
     return round((push_dt - seen_dt).total_seconds() / 86400.0, 1)
+
+
+def signature_age_days(first_seen, buildid):
+    """How old the signature already was when the build being triaged was produced.
+
+    A DIFFERENT question from ``days_landed_after_first_seen``, and the difference is why both
+    exist. That one asks whether a specific CANDIDATE can be the origin, and it is the right
+    question for a downweight: a signature merely being old says nothing, since two thirds of
+    triaged signatures are old and a new patch can perfectly well break code that has crashed
+    before. This one asks whether the signature is BRAND NEW, which is only useful in the
+    opposite direction — as evidence FOR looking, never against it.
+
+    ``None`` when either side is unknown, because a signature whose age we could not establish
+    is not a new one. Pair it with ``first_seen_ever``: computed from the windowed ``first_seen``
+    it will read a years-old signature as days old whenever the window truncates."""
+    seen_dt = _buildid_to_dt(first_seen)
+    build_dt = _buildid_to_dt(buildid)
+    if seen_dt is None or build_dt is None:
+        return None
+    return round((build_dt - seen_dt).total_seconds() / 86400.0, 1)
