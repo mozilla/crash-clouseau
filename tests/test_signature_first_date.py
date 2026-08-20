@@ -23,6 +23,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
+from urllib.parse import urlencode  # noqa: E402
 
 from crashclouseau import sigage  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
@@ -73,14 +74,35 @@ class TestFirstSeenEver(unittest.TestCase):
         self.assertEqual(get.call_args[1]["params"]["signatures"],
                          ["js::detail::BumpChunk::assertInvariants", "nsAtom::IsStatic"])
 
-    def test_batches(self):
-        sigs = ["sig{}".format(i) for i in range(sigage._FIRST_DATE_BATCH + 3)]
+    def test_batches_by_url_bytes_not_by_count(self):
+        # Real signatures reach Socorro's own 255-char SigTruncate ceiling, and at that length
+        # crash-stats rejects the query string: measured live, 10 per request is 3217 bytes and a
+        # 200, 20 is 6559 and a 400, 30 is 9925 and a 414. Batching by count was silently wrong.
+        long_sigs = ["A" * 255 for _ in range(20)]
         with mock.patch.object(sigage.net, "get", return_value=_hits()) as get:
-            sigage.first_seen_ever(sigs)
-        self.assertEqual(get.call_count, 2)
-        self.assertEqual(len(get.call_args_list[0][1]["params"]["signatures"]),
-                         sigage._FIRST_DATE_BATCH)
-        self.assertEqual(len(get.call_args_list[1][1]["params"]["signatures"]), 3)
+            sigage.first_seen_ever(long_sigs)
+        for call in get.call_args_list:
+            url = sigage.SIGNATURE_FIRST_DATE_URL + "?" + urlencode(
+                {"signatures": call[1]["params"]["signatures"]}, doseq=True)
+            self.assertLessEqual(len(url), 4094, "a request would be rejected outright")
+        self.assertEqual(sum(len(c[1]["params"]["signatures"]) for c in get.call_args_list),
+                         len(long_sigs), "every signature must be asked about exactly once")
+
+    def test_short_signatures_still_batch_generously(self):
+        # The byte budget must not turn into one-request-per-signature for ordinary names.
+        with mock.patch.object(sigage.net, "get", return_value=_hits()) as get:
+            sigage.first_seen_ever(["nsAtom::Release"] * 40)
+        self.assertLessEqual(get.call_count, 2)
+
+    def test_an_oversized_signature_is_still_asked_about(self):
+        # Dropping it would be the exact silent-absence failure the budget exists to prevent:
+        # the caller cannot tell "we never asked" from "Socorro has no row".
+        huge = "B" * 5000
+        with mock.patch.object(sigage.net, "get", return_value=_hits()) as get:
+            sigage.first_seen_ever([huge, "nsAtom::Release"])
+        asked = [s for c in get.call_args_list for s in c[1]["params"]["signatures"]]
+        self.assertIn(huge, asked)
+        self.assertIn("nsAtom::Release", asked)
 
     def test_no_signatures_makes_no_request(self):
         with mock.patch.object(sigage.net, "get") as get:
@@ -208,6 +230,58 @@ class TestRecordSignatureAgeFacts(unittest.TestCase):
             with self.subTest(seed=seed):
                 orch._record_signature_age_facts(_dossier(), seed)
         orch._record_signature_age_facts(None, {"buildid": "20260810000000"})
+
+
+class TestRenameSuspected(unittest.TestCase):
+    """A signature is only NEW if nobody renamed an old crash onto it.
+
+    `SignatureFirstDate` claims an all-time minimum; Elasticsearch reaches back ~178 days. ES
+    holding an OLDER build is impossible unless those documents were re-signatured after their
+    window closed -- Socorro's cron walks a rolling window of `date_processed`, which is the
+    SUBMITTED timestamp and is never refreshed on reprocessing. Live example measured this session:
+    `rlbox::detail::dynamic_check | rlbox::rlbox_sandbox<T>::register_callback<T>` reports
+    first_build 20260609153453 (age 0) while ES holds 12 reports back to build 20251106194447."""
+
+    def _facts(self, windowed, ever, buildid="20260810000000"):
+        d = _dossier()
+        orch._record_signature_age_facts(d, {
+            "buildid": buildid, "signature_first_seen_buildid": windowed,
+            "signature_first_seen_ever": ever})
+        return d.corroborations
+
+    def test_fires_when_es_holds_an_older_build_than_the_all_time_minimum(self):
+        facts = self._facts(windowed="20251106194447", ever="20260609153453")
+        self.assertTrue(facts["signature_rename_suspected"])
+        self.assertLess(facts["signature_clock_drift_days"], -_thirty())
+
+    def test_cron_lag_is_not_a_rename(self):
+        # The only one of 450 non-novel controls to invert at all did so by a single day.
+        facts = self._facts(windowed="20260809000000", ever="20260810000000")
+        self.assertNotIn("signature_rename_suspected", facts)
+
+    def test_the_normal_direction_is_not_a_rename(self):
+        # The unbounded clock being OLDER than the windowed one is the expected case -- it is the
+        # whole reason `first_seen_ever` exists -- and must never be read as a rename.
+        facts = self._facts(windowed="20251227210510", ever="20171028220326")
+        self.assertNotIn("signature_rename_suspected", facts)
+        self.assertGreater(facts["signature_clock_drift_days"], 0)
+
+    def test_needs_both_clocks(self):
+        for windowed, ever in (("20260809000000", None), (None, "20260810000000"), (None, None)):
+            with self.subTest(windowed=windowed, ever=ever):
+                self.assertNotIn("signature_rename_suspected", self._facts(windowed, ever))
+
+    def test_it_only_suppresses_novelty_it_never_moves_a_rung(self):
+        d = _dossier()
+        orch._record_signature_age_facts(d, {
+            "buildid": "20260810000000", "signature_first_seen_buildid": "20251106194447",
+            "signature_first_seen_ever": "20260609153453"})
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+
+
+def _thirty():
+    return orch._RENAME_DRIFT_DAYS - 0.5
 
 
 class TestGateClockIsUnchanged(unittest.TestCase):

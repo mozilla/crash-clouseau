@@ -30,6 +30,7 @@ is a LOWER bound and the resulting downweight is conservative.
 """
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 from libmozdata import socorro
 from libmozdata.connection import Query
@@ -82,7 +83,7 @@ def _oldest_build(result):
 def signature_history(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS,
                       other_channel_floor=None):
     """How old a signature is and how much it crashes:
-    ``{"first_seen", "first_seen_channel", "total", "total_other_channels"}``.
+    ``{"first_seen", "first_seen_channel", "first_seen_any", "total", "total_other_channels"}``.
 
     ``first_seen`` is the ANSWER — the buildid the stale-signature gate and the agent should
     both reason from. The other three are the parts it is built out of, returned so the choice
@@ -130,7 +131,7 @@ def signature_history(signature, product="Firefox", channel="nightly", days=MAX_
 
     ``None`` for any field means we could not find out — never zero. A failed lookup must not
     read as "brand new" to the stale-signature gate nor as "a singleton" to the bit-flip gate."""
-    empty = {"first_seen": None, "first_seen_channel": None,
+    empty = {"first_seen": None, "first_seen_channel": None, "first_seen_any": None,
              "total": None, "total_other_channels": None}
     if not signature:
         return empty
@@ -188,6 +189,17 @@ def signature_history(signature, product="Firefox", channel="nightly", days=MAX_
     else:
         first_seen = first_seen_channel
     return {"first_seen": first_seen, "first_seen_channel": first_seen_channel,
+            # The UNFLOORED all-channel value, computed above and previously discarded. Not a
+            # third opinion on how old the signature is -- `first_seen` remains the answer -- but
+            # the only one of the three that can catch a re-signaturing, because it is the only
+            # one derived purely from what Elasticsearch still holds, with no rule applied on top.
+            # Both `first_seen`'s alternatives lose the evidence: the channel-scoped value never
+            # sees an off-channel report, and the floored value ignores fewer than
+            # `other_channel_floor` of them -- which is exactly the shape a rename leaves behind.
+            # Measured on the renamed `rlbox::detail::dynamic_check | ...`: 12 off-channel reports
+            # back to build 20251106194447, below the floor of 20, so `first_seen` is None and the
+            # inversion is invisible unless this value is used.
+            "first_seen_any": first_seen_any,
             "total": total, "total_other_channels": other}
 
 
@@ -206,9 +218,40 @@ def first_seen_buildid(signature, product="Firefox", channel="nightly",
 # caps everything else in this module.
 SIGNATURE_FIRST_DATE_URL = "https://crash-stats.mozilla.org/api/SignatureFirstDate/"
 
-# Signatures per request. The endpoint takes a repeated `signatures` parameter; 50 keeps the query
-# string well inside any sane URL limit even for the long `a | b | c` signatures.
-_FIRST_DATE_BATCH = 50
+# Batching is by URL BYTES, not by a count of signatures, because the two are not proportional and
+# the count version is silently wrong. The endpoint takes a repeated `signatures` parameter, and
+# crash-stats rejects a long query string outright. Signatures run from ~20 characters to Socorro's
+# own `SigTruncate` ceiling of 255, and pipe-joined ones URL-encode to roughly three bytes per
+# character, so a fixed count that is comfortable for short names overruns on long ones: measured
+# against the 255-character signatures in our own `signatures` table, 10 per request is 3217 bytes
+# and fine, 20 is 6559 and a **400**, 30 is 9925 and a **414**. A count of 50 was fine in testing
+# only because the sample happened to be short.
+#
+# The failure that makes this worth doing carefully is not the HTTP error, it is what the error
+# looks like downstream: the handler below logs and moves on, so a rejected batch leaves its
+# signatures merely ABSENT from the result — indistinguishable from "Socorro has no row for this
+# signature". A caller asking "is this signature brand new?" would read a dropped batch as a yes.
+#
+# 3800 leaves headroom under the ~4094-byte limit for the scheme, host and path.
+_FIRST_DATE_URL_BUDGET = 3800
+
+
+def _first_date_batches(signatures):
+    """Split *signatures* into request-sized groups, measured in URL-encoded bytes.
+
+    A signature too long to fit the budget on its own still goes out alone rather than being
+    dropped: the server may well accept it, and a silent skip is the one outcome this function
+    exists to avoid. See ``_FIRST_DATE_URL_BUDGET``."""
+    batch, size = [], 0
+    for sig in signatures:
+        cost = len(urlencode({"signatures": sig})) + 1
+        if batch and size + cost > _FIRST_DATE_URL_BUDGET:
+            yield batch
+            batch, size = [], 0
+        batch.append(sig)
+        size += cost
+    if batch:
+        yield batch
 
 
 def first_seen_ever(signatures):
@@ -260,8 +303,7 @@ def first_seen_ever(signatures):
     wanted = [s for s in (signatures or []) if s]
     if not wanted:
         return out
-    for i in range(0, len(wanted), _FIRST_DATE_BATCH):
-        batch = wanted[i:i + _FIRST_DATE_BATCH]
+    for batch in _first_date_batches(wanted):
         try:
             r = net.get(SIGNATURE_FIRST_DATE_URL, params={"signatures": batch})
             r.raise_for_status()

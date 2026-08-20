@@ -607,6 +607,7 @@ def build_seed(uuid):
     # Offline the seed simply lacks these keys and the gate no-ops (a documented fidelity gap).
     # Best-effort: a lookup failure must never break a seed.
     sig_first_seen = None
+    sig_first_seen_any = None
     sig_first_seen_ever = None
     sig_report_count = None
     # ONE request serves two gates. `first_seen` is the stale-signature downweight's clock;
@@ -623,6 +624,7 @@ def build_seed(uuid):
                 channel,
             )
             sig_first_seen = history["first_seen"]
+            sig_first_seen_any = history["first_seen_any"]
             sig_report_count = history["total"]
             # A THIRD request, and deliberately not folded into `signature_history` above: it is
             # a different endpoint (`SignatureFirstDate`, a maintained table rather than a
@@ -676,6 +678,10 @@ def build_seed(uuid):
         # brand new?") has an instrument that cannot read 2017 as three days ago, and so the
         # error in the windowed clock is measurable in prod.
         "signature_first_seen_ever": sig_first_seen_ever,
+        # The unfloored all-channel value from the SAME query as `signature_first_seen_buildid`,
+        # so it is free. Only used to catch a re-signaturing (`_record_signature_age_facts`): the
+        # floored value hides exactly the off-channel reports a rename leaves behind.
+        "signature_first_seen_any": sig_first_seen_any,
         # How many reports this signature has EVER had (whole window, not from this build on —
         # `report_bug.fetch_signature_stats` computes that other quantity for the bug comment).
         # ``None`` means the lookup failed and must never read as "a singleton".
@@ -1781,6 +1787,12 @@ def _record_window_membership(dossier, seed):
     }
 
 
+# How far the two signature-age clocks must disagree before it means a re-signaturing rather than
+# Socorro's cron lag. Measured: the only one of 450 non-novel control signatures to invert at all
+# did so by 1 day, and the three real inversions in our own corpus sit at 40.5 and 45.6 days.
+_RENAME_DRIFT_DAYS = 30
+
+
 def _record_signature_age_facts(dossier, seed):
     """Record how old this signature really was, on BOTH clocks. Moves no rung.
 
@@ -1805,15 +1817,49 @@ def _record_signature_age_facts(dossier, seed):
     from crashclouseau import sigage
 
     buildid = seed.get("buildid")
+    windowed = seed.get("signature_first_seen_buildid")
+    ever = seed.get("signature_first_seen_ever")
+    # The inversion reads the UNFLOORED all-channel value, not the gate's floored `first_seen`.
+    # A rename shows up as a handful of off-channel reports on old builds, and the floor
+    # (`other_channel_floor`, 20) is designed to ignore exactly that many.
+    observed = seed.get("signature_first_seen_any") or windowed
     facts = {}
-    for key, first_seen in (("windowed", seed.get("signature_first_seen_buildid")),
-                            ("ever", seed.get("signature_first_seen_ever"))):
+    for key, first_seen in (("windowed", windowed), ("ever", ever)):
         if not first_seen:
             continue
         facts["signature_first_seen_" + key] = first_seen
         age = sigage.signature_age_days(first_seen, buildid)
         if age is not None:
             facts["signature_age_days_" + key] = age
+    # THE INVERSION, and it is a proof rather than a heuristic. `SignatureFirstDate` claims to be
+    # an all-time minimum, and Elasticsearch behind SuperSearch only reaches back ~178 days, so ES
+    # holding an OLDER build than the all-time minimum is arithmetically impossible — unless those
+    # documents were re-signatured onto this name after the fact. Socorro's cron walks a ~90-minute
+    # rolling window of `date_processed`, and `date_processed` is the SUBMITTED timestamp and is
+    # never refreshed on reprocessing, so a reprocessed old crash never re-enters that window and
+    # the all-time minimum silently stops being one.
+    #
+    # That is Calixte's worry made computable: a signature is only "new" if nobody renamed an old
+    # crash onto it. Measured over 500 live Firefox-nightly signatures it fires on 6 (1.2%), all
+    # six confirmed against `processor_history`, with 0 false positives on 450 non-novel controls.
+    #
+    # ONE-DIRECTIONAL, and the gap matters more than the sign. An older report PROVES a rename;
+    # no older report proves nothing, because both clocks are floored by the same retention wall
+    # and because the biggest artefact classes — a `MOZ_DIAGNOSTIC_ASSERT` prepended to an ancient
+    # crash site, a driver frame decorating it — mint a name that genuinely never existed before
+    # and leave no inversion at all. So this may suppress a novelty claim and must never
+    # corroborate one. The 30-day floor keeps the ~1-day cron lag out (measured: the only control
+    # that fired at any gap was 1 day).
+    #
+    # The drift is recorded whenever both clocks answered, fired or not, so "how far apart are the
+    # two clocks across the whole population?" stays answerable from prod — the flag alone would
+    # only ever show the tail it already decided to call a rename.
+    if observed and ever:
+        drift = sigage.signature_age_days(ever, observed)
+        if drift is not None:
+            facts["signature_clock_drift_days"] = drift
+            if drift <= -_RENAME_DRIFT_DAYS:
+                facts["signature_rename_suspected"] = True
     if facts:
         dossier.corroborations = {**(dossier.corroborations or {}), **facts}
 

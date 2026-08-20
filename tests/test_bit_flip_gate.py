@@ -479,6 +479,7 @@ class TestSignatureHistory(unittest.TestCase):
                                _fake_search({"hits": [], "total": 0, "facets": {}}, [])):
             self.assertEqual(sigage.signature_history("S", "Firefox", "nightly"),
                              {"first_seen": None, "first_seen_channel": None,
+                              "first_seen_any": None,
                               "total": 0, "total_other_channels": 0})
 
     def test_a_failed_lookup_is_none_not_zero(self):
@@ -495,6 +496,7 @@ class TestSignatureHistory(unittest.TestCase):
         with mock.patch.object(sigage.socorro, "SuperSearch", Boom):
             got = sigage.signature_history("S")
         self.assertEqual(got, {"first_seen": None, "first_seen_channel": None,
+                               "first_seen_any": None,
                                "total": None, "total_other_channels": None})
 
     def test_first_seen_buildid_still_answers_the_old_question(self):
