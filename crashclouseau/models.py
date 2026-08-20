@@ -2483,6 +2483,52 @@ class Dossier(db.Model):
         return (d.payload or {}).get("filed_bug") if d is not None else None
 
     @staticmethod
+    def already_commented(bug_id, signature):
+        """``{"uuid": ...}`` when we have ALREADY put an analysis of *signature* on *bug_id*,
+        else ``None`` — the gate that stops one bug collecting the same wall of text twice.
+
+        ``already_filed`` is keyed on the uuid, and that is not the same question. One
+        (signature, build) is split into as many proto-signature clusters as its stacks have
+        distinct frame lists, each of which is analysed and filed independently, so N clusters
+        on one signature produce N comments on the one bug they all resolve to. Bug 2062934 got
+        two 80 SECONDS apart from two crashes on the SAME machine whose stacks differed only by
+        six frames of recursion depth; 2064537 and 2063862 each got a second comment on a bug we
+        had just filed ourselves. Three of the 31 bugs we have commented on.
+
+        Keyed on (bug, signature), not on the bug alone, because a SECOND signature landing on
+        the same bug is real information — that is the one-defect-many-signatures case, and it
+        can only happen when the bug already lists the other signature.
+
+        Counts our own filings too (``mode="new_bug"``), which is where two of the three came
+        from: having just filed the bug, the next cluster finds it via
+        ``_open_bugs_for_signature`` and comments on it.
+
+        Fails CLOSED like ``already_filed`` — a lookup we cannot do returns a truthy sentinel,
+        so a DB failure produces silence rather than a duplicate."""
+        if not bug_id or not signature:
+            return None
+        fb = Dossier.payload["filed_bug"]
+        try:
+            row = (
+                db.session.query(UUID.uuid)
+                .select_from(Dossier)
+                .join(UUID, Dossier.uuidid == UUID.id)
+                .filter(
+                    # `filed` matters: a SKIPPED filing is recorded under the same key (see
+                    # `filed_bug_rows`), and a skip must not block the comment it declined
+                    # to make.
+                    fb["filed"].astext == "true",
+                    fb["bug"].astext == str(bug_id),
+                    fb["signature"].astext == signature,
+                )
+                .order_by(Dossier.id)
+                .first()
+            )
+        except Exception:                                  # pragma: no cover - defensive
+            return {"skipped": "prior-comment lookup failed"}
+        return {"uuid": row.uuid} if row else None
+
+    @staticmethod
     def filed_bugs_since(when):
         """How many bugs the autofiler has filed since *when* — the daily-cap counter."""
         return (

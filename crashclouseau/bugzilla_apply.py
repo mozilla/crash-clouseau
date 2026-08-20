@@ -561,7 +561,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     * if an OPEN bug already references the signature AND that bug belongs to this crash's own
       application (``_split_by_application``) AND it can be about this regression
       (``_bug_for_this_regression``), comment there instead of filing a duplicate — and if that
-      lookup FAILS we skip entirely rather than risk the duplicate.
+      lookup FAILS we skip entirely rather than risk the duplicate;
+    * never twice on one BUG for one signature (``Dossier.already_commented``), which is a
+      different question from "never twice for one crash": several proto-signature clusters of
+      the same signature are analysed independently and all land on the same bug.
 
     ``regressed_by`` is set — under the pushlog-window gate, on a bug we filed ourselves, and in
     its own PUT (see ``_link_regressed_by`` and ``report_bug.build_bug_preview``). Because we now
@@ -639,6 +642,22 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     if predating and bug_id is None:
         logger.info("autofile: open bug(s) %s all predate the suspected regressor — filing a "
                     "new bug for %s rather than commenting there", predating, uuid)
+
+    # Said it once already. `already_filed` above is keyed on the UUID, which is the wrong
+    # grain: one (signature, build) splits into one cluster per distinct stack, each analysed
+    # and filed on its own, and they all resolve to the SAME bug here. Bug 2062934 collected
+    # two identical analyses 80 seconds apart from two crashes on one machine. Skipping
+    # entirely rather than falling through to a new bug — a duplicate on BMO is the worse of
+    # the two noises.
+    prior_comment = (models.Dossier.already_commented(bug_id, signature)
+                     if bug_id is not None else None)
+    if prior_comment:
+        logger.info("autofile: bug %s already carries our analysis of %r (from %s) — not "
+                    "commenting again for %s", bug_id, signature,
+                    prior_comment.get("uuid") or "?", uuid)
+        return {"filed": False, "bug": bug_id,
+                "skipped": "already commented on bug {} for this signature".format(bug_id),
+                "prior_comment": prior_comment}
 
     from crashclouseau import report_bug
     try:

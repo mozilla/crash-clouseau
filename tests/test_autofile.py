@@ -4,8 +4,16 @@
 
 # Automatic Bugzilla filing — the ONE unattended write in the product.
 #   DATABASE_URL=sqlite:// python -m unittest tests.test_autofile
+#
+# `Dossier.already_commented` is a JSONB query, so its round-trip needs a disposable Postgres
+# (as in tests/test_persistence.py) and SILENTLY SKIPS without one:
+#   docker run -d --rm --name clouseau_test_pg -e POSTGRES_USER=clouseau \
+#       -e POSTGRES_PASSWORD=passwd -e POSTGRES_DB=clouseau_test -p 55432:5432 postgres
+#   DATABASE_URL=postgresql://clouseau:passwd@localhost:55432/clouseau_test \
+#       uv run python -m unittest tests.test_autofile
 import os
 
+os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import inspect  # noqa: E402
@@ -14,8 +22,15 @@ import unittest  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import bugzilla_apply, report_bug  # noqa: E402
+from crashclouseau import bugzilla_apply, db, models, report_bug  # noqa: E402
 from crashclouseau import config as cconfig  # noqa: E402
+
+
+def _is_postgres():
+    try:
+        return db.engine.dialect.name == "postgresql"
+    except Exception:
+        return False
 
 
 _PREVIEW = {
@@ -60,6 +75,8 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply.config, "get_bugzilla_token",
                               return_value="tok"),
             mock.patch.object(bugzilla_apply.models.Dossier, "already_filed",
+                              return_value=None),
+            mock.patch.object(bugzilla_apply.models.Dossier, "already_commented",
                               return_value=None),
             mock.patch.object(bugzilla_apply.models.Dossier, "filed_bugs_since",
                               return_value=0),
@@ -241,6 +258,67 @@ class TestDuplicates(_Base):
         res = self._file(comment_on_existing=False)
         self.assertFalse(res["filed"])
         self.assertEqual((self.created, self.comments), ([], []))
+
+
+class TestNeverTwiceOnOneBug(_Base):
+    """Bug 2062934 collected two identical analyses 80 seconds apart, from two crashes on the
+    SAME machine whose stacks differed only by six frames of recursion depth. Three of the 31
+    bugs we have commented on carry a second wall of text; in two of them the bug was one we
+    had just filed ourselves."""
+
+    def _prior(self, uuid="u-0"):
+        bugzilla_apply.models.Dossier.already_commented.return_value = {"uuid": uuid}
+
+    def test_a_bug_that_already_carries_our_analysis_gets_no_second_comment(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234)]
+        self._prior()
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertIn("already commented on bug 1234", res["skipped"])
+        self.assertEqual(self.comments, [])
+
+    def test_it_does_not_fall_through_to_filing_a_duplicate(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234)]
+        self._prior()
+        self._file()
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.filed, [])
+
+    def test_the_bug_and_the_earlier_crash_are_reported_back(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234)]
+        self._prior("u-earlier")
+        res = self._file()
+        self.assertEqual(res["bug"], 1234)
+        self.assertEqual(res["prior_comment"], {"uuid": "u-earlier"})
+
+    def test_the_question_is_asked_about_the_chosen_venue_and_this_signature(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234)]
+        self._file()
+        bugzilla_apply.models.Dossier.already_commented.assert_called_with(1234, "Foo::Bar")
+
+    def test_a_lookup_failure_produces_silence_not_a_duplicate(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234)]
+        bugzilla_apply.models.Dossier.already_commented.return_value = {
+            "skipped": "prior-comment lookup failed"}
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.created, [])
+
+    def test_a_new_bug_is_never_blocked_by_it(self):
+        # No open bug -> no venue -> the gate has nothing to ask about, and must not fire.
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        self._prior()
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "new_bug")
+
+    def test_the_first_comment_on_a_bug_still_goes_through(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1234)]
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "comment_on_existing")
+        self.assertEqual(self.comments, [(1234, "the whole bug opener")])
 
 
 class TestOtherApplications(_Base):
@@ -926,3 +1004,91 @@ class TestTokenResolution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_is_postgres(), "the filed_bug JSONB query needs a disposable Postgres")
+class TestAlreadyCommentedRoundTrip(unittest.TestCase):
+    """``Dossier.already_commented`` against a real backend — the gate above is only as good as
+    this query, and a JSONB path predicate cannot be exercised on sqlite."""
+
+    SIG = "Autofile::Commented"
+    OTHER = "Autofile::Other"
+    BUILDID = datetime(2026, 8, 18, 9, 20, tzinfo=timezone.utc)
+    VERSION = "9.9.9afc"
+
+    def setUp(self):
+        models.create()
+        self._clean()
+        self.sig = models.Signature.get_id(self.SIG)
+        self.other_sig = models.Signature.get_id(self.OTHER)
+        self.build = models.Build(self.BUILDID, "Firefox", "nightly", self.VERSION, None)
+        db.session.add(self.build)
+        db.session.commit()
+
+    def _clean(self):
+        db.session.rollback()
+        db.session.query(models.Build).filter(
+            models.Build.buildid == self.BUILDID,
+            models.Build.product == "Firefox",
+            models.Build.channel == "nightly",
+        ).delete(synchronize_session=False)
+        db.session.commit()
+
+    def tearDown(self):
+        self._clean()
+
+    def _filed(self, name, info, sigid=None, proto=None):
+        """A done dossier carrying ``filed_bug``, exactly as ``record_filed_bug`` writes it."""
+        u = models.UUID(name, sigid or self.sig, proto or name, self.build.id)
+        db.session.add(u)
+        db.session.commit()
+        models.Dossier.upsert(name, payload={"dossier": {}}, status="done")
+        models.Dossier.record_filed_bug(name, info)
+        return name
+
+    @staticmethod
+    def _info(bug, signature, filed=True, mode="comment_on_existing"):
+        return {"filed": filed, "bug": bug, "signature": signature, "mode": mode}
+
+    def test_a_comment_we_posted_is_found(self):
+        self._filed("afc-0001-aaaa-bbbb-ccccddddeeee", self._info(2062934, self.SIG))
+        found = models.Dossier.already_commented(2062934, self.SIG)
+        self.assertEqual(found, {"uuid": "afc-0001-aaaa-bbbb-ccccddddeeee"})
+
+    def test_a_bug_we_FILED_ourselves_counts_too(self):
+        # Two of the three real double-comments were a second cluster commenting on a bug the
+        # first cluster had just created.
+        self._filed("afc-0002-aaaa-bbbb-ccccddddeeee",
+                    self._info(2064537, self.SIG, mode="new_bug"))
+        self.assertTrue(models.Dossier.already_commented(2064537, self.SIG))
+
+    def test_another_bug_is_not_a_match(self):
+        self._filed("afc-0003-aaaa-bbbb-ccccddddeeee", self._info(2062934, self.SIG))
+        self.assertIsNone(models.Dossier.already_commented(2063003, self.SIG))
+
+    def test_another_signature_on_the_same_bug_is_not_a_match(self):
+        # One defect, several signatures: a second signature arriving on the same bug is real
+        # information, and only happens once the bug already lists it.
+        self._filed("afc-0004-aaaa-bbbb-ccccddddeeee", self._info(2062934, self.SIG))
+        self.assertIsNone(models.Dossier.already_commented(2062934, self.OTHER))
+
+    def test_a_SKIPPED_filing_does_not_block_the_comment_it_declined(self):
+        self._filed("afc-0005-aaaa-bbbb-ccccddddeeee",
+                    {"filed": False, "skipped": "daily cap 3 reached",
+                     "bug": 2062934, "signature": self.SIG})
+        self.assertIsNone(models.Dossier.already_commented(2062934, self.SIG))
+
+    def test_a_dossier_with_no_filed_bug_at_all_is_ignored(self):
+        u = "afc-0006-aaaa-bbbb-ccccddddeeee"
+        db.session.add(models.UUID(u, self.sig, u, self.build.id))
+        db.session.commit()
+        models.Dossier.upsert(u, payload={"dossier": {}}, status="done")
+        self.assertIsNone(models.Dossier.already_commented(2062934, self.SIG))
+
+    def test_the_bug_id_is_matched_as_a_number_not_a_prefix(self):
+        self._filed("afc-0007-aaaa-bbbb-ccccddddeeee", self._info(206293, self.SIG))
+        self.assertIsNone(models.Dossier.already_commented(2062934, self.SIG))
+
+    def test_no_venue_and_no_signature_ask_nothing(self):
+        self.assertIsNone(models.Dossier.already_commented(None, self.SIG))
+        self.assertIsNone(models.Dossier.already_commented(2062934, ""))
