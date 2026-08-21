@@ -1,0 +1,2864 @@
+[
+ {
+  "sig": "libc.so.6 | cuEGLApiInit",
+  "count": 1111,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::gmp::GMPChild::RecvPreloadLibs",
+  "count": 1075,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | small",
+  "count": 923,
+  "bugs": [
+   [
+    1318272,
+    "Core"
+   ],
+   [
+    1421345,
+    "Core"
+   ],
+   [
+    1541092,
+    "Core"
+   ],
+   [
+    1647269,
+    "Core"
+   ],
+   [
+    1660696,
+    "Thunderbird"
+   ],
+   [
+    1660710,
+    "Thunderbird"
+   ],
+   [
+    1673778,
+    "Core"
+   ],
+   [
+    1699340,
+    "Core"
+   ],
+   [
+    1738510,
+    "Calendar"
+   ],
+   [
+    1749192,
+    "Core"
+   ],
+   [
+    1806202,
+    "Core"
+   ],
+   [
+    1851428,
+    "Thunderbird"
+   ],
+   [
+    1896086,
+    "Thunderbird"
+   ],
+   [
+    2031161,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "IPCError-browser | ShutDownKill",
+  "count": 518,
+  "bugs": [
+   [
+    1279293,
+    "Core"
+   ],
+   [
+    1406996,
+    "Core"
+   ],
+   [
+    1439074,
+    "Core"
+   ],
+   [
+    1660300,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "igdusc64.dll | RtlpFreeHeapInternal | RtlFreeHeap | igdusc64.dll | RtlpLowFragHeapAllocFromContext",
+  "count": 508,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "abort | libgallium-24.2.8.so",
+  "count": 417,
+  "bugs": [
+   [
+    1993828,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+  "count": 318,
+  "bugs": [
+   [
+    1472062,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+  "count": 261,
+  "bugs": [
+   [
+    1675068,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::ContentChild::RecvConstructBrowser",
+  "count": 260,
+  "bugs": [
+   [
+    2022780,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+  "count": 252,
+  "bugs": [
+   [
+    1472062,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "atidxx64.dll | amdh264enc64.dll | _tailMerge_hid.dll | amdh264enc64.dll | CMFTransformActivate::ShutdownObject",
+  "count": 223,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "HandleGLibMessage",
+  "count": 201,
+  "bugs": [
+   [
+    1890074,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "nsAtom::IsStatic",
+  "count": 188,
+  "bugs": [
+   [
+    1798397,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+  "count": 186,
+  "bugs": [
+   [
+    2048390,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::widget::WlLogHandler",
+  "count": 182,
+  "bugs": [
+   [
+    1863047,
+    "Core"
+   ],
+   [
+    1868507,
+    "Core"
+   ],
+   [
+    1996736,
+    "Core"
+   ],
+   [
+    2001219,
+    "Core"
+   ],
+   [
+    2004555,
+    "Core"
+   ],
+   [
+    2015474,
+    "Core"
+   ],
+   [
+    2035750,
+    "Core"
+   ],
+   [
+    2035753,
+    "Core"
+   ],
+   [
+    2035754,
+    "Core"
+   ],
+   [
+    2059617,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "EnterJit",
+  "count": 158,
+  "bugs": [
+   [
+    858032,
+    "Core"
+   ],
+   [
+    1451720,
+    "Core"
+   ],
+   [
+    1461724,
+    "Core"
+   ],
+   [
+    1904173,
+    "Core"
+   ],
+   [
+    1999843,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+  "count": 158,
+  "bugs": [
+   [
+    1505660,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::HeaderWord::get",
+  "count": 153,
+  "bugs": [
+   [
+    1799300,
+    "Core"
+   ],
+   [
+    1863599,
+    "Core"
+   ],
+   [
+    1863600,
+    "Core"
+   ],
+   [
+    1891138,
+    "Core"
+   ],
+   [
+    1895101,
+    "Thunderbird"
+   ],
+   [
+    1948635,
+    "Core"
+   ],
+   [
+    2061080,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::detail::ChunkPtrHasStoreBuffer",
+  "count": 150,
+  "bugs": [
+   [
+    1541905,
+    "Core"
+   ],
+   [
+    1980548,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "libvulkan_radeon.so",
+  "count": 130,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "webrender::frame_builder::build_render_pass",
+  "count": 129,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in igd10um64xe.dll> | CContext::TID3D11DeviceContext_Draw_<T>",
+  "count": 125,
+  "bugs": [
+   [
+    1972146,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "wgpu_core::storage::Storage<T>::get",
+  "count": 125,
+  "bugs": [
+   [
+    2037013,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "EMPTY: no frame data available; EmptyMinidump",
+  "count": 123,
+  "bugs": [
+   [
+    1245570,
+    "Firefox for Android"
+   ],
+   [
+    1360392,
+    "Toolkit"
+   ],
+   [
+    1644486,
+    "Firefox for Android"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | Sqlite.sys.mjs shutdown blocker",
+  "count": 103,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "nsThreadPool::PutEvent",
+  "count": 99,
+  "bugs": [
+   [
+    2015433,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+  "count": 99,
+  "bugs": [
+   [
+    2065113,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "ff_vk_exec_add_dep_frame",
+  "count": 86,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::SharedSubResourceCache<T>::LoadCompleted",
+  "count": 81,
+  "bugs": [
+   [
+    1777931,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::quota::QuotaManager::Shutdown::<T>::operator()",
+  "count": 81,
+  "bugs": [
+   [
+    1588498,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | alloc::raw_vec::handle_error",
+  "count": 79,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "webrender::render_task::render_task_sanity_check",
+  "count": 78,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::Nursery::maybeMoveRawBufferOnPromotion",
+  "count": 76,
+  "bugs": [
+   [
+    1472062,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "amdxx64.dll",
+  "count": 73,
+  "bugs": [
+   [
+    1906490,
+    "Core"
+   ],
+   [
+    1935441,
+    "Core"
+   ],
+   [
+    1993861,
+    "Core"
+   ],
+   [
+    2048949,
+    "Core"
+   ],
+   [
+    2059284,
+    "Core"
+   ],
+   [
+    2059892,
+    "Core"
+   ],
+   [
+    2059983,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::frontend::ParseNode::getKind",
+  "count": 71,
+  "bugs": [
+   [
+    1801916,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in nvwgf2umx.dll> | CContext::TID3D11DeviceContext_ClearView_<T>",
+  "count": 68,
+  "bugs": [
+   [
+    1969772,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | __delayLoadHelper2 | _tailMerge_user32.dll | nsAppShell::StaticCreateEventWindow",
+  "count": 68,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+  "count": 65,
+  "bugs": [
+   [
+    2018640,
+    "Firefox"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | mozJSModuleLoader::InitSharedGlobal",
+  "count": 63,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "webrender::render_task_graph::RenderTaskGraphBuilder::end_frame",
+  "count": 62,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::ChunkMarkBitmap::markIfUnmarkedThreadSafe",
+  "count": 58,
+  "bugs": [
+   [
+    1917738,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "_cairo_mutex_initialize",
+  "count": 57,
+  "bugs": [
+   [
+    2044985,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | AddonManager: Waiting to start provider shutdown. | AddonRepository Background Updater",
+  "count": 56,
+  "bugs": [
+   [
+    1841444,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "CrashChannel::OpenContentStream",
+  "count": 56,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "webrender::render_api::window_size_sanity_check",
+  "count": 56,
+  "bugs": [
+   [
+    1705002,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::IsProxy",
+  "count": 53,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader",
+  "count": 51,
+  "bugs": [
+   [
+    2065373,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in amdxc64.dll> | NDXGI::CDevice::DestroyDriverInstance",
+  "count": 46,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change-telemetry | CrashManager: submitting Glean crash ping(s)",
+  "count": 45,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::DisplayItemClipChain::Release",
+  "count": 43,
+  "bugs": [
+   [
+    1822945,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::Navigation::UpdateEntriesForSameDocumentNavigation",
+  "count": 43,
+  "bugs": [
+   [
+    1999518,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "SerializeJSONProperty",
+  "count": 42,
+  "bugs": [
+   [
+    2048862,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::layers::NativeLayerMacSurfaceHandler::NextSurface",
+  "count": 40,
+  "bugs": [
+   [
+    2049217,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::Promise::CreateInfallible | mozilla::dom::ReadableStreamDefaultReader::Read",
+  "count": 39,
+  "bugs": [
+   [
+    2015430,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::DocumentLoadListener::Open",
+  "count": 39,
+  "bugs": [
+   [
+    1978727,
+    "Core"
+   ],
+   [
+    2061546,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "JSScript::getScope",
+  "count": 38,
+  "bugs": [
+   [
+    1865444,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree",
+  "count": 38,
+  "bugs": [
+   [
+    1876101,
+    "Core"
+   ],
+   [
+    1883167,
+    "Core"
+   ],
+   [
+    1909775,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "vk_common_QueueSubmit",
+  "count": 38,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::gmp::GMPChild::GetUTF8LibPath",
+  "count": 37,
+  "bugs": [
+   [
+    1839654,
+    "Core"
+   ],
+   [
+    1841944,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::MozPromise<T>::ThenValueBase::DoResolveOrReject",
+  "count": 36,
+  "bugs": [
+   [
+    1338025,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::quota::QuotaManager::Shutdown::$::operator()",
+  "count": 36,
+  "bugs": [
+   [
+    1588498,
+    "Core"
+   ],
+   [
+    1943005,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "nsWindow::GetMozContainer",
+  "count": 36,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in nvwgf2umx.dll> | CContext::TID3D11DeviceContext_ClearRenderTargetView_<T>",
+  "count": 35,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "EMPTY: no frame data available; OK",
+  "count": 35,
+  "bugs": [
+   [
+    1245570,
+    "Firefox for Android"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "EMPTY: no frame data available; unknown error",
+  "count": 35,
+  "bugs": [
+   [
+    1983084,
+    "Socorro"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "NewArrayBufferObject<T>",
+  "count": 35,
+  "bugs": [
+   [
+    1898399,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | mozilla::dom::UntypedToJSVal",
+  "count": 34,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::ipc::MessageChannel::AssertWorkerThread | mozilla::ipc::MessageChannel::Send | mozilla::ipc::IProtocol::ChannelSend | mozilla::dom::PContentParent::SendVarUpdate",
+  "count": 34,
+  "bugs": [
+   [
+    2063979,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "TraceStackRoots",
+  "count": 33,
+  "bugs": [
+   [
+    2052206,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::RemoteObjectProxyBase::GetOrCreateProxyObject",
+  "count": 33,
+  "bugs": [
+   [
+    1829760,
+    "Core"
+   ],
+   [
+    1891409,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::cache::ReadStream::Inner::EnsureStream",
+  "count": 33,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | __CFRunLoopServiceMachPort",
+  "count": 33,
+  "bugs": [
+   [
+    1610213,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "setup_stack_prot",
+  "count": 31,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "vk_optimusGetDeviceProcAddr",
+  "count": 31,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | mozilla::dom::ipc::StructuredCloneData::ReadIPCParams",
+  "count": 30,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+  "count": 29,
+  "bugs": [
+   [
+    1426941,
+    "Firefox"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::TenuredCell::zoneFromAnyThread",
+  "count": 29,
+  "bugs": [
+   [
+    1838277,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "libc.so.6 | ld-linux-aarch64.so.1",
+  "count": 29,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::ThreadSafeWorkerRef::Private",
+  "count": 28,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::Http2Session::VerifyStream",
+  "count": 27,
+  "bugs": [
+   [
+    1992303,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in atiumd6a.dll> | atidxx64.dll | new",
+  "count": 26,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | NS_ABORT_OOM | nsTSubstring<T>::AllocFailed | nsTSubstring<T>::GetMutableData | IPC::ParamTraits<nsTSubstring<T> >::Read::<T>::operator() | IPC::ReadSequenceParam | IPC::ParamTraits<nsTSubstring<T> >::Read | mozilla::dom::syncedcontext::F...",
+  "count": 26,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::Promise::CreateInfallible | mozilla::dom::streams_abstract::SetUpReadableByteStreamController",
+  "count": 26,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::places::History::History",
+  "count": 26,
+  "bugs": [
+   [
+    1746659,
+    "Thunderbird"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "webrender::spatial_tree::SpatialTree::get_relative_transform_with_face",
+  "count": 26,
+  "bugs": [
+   [
+    1427792,
+    "Core"
+   ],
+   [
+    1677533,
+    "Core"
+   ],
+   [
+    1927586,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "igdusc64.dll | <unknown in libGLESv2.pdb>",
+  "count": 25,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::MarkingTracerT<T>::processMarkStackTop",
+  "count": 25,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::detail::InvalidArrayIndex_CRASH | mozilla::Array<T>::operator[] | mozilla::BitSet<T>::Reference::operator= | js::gc::AllocSpace<T>::setAllocated",
+  "count": 25,
+  "bugs": [
+   [
+    2053292,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::widget::WlLogHandler_ViewportBufferBounds",
+  "count": 25,
+  "bugs": [
+   [
+    2001219,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "pthread_kill | abort | libonnxruntime.dylib",
+  "count": 24,
+  "bugs": [
+   [
+    2046877,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "__setsockopt",
+  "count": 23,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "abort | amdgpu_ctx_set_sw_reset_status",
+  "count": 23,
+  "bugs": [
+   [
+    1878186,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "glib_log_writer_func",
+  "count": 23,
+  "bugs": [
+   [
+    1905517,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "libc.so.6 | libc.so.6 | libgallium-26.1.5.so",
+  "count": 23,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "libgmpopenh264.dylib",
+  "count": 23,
+  "bugs": [
+   [
+    2065570,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | __syscall_cancel_arch",
+  "count": 23,
+  "bugs": [
+   [
+    1957882,
+    "MailNews Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | XPCJSContext::Initialize",
+  "count": 22,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "PtrInfo::WasTraversed",
+  "count": 22,
+  "bugs": [
+   [
+    500105,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "atiumd6a.dll",
+  "count": 22,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "core::ptr::drop_in_place | core::ptr::drop_in_place | core::ptr::drop_in_place | core::ptr::drop_in_place<T> | webrender::render_backend::RenderBackend::prepare_transactions",
+  "count": 22,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mfx_mft_h264ve_32.dll | CServerContextActivator::CreateInstance",
+  "count": 22,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::InCollectedNurseryRegion",
+  "count": 21,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::MediaChangeMonitor::DecodeFirstSample::<T>::operator()",
+  "count": 21,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::ContentChild::GetSingleton",
+  "count": 21,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::loader::ImportESModule",
+  "count": 21,
+  "bugs": [
+   [
+    1716849,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::LoadInfo::SetReservedClientInfo",
+  "count": 21,
+  "bugs": [
+   [
+    1761208,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "__fcntl64_nocancel_adjusted",
+  "count": 20,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::nsStandardURL::nsStandardURL",
+  "count": 20,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "nsINode::GetNextSibling",
+  "count": 20,
+  "bugs": [
+   [
+    1982481,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | AddonManager: shutting down.",
+  "count": 19,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "EnterBaseline",
+  "count": 19,
+  "bugs": [
+   [
+    858032,
+    "Core"
+   ],
+   [
+    1885439,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "JS::loader::ModuleLoaderBase::RegisterImportMap",
+  "count": 19,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "abort | libcmrt.so.1",
+  "count": 19,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "atiumd6a.dll | atidxx64.dll | atiumd6a.dll | atidxx64.dll",
+  "count": 19,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "dllmain_dispatch",
+  "count": 19,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | ZwUserMsgWaitForMultipleObjectsEx | mozilla::widget::WinUtils::WaitForMessage | nsAppShell::ProcessNextNativeEvent",
+  "count": 19,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "$ientry_thunk$cdecl$d$i8i8",
+  "count": 18,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in ntdll.pdb>",
+  "count": 18,
+  "bugs": [
+   [
+    1901230,
+    "External Software Affecting Firefox"
+   ],
+   [
+    1978257,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "IPCError-browser | GPUProcessKill",
+  "count": 18,
+  "bugs": [
+   [
+    1908798,
+    "Core"
+   ],
+   [
+    1996653,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread",
+  "count": 18,
+  "bugs": [
+   [
+    1667663,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "amdxx64.dll | mozilla::layers::CompositorD3D11::UpdateConstantBuffers",
+  "count": 18,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd12umd64.dll | CallAndLogImpl<T>",
+  "count": 18,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "NvGlEglGetFunctions",
+  "count": 17,
+  "bugs": [
+   [
+    1788573,
+    "Core"
+   ],
+   [
+    2052077,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | mozilla::dom::InferenceSession::Init",
+  "count": 17,
+  "bugs": [],
+  "failed": true
+ },
+ {
+  "sig": "mozilla::PresShell::DoFlushPendingNotifications",
+  "count": 17,
+  "bugs": [
+   [
+    1851430,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::TimeoutManager::RescheduleTimeout",
+  "count": 17,
+  "bugs": [
+   [
+    1843369,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::ipc::IProtocol::Id",
+  "count": 17,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "count": 17,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "nsCycleCollectingAutoRefCnt::incr",
+  "count": 17,
+  "bugs": [
+   [
+    1920342,
+    "Thunderbird"
+   ],
+   [
+    1942949,
+    "Core"
+   ],
+   [
+    2009859,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "nsFind::FindFromRangeBoundaries",
+  "count": 17,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "stackoverflow | mozglue_static::impl$2::alloc",
+  "count": 17,
+  "bugs": [
+   [
+    2055379,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | IPC::ParamTraits<mozilla::SerializedStructuredCloneBuffer>::Read | IPC::ParamTraits<mozilla::dom::indexedDB::SerializedStructuredCloneReadInfo>::Read | IPC::ParamTraits<mozill...",
+  "count": 16,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::BufferAllocator::allocSmall",
+  "count": 16,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "amdxx64.dll | RtlpAllocateNTHeapInternal | RtlAllocateHeap | amdxx64.dll | RtlAllocateHeap",
+  "count": 16,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "nsGlobalWindowInner::ClearDocumentDependentSlots",
+  "count": 16,
+  "bugs": [
+   [
+    1405521,
+    "Core"
+   ],
+   [
+    1986910,
+    "Firefox"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | memset | mozilla::MaybePoison",
+  "count": 16,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "stackoverflow | style::values::specified::calc::impl$13::parse::closure$0::closure$3",
+  "count": 16,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "wgpu_hal::metal::adapter::<T>::open::{{closure}}",
+  "count": 16,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "wl_proxy_create_wrapper | libnvidia-egl-wayland2.so.1",
+  "count": 16,
+  "bugs": [
+   [
+    2063934,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | CookiePersistentStorage: cookies.sqlite closing",
+  "count": 15,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | mozilla::dom::Sequence<T>::operator=",
+  "count": 15,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "allocator_api2::stable::vec::Vec<T>::push",
+  "count": 15,
+  "bugs": [
+   [
+    1974669,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::AllocSite::zone",
+  "count": 15,
+  "bugs": [
+   [
+    1639157,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::widget::WlCompositorCrashHandler",
+  "count": 15,
+  "bugs": [
+   [
+    2036078,
+    "Firefox Build System"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | NS_ABORT_OOM | nsTSubstring<T>::AllocFailed | nsTSubstring<T>::SetLength | mozilla::dom::SnappyUncompress",
+  "count": 14,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "alloc::vec::Vec<T>::push_mut",
+  "count": 14,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "amdh264enc64.dll | RtlpWaitOnCriticalSection",
+  "count": 14,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "glean_core::storage::impl$0::snapshot_as_json::closure$0",
+  "count": 14,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::jit::X86Encoding::BaseAssembler::linkJump",
+  "count": 14,
+  "bugs": [
+   [
+    1918280,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "libwidevinecdm.dylib",
+  "count": 14,
+  "bugs": [
+   [
+    2008519,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::StyleGenericColor<T>::operator==",
+  "count": 14,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "wgpu_core::storage::Storage<T>::insert",
+  "count": 14,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | MonitorStore: Shutdown",
+  "count": 13,
+  "bugs": [
+   [
+    2065119,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::Promise::CreateInfallible | mozilla::dom::InputToReadableStreamAlgorithms::PullCallbackImpl",
+  "count": 13,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd12umd64.dll | igc64.dll | igdgmm64.dll | CallAndLogImpl<T>",
+  "count": 13,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd12umd64.dll | igdgmm64.dll | CallAndLogImpl<T>",
+  "count": 13,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::(anonymous namespace)::PromiseNativeHandlerShim::RejectedCallback",
+  "count": 13,
+  "bugs": [
+   [
+    1688585,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::HttpBaseChannel::DoApplyContentConversionsInternal",
+  "count": 13,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | ICUReporter::Alloc",
+  "count": 12,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::GetGCKindSlots",
+  "count": 12,
+  "bugs": [
+   [
+    1472062,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "XREMain::XRE_main",
+  "count": 12,
+  "bugs": [
+   [
+    1793867,
+    "Core"
+   ],
+   [
+    1909700,
+    "Core"
+   ],
+   [
+    1928888,
+    "Thunderbird"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "dllmain_crt_process_attach",
+  "count": 12,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::GCData<T>::get",
+  "count": 12,
+  "bugs": [
+   [
+    2050826,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::InferenceSession::Init",
+  "count": 12,
+  "bugs": [
+   [
+    1990708,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::media::Interval<T>::Interval<T> | mozilla::TrackBuffersManager::RemoveFrames",
+  "count": 12,
+  "bugs": [
+   [
+    1914844,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "pulse::threaded_mainloop::ThreadedMainloop::raw_mut",
+  "count": 12,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "EMPTY: no frame data available; HeaderMismatch",
+  "count": 11,
+  "bugs": [
+   [
+    1245570,
+    "Firefox for Android"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "EMPTY: no frame data available; MissingThreadList",
+  "count": 11,
+  "bugs": [],
+  "failed": true
+ },
+ {
+  "sig": "EdgePool::Iterator::operator*",
+  "count": 11,
+  "bugs": [
+   [
+    500105,
+    "Core"
+   ],
+   [
+    1869503,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::ObjectSlots::isSharedEmptySlots",
+  "count": 11,
+  "bugs": [
+   [
+    787879,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::jit::BailoutFrameInfo::BailoutFrameInfo",
+  "count": 11,
+  "bugs": [
+   [
+    1323786,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::detail::InvalidArrayIndex_CRASH | mozilla::Vector<T>::operator[] | js::Nursery::chunk",
+  "count": 11,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::UntypedToJSVal",
+  "count": 11,
+  "bugs": [
+   [
+    2018735,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | IOUtils: waiting for sendTelemetry IO to complete | TelemetryController: shutting down",
+  "count": 10,
+  "bugs": [
+   [
+    1315306,
+    "Toolkit"
+   ],
+   [
+    1813973,
+    "Thunderbird"
+   ],
+   [
+    1957983,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | <unknown in mfx_mft_h264ve_64.dll> | CreateInprocInstanceHelper",
+  "count": 10,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::wasm::Init",
+  "count": 10,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "_dlerror_run",
+  "count": 10,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd10iumd64.dll | <unknown in d3d11.pdb>",
+  "count": 10,
+  "bugs": [
+   [
+    1862280,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "igdusc64.dll | igd11dxva64.dll | igdusc64.dll | igd11dxva64.dll | RtlpFreeHeapInternal | RtlFreeHeap | igdusc64.dll | igd11dxva64.dll | RtlpLowFragHeapAllocFromContext",
+  "count": 10,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::BarrieredBase<T>::getForTracing",
+  "count": 10,
+  "bugs": [
+   [
+    2053805,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::ScriptLoadContext::~ScriptLoadContext",
+  "count": 10,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::gfx::GPUProcessManager::MaybeCrashIfGpuProcessOnceStable",
+  "count": 10,
+  "bugs": [
+   [
+    2011815,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "nsPIDOMWindowInner::GetExtantDoc",
+  "count": 10,
+  "bugs": [
+   [
+    1900878,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | google_breakpad::ExceptionHandler::WriteMinidumpOnHandlerThread",
+  "count": 10,
+  "bugs": [
+   [
+    1726517,
+    "Toolkit"
+   ],
+   [
+    1852842,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "wgpu_hal::dx12::Adapter::expose",
+  "count": 10,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::Promise::CreateInfallible | mozilla::dom::streams_abstract::WritableStreamClose",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | alloc::raw_vec::handle_error",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "XPCJSRuntime::UnprivilegedJunkScope",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "abort | libonnxruntime.so.1",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd12umd64.dll | delete",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::HeaderWord::getAtomic",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "librockchip_mpp.so.1",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::RustCell<T>::RustCell",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::Vector<T>::begin | JS::GCVector<T>::begin",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::webgpu::WebGPUParent::MapCallback",
+  "count": 9,
+  "bugs": [
+   [
+    1954234,
+    "Core"
+   ],
+   [
+    1972521,
+    "Core"
+   ],
+   [
+    1976766,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "setsockopt_syscall",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | mozilla::SpinEventLoopUntil<T> | (anonymous namespace)::ParentImpl::ShutdownBackgroundThread",
+  "count": 9,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in nvwgf2umx.dll> | CVideoProcessor::Blt",
+  "count": 8,
+  "bugs": [
+   [
+    1947688,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "@0x0 | NvGlEglGetFunctions",
+  "count": 8,
+  "bugs": [
+   [
+    2052077,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | Places Clients shutdown | Interactions.sys.mjs:: store",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "IPCError-content | RecvConstructBrowser missing initial top BrowsingContext",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "IS_INDEX_IN_USER_SHARED_ARRAY",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | EMPTY: no frame data available; EmptyMinidump",
+  "count": 8,
+  "bugs": [
+   [
+    1360392,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | mozilla::JSHolderMap::Put",
+  "count": 8,
+  "bugs": [
+   [
+    1333035,
+    "Core"
+   ],
+   [
+    1882757,
+    "Thunderbird"
+   ],
+   [
+    1892171,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::Promise::CreateInfallible | mozilla::dom::TransformStream::SetBackpressure",
+  "count": 8,
+  "bugs": [
+   [
+    1939361,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | XPCJSContext::NewXPCJSContext",
+  "count": 8,
+  "bugs": [
+   [
+    1664308,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "Watchdog::Init",
+  "count": 8,
+  "bugs": [
+   [
+    1833948,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "allocator_api2::stable::vec::Vec<T>::len",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "arena_run_reg_dalloc | arena_t::DallocSmall | arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree",
+  "count": 8,
+  "bugs": [
+   [
+    1876101,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "atiumd6a.dll | NDXGI::CDevice::SignalFence",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "detail::nsTHashtableKeyIterator<T>::operator++",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd12umd64.dll | RtlpAllocateNTHeapInternal | RtlAllocateHeap | igd12umd64.dll",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igdusc64.dll | CMFAttributesImpl<T>::SetUINT32",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::TraceEdgeInternal",
+  "count": 8,
+  "bugs": [
+   [
+    1472062,
+    "Core"
+   ],
+   [
+    1946261,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::UnmarkGrayTracer<T>::unmark",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::ContentSubtreeIterator::DetermineFirstContent",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::MediaTrackGraphImpl::OnGraphThread",
+  "count": 8,
+  "bugs": [
+   [
+    2065072,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "nsJARProtocolHandler::MimeService",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "nsWrapperCache::HasFlag",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "nvwgf2umx.dll | <unknown in d3d11.pdb>",
+  "count": 8,
+  "bugs": [
+   [
+    2061989,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "stackoverflow | OnThreadExit",
+  "count": 8,
+  "bugs": [
+   [
+    1982752,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "std::equal<T>",
+  "count": 8,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "vivante_dri.so",
+  "count": 8,
+  "bugs": [
+   [
+    2048951,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "Abort | NS_PrintStackTrace",
+  "count": 7,
+  "bugs": [
+   [
+    2019705,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "HANDLE_TO_INDEX",
+  "count": 7,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "abort | amdgpu_winsys_create",
+  "count": 7,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igdusc64.dll | nsTSubstring<T>::Capacity | nsTSubstring<T>::StartBulkWriteImpl | nsTSubstring<T>::Assign | nsTSubstring<T>::Assign | nsTSubstring<T>::Assign | mozilla::TextControlState::SetValueWithoutTextEditor",
+  "count": 7,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::Arena::getAllocKind",
+  "count": 7,
+  "bugs": [
+   [
+    1915055,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "libc.so.6 | libc.so.6 | libgallium-26.1.4.so",
+  "count": 7,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dmd::TaggedPtr<T>::Set",
+  "count": 7,
+  "bugs": [
+   [
+    1872210,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::nsAsyncRedirectVerifyHelper::OnRedirectVerifyCallback",
+  "count": 7,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "stackoverflow | Mutex::Lock",
+  "count": 7,
+  "bugs": [
+   [
+    2045194,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "std::vector<T>::_M_default_append",
+  "count": 7,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "widevinecdm.dll",
+  "count": 7,
+  "bugs": [
+   [
+    1825984,
+    "Core"
+   ],
+   [
+    1850320,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "AsyncShutdownTimeout | IOUtils: waiting for profileBeforeChange IO to complete | JSON store: writing data for 'targeting.snapshot'",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "CxxThrowException | CxxThrowException | _DllMainCRTStartup",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "JS::RootingContext::nursery",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "JS::Value::isGCThing",
+  "count": 6,
+  "bugs": [
+   [
+    1876939,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "NS_InitXPCOM",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::StoreBuffer::MonoTypeBuffer<T>::sinkStore",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | v8::internal::Zone::New<T>",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "VerifyCientPrincipalInfosMatch",
+  "count": 6,
+  "bugs": [
+   [
+    2021375,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "amdxx64.dll | ResetEvent",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "atiumd6a.dll | <unknown in atidxx64.dll>",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "atiumd6a.dll | RtlFreeHeap | atiumd6a.dll | atidxx64.dll | atiumd6a.dll | atidxx64.dll",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "atiumd6a.dll | atidxx64.dll | atiumd6a.dll",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "euclid::box2d::Box2D<T>::intersection_unchecked",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "gdi32.dll | win32-ui-modernizer_1.0.2_523164.dll | InitOnceExecuteOnce",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "igd10iumd64.dll",
+  "count": 6,
+  "bugs": [
+   [
+    1285152,
+    "Core"
+   ],
+   [
+    1479795,
+    "Core"
+   ],
+   [
+    1603880,
+    "Core"
+   ],
+   [
+    1719666,
+    "Core"
+   ],
+   [
+    1854899,
+    "Core"
+   ],
+   [
+    1862276,
+    "Core"
+   ],
+   [
+    1862280,
+    "Core"
+   ],
+   [
+    1988418,
+    "Core"
+   ],
+   [
+    2055981,
+    "Core"
+   ],
+   [
+    2064342,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "igd10iumd64.dll | CContext::TID3D11DeviceContext_SetShaderResources_<T>",
+  "count": 6,
+  "bugs": [
+   [
+    1285152,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "igd10iumd64.dll | CContext::UMQueryOM_DepthState_",
+  "count": 6,
+  "bugs": [
+   [
+    1479795,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "linux_read_sorted_physical_devices",
+  "count": 6,
+  "bugs": [
+   [
+    1989009,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::Maybe<T>::ref | mozilla::AppleVTDecoder::ProcessDecode",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::MozPromise<T>::ThenValue<T>::DoResolveOrRejectInternal",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::a11y::DocAccessible::ProcessContentInserted",
+  "count": 6,
+  "bugs": [
+   [
+    1723936,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::a11y::MsaaAccessible::Release",
+  "count": 6,
+  "bugs": [
+   [
+    2050714,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::nsHttpTransaction::ParseLineSegment",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::net::nsSocketTransportService::AttachSocket",
+  "count": 6,
+  "bugs": [
+   [
+    2026491,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::webgl::TexUnpackSurface::BlitSd",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::widget::WaylandSurface::IsBufferAttached",
+  "count": 6,
+  "bugs": [
+   [
+    2063493,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "nsINode::IsMaybeSelected",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | NtUserPeekMessage | _PeekMessage",
+  "count": 6,
+  "bugs": [
+   [
+    1547541,
+    "Thunderbird"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "shutdownhang | libsystem_kernel.dylib",
+  "count": 6,
+  "bugs": [
+   [
+    1992841,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "stackoverflow | cssparser::tokenizer::next_token",
+  "count": 6,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "std::equal",
+  "count": 6,
+  "bugs": [
+   [
+    1991805,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "webrender::clip::ClipTreeBuilder::build_clip_set",
+  "count": 6,
+  "bugs": [
+   [
+    2055982,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in atiumd6a.dll> | atidxx64.dll | CVideoProcessor::Blt",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "<unknown in nvd3dumx.dll> | CreateDeviceLHDDI",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "AllocInfo::GetInChunk",
+  "count": 5,
+  "bugs": [
+   [
+    1827549,
+    "Socorro"
+   ],
+   [
+    1997772,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "ArenaAvailRuns::SearchOrNext",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "CTrackVarMapChanges::TrackChange",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "IPC::ChannelWin::SetOtherPid | IPC::ChannelWin::ProcessIncomingMessages | IPC::ChannelWin::OnIOCompleted | base::MessagePumpForIO::WaitForIOCompletion | base::MessagePumpForIO::WaitForWork | base::MessagePumpForIO::DoRunLoop",
+  "count": 5,
+  "bugs": [
+   [
+    1925926,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "JS::PropertyKey::operator!=",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "NtCreateFile",
+  "count": 5,
+  "bugs": [
+   [
+    1182927,
+    "Core"
+   ],
+   [
+    1749177,
+    "Thunderbird"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | IPC::ParamTraits<mozilla::SerializedStructuredCloneBuffer>::Read | IPC::ParamTraits<mozilla::dom::indexedDB::SerializedStructuredCloneWriteInfo>::Read | IPC::ParamTraits<mozil...",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | gfxOTSMozAlloc::Grow",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | large | nsTArray_Impl<T>::SetCapacity | mozilla::gfx::COLRFonts::CreateColorPalette",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::Nursery::maybeMoveRawNurseryOrMallocBufferOnPromotion",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "OOM | unknown | logging::(anonymous namespace)::CheckLogMessage::~CheckLogMessage",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "PtrToNodeHashPolicy::match",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "RtlFreeHeap | CClassMoniker::Release",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread",
+  "count": 5,
+  "bugs": [
+   [
+    1667663,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "__security_init_cookie",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "abort | g_settings_set_property",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "google_breakpad::ExceptionHandler::WaitForMessage | thread_start",
+  "count": 5,
+  "bugs": [
+   [
+    1853703,
+    "Toolkit"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "igd10iumd64.dll | CLayeredObjectRoot<T>::CondObjectLock::CondObjectLock",
+  "count": 5,
+  "bugs": [
+   [
+    1854899,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "iris_fence_await",
+  "count": 5,
+  "bugs": [
+   [
+    2064269,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::AutoHelperTaskQueue::dispatchQueuedTasks",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "js::BarrieredBase<T>::unbarrieredSet",
+  "count": 5,
+  "bugs": [
+   [
+    2041307,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::frontend::ParseContext::Scope::id",
+  "count": 5,
+  "bugs": [
+   [
+    1931733,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "js::gc::MarkingTracerT<T>::eagerlyMarkChildren",
+  "count": 5,
+  "bugs": [
+   [
+    2059283,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "libvulkan.so.1",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "libxul.so (deleted) | libnspr4.so (deleted)",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so (deleted) | libxul.so ...",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "moz_speex_resampler_skip_zeros",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::AssertUniqueItem",
+  "count": 5,
+  "bugs": [
+   [
+    2001346,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::RestyleManager::ElementStateChanged",
+  "count": 5,
+  "bugs": [
+   [
+    1651070,
+    "Core"
+   ],
+   [
+    2012052,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::StaticPrefs::InitStaticPrefsFromShared",
+  "count": 5,
+  "bugs": [
+   [
+    1578430,
+    "Core"
+   ]
+  ],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::detail::VectorImpl<T>::new_",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ },
+ {
+  "sig": "mozilla::dom::TextDirectiveUtil::ComputeCommonSubstringLength<T>",
+  "count": 5,
+  "bugs": [],
+  "failed": false
+ }
+]

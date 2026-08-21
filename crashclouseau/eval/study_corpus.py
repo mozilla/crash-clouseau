@@ -43,10 +43,30 @@ _FIXTURE_RE = re.compile(r"^(\d+)(\.neg)?\.json$")
 _JAVA_SIG_RE = re.compile(r"^(?:[A-Za-z_][\w$]*\.)+[A-Za-z_][\w$]*(?:Exception|Error)\b")
 # BMO products Clouseau does NOT triage (mobile / Thunderbird). Kept in sync with the intent of
 # ``corpus._is_target_crash`` (desktop Firefox native only); the study corpus spans all products.
-_NON_DESKTOP_PRODUCTS = frozenset({
+#
+# The Thunderbird/SeaMonkey half is DERIVED, not restated. This was the THIRD copy of
+# ``config._OTHER_APP_PRODUCTS`` in the repo and it had already drifted to the opposite answer:
+# it called ``Firefox for Android`` and ``GeckoView`` somebody else's, which config deliberately
+# does not, and it omitted ``Calendar``, ``Chat Core`` and ``SeaMonkey``, which config does call
+# foreign. Measured 2026-08-21 over the 287 blind fixtures: this literal dropped 29, config's
+# list would have dropped 3, and 26 of 287 (9.1%) were classified differently by two lists in
+# one repo with no test comparing them.
+#
+# The Android family stays a LITERAL and stays here, because the two lists answer different
+# questions: config's map asks "whose bug would this venue be" and keeps Fenix/GeckoView on the
+# Firefox side (they file into the same Gecko products), while this asks "can Clouseau triage
+# this crash at all", and for a JVM/Android crash the answer is no until plans/16 lands. The
+# union drops exactly what the literal dropped — 25 Firefox for Android, 2 MailNews Core, 1
+# GeckoView, 1 Thunderbird — so this is a de-duplication with 0 fixtures moved. What it must
+# NOT eat is the study corpus itself: 238 Core, 10 Toolkit, 7 Firefox, 2 External Software
+# Affecting Firefox and 1 Application Services fixture, none of which is exclusive to any
+# application and all of which stay.
+_ANDROID_PRODUCTS = frozenset({
     "firefox for android", "fenix", "fennecandroid", "geckoview",
-    "thunderbird", "mailnews core",
 })
+_NON_DESKTOP_PRODUCTS = _ANDROID_PRODUCTS | frozenset(
+    p.lower() for p in config.get_other_app_products("Firefox")
+)
 
 
 def _is_target_crash(crash):

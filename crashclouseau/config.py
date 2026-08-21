@@ -151,9 +151,58 @@ def get_bugzilla_token():
 # Defined by exclusion (the other applications) rather than by inclusion (ours) deliberately.
 # The Firefox side is twenty-odd products — Core, Firefox, Toolkit, DevTools, WebExtensions,
 # GeckoView, Fenix, NSS, External Software Affecting Firefox, the graveyards — and an inclusion
-# list that fell one product behind BMO would quietly start filing duplicates. This list is
-# short, stable, and complete in the only sense that matters: these are the only non-Firefox
-# products whose application reports crashes to Socorro at all.
+# list that fell one product behind BMO would quietly start filing duplicates.
+#
+# IT IS NOT COMPLETE. The claim that stood here until 2026-08-21 — "these are the only
+# non-Firefox products whose application reports crashes to Socorro at all" — is false in both
+# directions, and ``bin/audit_products.py`` is that claim turned into a check, which FAILS today
+# on purpose. Socorro's product facet, 30d to 2026-08-21, no product filter: Firefox 1,129,749 /
+# Fenix 458,043 / Thunderbird 223,861 / Focus 5,804 / ReferenceBrowser 125 — three reporting
+# applications with no entry here — while SeaMonkey, which HAS one, reported 0 crashes over the
+# entire retention (180d: 11,383,017 reports; the 365d facet is identical, so 180d is all there
+# is). MozillaVPN shows up at 180d with 9.
+#
+# THEY STAY OUT because measured 2026-08-21 they cost nothing in the only scope this map is used
+# in, which is desktop Firefox. Of the 96 open ``Firefox for Android`` + 38 ``GeckoView`` + 2
+# ``Focus`` bugs carrying a ``cf_crash_signature``, exactly FOUR carry a signature that also
+# occurs in the 180d desktop-Firefox population: 1245570, 1644486, 1855806, 1812544. Two of the
+# four (1245570, 1644486) collide ONLY on ``EMPTY: no frame data available; *`` signatures —
+# 1245570's field carries 20 entries, but its ``Abort | …``, ``EMPTY: no crashing thread
+# identified; *`` and ``OOM | large | …`` ones have 0 desktop reports each — and the reports
+# behind the colliding ones have 0 threads and 0 frames, so ``inspector.thread_for_analysis``
+# returns None and there is no analysis to file anywhere. Adding
+# Fenix/Focus/ReferenceBrowser/MozillaVPN moves the chosen venue on 0 of the 51 filings
+# (2026-08-05..21, live signatures re-run through ``_split_by_application``; 27 had a venue,
+# exactly 1 had a foreign candidate) and on 0 of the 300 loudest desktop-nightly
+# signatures (2026-08-07..21, 15,131 nightly reports; 298 lookups
+# clean and the 2 that answered 502 retried by hand; 4 nominal hits, every one ``EMPTY: no
+# frame data available; *``, so 0 analysable). It LOSES bug 1855806
+# (``arena_run_reg_dalloc | arena_t::DallocSmall | arena_dalloc | idalloc``, NEW, 1
+# desktop-nightly crash in 180d) as a comment venue. Panel and scripts:
+# ``spike/other_app_products/``.
+#
+# AND THE MAP CANNOT BE DERIVED FROM BMO. ``/rest/product`` carries name, classification,
+# description, components and versions — no application, no family. ``classification`` is the
+# trap: ``MailNews Core`` and ``GeckoView`` are ``Components`` while ``Firefox`` and ``Focus``
+# are ``Client Software``, so a classification-keyed "is this an application's product" map
+# hands crash 05381864-aa6e-402f-a1fd-56a3e0260816 straight back to bug 2057980
+# ``MailNews Core`` — measured on the panel, filing 2064066's venue flips from None to 2057980,
+# so the derived map eats the one case this map exists for — and it strips BMO ``Firefox`` as
+# well, 14 of whose 17 open signature-bugs collide with the desktop population. Hand-maintained
+# is the answer; the audit is what keeps it honest.
+#
+# FENIX DAY (plans/16) NEEDS A SHAPE CHANGE, NOT ENTRIES. ``get_other_app_products`` drops the
+# single key equal to the crash product, so with Fenix and Focus both keyed to the shared
+# Android products a Fenix crash would still see ``Firefox for Android`` as foreign via the
+# ``Focus`` key. It has to become ``Socorro product -> family`` plus ``family -> the BMO
+# products only that family files in``, and the ``desktop: ["Firefox"]`` entry must NOT be
+# applied when the crash product is unknown, or ``_split_by_application(bugs, None)`` starts
+# stripping BMO ``Firefox`` venues and contradicts bugzilla_apply's "may only drop what it can
+# positively identify as somebody else's". Leave ``GeckoView`` shared in that design; the
+# measured price is bug 1812544 staying a desktop candidate. Two cases pin the shape: today's
+# map calls bug 1681745 ``Firefox :: Installer`` a venue for a Fenix crash (wrong), and 40 of
+# the 96 open ``Firefox for Android`` signature-bugs collide with the FOCUS population — one
+# triage family, two Socorro products, which no per-Socorro-product map can express.
 _OTHER_APP_PRODUCTS = {
     "Thunderbird": ["Thunderbird", "MailNews Core", "Calendar", "Chat Core"],
     "SeaMonkey": ["SeaMonkey"],
@@ -170,6 +219,32 @@ def get_other_app_products(product=None):
     return frozenset(
         p for app, products in _OTHER_APP_PRODUCTS.items() if app != product for p in products
     )
+
+
+def describe_other_applications(product=None):
+    """The other applications as one prose clause, for an agent prompt to interpolate.
+
+    Today it renders the application name, then its BMO products in RST literal markup, then
+    "and SeaMonkey". It exists so ``agent/tools/bugzilla.py``'s ``signature_bugs`` description
+    is RENDERED from this map rather than restating it: that description was a second
+    hand-written copy of the map, and the THIRD copy
+    (``eval/study_corpus._NON_DESKTOP_PRODUCTS``) had already drifted to the opposite answer —
+    it called ``Firefox for Android`` and ``GeckoView`` somebody else's, which this map
+    deliberately does not, and omitted ``Calendar``, ``Chat Core`` and ``SeaMonkey``, which it
+    does. Measured 2026-08-21 on the 287 blind study fixtures, the two lists classified 26 of
+    them (9.1%) differently and no test compared them.
+
+    Same ``product`` semantics as ``get_other_app_products``: the crash's own Socorro product is
+    left out, ``None`` leaves out nobody. Map order rather than sorted, so the sentence leads
+    with the application that actually shares signatures with us. An empty map renders an empty
+    string — this is a source constant, so that is a source edit, not a runtime state."""
+    bits = [
+        app if products == [app] else "{} (``{}``)".format(app, "``, ``".join(products))
+        for app, products in _OTHER_APP_PRODUCTS.items() if app != product
+    ]
+    if len(bits) > 1:
+        return "{} and {}".format(", ".join(bits[:-1]), bits[-1])
+    return bits[0] if bits else ""
 
 
 _POPULATION_DEFAULTS = {

@@ -1,0 +1,359 @@
+{
+ "2060920": {
+  "uuid": "46607417-af82-40db-b97d-a31e40260801",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "OOM | unknown | memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::RTCEncodedFrameBase",
+  "panel_sig": "OOM | unknown | memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::RTCEncodedFrameBase"
+ },
+ "2060922": {
+  "uuid": "b66819b5-785e-4e44-b586-4126d0260802",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::MediaDecoder::SetCDMProxy",
+  "panel_sig": "mozilla::MediaDecoder::SetCDMProxy"
+ },
+ "2060924": {
+  "uuid": "0d4a0bee-d3cb-498a-844c-c84ff0260728",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::ipc::IProtocol::Id",
+  "panel_sig": "mozilla::ipc::IProtocol::Id"
+ },
+ "2061124": {
+  "uuid": "71875125-4c28-4f9d-ada7-283980260805",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "huge_dalloc | js_free | js_delete",
+  "panel_sig": "huge_dalloc | js_free | js_delete"
+ },
+ "2061127": {
+  "uuid": "f6fe186b-1014-4144-9d2d-ea29d0260806",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::dom::SessionHistoryEntry::GetParent",
+  "panel_sig": "mozilla::dom::SessionHistoryEntry::GetParent"
+ },
+ "2061180": {
+  "uuid": "1fe779a3-14a1-415d-a806-2afff0260806",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "libvulkan_radeon.so",
+  "panel_sig": "libvulkan_radeon.so"
+ },
+ "2061726": {
+  "uuid": "592ff73c-019d-4ea0-9dec-612410260807",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "OffthreadGCPtr<T>::operator JSScript*",
+  "panel_sig": "OffthreadGCPtr<T>::operator JSScript*"
+ },
+ "2061960": {
+  "uuid": "bce6c191-c569-4cfc-8fe5-b7aa50260807",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "nsFind::FindFromRangeBoundaries",
+  "panel_sig": "nsFind::FindFromRangeBoundaries]\r\n[@ xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll"
+ },
+ "2061961": {
+  "uuid": "ff888d42-ce3e-4308-8c2f-b3f060260807",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "geckoservo::glue::Servo_Element_ReferencesAttribute::{{closure}}",
+  "panel_sig": "geckoservo::glue::Servo_Element_ReferencesAttribute::{{closure}}"
+ },
+ "2061962": {
+  "uuid": "f558e4f2-6e3f-4a81-84b2-fba8d0260807",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll",
+  "panel_sig": "xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll"
+ },
+ "2061969": {
+  "uuid": "424b0ab0-af81-4b33-b045-83c5b0260808",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "shutdownhang | __fstatat",
+  "panel_sig": "shutdownhang | __fstatat"
+ },
+ "2061973": {
+  "uuid": "5f52ad87-cab1-47a8-bd80-64e110260807",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "zlib_rs::inflate::inflate_fast_help_impl",
+  "panel_sig": "zlib_rs::inflate::inflate_fast_help_impl"
+ },
+ "2061975": {
+  "uuid": "5f4931f6-2bc6-4f17-9245-92f4d0260807",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "zlib_rs::inflate::writer::Writer::copy_match_help",
+  "panel_sig": "zlib_rs::inflate::writer::Writer::copy_match_help"
+ },
+ "2062052": {
+  "uuid": "76533efa-290a-450f-843d-cc0e50260809",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::dom::ScreenOrientation::Create",
+  "panel_sig": "mozilla::dom::ScreenOrientation::Create"
+ },
+ "2062062": {
+  "uuid": "d29ac23d-eb9c-45f0-bf2c-8129b0260809",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "AsyncShutdownTimeout | profile-change-teardown | LoginManagerRustStorage: Interrupt IO operations on login store",
+  "panel_sig": "AsyncShutdownTimeout | profile-change-teardown | LoginManagerRustStorage: Interrupt IO operations on login store"
+ },
+ "2062114": {
+  "uuid": "91710ff6-daae-4752-acb3-560710260810",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "js::gc::ChunkBase::isNurseryChunk",
+  "panel_sig": "js::gc::ChunkBase::isNurseryChunk"
+ },
+ "2062119": {
+  "uuid": "64d69b23-39c9-4e8f-81c4-48bb20260810",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "nsJARProtocolHandler::MimeService",
+  "panel_sig": "nsJARProtocolHandler::MimeService"
+ },
+ "2062168": {
+  "uuid": "176be3dc-a1cf-4cba-844a-bbcc20260810",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "PerformPromiseThenWithoutSettleHandlers",
+  "panel_sig": "PerformPromiseThenWithoutSettleHandlers"
+ },
+ "2062173": {
+  "uuid": "8c0d2569-dcd3-465e-89b9-25bfd0260810",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "js::detail::BumpChunk::assertInvariants",
+  "panel_sig": "js::detail::BumpChunk::assertInvariants"
+ },
+ "2062219": {
+  "uuid": "ddeac1a4-64d1-4413-b03b-f79540260809",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "nsAtom::IsStatic",
+  "panel_sig": "nsAtom::IsStatic]\r\n[@ nsCharTraits<T>::copy]\r\n[@ memcpy | nsCharTraits<T>::copy]\r\n[@ FindSafeLength]\n[@ _ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_"
+ },
+ "2062286": {
+  "uuid": "8e0a65cc-9166-4d7b-9aa2-e2ed40260810",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "FindSafeLength",
+  "panel_sig": "FindSafeLength"
+ },
+ "2062335": {
+  "uuid": "a803cd9b-a991-47f8-9754-de73b0260810",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "OOM | large | NS_ABORT_OOM | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement<T> | mozilla::dom::TimeRanges::Add",
+  "panel_sig": "OOM | large | NS_ABORT_OOM | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement<T> | mozilla::dom::TimeRanges::Add"
+ },
+ "2062495": {
+  "uuid": "50b9a33c-4a11-4499-8700-c9c660260811",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::net::CacheStorageService::NoteNoVarySearchEntry",
+  "panel_sig": "mozilla::net::CacheStorageService::NoteNoVarySearchEntry"
+ },
+ "2062806": {
+  "uuid": "4ba6dd3f-b0aa-4dcd-ac21-6a8180260811",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "callback_interface_ads_client_moz_ads_context_id_provider_context_id",
+  "panel_sig": "callback_interface_ads_client_moz_ads_context_id_provider_context_id"
+ },
+ "2062915": {
+  "uuid": "a3c64061-aead-476d-a2cb-eacb10260812",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "js::AvlTreeImpl<T>::leftshrunk",
+  "panel_sig": "js::AvlTreeImpl<T>::leftshrunk"
+ },
+ "2062934": {
+  "uuid": "41ec4f9e-27c2-4fe6-8dcd-9ecc50260812",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "nsStyleContent::NonAltContentItems",
+  "panel_sig": "nsStyleContent::NonAltContentItems"
+ },
+ "2063002": {
+  "uuid": "bfcf3016-b44a-4c44-8209-ae4030260812",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "_ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_",
+  "panel_sig": "_ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_"
+ },
+ "2063003": {
+  "uuid": "56e7a6b2-776d-4e66-9419-388b60260812",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "nsCharTraits<T>::copy",
+  "panel_sig": "nsCharTraits<T>::copy"
+ },
+ "2063234": {
+  "uuid": "081481b1-5dc3-4334-836a-084690260813",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "nsWrapperCache::GetWrapperMaybeDead",
+  "panel_sig": "nsWrapperCache::GetWrapperMaybeDead"
+ },
+ "2063364": {
+  "uuid": "845d4cf8-1354-4722-ad72-63a820260813",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "js::jit::CompilerFrameInfo::sync",
+  "panel_sig": "js::jit::CompilerFrameInfo::sync"
+ },
+ "2063678": {
+  "uuid": "46544ed7-05f1-4923-baf1-1bb620260814",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "libc.so.6 | cuEGLApiInit",
+  "panel_sig": "libc.so.6 | cuEGLApiInit]\n[@ setsockopt_syscall"
+ },
+ "2063782": {
+  "uuid": "f95b9636-e153-471c-9c15-759c80260815",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "js::jit::CacheIRStubInfo::fieldType",
+  "panel_sig": "js::jit::CacheIRStubInfo::fieldType"
+ },
+ "2063809": {
+  "uuid": "2cd465d2-8027-4a85-b523-2baec0260815",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "ff_vk_exec_add_dep_frame",
+  "panel_sig": "ff_vk_exec_add_dep_frame"
+ },
+ "2063826": {
+  "uuid": "e9a47522-f096-4f2c-a639-9b3b10260815",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "DMABufSurfaceRGBA::ReleaseTextures",
+  "panel_sig": "DMABufSurfaceRGBA::ReleaseTextures"
+ },
+ "2063862": {
+  "uuid": "49d9c596-2f36-43a6-ab97-a5ebc0260816",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "panel_sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder"
+ },
+ "2063864": {
+  "uuid": "1e18d8d6-d188-424b-ba8a-9c31f0260816",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "setsockopt_syscall",
+  "panel_sig": "setsockopt_syscall"
+ },
+ "2063892": {
+  "uuid": "80e01888-f10a-4a4b-9120-b2aac0260816",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | kernelbase.dll | DispatchMessageWorker",
+  "panel_sig": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | kernelbase.dll | DispatchMessageWorker"
+ },
+ "2063898": {
+  "uuid": "3a3ded5f-4629-4354-8a08-e6eb60260816",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "webrender::device::gl::Device::update_vbo_data_unsynchronized",
+  "panel_sig": "webrender::device::gl::Device::update_vbo_data_unsynchronized"
+ },
+ "2063902": {
+  "uuid": "e14a7eb4-2a99-4ee6-b014-e7fe20260816",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "js::jit::ICScript::icEntry",
+  "panel_sig": "js::jit::ICScript::icEntry"
+ },
+ "2064066": {
+  "uuid": "05381864-aa6e-402f-a1fd-56a3e0260816",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | nsDocShellLoadState::nsDocShellLoadState",
+  "panel_sig": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | nsDocShellLoadState::nsDocShellLoadState"
+ },
+ "2064137": {
+  "uuid": "3c261523-734b-4aa5-8d70-0fbaf0260817",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::Vector<T>::operator[] | js::jit::MPhi::getOperand",
+  "panel_sig": "mozilla::Vector<T>::operator[] | js::jit::MPhi::getOperand"
+ },
+ "2064274": {
+  "uuid": "a56da0ba-560e-4a5e-acdc-ef1340260818",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::detail::MutexImpl::mutexLock",
+  "panel_sig": "mozilla::detail::MutexImpl::mutexLock"
+ },
+ "2064342": {
+  "uuid": "23f897e0-a520-4b57-844e-016080260818",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "igd10iumd64.dll | CLayeredObjectWithCLS<T>::CContainedObject::AddRef",
+  "panel_sig": "igd10iumd64.dll | CLayeredObjectWithCLS<T>::CContainedObject::AddRef"
+ },
+ "2064436": {
+  "uuid": "ec1ff67a-a835-4740-be14-572e50260818",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+  "panel_sig": "shutdownhang | ntdll.dll | user32.dll | kernelbase.dll | mozilla::FutexImpl<T>::wait"
+ },
+ "2064537": {
+  "uuid": "38f1a5bc-2b3a-459c-ae37-1a99c0260818",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "panel_sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder"
+ },
+ "2064600": {
+  "uuid": "92ce80ce-3c58-4fc3-ae1f-8ffde0260819",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::ActiveScrolledRoot::GetNearestScrollASR",
+  "panel_sig": "mozilla::ActiveScrolledRoot::GetNearestScrollASR"
+ },
+ "2065072": {
+  "uuid": "a4ac8c69-7b93-48e5-8e5d-9a1ae0260819",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::MediaTrackGraphImpl::OnGraphThread",
+  "panel_sig": "mozilla::MediaTrackGraphImpl::OnGraphThread"
+ },
+ "2065075": {
+  "uuid": "cf139d7e-2652-4eab-a88f-04ce10260820",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "mozilla::MediaTrackGraphImpl::TailDispatchMessage",
+  "panel_sig": "mozilla::MediaTrackGraphImpl::TailDispatchMessage"
+ },
+ "2065085": {
+  "uuid": "4fe3bb03-028a-4ccf-83e1-96ff50260820",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "std::vector<T>::_Resize_reallocate<T>",
+  "panel_sig": "std::vector<T>::_Resize_reallocate<T>"
+ },
+ "2065156": {
+  "uuid": "136fdb89-73ba-41dd-b808-7dcc60260820",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "stackoverflow | GL_GetGraphicsResetStatusKHR",
+  "panel_sig": "stackoverflow | GL_GetGraphicsResetStatusKHR"
+ },
+ "2065373": {
+  "uuid": "363ff2bf-990e-45f3-a361-b13f50260820",
+  "product": "Firefox",
+  "channel": "nightly",
+  "signature": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader",
+  "panel_sig": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader"
+ }
+}

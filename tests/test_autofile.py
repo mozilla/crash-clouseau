@@ -356,7 +356,16 @@ class TestOtherApplications(_Base):
     def test_a_firefox_side_bug_still_gets_the_comment(self):
         # The whole Firefox side is defined by exclusion, so anything not named as another
         # application's remains a venue — Core here, but equally Toolkit, GeckoView, NSS.
-        for product in ("Core", "Firefox", "Toolkit", "GeckoView", "Fenix"):
+        #
+        # ``Firefox for Android`` is here because the ``Fenix`` subTest is VACUOUS: BMO has no
+        # product of that name (2026-08-21, ``/rest/product?names=Fenix`` -> ``{"products":[]}``,
+        # and absent from all 194 products ``?type=accessible`` returns —
+        # spike/other_app_products/bmo_products.json). It is only a search alias: ``?product=
+        # Fenix`` returned 21,891 bugs and every one of them reads ``product: "Firefox for
+        # Android"``. So the string BMO can actually send was asserted nowhere, and "Fenix is
+        # deliberately pinned to the Firefox side" was pinned by nothing.
+        for product in ("Core", "Firefox", "Toolkit", "GeckoView", "Fenix",
+                        "Firefox for Android"):
             with self.subTest(product=product):
                 res = self._one(_bug(12345, product=product))
                 self.assertEqual((res["bug"], res["mode"]), (12345, "comment_on_existing"))

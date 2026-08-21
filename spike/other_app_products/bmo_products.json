@@ -1,0 +1,1166 @@
+[
+ {
+  "name": "Tech Evangelism Graveyard",
+  "description": "Old, retired \"Tech Evangelism\" components",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Marketplace Graveyard",
+  "description": "Mozilla's website (<a href=\"https://marketplace.firefox.com\">marketplace.firefox.com</a>) to bring personalized discovery, worldwide distribution, and easy payments to the largest platform for app development: the Web. (<a href=\r\n\"https://wiki.mozilla.org/Marketplace\">more info</a>)"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Context Graph Graveyard",
+  "description": "Context Graph is a recommender system for the Web. The goal for Context Graph features is to help people find new stuff based on their current context. This project includes several ongoing research projects related to the Web's morphology, client interactions with the Web, and Web content.\r\nhttps://wiki.mozilla.org/Context_Graph"
+ },
+ {
+  "classification": "Client Software",
+  "is_active": true,
+  "description": "For bugs in Firefox Focus for Android. Bugs in Firefox Focus for iOS should be filed on <a href=\"https://github.com/mozilla-mobile/firefox-ios/issues/new/choose\">GitHub</a>",
+  "name": "Focus"
+ },
+ {
+  "is_active": true,
+  "classification": "Developer Infrastructure",
+  "name": "Tree Management",
+  "description": "Dashboards & tools to help manage commits to Firefox & Gecko related version control repositories and monitor the effect they have on code & test health."
+ },
+ {
+  "description": "Next-generation localization architecture (<a href=\"https://wiki.mozilla.org/L20n\">more info</",
+  "name": "L20n Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "classification": "Server Software",
+  "is_active": true,
+  "description": "For issues with the <a href=\"https://wiki.mozilla.org/Socorro\">Socorro</a> server which accepts and processes Breakpad crash reports.",
+  "name": "Socorro"
+ },
+ {
+  "name": "Developer Engagement Graveyard",
+  "description": "For requests related to Mozilla's Technology Evangelism group within Developer Engagement. Includes requests for events, outreach and demos (<a href=\"https://wiki.mozilla.org/Engagement/Developer_Engagement/Technical_Evangelism\">more info</a>).",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Security Assurance",
+  "description": "For Security incidents, investigation, risk analysis requests, reviews. The team formerly known as Enterprise Information Security (EIS)/OpSec/infosec",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "description": "The Mozilla Toolkit is a set of APIs, built on top of Gecko, which provide advanced services to XUL applications. These services include Profile Management, Chrome Registration, Browsing History, Extension and Theme Management, Application Update Service, and Safe Mode. (<a href=\"https://wiki.mozilla.org/Modules/Toolkit\">More info</a>)",
+  "name": "Toolkit",
+  "classification": "Components",
+  "is_active": true
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "<a href=\"https://wiki.mozilla.org/Firefox/Input\">Input</a> is the feedback tool for Firefox.",
+  "name": "Input Graveyard"
+ },
+ {
+  "name": "Plugins Graveyard",
+  "description": "For problems with third party plugins (<a href=\"https://developer.mozilla.org/en/Gecko_Plugin_API_Reference\">NPAPI</a>), AntiVirus applications and Firewalls.  This product is for enabling collaboration between mozilla.org and third party software vendors. Vendors will be recognized, and able to mark bugs as fixed with references to their software versions.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "Tools, libraries and automation involved in Mozilla's localization processes",
+  "name": "Localization Infrastructure and Tools",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "name": "Web Compatibility",
+  "description": "A place to move bugs for sites or content that does not work in Firefox, but works in other browsers. File new bugs at <a href=\"https://webcompat.com/issues/new\">https://webcompat.com/issues/new</a>. This component was previously called Tech Evangelism.",
+  "is_active": true,
+  "classification": "Client Software"
+ },
+ {
+  "classification": "Developer Infrastructure",
+  "is_active": true,
+  "description": "For issues relating to the bugzilla.mozilla.org website, also known as <a href=\"https://wiki.mozilla.org/BMO\">BMO</a>.",
+  "name": "bugzilla.mozilla.org"
+ },
+ {
+  "description": "<a href=\"https://wiki.mozilla.org/Ignite\">Mozilla Ignite</a> is joint project with the National Science Foundation (NSF) to help people make apps that improve people's lives.",
+  "name": "mozillaignite Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "Remote Protocol",
+  "description": "The Firefox Remote Protocol is a low-level debugging interface based on the CDP protocol. With it, you can inspect the state and control execution of documents running in web content, instrument Gecko in interesting ways, simulate user interaction for automation purposes, and debug JavaScript execution",
+  "is_active": true,
+  "classification": "Components"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Websites",
+  "description": "For issues with content of Websites managed by Mozilla that do not have their own Bugzilla products."
+ },
+ {
+  "description": "For bugs reports that we are marking INVALID and don't belong in legitimate products and components. Moving bugs to this product will allow them to stop showing up in a valid product's search results and statistics.",
+  "name": "Invalid Bugs",
+  "classification": "Graveyard",
+  "is_active": true
+ },
+ {
+  "description": "Old, retired components for Cloud Services.",
+  "name": "Cloud Services Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "FSA Graveyard",
+  "description": "Firefox Student Ambassadors is a volunteer program for university students who are passionate about Mozilla, the open web, and the many benefits of Firefox and its products.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "Camino is a native Mac OS X browser-only project (<a href=\"http://www.caminobrowser.org/\">more info</a>)",
+  "name": "Camino Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "description": "Firefox Hello, formerly called <a href=\"https://wiki.mozilla.org/Loop\">Loop</a>, uses WebRTC to add real-time communications to the user's web browsing experience.",
+  "name": "Hello (Loop)",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": true,
+  "classification": "Client Software",
+  "name": "Firefox Private Network",
+  "description": "Firefox Private Network (FPN)"
+ },
+ {
+  "description": "For issues relating to the <a href=\"https://quality.mozilla.org/\">quality.mozilla.org</a> website, also known as <a href=\"https://wiki.mozilla.org/QA\">QMO</a>.",
+  "name": "quality.mozilla.org",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Infrastructure & Operations Graveyard",
+  "description": "Old, retired Infrastructure & Operations components."
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Location",
+  "description": "For bugs and requests related to management of Mozilla Location Services at location.services.mozilla.com."
+ },
+ {
+  "name": "Mozilla Labs",
+  "description": "For bugs and requests related to management of <a href=\"https://wiki.mozilla.org/Labs\">Mozilla\r\nLabs</a> and related projects.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "For bugs in Firefox DevTools, the developer tools within the Firefox web browser. This includes issues about the user interface of the toolbox, special pages such as about:debugging and about:devtools, and developer-related APIs.",
+  "name": "DevTools Graveyard"
+ },
+ {
+  "description": "The <a href=\"http://wiki.mozilla.org/ReMo\">Mozilla Reps, or ReMo</a>, program provides a simple framework and specific tools to help volunteer Mozillians become official representatives of Mozilla in their region.",
+  "name": "Mozilla Reps",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Old, retired Firefox Affiliates components",
+  "name": "Firefox Affiliates Graveyard"
+ },
+ {
+  "name": "mozilla.org",
+  "description": "The administration of the <a href=\"https://wiki.mozilla.org/Modules/All#Governance_Sub_Modules\">Mozilla Project</a> and its servers (Website content bugs will belong in the www.mozilla.org product)",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Localization Infrastructure and Tools Graveyard",
+  "description": "Tools, libraries and automation involved in Mozilla's localization processes"
+ },
+ {
+  "classification": "Client Software",
+  "is_active": true,
+  "description": "Pocket and the Pocket API",
+  "name": "Pocket"
+ },
+ {
+  "name": "Marketing Graveyard",
+  "description": "Marketing and business-related ideas and projects (<a href=\"http://www.mozilla.org/projects/marketing/\">more info</a>)",
+  "is_active": false,
+  "classification": "Other"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Developer Services",
+  "description": "For issues related to the services and infrastructure that support developer productivity, primarily hg.mozilla.org   (<a href=\"https://wiki.mozilla.org/DeveloperServices\">more info</a>)"
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "System to execute experiments, self-repair, and surveys in Firefox",
+  "name": "Shield"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Taskcluster",
+  "description": "Taskcluster is a platform that Mozilla has developed for running tasks.  This product is for bugs with the Taskcluster platform itself, not for issues with the configuration of the Mozilla Taskcluster instance."
+ },
+ {
+  "classification": "Components",
+  "is_active": true,
+  "description": "Network Security Services - a cross-platform\r\nsecurity library (<a\r\n href=\"http://www.mozilla.org/projects/security/pki/nss/\">more info</a>)",
+  "name": "NSS"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "For tracking bugs that cross multiple products and services",
+  "name": "Tracking Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Mozilla Grants",
+  "description": "Grants from the Mozilla Foundation."
+ },
+ {
+  "classification": "Server Software",
+  "is_active": true,
+  "description": "Mozilla Symbols Server at <a href=\"https://symbols.mozilla.org\">https://symbols.mozilla.org</a>.",
+  "name": "Tecken"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Enterprise Information Security Graveyard",
+  "description": "For Security incidents, investigation, risk analysis requests, reviews. The team formerly known as OpSec and currently known as EIS or infosec"
+ },
+ {
+  "is_active": false,
+  "classification": "Other",
+  "name": "support.mozilla.org - Lithium",
+  "description": "For issues support.mozilla.org on the lithium platform"
+ },
+ {
+  "description": "For bugs in Classification Engine, Interest Dashboard, Recommendations, Subscribe 2 Web, Tiles, and other services. (<a href=\"https://blog.mozilla.org/advancingcontent\"\r\n>more info</a>)",
+  "name": "Content Services Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Privacy Graveyard",
+  "description": "<a href=\"https://wiki.mozilla.org/Privacy\">Privacy</a> and policy, including privacy reviews, data data release proposals, and modifications to privacy policies. Not for bugs and feature requests in software."
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Bugs for Telemetry Components",
+  "name": "Data Platform and Tools Graveyard"
+ },
+ {
+  "description": "Old, retired Fennec bugs. Fennec is the code name of the effort to build a mobile version of Firefox (<a href=\"http://wiki.mozilla.org/Mobile/FennecVision\">more info</a>)",
+  "name": "Firefox for Android Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "bugzilla.mozilla.org Graveyard",
+  "description": "For issues relating to the bugzilla.mozilla.org website, also known as <a href=\"https://wiki.mozilla.org/BMO\">BMO</a>.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Firefox Friends Graveyard",
+  "description": "Firefox Friends is a word of mouth marketing program that amplifies our marketing efforts by arming our broad community with the tools to become Firefox Friends.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "Old, retired Mozilla QA components",
+  "name": "Mozilla QA Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "description": "<a href=\"https://wiki.mozilla.org/Firefox/Input\">Input</a> is the feedback tool for Firefox.",
+  "name": "Input",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "MozReview Graveyard",
+  "description": "Mozilla's installation of Review Board and related systems for tracking and managing code review.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Tree Management Graveyard",
+  "description": "Old, retired Tree Management components",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "classification": "Components",
+  "is_active": true,
+  "description": "Mail and news components common to Thunderbird and SeaMonkey",
+  "name": "MailNews Core"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Suite of tools that helps make it easier for people to get involved in the Mozilla Project.",
+  "name": "Participation Infrastructure Graveyard"
+ },
+ {
+  "description": "For requests related to Mozilla's Technology Evangelism group within Developer Engagement. Includes requests for events, outreach and demos (<a href=\"https://wiki.mozilla.org/Engagement/Developer_Engagement/Technical_Evangelism\">more info</a>).",
+  "name": "Developer Engagement",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "is_active": true,
+  "classification": "Client Software",
+  "name": "Firefox",
+  "description": "For bugs in  Firefox Desktop, the Mozilla Foundation's web browser. For Firefox user interface issues in menus, bookmarks, location bar, and preferences. Many Firefox bugs will either be filed here or in the <a href=\"https://bugzilla.mozilla.org/describecomponents.cgi?product=Core\">Core</a> product. Bugs for developer tools (F12) should be filed in the <a href=\"https://bugzilla.mozilla.org/describecomponents.cgi?product=DevTools\">DevTools</a> product.  (<a href=\"https://wiki.mozilla.org/Modules/All#Firefox\">more info</a>)"
+ },
+ {
+  "classification": "Client Software",
+  "is_active": true,
+  "description": "Bugs for Telemetry Components",
+  "name": "Data Platform and Tools"
+ },
+ {
+  "is_active": true,
+  "classification": "Server Software",
+  "name": "Webtools",
+  "description": "For bugs in the tools that mozilla.org uses, including but not limited to Air Mozilla, Pontoon, and SearchFox."
+ },
+ {
+  "description": "Web Apps are applications that run on any device, and can be distributed through any store or directly by the developer.",
+  "name": "Web Apps Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "Mozilla QA",
+  "description": "For bugs and requests related to management of <a href=\"http://quality.mozilla.org/\">Mozilla QA</a> related projects.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "is_active": true,
+  "classification": "Client Software",
+  "name": "Firefox for Android",
+  "description": "Firefox for Android is an Android browser built using Android Components that re-imagines how a mobile browser would look if it was built from scratch to demonstrate better design for typical mobile use cases  (<a href=\"https://www.mozilla.org/en-us/firefox/mobile/\">more info</a>)."
+ },
+ {
+  "name": "App Stores",
+  "description": "Bugs related to Firefox products delivered via app stores.",
+  "is_active": true,
+  "classification": "Developer Infrastructure"
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "Requests for the Firefox User Research Team.",
+  "name": "User Research"
+ },
+ {
+  "description": "The Mozilla Foundation's project to build a generation of web makers (<a href=\"https://wiki.mozilla.org/Webmaker/Product\">More info</a>)",
+  "name": "Webmaker Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "description": "Request a design review, a component, or a new asset.",
+  "name": "UX Systems",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "For bugs and requests related to management of the <a href=\"https://wiki.mozilla.org/Thunderbird/Support\">Mozilla Messaging</a> \"Knowledge Base (KB)\"- known as \"SuMoMo.\" Thunderbird support forum.",
+  "name": "support.mozillamessaging.com Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "The <a href=\"https://wiki.mozilla.org/Websites/Snippets\">about:home snippet</a> service is a simple, highly-cached content management service. It is intended to assemble and deliver content snippets to the about:home page in Firefox. The content delivered is determined by details about the installation of Firefox requesting content - including mainly details about the browser's build, locale, platform, and distribution channel, but not the person using the browser.",
+  "name": "Snippets Graveyard"
+ },
+ {
+  "description": "For security bugs ONLY for addons.mozilla.org. All other issues should be filed on github at https://github.com/mozilla/addons.",
+  "name": "addons.mozilla.org",
+  "classification": "Server Software",
+  "is_active": true
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Security bugs in the Firefox for Echo Show client. All other bugs should be filed on GitHub at <a href=\"https://github.com/mozilla-mobile/firefox-echo-show/issues\">github.com/mozilla-mobile/firefox-echo-show</a>.",
+  "name": "Firefox for Echo Show Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Plugin Check is a service that allows users to determine whether their plugins are up to date, out of date or vulnerable, and is accessible via http://mozilla.org/plugincheck",
+  "name": "Plugin Check Graveyard"
+ },
+ {
+  "name": "B2GDroid Graveyard",
+  "description": "B2GDroid is a project that let us run b2g on android devices as a homescreen. It uses code from both android and b2g, along with additional custom code.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Petri Graveyard",
+  "description": "<a href=\"http://wiki.mozilla.org/Petri\">Petri</a> is a Mozilla PaaS/IaaS experimental project.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "mozilla.org Graveyard",
+  "description": "Old, retired mozilla.org components",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "is_active": false,
+  "classification": "Other",
+  "name": "Mozilla China",
+  "description": "For issues in extensions and websites owned by <a href=\"https://www.firefox.com.cn/\">Mozilla Online</a> team in Beijing, China"
+ },
+ {
+  "name": "Web Apps",
+  "description": "Web Apps are applications that run on any device, and can be distributed through any store or directly by the developer.",
+  "is_active": false,
+  "classification": "Other"
+ },
+ {
+  "name": "addons.mozilla.org Graveyard",
+  "description": "Old, retired addons.mozilla.org components",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Lockwise Graveyard",
+  "description": "Security bugs for Lockwise. All other issues should be filed on GitHub at <a href=\"https://github.com/mozilla-lockwise\">github.com/mozilla-lockwise</a>.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "Firefox for iOS is the Firefox mobile experience developed for the iOS platform.",
+  "name": "Firefox for iOS",
+  "classification": "Client Software",
+  "is_active": true
+ },
+ {
+  "description": "Old, retired Firefox Health Report components",
+  "name": "Firefox Health Report Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Requests for the Firefox User Experience Design Team. We help you shape your project, or review existing projects with you.",
+  "name": "User Experience Design Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Old, retired Websites",
+  "name": "Websites Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Fenix is a new Android browser built using Android Components that re-imagines how a mobile browser would look if it was built from scratch to demonstrate better design for typical mobile use cases (<a href=\"https://github.com/mozilla-mobile/fenix\">more info</a>).",
+  "name": "Fenix Graveyard"
+ },
+ {
+  "name": "Release Engineering Graveyard",
+  "description": "For bugs related to all aspects of Mozilla's Release Engineering pipeline, including branded releases, continuous automation, release automation, tools, repos and hooks, machine issues, loaner machines, buildbot.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "Project Conduit.",
+  "name": "Conduit",
+  "classification": "Developer Infrastructure",
+  "is_active": true
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "Next-generation localization architecture (<a href=\"https://wiki.mozilla.org/L20n\">more info</a>)",
+  "name": "L20n"
+ },
+ {
+  "name": "Mozilla Metrics",
+  "description": "Internal Mozilla Corp. database to house statistical/market data",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "name": "Air Mozilla Graveyard",
+  "description": "The Air Mozilla site (<a href=\"http://air.mozilla.com\">http://air.mozilla.com</a>) and supporting infrastructure, including video conferencing. More info: <a href=\"https://wiki.mozilla.org/Air_Mozilla\">Air Mozilla wiki page</a>",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Add-on SDK Graveyard",
+  "description": "The software development kit for building Firefox add-ons.\r\nMore info at: <a href=\"https://wiki.mozilla.org/Jetpack\">Jetpack project documentation</a>.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Toolkit Graveyard",
+  "description": "Old, retired Toolkit components"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "An implementation of JavaScript in Java (<a\r\n href=\"http://www.mozilla.org/rhino/\">more info</a>)",
+  "name": "Rhino Graveyard"
+ },
+ {
+  "description": "Conduit Graveyard",
+  "name": "Conduit Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "description": "Please file bugs for this product on <a href=\"https://github.com/mozilla-mobile/firefox-ios/issues/new/choose\">GitHub</a>.",
+  "name": "Focus-iOS",
+  "classification": "Client Software",
+  "is_active": false
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "Bugs for the Mozilla Foundation Operations team",
+  "name": "Mozilla Foundation Operations"
+ },
+ {
+  "description": "Old, retired \"Testing\" components",
+  "name": "Testing Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Other Applications Graveyard",
+  "description": "Old, retired Other Applications components"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Connected Devices Graveyard",
+  "description": "Connected Devices is Mozilla's effort to extend the Open Web to the Internet of Things (<a href=\"https://wiki.mozilla.org/Connected_Devices\">more info</a>)."
+ },
+ {
+  "name": "www.mozilla.org Graveyard",
+  "description": "For issues with content on www.mozilla.org http servers (but not the functioning of the servers) (<a href=\"https://wiki.mozilla.org/Websites/Mozilla.org\">more info</a>)",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "Issues related to the DoH TRR Program https://wiki.mozilla.org/Trusted_Recursive_Resolver",
+  "name": "DoH TRR Program",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Servo Project",
+  "name": "Servo Graveyard"
+ },
+ {
+  "name": "Penelope Graveyard",
+  "description": "Eudora meets Thunderbird (<a href=\"http://wiki.mozilla.org/penelope\">more info</a>)",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Native Android services, including those bundled with Fennec. (<a href=\"https://wiki.mozilla.org/Android/Services\">More info</a>)",
+  "name": "Android Background Services Graveyard"
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "Request that we prioritize and open a headcount for hiring.",
+  "name": "Recruiting"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Participation Infrastructure",
+  "description": "Suite of tools that helps make it easier for people to get involved in the Mozilla Project."
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "For bugs about the Mozilla web browser before M3. <b>You cannot file bugs in this component</b>.",
+  "name": "MozillaClassic Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Client Software",
+  "name": "Thunderbird",
+  "description": "For bugs in MZLA's Thunderbird desktop mail client. Bugs in the back-end (e.g. protocols) should be filed in the <a href=\"https://bugzilla.mozilla.org/enter_bug.cgi?product=MailNews Core\">MailNews Core</a> product.  Bugs in calendar should be filed in the <a href=\"https://bugzilla.mozilla.org/enter_bug.cgi?product=Calendar\">Calendar</a> product. Bugs for the chat features, file in the  <a href=\"https://bugzilla.mozilla.org/enter_bug.cgi?product=Chat%20Core\">Chat Core</a> product."
+ },
+ {
+  "name": "Extend Firefox Graveyard",
+  "description": "For issues related to the <a href=\"http://extendfirefox.com/\">Extend Firefox</a> contest, web site, etc.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Security bugs in the FireTV clients. All other bugs should be filed on GitHub at <a href=\"https://github.com/mozilla-mobile/firefox-tv/issues\">github.com/mozilla-mobile/firefox-tv</a>.",
+  "name": "Firefox for FireTV Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Data & BI Services Team",
+  "description": "Data & BI Services Team provides data ingestion, processing and storage services, as well as BI consulting, dashboarding, reporting and custom visualization services for consumers of Mozilla product, people and business data."
+ },
+ {
+  "name": "Eliot",
+  "description": "Mozilla Symbolication Service at <a href=\"https://symbolication.services.mozilla.com\">https://symbolication.services.mozilla.com</a>.",
+  "is_active": true,
+  "classification": "Server Software"
+ },
+ {
+  "classification": "Client Software",
+  "is_active": true,
+  "description": "The Mozilla Calendar project also known as Lightning (<a\r\nhref=\"http://www.mozilla.org/projects/calendar/help.html\">more info</a>).",
+  "name": "Calendar"
+ },
+ {
+  "classification": "Client Software",
+  "is_active": true,
+  "description": "An all-in-one internet application suite, including web browser, e-mail and newsgroup client, and HTML composer. (<a href=\"http://www.seamonkey-project.org/\">more info</a>)",
+  "name": "SeaMonkey"
+ },
+ {
+  "description": "The <a href=\"https://wiki.mozilla.org/Websites/Snippets\">about:home snippet</a> service is a simple, highly-cached content management service. It is intended to assemble and deliver content snippets to the about:home page in Firefox. The content delivered is determined by details about the installation of Firefox requesting content - including mainly details about the browser's build, locale, platform, and distribution channel, but not the person using the browser.",
+  "name": "Snippets",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "description": "Graveyarded components for <a href=\"https://wiki.mozilla.org/Socorro\">Socorro</a> server which accepts and processes Breakpad crash reports.",
+  "name": "Socorro Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Tracking",
+  "description": "For tracking bugs that cross multiple products and services"
+ },
+ {
+  "description": "*.instantbird.org and *.instantbird.com websites.",
+  "name": "Instantbird Servers Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Community Building",
+  "description": "For bugs about Community Building Working Groups, Partnerships and local communities."
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "<a href=\"https://wiki.mozilla.org/Pancake\">Pancake</a> is a Mozilla Labs project using search and navigation history.",
+  "name": "Pancake Graveyard"
+ },
+ {
+  "name": "Mozilla Foundation Communications",
+  "description": "<a href=\"http://www.mozilla.org/foundation/\">The Mozilla Foundation</a> runs programs like Mozilla Webmaker, Open Badges, Open News and more.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Product Innovation",
+  "description": "The Firefox Product Innovation team will hunt, identify, evaluate, prototype, and pilot emerging products, solutions, and technologies that will create a competitive advantage for Mozilla."
+ },
+ {
+  "description": "This is for bugs in the Mozilla Application Services set of components, currently hosted at <a href=\"https://github.com/mozilla/application-services\">https://github.com/mozilla/application-services</a>.",
+  "name": "Application Services",
+  "classification": "Components",
+  "is_active": true
+ },
+ {
+  "name": "CCK Graveyard",
+  "description": "The Client Customization Kit, for corporate/organization\r\nrollouts (<a href=\"http://www.mozilla.org/projects/cck/\">more info</a>)",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "description": "For all bugs involving collection, submission, analysis and user-facing features (about:healthreport) as part of the Firefox Health Report product. (<a href=\"https://wiki.mozilla.org/QA/Desktop_Firefox/Firefox_Health_Report\">More info</a>)",
+  "name": "Firefox Health Report",
+  "classification": "Client Software",
+  "is_active": false
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Security bugs in the Focus mobile clients. All other bugs should be filed on GitHub at <a href=\"https://github.com/mozilla-mobile\">github.com/mozilla-mobile</a>.",
+  "name": "Focus Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Data Compliance",
+  "description": "Tracking issues regarding handling of user data for maximal user benefit, in accordance with our privacy principles. (<a href=\"https://wiki.mozilla.org/Data_Safety\">More info</a>)"
+ },
+ {
+  "name": "Emerging Markets Graveyard",
+  "description": "For security bugs ONLY for Emerging Market Group projects. All other issues should be filed on GitHub at <a href=\"https://github.com/mozilla-tw\">github.com/mozilla-tw</a>.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Marketing",
+  "description": "Marketing and business-related ideas and projects (<a href=\"http://www.mozilla.org/projects/marketing/\">more info</a>)",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "name": "Mozilla Foundation",
+  "description": "Bugs specific to the Mozilla Foundation.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "name": "GeckoView",
+  "description": "The GeckoView components for Android",
+  "is_active": true,
+  "classification": "Components"
+ },
+ {
+  "description": "Requests for new developer documentation or for corrections to existing developer documentation on the <a href=\"https://developer.mozilla.org\">MDN Web Docs</a> wiki. Report issues about the MDN wiki platform under 'developer.mozilla.org'.",
+  "name": "Developer Documentation Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "classification": "Server Software",
+  "is_active": true,
+  "description": "The <a\r\nhref=\"http://www.bugzilla.org\">Bugzilla</a> bug-tracking system.<br>\r\n<b>Note:</b> This is <b>not</b> the place to request configuration, permission, or account changes to this installation of Bugzilla (bugzilla.mozilla.org). File such changes under the appropriate component in the <a\r\nhref=\"enter_bug.cgi?product=bugzilla.mozilla.org\"><b>bugzilla.mozilla.org</b></a> product.",
+  "name": "Bugzilla"
+ },
+ {
+  "description": "The Firefox Profiler is the tool that Firefox engineers and Web developers alike use to analyze how their code works, including its performance. Note that other components exist in Devtools and Core (<a href=\"https://profiler.firefox.com\">more info</a>).",
+  "name": "Firefox Profiler",
+  "classification": "Components",
+  "is_active": true
+ },
+ {
+  "name": "support.mozilla.org",
+  "description": "For bugs and requests related to management of <a href=\"https://wiki.mozilla.org/Sumo\">SUMO</a>,\r\nsometimes known as <a href=\"https://support.mozilla.org\">support.mozilla.org</a>.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "For bugs related to all aspects of Mozilla's Release Engineering pipeline, including branded releases, continuous automation, release automation, tools, repos and hooks, machine issues, loaner machines, buildbot.",
+  "name": "Release Engineering"
+ },
+ {
+  "name": "Core Graveyard",
+  "description": "Old, retired Core components",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "External Software Affecting Firefox Graveyard",
+  "description": "For problems with third-party software which affect Firefox users. Plugin problems should be in Core:Plug-Ins instead of this product.",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "Server and networking infrastructure, including web properties, CDN, DNS (<a href=\"https://mana.mozilla.org/wiki/display/IT/Home\">more info</a>)",
+  "name": "Infrastructure & Operations"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Sometimes bugs are reported to Bugzilla which are really bugs in a product that is derived from Mozilla and should be reported elsewhere.  When you find such bugs assign them to this product to nominate them for transfer to the proper bug database.  <b>You cannot file bugs in this component</b>.\r\n\r\nExamples:  AIM or Net2Phone bugs in Netscape 6.",
+  "name": "Derivatives Graveyard"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "AUS Graveyard",
+  "description": "The <a href=\"https://wiki.mozilla.org/Software_Update\">Application Update Service</a> is used by client software to check for updates to application software."
+ },
+ {
+  "name": "Chat Core",
+  "description": "This is the core/back-end of Instantbird and Thunderbird chat (all code in the chat/ directory). This includes the JavaScript protocol implementations, our custom protocols that are not part of libpurple, and the purplexpcom library which allows the use of libpurple from scriptable  XPCOM (XUL/JS).",
+  "is_active": true,
+  "classification": "Components"
+ },
+ {
+  "description": "The Lightweight Directory Access Protocol (LDAP) project.",
+  "name": "Directory Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "Datazilla Graveyard",
+  "description": "Datazilla is a system for managing and visualizing application performance data.  The project includes a database, web service, and several user interfaces.  The source code repository, https://github.com/mozilla/datazilla/, and documentation, http://datazilla.readthedocs.org, can be found at these locations.  The primary project data managed by datazilla includes Talos performance data.  Datazilla web services for individual projects are deployed at specific uri paths: https://datazilla.mozilla.org/stoneridge/ (stoneridge project) and https://datazilla.mozilla.org/talos/ (talos project).",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Client Software",
+  "name": "Mozilla VPN",
+  "description": "Mozilla's full-device VPN available on desktop and mobile operating systems"
+ },
+ {
+  "description": "Documentation for Mozilla users, developers\r\nand web developers.",
+  "name": "Documentation Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "description": "Retired Taskcluster components",
+  "name": "Taskcluster Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "description": "GeckoView Graveyard",
+  "name": "GeckoView Graveyard",
+  "classification": "Graveyard",
+  "is_active": true
+ },
+ {
+  "name": "Core",
+  "description": "Shared components used by Firefox and other Mozilla software, including handling of Web content; Gecko, HTML, CSS, layout, DOM, scripts, images, networking, etc. Issues with web page layout probably go here, while Firefox user interface issues belong in the <a href=\"https://bugzilla.mozilla.org/describecomponents.cgi?product=Firefox\">Firefox</a> product. (<a href=\"https://wiki.mozilla.org/Modules/All#Core\">More info</a>)",
+  "is_active": true,
+  "classification": "Components"
+ },
+ {
+  "description": "Bugs and features related to the Enterprise products.",
+  "name": "Enterprise Products",
+  "classification": "Client Software",
+  "is_active": true
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Next-generation JavaScript 2 virtual machine (<a href=\"http://www.mozilla.org/projects/tamarin/\">more info</a>)",
+  "name": "Tamarin Graveyard"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Minimo Graveyard",
+  "description": "Browser for limited resource devices (<a href=\"http://www.mozilla.org/projects/minimo/\">more info</a>)"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Data & BI Services Team Graveyard",
+  "description": "Data & BI Services Team provides data ingestion, processing and storage services, as well as BI consulting, dashboarding, reporting and custom visualization services for consumers of Mozilla product, people and business data."
+ },
+ {
+  "is_active": true,
+  "classification": "Components",
+  "name": "DevTools",
+  "description": "For bugs in Firefox DevTools, the developer tools within the Firefox web browser. This includes issues about the user interface of the toolbox, special pages such as about:debugging and about:devtools, and developer-related APIs."
+ },
+ {
+  "name": "Testopia",
+  "description": "<a href=\"https://wiki.mozilla.org/Testopia\">Testopia</a> is a test case management system that sits\r\non top of Bugzilla.",
+  "is_active": true,
+  "classification": "Server Software"
+ },
+ {
+  "is_active": false,
+  "classification": "Other",
+  "name": "Data Science",
+  "description": "Requests for the Data Science Team. If you are unsure of which component to choose please select General."
+ },
+ {
+  "description": "Next-generation gecko-based standalone HTML/XHTML authoring tool",
+  "name": "Composer Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Old, retired Webtools",
+  "name": "Webtools Graveyard"
+ },
+ {
+  "description": "The <a href=\"http://wiki.mozilla.org/ReMo\">Mozilla Reps, or ReMo</a>, program provides a simple framework and specific tools to help volunteer Mozillians become official representatives of Mozilla in their region.",
+  "name": "Mozilla Reps Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Firefox Graveyard",
+  "description": "Old, retired Firefox components"
+ },
+ {
+  "name": "www.firefox.com",
+  "description": "For issues with content on www.mozilla.org http servers (but not the functioning of the servers)",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "name": "Firefox OS Graveyard",
+  "description": "FirefoxOS, or Boot2Gecko (B2G) is Mozilla's operating system built on web standards. (<a href=\"https://wiki.mozilla.org/B2G\">more info</a>)",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "name": "Instantbird Graveyard",
+  "description": "This is the user interface of Instantbird. http://www.instantbird.com/",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "developer.mozilla.org Graveyard",
+  "description": "For bugs and requests related to management of <a href=\"https://developer.mozilla.org\">MDN Web Docs</a>, and for bugs and requests related to the Kuma platform that drives the <a href=\"https://developer.mozilla.org\">MDN</a> wiki. Report issues about the MDN content under 'Developer Documentation'."
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Skywriter Graveyard",
+  "description": "Mozilla Skywriter is a product, designed in Mozilla Labs, that proposes an open, extensible, web-based framework for code editing that aims to increase developer productivity, enable compelling user experiences, and promote the use of open standards."
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "Old, retired \"Mozilla Localizations\" components.",
+  "name": "Mozilla Localizations Graveyard"
+ },
+ {
+  "description": "Other developer workflow and infrastructure components",
+  "name": "Developer Infrastructure",
+  "classification": "Developer Infrastructure",
+  "is_active": true
+ },
+ {
+  "name": "Other Applications",
+  "description": "For bugs in CCK, Chatzilla, DOM Inspector, Venkman, and other applications which aren't large enough to warrant an entire Bugzilla product.",
+  "is_active": true,
+  "classification": "Client Software"
+ },
+ {
+  "classification": "Other",
+  "is_active": true,
+  "description": "For security bugs related to management of <a href=\"https://developer.mozilla.org\">MDN Web Docs</a>.  Report non-security issues <a href=\"https://github.com/mdn\">on GitHub</a>.",
+  "name": "developer.mozilla.org"
+ },
+ {
+  "name": "CA Program",
+  "description": "Issues related to the Certificate Authority Program",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "description": "The Air Mozilla site (<a href=\"http://air.mozilla.com\">http://air.mozilla.com</a>) and supporting infrastructure, including video conferencing. More info: <a href=\"https://wiki.mozilla.org/Air_Mozilla\">Air Mozilla wiki page</a>",
+  "name": "Air Mozilla",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "description": "For newly filed bugs that need some help finding the right place to go. <a href=\"https://wiki.mozilla.org/Bugmasters\">Help the bugmasters triage these!</a>",
+  "name": "Untriaged Bugs",
+  "classification": "Other",
+  "is_active": false
+ },
+ {
+  "description": "For bugs in old components that aren't active anymore.",
+  "name": "Boot2Gecko Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "classification": "Client Software",
+  "is_active": true,
+  "description": "For bugs in Firefox Sync, Firefox Home, metrics, Server, Share, and other services. (<a href=\"https://wiki.mozilla.org/Services\">more info</a>)",
+  "name": "Cloud Services"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "The Grendel Java-based mail/news reader (<a\r\n href=\"http://www.mozilla.org/projects/grendel/\">more info</a>)",
+  "name": "Grendel Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Other",
+  "name": "Internet Public Policy",
+  "description": "The Mozilla <a href=\"https://wiki.mozilla.org/Netpolicy\">Internet Public Policy</a> group works to build products that make the Web more robust and take action when the web\u2019s DNA is threatened."
+ },
+ {
+  "name": "Release Management",
+  "description": "Bugs used to track Release Management specific tasks.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "description": "Network Security Services for Java - a Java\r\ninterface to NSS (<a\r\n href=\"http://mozilla.org/projects/security/pki/jss/\">more info</a>)",
+  "name": "JSS Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "support.mozilla.org Graveyard",
+  "description": "Old, retired suppport.mozilla.org components"
+ },
+ {
+  "name": "Firefox Build System",
+  "description": "All the stuff related to the build system and associated automation",
+  "is_active": true,
+  "classification": "Developer Infrastructure"
+ },
+ {
+  "description": "The products, tools, services, and resources used to equip and support our <a href=\"https://wiki.mozilla.org/Apps/Ecosystem\">Mozilla Developer Ecosystem</a>.",
+  "name": "Developer Ecosystem",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "MailNews Core Graveyard",
+  "description": "Old, retired MailNews Core components"
+ },
+ {
+  "name": "Growth",
+  "description": "We track all the efforts related to Growth initiatives here.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "name": "Mozilla Messaging Graveyard",
+  "description": "The administration of Mozilla Messaging and its servers (Website content bugs will belong in the Websites product)",
+  "is_active": false,
+  "classification": "Graveyard"
+ },
+ {
+  "classification": "Graveyard",
+  "is_active": false,
+  "description": "A machine translation project for the benefit of Mozilla and the Open Web (<a href=\"https://wiki.mozilla.org/Intellego\">more info</a>).",
+  "name": "Intellego Graveyard"
+ },
+ {
+  "is_active": true,
+  "classification": "Components",
+  "name": "External Software Affecting Firefox",
+  "description": "For problems with third-party software which affect Firefox users. Plugin problems should be in Core:Plug-Ins instead of this product."
+ },
+ {
+  "description": "For issues with content on www.mozilla.org http servers (but not the functioning of the servers) (<a href=\"https://wiki.mozilla.org/Websites/Mozilla.org\">more info</a>)",
+  "name": "www.mozilla.org",
+  "classification": "Other",
+  "is_active": true
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Mozilla Labs Graveyard",
+  "description": "Old, retired Mozilla Labs projects. Some products may have graduated to other places."
+ },
+ {
+  "name": "Mozilla Localizations",
+  "description": "Translation, spelling and other errors in language\r\npacks and localized builds (<a href=\"https://wiki.mozilla.org/L10n:Home_Page\">more info</a>)",
+  "is_active": true,
+  "classification": "Client Software"
+ },
+ {
+  "is_active": false,
+  "classification": "Graveyard",
+  "name": "Powertool Graveyard",
+  "description": "Powertool is a set of software and hardware tools to allow developers to measure power consumption on Firefox OS phones.\r\n(<a href=\"https://developer.mozilla.org/en-US/Firefox_OS/Performance/Power\">more info</a>)"
+ },
+ {
+  "description": "The Netscape Portable Runtime - Mozilla's cross-platform\r\nportability layer (<a\r\n href=\"http://www.mozilla.org/projects/nspr/reference/html/\">more info</a>)",
+  "name": "NSPR",
+  "classification": "Components",
+  "is_active": true
+ },
+ {
+  "description": "Firefox for Windows 8 Touch (formerly Metro) is Mozilla's version of Firefox for the Windows 8 touch interface included in Firefox Desktop on Windows 8 and higher. (<a href=\"https://wiki.mozilla.org/Firefox/Windows_8_Integration\">more info</a>)",
+  "name": "Firefox for Metro Graveyard",
+  "classification": "Graveyard",
+  "is_active": false
+ },
+ {
+  "name": "Crash Pings",
+  "description": "Crash ping post-processing and the <a href=\"https://crash-pings.mozilla.org\">crash-ping dashboard website</a>.",
+  "is_active": true,
+  "classification": "Other"
+ },
+ {
+  "name": "Testing",
+  "description": "For bugs related to automated testing of Mozilla client code (Firefox, Thunderbird, Fennec, Gecko, etc) (<a href=\"https://wiki.mozilla.org/EngineeringProductivity\">More info</a>)",
+  "is_active": true,
+  "classification": "Components"
+ },
+ {
+  "is_active": true,
+  "classification": "Components",
+  "name": "WebExtensions",
+  "description": "File feature requests and bugs related to the WebExtension add-on API."
+ }
+]

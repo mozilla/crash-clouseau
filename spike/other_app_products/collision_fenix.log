@@ -1,0 +1,18 @@
+done Fenix 303
+done Focus 100
+done Thunderbird 225
+
+BMO product (open sig bugs)              open        Fenix        Focus  Thunderbird
+Firefox for Android                        96           94           40            3
+GeckoView                                  38           36           24            1
+Focus                                       2            1            2            0
+Application Services                        7            4            2            1
+Thunderbird                                59           16           11           54
+MailNews Core                              21            1            0           16
+Calendar                                    1            1            1            1
+Chat Core                                   0            0            0            0
+SeaMonkey                                   2            0            0            0
+Firefox                                    17            3            1            9
+Toolkit                                    53            9            2           32
+External Software Affecting Firefox        56            2            1           29
+WebExtensions                              16            5            1            8

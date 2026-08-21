@@ -1,0 +1,307 @@
+{
+ "Tech Evangelism Graveyard": {
+  "all": 4,
+  "open": 0,
+  "is_active": false
+ },
+ "Focus": {
+  "all": 28,
+  "open": 2,
+  "is_active": true
+ },
+ "Socorro": {
+  "all": 13,
+  "open": 2,
+  "is_active": true
+ },
+ "Toolkit": {
+  "all": 1074,
+  "open": 53,
+  "is_active": true
+ },
+ "Plugins Graveyard": {
+  "all": 244,
+  "open": 0,
+  "is_active": false
+ },
+ "Web Compatibility": {
+  "all": 5,
+  "open": 0,
+  "is_active": true
+ },
+ "bugzilla.mozilla.org": {
+  "all": 1,
+  "open": 0,
+  "is_active": true
+ },
+ "Remote Protocol": {
+  "all": 16,
+  "open": 0,
+  "is_active": true
+ },
+ "Invalid Bugs": {
+  "all": 71,
+  "open": 0,
+  "is_active": true
+ },
+ "Camino Graveyard": {
+  "all": 198,
+  "open": 0,
+  "is_active": false
+ },
+ "Infrastructure & Operations Graveyard": {
+  "all": 4,
+  "open": 0,
+  "is_active": false
+ },
+ "Mozilla Labs": {
+  "all": 1,
+  "open": 0,
+  "is_active": false
+ },
+ "DevTools Graveyard": {
+  "all": 10,
+  "open": 0,
+  "is_active": false
+ },
+ "Taskcluster": {
+  "all": 3,
+  "open": 0,
+  "is_active": true
+ },
+ "NSS": {
+  "all": 201,
+  "open": 6,
+  "is_active": true
+ },
+ "Tracking Graveyard": {
+  "all": 1,
+  "open": 0,
+  "is_active": false
+ },
+ "Firefox for Android Graveyard": {
+  "all": 2559,
+  "open": 0,
+  "is_active": false
+ },
+ "MailNews Core": {
+  "all": 1250,
+  "open": 21,
+  "is_active": true
+ },
+ "Firefox": {
+  "all": 1816,
+  "open": 17,
+  "is_active": true
+ },
+ "Data Platform and Tools": {
+  "all": 22,
+  "open": 7,
+  "is_active": true
+ },
+ "Firefox for Android": {
+  "all": 462,
+  "open": 96,
+  "is_active": true
+ },
+ "Web Apps": {
+  "all": 1,
+  "open": 0,
+  "is_active": false
+ },
+ "Firefox Health Report Graveyard": {
+  "all": 4,
+  "open": 0,
+  "is_active": false
+ },
+ "Release Engineering Graveyard": {
+  "all": 2,
+  "open": 0,
+  "is_active": false
+ },
+ "Add-on SDK Graveyard": {
+  "all": 3,
+  "open": 0,
+  "is_active": false
+ },
+ "Toolkit Graveyard": {
+  "all": 40,
+  "open": 0,
+  "is_active": false
+ },
+ "Testing Graveyard": {
+  "all": 9,
+  "open": 0,
+  "is_active": false
+ },
+ "Other Applications Graveyard": {
+  "all": 22,
+  "open": 0,
+  "is_active": false
+ },
+ "Penelope Graveyard": {
+  "all": 1,
+  "open": 0,
+  "is_active": false
+ },
+ "Android Background Services Graveyard": {
+  "all": 3,
+  "open": 0,
+  "is_active": false
+ },
+ "Thunderbird": {
+  "all": 1079,
+  "open": 59,
+  "is_active": true
+ },
+ "Calendar": {
+  "all": 76,
+  "open": 1,
+  "is_active": true
+ },
+ "SeaMonkey": {
+  "all": 472,
+  "open": 2,
+  "is_active": true
+ },
+ "Application Services": {
+  "all": 16,
+  "open": 7,
+  "is_active": true
+ },
+ "GeckoView": {
+  "all": 359,
+  "open": 38,
+  "is_active": true
+ },
+ "Release Engineering": {
+  "all": 2,
+  "open": 0,
+  "is_active": true
+ },
+ "Core Graveyard": {
+  "all": 1750,
+  "open": 0,
+  "is_active": false
+ },
+ "External Software Affecting Firefox Graveyard": {
+  "all": 567,
+  "open": 0,
+  "is_active": false
+ },
+ "Infrastructure & Operations": {
+  "all": 1,
+  "open": 1,
+  "is_active": true
+ },
+ "Chat Core": {
+  "all": 3,
+  "open": 0,
+  "is_active": true
+ },
+ "Directory Graveyard": {
+  "all": 5,
+  "open": 0,
+  "is_active": false
+ },
+ "GeckoView Graveyard": {
+  "all": 1,
+  "open": 0,
+  "is_active": true
+ },
+ "Core": {
+  "all": 34857,
+  "open": 1292,
+  "is_active": true
+ },
+ "Enterprise Products": {
+  "all": 7,
+  "open": 1,
+  "is_active": true
+ },
+ "Tamarin Graveyard": {
+  "all": 2,
+  "open": 0,
+  "is_active": false
+ },
+ "DevTools": {
+  "all": 260,
+  "open": 0,
+  "is_active": true
+ },
+ "Firefox Graveyard": {
+  "all": 10,
+  "open": 0,
+  "is_active": false
+ },
+ "Firefox OS Graveyard": {
+  "all": 350,
+  "open": 0,
+  "is_active": false
+ },
+ "Developer Infrastructure": {
+  "all": 6,
+  "open": 0,
+  "is_active": true
+ },
+ "Other Applications": {
+  "all": 26,
+  "open": 0,
+  "is_active": true
+ },
+ "CA Program": {
+  "all": 1,
+  "open": 0,
+  "is_active": true
+ },
+ "Air Mozilla": {
+  "all": 1,
+  "open": 1,
+  "is_active": true
+ },
+ "Cloud Services": {
+  "all": 10,
+  "open": 4,
+  "is_active": true
+ },
+ "Firefox Build System": {
+  "all": 53,
+  "open": 2,
+  "is_active": true
+ },
+ "MailNews Core Graveyard": {
+  "all": 2,
+  "open": 0,
+  "is_active": false
+ },
+ "External Software Affecting Firefox": {
+  "all": 402,
+  "open": 56,
+  "is_active": true
+ },
+ "Mozilla Localizations": {
+  "all": 2,
+  "open": 0,
+  "is_active": true
+ },
+ "NSPR": {
+  "all": 33,
+  "open": 1,
+  "is_active": true
+ },
+ "Firefox for Metro Graveyard": {
+  "all": 16,
+  "open": 0,
+  "is_active": false
+ },
+ "Testing": {
+  "all": 599,
+  "open": 5,
+  "is_active": true
+ },
+ "WebExtensions": {
+  "all": 482,
+  "open": 16,
+  "is_active": true
+ }
+}

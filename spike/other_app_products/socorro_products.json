@@ -1,0 +1,85 @@
+{
+ "window": [
+  "2026-08-14",
+  "2026-08-21"
+ ],
+ "total": 432417,
+ "product_facet": [
+  {
+   "term": "Firefox",
+   "count": 267662
+  },
+  {
+   "term": "Fenix",
+   "count": 108480
+  },
+  {
+   "term": "Thunderbird",
+   "count": 54850
+  },
+  {
+   "term": "Focus",
+   "count": 1404
+  },
+  {
+   "term": "ReferenceBrowser",
+   "count": 21
+  }
+ ],
+ "by_product_channel": {
+  "Firefox": {
+   "total": 267662,
+   "channels": {
+    "release": 137876,
+    "esr": 107955,
+    "nightly": 7734,
+    "beta": 5904,
+    "aurora": 3586,
+    "default": 3422,
+    "no": 273,
+    "esr140": 250,
+    "esr115": 213,
+    "Bosch": 164,
+    "esr128": 29,
+    "": 5,
+    "r": 5,
+    "none": 2,
+    "releasexx": 1
+   }
+  },
+  "Fenix": {
+   "total": 108480,
+   "channels": {
+    "release": 70714,
+    "nightly": 33657,
+    "beta": 3933,
+    "default": 176
+   }
+  },
+  "Thunderbird": {
+   "total": 54850,
+   "channels": {
+    "esr": 31626,
+    "release": 22989,
+    "beta": 163,
+    "default": 52,
+    "nightly": 18,
+    "scg_release": 2
+   }
+  },
+  "Focus": {
+   "total": 1404,
+   "channels": {
+    "release": 1402,
+    "beta": 1,
+    "nightly": 1
+   }
+  },
+  "ReferenceBrowser": {
+   "total": 21,
+   "channels": {
+    "nightly": 21
+   }
+  }
+ }
+}

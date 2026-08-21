@@ -1,0 +1,864 @@
+[
+ {
+  "bug": 2060920,
+  "uuid": "46607417-af82-40db-b97d-a31e40260801",
+  "product": "Firefox",
+  "signature": "OOM | unknown | memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::RTCEncodedFrameBase",
+  "candidates": [
+   {
+    "id": 2060920,
+    "creation_time": "2026-08-05T15:48:05Z",
+    "product": "Core"
+   }
+  ],
+  "node": "ce6e012f8850",
+  "pushdate": [
+   1783483112,
+   0
+  ],
+  "created": "2026-08-05"
+ },
+ {
+  "bug": 2060922,
+  "uuid": "b66819b5-785e-4e44-b586-4126d0260802",
+  "product": "Firefox",
+  "signature": "mozilla::MediaDecoder::SetCDMProxy",
+  "candidates": [
+   {
+    "id": 1990812,
+    "creation_time": "2025-09-25T13:46:32Z",
+    "product": "Core"
+   }
+  ],
+  "node": "e6335c6fffd3",
+  "pushdate": [
+   1761511377,
+   0
+  ],
+  "created": "2026-08-05"
+ },
+ {
+  "bug": 2060924,
+  "uuid": "0d4a0bee-d3cb-498a-844c-c84ff0260728",
+  "product": "Firefox",
+  "signature": "mozilla::ipc::IProtocol::Id",
+  "candidates": [],
+  "node": "74675cc139d9",
+  "pushdate": [
+   1785140244,
+   0
+  ],
+  "created": "2026-08-05"
+ },
+ {
+  "bug": 2061124,
+  "uuid": "71875125-4c28-4f9d-ada7-283980260805",
+  "product": "Firefox",
+  "signature": "huge_dalloc | js_free | js_delete",
+  "candidates": [],
+  "node": "8e478167d68b",
+  "pushdate": [
+   1733242868,
+   0
+  ],
+  "created": "2026-08-06"
+ },
+ {
+  "bug": 2061127,
+  "uuid": "f6fe186b-1014-4144-9d2d-ea29d0260806",
+  "product": "Firefox",
+  "signature": "mozilla::dom::SessionHistoryEntry::GetParent",
+  "candidates": [
+   {
+    "id": 2061127,
+    "creation_time": "2026-08-06T09:05:12Z",
+    "product": "Core"
+   }
+  ],
+  "node": "7b3553f0a27f",
+  "pushdate": [
+   1780132840,
+   0
+  ],
+  "created": "2026-08-06"
+ },
+ {
+  "bug": 2061180,
+  "uuid": "1fe779a3-14a1-415d-a806-2afff0260806",
+  "product": "Firefox",
+  "signature": "libvulkan_radeon.so",
+  "candidates": [],
+  "node": "7f6ff9672f44",
+  "pushdate": [
+   1778621183,
+   0
+  ],
+  "created": "2026-08-06"
+ },
+ {
+  "bug": 2061726,
+  "uuid": "592ff73c-019d-4ea0-9dec-612410260807",
+  "product": "Firefox",
+  "signature": "OffthreadGCPtr<T>::operator JSScript*",
+  "candidates": [],
+  "node": "3da14bd1c3b0",
+  "pushdate": [
+   1785447827,
+   0
+  ],
+  "created": "2026-08-07"
+ },
+ {
+  "bug": 2061960,
+  "uuid": "bce6c191-c569-4cfc-8fe5-b7aa50260807",
+  "product": "Firefox",
+  "signature": "nsFind::FindFromRangeBoundaries",
+  "candidates": [],
+  "node": "f22608dce605",
+  "pushdate": [
+   1781195388,
+   0
+  ],
+  "created": "2026-08-08"
+ },
+ {
+  "bug": 2061961,
+  "uuid": "ff888d42-ce3e-4308-8c2f-b3f060260807",
+  "product": "Firefox",
+  "signature": "geckoservo::glue::Servo_Element_ReferencesAttribute::{{closure}}",
+  "candidates": [],
+  "node": "c998e317e0cc",
+  "pushdate": [
+   1780953900,
+   0
+  ],
+  "created": "2026-08-08"
+ },
+ {
+  "bug": 2061962,
+  "uuid": "f558e4f2-6e3f-4a81-84b2-fba8d0260807",
+  "product": "Firefox",
+  "signature": "xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll",
+  "candidates": [],
+  "node": "852d3ab675d3",
+  "pushdate": [
+   1783330892,
+   0
+  ],
+  "created": "2026-08-08"
+ },
+ {
+  "bug": 2061969,
+  "uuid": "424b0ab0-af81-4b33-b045-83c5b0260808",
+  "product": "Firefox",
+  "signature": "shutdownhang | __fstatat",
+  "candidates": [
+   {
+    "id": 2061969,
+    "creation_time": "2026-08-08T19:47:35Z",
+    "product": "Core"
+   }
+  ],
+  "node": "1521b075f307",
+  "pushdate": [
+   1784237769,
+   0
+  ],
+  "created": "2026-08-08"
+ },
+ {
+  "bug": 2061973,
+  "uuid": "5f52ad87-cab1-47a8-bd80-64e110260807",
+  "product": "Firefox",
+  "signature": "zlib_rs::inflate::inflate_fast_help_impl",
+  "candidates": [
+   {
+    "id": 2061973,
+    "creation_time": "2026-08-08T20:51:39Z",
+    "product": "Core"
+   }
+  ],
+  "node": "dfbb73240fbf",
+  "pushdate": [
+   1773869616,
+   0
+  ],
+  "created": "2026-08-08"
+ },
+ {
+  "bug": 2061975,
+  "uuid": "5f4931f6-2bc6-4f17-9245-92f4d0260807",
+  "product": "Firefox",
+  "signature": "zlib_rs::inflate::writer::Writer::copy_match_help",
+  "candidates": [
+   {
+    "id": 2061975,
+    "creation_time": "2026-08-08T21:37:03Z",
+    "product": "Core"
+   }
+  ],
+  "node": "dfbb73240fbf",
+  "pushdate": [
+   1773869616,
+   0
+  ],
+  "created": "2026-08-08"
+ },
+ {
+  "bug": 2062052,
+  "uuid": "76533efa-290a-450f-843d-cc0e50260809",
+  "product": "Firefox",
+  "signature": "mozilla::dom::ScreenOrientation::Create",
+  "candidates": [],
+  "node": "7c798dd4037f",
+  "pushdate": [
+   1757086973,
+   0
+  ],
+  "created": "2026-08-09"
+ },
+ {
+  "bug": 2062062,
+  "uuid": "d29ac23d-eb9c-45f0-bf2c-8129b0260809",
+  "product": "Firefox",
+  "signature": "AsyncShutdownTimeout | profile-change-teardown | LoginManagerRustStorage: Interrupt IO operations on login store",
+  "candidates": [
+   {
+    "id": 2062062,
+    "creation_time": "2026-08-09T14:07:45Z",
+    "product": "Toolkit"
+   }
+  ],
+  "node": "348451694fbe",
+  "pushdate": [
+   1784365641,
+   0
+  ],
+  "created": "2026-08-09"
+ },
+ {
+  "bug": 2062114,
+  "uuid": "91710ff6-daae-4752-acb3-560710260810",
+  "product": "Firefox",
+  "signature": "js::gc::ChunkBase::isNurseryChunk",
+  "candidates": [
+   {
+    "id": 2062114,
+    "creation_time": "2026-08-10T03:50:21Z",
+    "product": "Core"
+   }
+  ],
+  "node": "72aa2b26aa44",
+  "pushdate": [
+   1780084969,
+   0
+  ],
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062119,
+  "uuid": "64d69b23-39c9-4e8f-81c4-48bb20260810",
+  "product": "Firefox",
+  "signature": "nsJARProtocolHandler::MimeService",
+  "candidates": [],
+  "node": "9dd8e171ceec",
+  "pushdate": [
+   1670904669,
+   0
+  ],
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062168,
+  "uuid": "176be3dc-a1cf-4cba-844a-bbcc20260810",
+  "product": "Firefox",
+  "signature": "PerformPromiseThenWithoutSettleHandlers",
+  "candidates": [
+   {
+    "id": 2062168,
+    "creation_time": "2026-08-10T09:18:12Z",
+    "product": "Core"
+   }
+  ],
+  "node": "f8944199b9e5",
+  "pushdate": null,
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062173,
+  "uuid": "8c0d2569-dcd3-465e-89b9-25bfd0260810",
+  "product": "Firefox",
+  "signature": "js::detail::BumpChunk::assertInvariants",
+  "candidates": [],
+  "node": "0b3651bc33f5",
+  "pushdate": [
+   1785966196,
+   0
+  ],
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062219,
+  "uuid": "ddeac1a4-64d1-4413-b03b-f79540260809",
+  "product": "Firefox",
+  "signature": "nsAtom::IsStatic",
+  "candidates": [
+   {
+    "id": 1798397,
+    "creation_time": "2022-10-31T19:44:56Z",
+    "product": "Core"
+   }
+  ],
+  "node": "60d6dd5b849b",
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062286,
+  "uuid": "8e0a65cc-9166-4d7b-9aa2-e2ed40260810",
+  "product": "Firefox",
+  "signature": "FindSafeLength",
+  "candidates": [],
+  "node": "60d6dd5b849b",
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062335,
+  "uuid": "a803cd9b-a991-47f8-9754-de73b0260810",
+  "product": "Firefox",
+  "signature": "OOM | large | NS_ABORT_OOM | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement<T> | mozilla::dom::TimeRanges::Add",
+  "candidates": [
+   {
+    "id": 2062335,
+    "creation_time": "2026-08-10T16:42:52Z",
+    "product": "Core"
+   }
+  ],
+  "node": "12139fa0ac84",
+  "pushdate": [
+   1771494062,
+   0
+  ],
+  "created": "2026-08-10"
+ },
+ {
+  "bug": 2062495,
+  "uuid": "50b9a33c-4a11-4499-8700-c9c660260811",
+  "product": "Firefox",
+  "signature": "mozilla::net::CacheStorageService::NoteNoVarySearchEntry",
+  "candidates": [
+   {
+    "id": 2062495,
+    "creation_time": "2026-08-11T03:28:04Z",
+    "product": "Core"
+   }
+  ],
+  "node": "6d491870ade5",
+  "pushdate": [
+   1780004528,
+   0
+  ],
+  "created": "2026-08-11"
+ },
+ {
+  "bug": 2062806,
+  "uuid": "4ba6dd3f-b0aa-4dcd-ac21-6a8180260811",
+  "product": "Firefox",
+  "signature": "callback_interface_ads_client_moz_ads_context_id_provider_context_id",
+  "candidates": [],
+  "node": "07836de09a14",
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "created": "2026-08-11"
+ },
+ {
+  "bug": 2062915,
+  "uuid": "a3c64061-aead-476d-a2cb-eacb10260812",
+  "product": "Firefox",
+  "signature": "js::AvlTreeImpl<T>::leftshrunk",
+  "candidates": [
+   {
+    "id": 2062915,
+    "creation_time": "2026-08-12T10:11:08Z",
+    "product": "Core"
+   }
+  ],
+  "node": "71bf1c0cb979",
+  "pushdate": [
+   1776890864,
+   0
+  ],
+  "created": "2026-08-12"
+ },
+ {
+  "bug": 2062934,
+  "uuid": "41ec4f9e-27c2-4fe6-8dcd-9ecc50260812",
+  "product": "Firefox",
+  "signature": "nsStyleContent::NonAltContentItems",
+  "candidates": [
+   {
+    "id": 2062934,
+    "creation_time": "2026-08-12T11:29:43Z",
+    "product": "Core"
+   }
+  ],
+  "node": "f840e09e83ac",
+  "pushdate": [
+   1784694453,
+   0
+  ],
+  "created": "2026-08-12"
+ },
+ {
+  "bug": 2063002,
+  "uuid": "bfcf3016-b44a-4c44-8209-ae4030260812",
+  "product": "Firefox",
+  "signature": "_ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_",
+  "candidates": [],
+  "node": "60d6dd5b849b",
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "created": "2026-08-12"
+ },
+ {
+  "bug": 2063003,
+  "uuid": "56e7a6b2-776d-4e66-9419-388b60260812",
+  "product": "Firefox",
+  "signature": "nsCharTraits<T>::copy",
+  "candidates": [
+   {
+    "id": 1863599,
+    "creation_time": "2023-11-07T20:18:24Z",
+    "product": "Core"
+   }
+  ],
+  "node": "60d6dd5b849b",
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "created": "2026-08-12"
+ },
+ {
+  "bug": 2063234,
+  "uuid": "081481b1-5dc3-4334-836a-084690260813",
+  "product": "Firefox",
+  "signature": "nsWrapperCache::GetWrapperMaybeDead",
+  "candidates": [
+   {
+    "id": 2063234,
+    "creation_time": "2026-08-13T10:58:27Z",
+    "product": "Core"
+   }
+  ],
+  "node": "cafe8f49eb3f",
+  "pushdate": [
+   1648805283,
+   0
+  ],
+  "created": "2026-08-13"
+ },
+ {
+  "bug": 2063364,
+  "uuid": "845d4cf8-1354-4722-ad72-63a820260813",
+  "product": "Firefox",
+  "signature": "js::jit::CompilerFrameInfo::sync",
+  "candidates": [
+   {
+    "id": 1874575,
+    "creation_time": "2024-01-14T00:41:04Z",
+    "product": "Core"
+   }
+  ],
+  "node": "e3b1400d908a",
+  "pushdate": [
+   1777454341,
+   0
+  ],
+  "created": "2026-08-13"
+ },
+ {
+  "bug": 2063678,
+  "uuid": "46544ed7-05f1-4923-baf1-1bb620260814",
+  "product": "Firefox",
+  "signature": "libc.so.6 | cuEGLApiInit",
+  "candidates": [],
+  "node": "585a77d8786a",
+  "pushdate": [
+   1786680759,
+   0
+  ],
+  "created": "2026-08-14"
+ },
+ {
+  "bug": 2063782,
+  "uuid": "f95b9636-e153-471c-9c15-759c80260815",
+  "product": "Firefox",
+  "signature": "js::jit::CacheIRStubInfo::fieldType",
+  "candidates": [
+   {
+    "id": 2063782,
+    "creation_time": "2026-08-15T03:06:41Z",
+    "product": "Core"
+   }
+  ],
+  "node": "3f0439a2aec8",
+  "pushdate": [
+   1786651731,
+   0
+  ],
+  "created": "2026-08-15"
+ },
+ {
+  "bug": 2063809,
+  "uuid": "2cd465d2-8027-4a85-b523-2baec0260815",
+  "product": "Firefox",
+  "signature": "ff_vk_exec_add_dep_frame",
+  "candidates": [],
+  "node": "585a77d8786a",
+  "pushdate": [
+   1786680759,
+   0
+  ],
+  "created": "2026-08-15"
+ },
+ {
+  "bug": 2063826,
+  "uuid": "e9a47522-f096-4f2c-a639-9b3b10260815",
+  "product": "Firefox",
+  "signature": "DMABufSurfaceRGBA::ReleaseTextures",
+  "candidates": [
+   {
+    "id": 2063826,
+    "creation_time": "2026-08-15T15:11:15Z",
+    "product": "Core"
+   }
+  ],
+  "node": "bf4bd818a161",
+  "pushdate": [
+   1764624946,
+   0
+  ],
+  "created": "2026-08-15"
+ },
+ {
+  "bug": 2063862,
+  "uuid": "49d9c596-2f36-43a6-ab97-a5ebc0260816",
+  "product": "Firefox",
+  "signature": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "candidates": [],
+  "node": "91f4959d84dc",
+  "pushdate": [
+   1786743798,
+   0
+  ],
+  "created": "2026-08-16"
+ },
+ {
+  "bug": 2063864,
+  "uuid": "1e18d8d6-d188-424b-ba8a-9c31f0260816",
+  "product": "Firefox",
+  "signature": "setsockopt_syscall",
+  "candidates": [],
+  "node": "585a77d8786a",
+  "pushdate": [
+   1786680759,
+   0
+  ],
+  "created": "2026-08-16"
+ },
+ {
+  "bug": 2063892,
+  "uuid": "80e01888-f10a-4a4b-9120-b2aac0260816",
+  "product": "Firefox",
+  "signature": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | kernelbase.dll | DispatchMessageWorker",
+  "candidates": [
+   {
+    "id": 2063892,
+    "creation_time": "2026-08-16T11:47:22Z",
+    "product": "Core"
+   }
+  ],
+  "node": "e985e1aa0c19",
+  "pushdate": [
+   1786743798,
+   0
+  ],
+  "created": "2026-08-16"
+ },
+ {
+  "bug": 2063898,
+  "uuid": "3a3ded5f-4629-4354-8a08-e6eb60260816",
+  "product": "Firefox",
+  "signature": "webrender::device::gl::Device::update_vbo_data_unsynchronized",
+  "candidates": [
+   {
+    "id": 2063898,
+    "creation_time": "2026-08-16T12:23:15Z",
+    "product": "Core"
+   }
+  ],
+  "node": "6f16d0ac376a",
+  "pushdate": [
+   1786133212,
+   0
+  ],
+  "created": "2026-08-16"
+ },
+ {
+  "bug": 2063902,
+  "uuid": "e14a7eb4-2a99-4ee6-b014-e7fe20260816",
+  "product": "Firefox",
+  "signature": "js::jit::ICScript::icEntry",
+  "candidates": [
+   {
+    "id": 2063902,
+    "creation_time": "2026-08-16T13:24:50Z",
+    "product": "Core"
+   }
+  ],
+  "node": "3f0439a2aec8",
+  "pushdate": [
+   1786651731,
+   0
+  ],
+  "created": "2026-08-16"
+ },
+ {
+  "bug": 2064066,
+  "uuid": "05381864-aa6e-402f-a1fd-56a3e0260816",
+  "product": "Firefox",
+  "signature": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | nsDocShellLoadState::nsDocShellLoadState",
+  "candidates": [
+   {
+    "id": 2057980,
+    "creation_time": "2026-07-27T07:40:41Z",
+    "product": "MailNews Core"
+   }
+  ],
+  "node": "12f0ef62c249",
+  "pushdate": [
+   1786506838,
+   0
+  ],
+  "created": "2026-08-17"
+ },
+ {
+  "bug": 2064137,
+  "uuid": "3c261523-734b-4aa5-8d70-0fbaf0260817",
+  "product": "Firefox",
+  "signature": "mozilla::Vector<T>::operator[] | js::jit::MPhi::getOperand",
+  "candidates": [],
+  "node": "421d6d5e7647",
+  "pushdate": [
+   1786698151,
+   0
+  ],
+  "created": "2026-08-17"
+ },
+ {
+  "bug": 2064274,
+  "uuid": "a56da0ba-560e-4a5e-acdc-ef1340260818",
+  "product": "Firefox",
+  "signature": "mozilla::detail::MutexImpl::mutexLock",
+  "candidates": [
+   {
+    "id": 1695119,
+    "creation_time": "2021-02-26T04:10:12Z",
+    "product": "Core"
+   },
+   {
+    "id": 1777373,
+    "creation_time": "2022-06-29T23:21:11Z",
+    "product": "Core"
+   },
+   {
+    "id": 2064274,
+    "creation_time": "2026-08-18T00:55:55Z",
+    "product": "Core"
+   }
+  ],
+  "node": "7630cafc691f",
+  "pushdate": [
+   1783974394,
+   0
+  ],
+  "created": "2026-08-18"
+ },
+ {
+  "bug": 2064342,
+  "uuid": "23f897e0-a520-4b57-844e-016080260818",
+  "product": "Firefox",
+  "signature": "igd10iumd64.dll | CLayeredObjectWithCLS<T>::CContainedObject::AddRef",
+  "candidates": [
+   {
+    "id": 2064342,
+    "creation_time": "2026-08-18T11:12:39Z",
+    "product": "Core"
+   }
+  ],
+  "node": "720f61a5596a",
+  "pushdate": [
+   1747067691,
+   0
+  ],
+  "created": "2026-08-18"
+ },
+ {
+  "bug": 2064436,
+  "uuid": "ec1ff67a-a835-4740-be14-572e50260818",
+  "product": "Firefox",
+  "signature": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+  "candidates": [
+   {
+    "id": 1505660,
+    "creation_time": "2018-11-08T04:17:23Z",
+    "product": "Core"
+   }
+  ],
+  "node": "e7ad1bf72931",
+  "pushdate": [
+   1787044826,
+   0
+  ],
+  "created": "2026-08-18"
+ },
+ {
+  "bug": 2064537,
+  "uuid": "38f1a5bc-2b3a-459c-ae37-1a99c0260818",
+  "product": "Firefox",
+  "signature": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "candidates": [],
+  "node": "91f4959d84dc",
+  "pushdate": [
+   1786743798,
+   0
+  ],
+  "created": "2026-08-18"
+ },
+ {
+  "bug": 2064600,
+  "uuid": "92ce80ce-3c58-4fc3-ae1f-8ffde0260819",
+  "product": "Firefox",
+  "signature": "mozilla::ActiveScrolledRoot::GetNearestScrollASR",
+  "candidates": [
+   {
+    "id": 2064600,
+    "creation_time": "2026-08-19T04:38:41Z",
+    "product": "Core"
+   }
+  ],
+  "node": "8ce43095b3e8",
+  "pushdate": [
+   1763051600,
+   0
+  ],
+  "created": "2026-08-19"
+ },
+ {
+  "bug": 2065072,
+  "uuid": "a4ac8c69-7b93-48e5-8e5d-9a1ae0260819",
+  "product": "Firefox",
+  "signature": "mozilla::MediaTrackGraphImpl::OnGraphThread",
+  "candidates": [
+   {
+    "id": 2065072,
+    "creation_time": "2026-08-20T10:04:52Z",
+    "product": "Core"
+   }
+  ],
+  "node": "1b7fbc53f0e0",
+  "pushdate": [
+   1787044826,
+   0
+  ],
+  "created": "2026-08-20"
+ },
+ {
+  "bug": 2065075,
+  "uuid": "cf139d7e-2652-4eab-a88f-04ce10260820",
+  "product": "Firefox",
+  "signature": "mozilla::MediaTrackGraphImpl::TailDispatchMessage",
+  "candidates": [
+   {
+    "id": 2065075,
+    "creation_time": "2026-08-20T10:06:56Z",
+    "product": "Core"
+   }
+  ],
+  "node": "e7ad1bf72931",
+  "pushdate": [
+   1787044826,
+   0
+  ],
+  "created": "2026-08-20"
+ },
+ {
+  "bug": 2065085,
+  "uuid": "4fe3bb03-028a-4ccf-83e1-96ff50260820",
+  "product": "Firefox",
+  "signature": "std::vector<T>::_Resize_reallocate<T>",
+  "candidates": [
+   {
+    "id": 2065085,
+    "creation_time": "2026-08-20T10:56:09Z",
+    "product": "Core"
+   }
+  ],
+  "node": "8f425dcfd002",
+  "pushdate": [
+   1784627208,
+   0
+  ],
+  "created": "2026-08-20"
+ },
+ {
+  "bug": 2065156,
+  "uuid": "136fdb89-73ba-41dd-b808-7dcc60260820",
+  "product": "Firefox",
+  "signature": "stackoverflow | GL_GetGraphicsResetStatusKHR",
+  "candidates": [
+   {
+    "id": 2065156,
+    "creation_time": "2026-08-20T13:53:07Z",
+    "product": "Core"
+   }
+  ],
+  "node": "ccfa767dba64",
+  "pushdate": [
+   1578541218,
+   0
+  ],
+  "created": "2026-08-20"
+ },
+ {
+  "bug": 2065373,
+  "uuid": "363ff2bf-990e-45f3-a361-b13f50260820",
+  "product": "Firefox",
+  "signature": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader",
+  "candidates": [
+   {
+    "id": 2065373,
+    "creation_time": "2026-08-21T04:53:35Z",
+    "product": "Core"
+   }
+  ],
+  "node": "db1a48a97fed",
+  "pushdate": [
+   1785275008,
+   0
+  ],
+  "created": "2026-08-21"
+ }
+]

@@ -1,0 +1,49 @@
+{
+ "30": {
+  "window_start": "2026-07-22",
+  "total": 1817582,
+  "products": {
+   "Firefox": 1129749,
+   "Fenix": 458043,
+   "Thunderbird": 223861,
+   "Focus": 5804,
+   "ReferenceBrowser": 125
+  }
+ },
+ "90": {
+  "window_start": "2026-05-23",
+  "total": 5749374,
+  "products": {
+   "Firefox": 3557630,
+   "Fenix": 1554229,
+   "Thunderbird": 620787,
+   "Focus": 16431,
+   "ReferenceBrowser": 292,
+   "MozillaVPN": 5
+  }
+ },
+ "180": {
+  "window_start": "2026-02-22",
+  "total": 11383017,
+  "products": {
+   "Firefox": 7461015,
+   "Fenix": 2484856,
+   "Thunderbird": 1396976,
+   "Focus": 39549,
+   "ReferenceBrowser": 612,
+   "MozillaVPN": 9
+  }
+ },
+ "365": {
+  "window_start": "2025-08-21",
+  "total": 11383017,
+  "products": {
+   "Firefox": 7461015,
+   "Fenix": 2484856,
+   "Thunderbird": 1396976,
+   "Focus": 39549,
+   "ReferenceBrowser": 612,
+   "MozillaVPN": 9
+  }
+ }
+}

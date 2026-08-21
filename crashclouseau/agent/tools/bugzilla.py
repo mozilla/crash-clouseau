@@ -20,6 +20,7 @@ from typing import Annotated
 from pydantic import Field
 
 from libmozdata.bugzilla import Bugzilla
+from crashclouseau import config
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
 _BUG_FIELDS = [
@@ -90,11 +91,10 @@ async def signature_bugs(
     to see whether the crash is already reported / known — reuse prior analysis and avoid a
     duplicate — before proposing a fresh mechanism. Read-only.
 
-    Each row names the bug's product::component, and you have to read it: every application
-    built on mozilla-central (Thunderbird — ``MailNews Core``, ``Calendar``, ``Chat Core`` —
-    and SeaMonkey) shares Gecko's crash signatures, so a matching bug in one of THEIR products
-    is a different application's crash population with its own cause, however well the stack
-    matches. It is context, not this crash's bug."""
+    Each row names the bug's product::component, and you have to read it: {other_applications}
+    also build on mozilla-central and so share Gecko's crash signatures, which means a matching
+    bug in one of THEIR products is a different application's crash population with its own
+    cause, however well the stack matches. It is context, not this crash's bug."""
     params = {
         "include_fields": _SEARCH_FIELDS,
         "f1": "cf_crash_signature", "o1": "substring", "v1": signature,
@@ -116,3 +116,21 @@ async def signature_bugs(
 
 
 TOOLS = tools_in(__name__)
+
+# The other-application clause in ``signature_bugs`` is RENDERED from the map in
+# ``crashclouseau.config``, not written out. It used to be a second hand-written copy of that
+# map (``eval/study_corpus`` was a third, and had already drifted to the opposite answer for
+# Android and GeckoView), so correcting the map left the agent reading the old list with
+# nothing anywhere to surface the divergence.
+#
+# ``.replace`` and not ``.format``: this docstring is RST and reaches the model verbatim, so one
+# future ``{...}`` anywhere in it would turn a prompt edit into a KeyError at import.
+#
+# Safe at module level because ``ToolDefinition`` is a plain (non-frozen) dataclass and the SDK
+# adapter reads ``description`` inside ``build_sdk_server`` (vendor/agent_tools/claude_sdk.py:31),
+# which runs per RUN. That is also the seam for Fenix day: ``second_opinion.build_options``
+# already knows the crash's product (second_opinion.py:125), so a per-crash clause is a
+# ``dataclasses.replace`` of this one tool there, not a change here.
+for _defn in TOOLS:
+    _defn.description = _defn.description.replace(
+        "{other_applications}", config.describe_other_applications())

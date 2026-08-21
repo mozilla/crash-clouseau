@@ -1,0 +1,20 @@
+nightly reports in window: 15131 distinct signatures faceted: 1000
+0 libc.so.6 | cuEGLApiInit []
+25 nsThreadPool::PutEvent [(2015433, 'Core')]
+50 mozilla::dom::Navigation::UpdateEntriesForSameDocumentNaviga [(1999518, 'Core')]
+75 AsyncShutdownTimeout | Places Clients shutdown | sanitize.js [(1426941, 'Firefox')]
+100 mfx_mft_h264ve_32.dll | CServerContextActivator::CreateInsta []
+2026-08-21 18:50:31,436 - WARNING - autofile: signature bug lookup failed for 'OOM | unknown | mozilla::dom::InferenceSession::Init': 502 Server Error: Bad Gateway for url: https://bugzilla.mozilla.org/rest/bug?include_fields=id%2Csummary%2Cstatus%2Cresolution%2Ccreation_time%2Cproduct&f1=cf_crash_signature&o1=substring&v1=OOM+%7C+unknown+%7C+mozilla%3A%3Adom%3A%3AInferenceSession%3A%3AInit&resolution=---&j_top=OR&f2=short_desc&o2=substring&v2=OOM+%7C+unknown+%7C+mozilla%3A%3Adom%3A%3AInferenceSession%3A%3AInit
+125 mozilla::dom::TimeoutManager::RescheduleTimeout [(1843369, 'Core')]
+150 mozilla::StyleGenericColor<T>::operator== []
+2026-08-21 18:51:29,108 - WARNING - autofile: signature bug lookup failed for 'EMPTY: no frame data available; MissingThreadList': 502 Server Error: Bad Gateway for url: https://bugzilla.mozilla.org/rest/bug?include_fields=id%2Csummary%2Cstatus%2Cresolution%2Ccreation_time%2Cproduct&f1=cf_crash_signature&o1=substring&v1=EMPTY%3A+no+frame+data+available%3B+MissingThreadList&resolution=---
+175 OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | j []
+200 IPCError-content | RecvConstructBrowser missing initial top  []
+225 abort | amdgpu_winsys_create []
+250 igd10iumd64.dll | CContext::UMQueryOM_DepthState_ [(1479795, 'Core')]
+275 OOM | large | gfxOTSMozAlloc::Grow []
+
+sampled signatures: 300 lookup failures: 2
+with ANY open bug: 146
+with a CURRENT-foreign bug: 10 ['OOM | small', 'js::gc::HeaderWord::get', 'mozilla::places::History::History', 'shutdownhang | __syscall_cancel_arch', 'nsCycleCollectingAutoRefCnt::incr', 'XREMain::XRE_main', 'AsyncShutdownTimeout | IOUtils: waiting for sendTe', 'OOM | large | mozilla::JSHolderMap::Put', 'shutdownhang | NtUserPeekMessage | _PeekMessage', 'NtCreateFile']
+with a NEW-foreign bug: 3 [('EMPTY: no frame data available; EmptyMinidump', [(1245570, 'Firefox for Android'), (1360392, 'Toolkit'), (1644486, 'Firefox for Android')]), ('EMPTY: no frame data available; OK', [(1245570, 'Firefox for Android')]), ('EMPTY: no frame data available; HeaderMismatch', [(1245570, 'Firefox for Android')])]

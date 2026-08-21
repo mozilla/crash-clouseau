@@ -1,0 +1,256 @@
+{
+ "item": "worklist rank 13 - _OTHER_APP_PRODUCTS",
+ "measured_on": "2026-08-21",
+ "socorro_product_facet": {
+  "window_7d": {
+   "start": "2026-08-14",
+   "end": "2026-08-21",
+   "total": 432417,
+   "Firefox": 267662,
+   "Fenix": 108480,
+   "Thunderbird": 54850,
+   "Focus": 1404,
+   "ReferenceBrowser": 21
+  },
+  "window_180d_full_retention": {
+   "total": 11383017,
+   "Firefox": 7461015,
+   "Fenix": 2484856,
+   "Thunderbird": 1396976,
+   "Focus": 39549,
+   "ReferenceBrowser": 612,
+   "MozillaVPN": 9
+  },
+  "SeaMonkey": 0
+ },
+ "bmo_products": {
+  "Fenix": "DOES NOT EXIST (query alias for 'Firefox for Android'; bugs return product='Firefox for Android')",
+  "Focus": "is_active true, Client Software",
+  "SeaMonkey": "is_active true, Client Software",
+  "Firefox for Android": "is_active true, Client Software",
+  "GeckoView": "is_active true, Components",
+  "Reference Browser": "DOES NOT EXIST",
+  "Mozilla VPN": "is_active true, 0 bugs carry a crash signature"
+ },
+ "open_bugs_with_a_crash_signature_by_product": {
+  "_total": 1690,
+  "Core": 1292,
+  "Firefox for Android": 96,
+  "Thunderbird": 59,
+  "External Software Affecting Firefox": 56,
+  "Toolkit": 53,
+  "GeckoView": 38,
+  "MailNews Core": 21,
+  "Firefox": 17,
+  "WebExtensions": 16,
+  "Focus": 2,
+  "SeaMonkey": 2,
+  "Calendar": 1,
+  "Chat Core": 0
+ },
+ "collision_with_desktop_Firefox_crashes_180d": {
+  "Thunderbird": "41/59",
+  "Toolkit": "46/53",
+  "External Software": "54/56",
+  "MailNews Core": "5/21",
+  "Firefox": "14/17",
+  "Calendar": "1/1",
+  "Firefox for Android": "3/96 (2 are the unanalysable 'EMPTY: no frame data' bugs)",
+  "GeckoView": "1/38",
+  "Focus": "0/2",
+  "SeaMonkey": "0/2"
+ },
+ "collision_with_Fenix_crashes_180d": {
+  "Firefox for Android": "94/96",
+  "GeckoView": "36/38",
+  "Thunderbird": "16/59",
+  "Firefox": "3/17 (incl. 1681745 Firefox::Installer)",
+  "Toolkit": "9/53"
+ },
+ "collision_with_Focus_crashes_180d": {
+  "Firefox for Android": "40/96",
+  "GeckoView": "24/38",
+  "Focus": "2/2"
+ },
+ "panel_51_filings": {
+  "all_Firefox_nightly": 51,
+  "filings_with_any_open-bug_candidate": 27,
+  "filings_with_a_foreign-product_candidate_under_the_shipped_map": [
+   2064066
+  ],
+  "venue_changed_under_map_A": 0,
+  "venue_changed_under_map_B": 0,
+  "venue_changed_under_map_C_classification": 1,
+  "map_C_change": "bug 2064066: 2057980 MailNews Core BECOMES the venue (counter-example EATEN)",
+  "filings_with_a_chosen_venue": 27,
+  "filings_with_at_least_one_candidate_bug": 32
+ },
+ "prod_exposure_top300_nightly_signatures": {
+  "window": "2026-08-07..2026-08-21",
+  "nightly_reports": 15131,
+  "distinct_signatures_faceted": 1000,
+  "sampled": 300,
+  "lookup_failures_502": 2,
+  "with_any_open_bug": 146,
+  "with_a_currently_foreign_bug": 10,
+  "with_a_would_be_newly_foreign_bug": 3,
+  "of_which_analysable": 0,
+  "note": "all 3 are 'EMPTY: no frame data available; *' \u2014 verified 0 threads / 0 frames / thread_for_analysis None",
+  "newly_foreign_hits": [
+   {
+    "signature": "EMPTY: no frame data available; EmptyMinidump",
+    "reports": 123,
+    "bugs": [
+     [
+      1245570,
+      "Firefox for Android"
+     ],
+     [
+      1644486,
+      "Firefox for Android"
+     ]
+    ]
+   },
+   {
+    "signature": "EMPTY: no frame data available; OK",
+    "reports": 35,
+    "bugs": [
+     [
+      1245570,
+      "Firefox for Android"
+     ]
+    ]
+   },
+   {
+    "signature": "EMPTY: no frame data available; HeaderMismatch",
+    "reports": 11,
+    "bugs": [
+     [
+      1245570,
+      "Firefox for Android"
+     ]
+    ]
+   }
+  ]
+ },
+ "third_copy_of_the_list": {
+  "where": "crashclouseau/eval/study_corpus.py:46 _NON_DESKTOP_PRODUCTS",
+  "set": [
+   "firefox for android",
+   "fenix",
+   "fennecandroid",
+   "geckoview",
+   "thunderbird",
+   "mailnews core"
+  ],
+  "disagrees_with_config_on": [
+   "Firefox for Android",
+   "GeckoView",
+   "Calendar",
+   "Chat Core",
+   "SeaMonkey",
+   "Focus"
+  ],
+  "measured_divergence": "26 of 287 study fixtures (9.1%) are dropped by study_corpus and kept by config"
+ },
+ "would_be_newly_foreign_bugs_vs_desktop_180d": [
+  {
+   "bug": 1245570,
+   "bmo_product": "Firefox for Android",
+   "colliding_signatures": [
+    [
+     "EMPTY: no frame data available; EmptyMinidump",
+     91920,
+     415
+    ],
+    [
+     "EMPTY: no frame data available; MissingThreadList",
+     19163,
+     6172
+    ],
+    [
+     "EMPTY: no frame data available; HeaderMismatch",
+     6120,
+     47
+    ],
+    [
+     "EMPTY: no frame data available; OK",
+     5390,
+     4352
+    ],
+    [
+     "EMPTY: no frame data available; MissingSystemInfo",
+     233,
+     1
+    ],
+    [
+     "EMPTY: no frame data available",
+     11,
+     0
+    ]
+   ]
+  },
+  {
+   "bug": 1644486,
+   "bmo_product": "Firefox for Android",
+   "colliding_signatures": [
+    [
+     "EMPTY: no frame data available; EmptyMinidump",
+     91920,
+     415
+    ]
+   ]
+  },
+  {
+   "bug": 1812544,
+   "bmo_product": "GeckoView",
+   "colliding_signatures": [
+    [
+     "mozilla::ThreadEventTarget::Dispatch",
+     164,
+     1
+    ],
+    [
+     "MOZ_Crash",
+     28,
+     0
+    ]
+   ]
+  },
+  {
+   "bug": 1855806,
+   "bmo_product": "Firefox for Android",
+   "colliding_signatures": [
+    [
+     "arena_run_reg_dalloc | arena_t::DallocSmall | arena_dalloc | idalloc",
+     103,
+     1
+    ]
+   ]
+  }
+ ],
+ "study_corpus_287_blind_fixtures_by_bmo_product": {
+  "Core": 238,
+  "Firefox for Android": 25,
+  "Toolkit": 10,
+  "Firefox": 7,
+  "External Software Affecting Firefox": 2,
+  "MailNews Core": 2,
+  "Application Services": 1,
+  "GeckoView": 1,
+  "Thunderbird": 1
+ },
+ "study_corpus_split": {
+  "dropped_by_the_literal_list": 29,
+  "dropped_by_config_get_other_app_products_Firefox": 3,
+  "classified_differently": 26,
+  "of": 287,
+  "dropped_by_the_union_shipped": 29,
+  "fixtures_moved_by_the_change": 0
+ },
+ "reproduce": {
+  "scripts": "spike/other_app_products/*.py \u2014 see README.md there",
+  "live_recheck": "uv run python bin/audit_products.py",
+  "note": "run every script from the REPO ROOT: config._get_global opens the relative path ./config/global.json"
+ }
+}

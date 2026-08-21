@@ -1,0 +1,1427 @@
+[
+ {
+  "bug": 2060920,
+  "uuid": "46607417-af82-40db-b97d-a31e40260801",
+  "worth": null,
+  "conf": "high",
+  "node": "ce6e012f8850",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-05",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::WebRTC",
+  "sig": "OOM | unknown | memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::RTCEncodedFrameBase",
+  "ncomments": 4,
+  "hist": {
+   "first_seen": "20260801094916",
+   "first_seen_channel": "20260801094916",
+   "first_seen_any": "20260801094916",
+   "total": 1,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1783483112,
+   0
+  ],
+  "landed_after_floored": -24.2,
+  "landed_after_nightly": -24.2
+ },
+ {
+  "bug": 2060922,
+  "uuid": "b66819b5-785e-4e44-b586-4126d0260802",
+  "worth": null,
+  "conf": "high",
+  "node": "e6335c6fffd3",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-05",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::Audio/Video: Playback",
+  "sig": "mozilla::MediaDecoder::SetCDMProxy",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20251219090541",
+   "first_seen_channel": "20260406090304",
+   "first_seen_any": "20251219090541",
+   "total": 11,
+   "total_other_channels": 38
+  },
+  "pushdate": [
+   1761511377,
+   0
+  ],
+  "landed_after_floored": -53.5,
+  "landed_after_nightly": -161.5
+ },
+ {
+  "bug": 2060924,
+  "uuid": "0d4a0bee-d3cb-498a-844c-c84ff0260728",
+  "worth": null,
+  "conf": "probable",
+  "node": "74675cc139d9",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-05",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::Disability Access APIs",
+  "sig": "mozilla::ipc::IProtocol::Id",
+  "ncomments": 6,
+  "hist": {
+   "first_seen": "20241008174909",
+   "first_seen_channel": "20260727081724",
+   "first_seen_any": "20241008174909",
+   "total": 54,
+   "total_other_channels": 151
+  },
+  "pushdate": [
+   1785140244,
+   0
+  ],
+  "landed_after_floored": 656.6,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2061124,
+  "uuid": "71875125-4c28-4f9d-ada7-283980260805",
+  "worth": null,
+  "conf": "probable",
+  "node": "8e478167d68b",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-06",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::JavaScript Engine: JIT",
+  "sig": "huge_dalloc | js_free | js_delete",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20260805092115",
+   "first_seen_channel": "20260805092115",
+   "first_seen_any": "20250806102122",
+   "total": 1,
+   "total_other_channels": 13
+  },
+  "pushdate": [
+   1733242868,
+   0
+  ],
+  "landed_after_floored": -609.7,
+  "landed_after_nightly": -609.7
+ },
+ {
+  "bug": 2061127,
+  "uuid": "f6fe186b-1014-4144-9d2d-ea29d0260806",
+  "worth": null,
+  "conf": "probable",
+  "node": "7b3553f0a27f",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-06",
+  "status": "ASSIGNED",
+  "res": "",
+  "comp": "Core::DOM: Navigation",
+  "sig": "mozilla::dom::SessionHistoryEntry::GetParent",
+  "ncomments": 4,
+  "hist": {
+   "first_seen": "20260204004611",
+   "first_seen_channel": "20260501211238",
+   "first_seen_any": "20260204004611",
+   "total": 5,
+   "total_other_channels": 26
+  },
+  "pushdate": [
+   1780132840,
+   0
+  ],
+  "landed_after_floored": 115.4,
+  "landed_after_nightly": 28.5
+ },
+ {
+  "bug": 2061180,
+  "uuid": "1fe779a3-14a1-415d-a806-2afff0260806",
+  "worth": null,
+  "conf": "probable",
+  "node": "7f6ff9672f44",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-06",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::Audio/Video: Playback",
+  "sig": "libvulkan_radeon.so",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20251124145406",
+   "first_seen_channel": "20260325212151",
+   "first_seen_any": "20251124145406",
+   "total": 1251,
+   "total_other_channels": 673
+  },
+  "pushdate": [
+   1778621183,
+   0
+  ],
+  "landed_after_floored": 169.3,
+  "landed_after_nightly": 48.0
+ },
+ {
+  "bug": 2061726,
+  "uuid": "592ff73c-019d-4ea0-9dec-612410260807",
+  "worth": null,
+  "conf": "probable",
+  "node": "3da14bd1c3b0",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-07",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::JavaScript Engine",
+  "sig": "OffthreadGCPtr<T>::operator JSScript*",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20260802092052",
+   "first_seen_channel": "20260802092052",
+   "first_seen_any": "20260212191108",
+   "total": 1,
+   "total_other_channels": 16
+  },
+  "pushdate": [
+   1785447827,
+   0
+  ],
+  "landed_after_floored": -2.5,
+  "landed_after_nightly": -2.5
+ },
+ {
+  "bug": 2061960,
+  "uuid": "bce6c191-c569-4cfc-8fe5-b7aa50260807",
+  "worth": null,
+  "conf": "probable",
+  "node": "f22608dce605",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-08",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::DOM: Core & HTML",
+  "sig": "nsFind::FindFromRangeBoundaries]\r\n[@ xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll",
+  "ncomments": 10,
+  "hist": {
+   "first_seen": null,
+   "first_seen_channel": null,
+   "first_seen_any": null,
+   "total": 0,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1781195388,
+   0
+  ],
+  "landed_after_floored": null,
+  "landed_after_nightly": null
+ },
+ {
+  "bug": 2061961,
+  "uuid": "ff888d42-ce3e-4308-8c2f-b3f060260807",
+  "worth": null,
+  "conf": "probable",
+  "node": "c998e317e0cc",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-08",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::CSS Parsing and Computation",
+  "sig": "geckoservo::glue::Servo_Element_ReferencesAttribute::{{closure}}",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20260805220233",
+   "first_seen_channel": "20260805220233",
+   "first_seen_any": "20260805220233",
+   "total": 1,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1780953900,
+   0
+  ],
+  "landed_after_floored": -58.0,
+  "landed_after_nightly": -58.0
+ },
+ {
+  "bug": 2061962,
+  "uuid": "f558e4f2-6e3f-4a81-84b2-fba8d0260807",
+  "worth": null,
+  "conf": "probable",
+  "node": "852d3ab675d3",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-08",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::DOM: Selection",
+  "sig": "xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20260806211740",
+   "first_seen_channel": "20260806211740",
+   "first_seen_any": "20260806211740",
+   "total": 1,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1783330892,
+   0
+  ],
+  "landed_after_floored": -31.5,
+  "landed_after_nightly": -31.5
+ },
+ {
+  "bug": 2061969,
+  "uuid": "424b0ab0-af81-4b33-b045-83c5b0260808",
+  "worth": null,
+  "conf": "probable",
+  "node": "1521b075f307",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-08",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Storage: Quota Manager",
+  "sig": "shutdownhang | __fstatat",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20250827004350",
+   "first_seen_channel": "20260807200652",
+   "first_seen_any": "20250827004350",
+   "total": 1,
+   "total_other_channels": 41
+  },
+  "pushdate": [
+   1784237769,
+   0
+  ],
+  "landed_after_floored": 323.9,
+  "landed_after_nightly": -21.9
+ },
+ {
+  "bug": 2061973,
+  "uuid": "5f52ad87-cab1-47a8-bd80-64e110260807",
+  "worth": null,
+  "conf": "probable",
+  "node": "dfbb73240fbf",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-08",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::General",
+  "sig": "zlib_rs::inflate::inflate_fast_help_impl",
+  "ncomments": 6,
+  "hist": {
+   "first_seen": "20260806095421",
+   "first_seen_channel": "20260806095421",
+   "first_seen_any": "20260616012924",
+   "total": 1,
+   "total_other_channels": 3
+  },
+  "pushdate": [
+   1773869616,
+   0
+  ],
+  "landed_after_floored": -140.5,
+  "landed_after_nightly": -140.5
+ },
+ {
+  "bug": 2061975,
+  "uuid": "5f4931f6-2bc6-4f17-9245-92f4d0260807",
+  "worth": null,
+  "conf": "probable",
+  "node": "dfbb73240fbf",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-08",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::General",
+  "sig": "zlib_rs::inflate::writer::Writer::copy_match_help",
+  "ncomments": 7,
+  "hist": {
+   "first_seen": "20260806095421",
+   "first_seen_channel": "20260806095421",
+   "first_seen_any": "20260706120035",
+   "total": 1,
+   "total_other_channels": 3
+  },
+  "pushdate": [
+   1773869616,
+   0
+  ],
+  "landed_after_floored": -140.5,
+  "landed_after_nightly": -140.5
+ },
+ {
+  "bug": 2062052,
+  "uuid": "76533efa-290a-450f-843d-cc0e50260809",
+  "worth": null,
+  "conf": "high",
+  "node": "7c798dd4037f",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-09",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Remote Protocol::WebDriver BiDi",
+  "sig": "mozilla::dom::ScreenOrientation::Create",
+  "ncomments": 8,
+  "hist": {
+   "first_seen": "20260626040954",
+   "first_seen_channel": "20260626040954",
+   "first_seen_any": "20260525130955",
+   "total": 6,
+   "total_other_channels": 6
+  },
+  "pushdate": [
+   1757086973,
+   0
+  ],
+  "landed_after_floored": -293.5,
+  "landed_after_nightly": -293.5
+ },
+ {
+  "bug": 2062062,
+  "uuid": "d29ac23d-eb9c-45f0-bf2c-8129b0260809",
+  "worth": 97,
+  "conf": "probable",
+  "node": "348451694fbe",
+  "suspected": true,
+  "startpoint": true,
+  "created": "2026-08-09",
+  "status": "REOPENED",
+  "res": "",
+  "comp": "Toolkit::Password Manager",
+  "sig": "AsyncShutdownTimeout | profile-change-teardown | LoginManagerRustStorage: Interrupt IO operations on login store",
+  "ncomments": 8,
+  "hist": {
+   "first_seen": "20260808210518",
+   "first_seen_channel": "20260808210518",
+   "first_seen_any": "20260808210518",
+   "total": 2,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1784365641,
+   0
+  ],
+  "landed_after_floored": -21.5,
+  "landed_after_nightly": -21.5
+ },
+ {
+  "bug": 2062114,
+  "uuid": "91710ff6-daae-4752-acb3-560710260810",
+  "worth": null,
+  "conf": "probable",
+  "node": "72aa2b26aa44",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-10",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::JavaScript: GC",
+  "sig": "js::gc::ChunkBase::isNurseryChunk",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20251009125714",
+   "first_seen_channel": "20260213212122",
+   "first_seen_any": "20251009125714",
+   "total": 29,
+   "total_other_channels": 1395
+  },
+  "pushdate": [
+   1780084969,
+   0
+  ],
+  "landed_after_floored": 232.3,
+  "landed_after_nightly": 104.9
+ },
+ {
+  "bug": 2062119,
+  "uuid": "64d69b23-39c9-4e8f-81c4-48bb20260810",
+  "worth": null,
+  "conf": "high",
+  "node": "9dd8e171ceec",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-10",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::Networking: JAR",
+  "sig": "nsJARProtocolHandler::MimeService",
+  "ncomments": 27,
+  "hist": {
+   "first_seen": "20260415192539",
+   "first_seen_channel": "20260712113206",
+   "first_seen_any": "20260415192539",
+   "total": 13,
+   "total_other_channels": 73
+  },
+  "pushdate": [
+   1670904669,
+   0
+  ],
+  "landed_after_floored": -1219.6,
+  "landed_after_nightly": -1307.3
+ },
+ {
+  "bug": 2062168,
+  "uuid": "176be3dc-a1cf-4cba-844a-bbcc20260810",
+  "worth": null,
+  "conf": "probable",
+  "node": "f8944199b9e5",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-10",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::JavaScript Engine: JIT",
+  "sig": "PerformPromiseThenWithoutSettleHandlers",
+  "ncomments": 4,
+  "hist": {
+   "first_seen": "20260807200652",
+   "first_seen_channel": "20260807200652",
+   "first_seen_any": "20260106170501",
+   "total": 1,
+   "total_other_channels": 2
+  },
+  "pushdate": null,
+  "landed_after_floored": null,
+  "landed_after_nightly": null
+ },
+ {
+  "bug": 2062173,
+  "uuid": "8c0d2569-dcd3-465e-89b9-25bfd0260810",
+  "worth": null,
+  "conf": "high",
+  "node": "0b3651bc33f5",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-10",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::JavaScript Engine: JIT",
+  "sig": "js::detail::BumpChunk::assertInvariants",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20260302093328",
+   "first_seen_channel": "20260318213336",
+   "first_seen_any": "20260302093328",
+   "total": 22,
+   "total_other_channels": 23
+  },
+  "pushdate": [
+   1785966196,
+   0
+  ],
+  "landed_after_floored": 156.5,
+  "landed_after_nightly": 140.0
+ },
+ {
+  "bug": 2062219,
+  "uuid": "ddeac1a4-64d1-4413-b03b-f79540260809",
+  "worth": null,
+  "conf": "probable",
+  "node": "60d6dd5b849b",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-10",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::CSS Parsing and Computation",
+  "sig": "nsAtom::IsStatic]\r\n[@ nsCharTraits<T>::copy]\r\n[@ memcpy | nsCharTraits<T>::copy]\r\n[@ FindSafeLength]\n[@ _ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_",
+  "ncomments": 14,
+  "hist": {
+   "first_seen": null,
+   "first_seen_channel": null,
+   "first_seen_any": null,
+   "total": 0,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "landed_after_floored": null,
+  "landed_after_nightly": null
+ },
+ {
+  "bug": 2062286,
+  "uuid": "8e0a65cc-9166-4d7b-9aa2-e2ed40260810",
+  "worth": 97,
+  "conf": null,
+  "node": "60d6dd5b849b",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-10",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::CSS Parsing and Computation",
+  "sig": "FindSafeLength",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20260810093015",
+   "first_seen_channel": "20260810093015",
+   "first_seen_any": "20260427013024",
+   "total": 1,
+   "total_other_channels": 3
+  },
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "landed_after_floored": -2.0,
+  "landed_after_nightly": -2.0
+ },
+ {
+  "bug": 2062335,
+  "uuid": "a803cd9b-a991-47f8-9754-de73b0260810",
+  "worth": 97,
+  "conf": null,
+  "node": "12139fa0ac84",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-10",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Audio/Video",
+  "sig": "OOM | large | NS_ABORT_OOM | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement<T> | mozilla::dom::TimeRanges::Add",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20240603145132",
+   "first_seen_channel": "20260305215107",
+   "first_seen_any": "20240603145132",
+   "total": 3,
+   "total_other_channels": 27
+  },
+  "pushdate": [
+   1771494062,
+   0
+  ],
+  "landed_after_floored": 625.8,
+  "landed_after_nightly": -14.5
+ },
+ {
+  "bug": 2062495,
+  "uuid": "50b9a33c-4a11-4499-8700-c9c660260811",
+  "worth": 97,
+  "conf": null,
+  "node": "6d491870ade5",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-11",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Networking: Cache",
+  "sig": "mozilla::net::CacheStorageService::NoteNoVarySearchEntry",
+  "ncomments": 1,
+  "hist": {
+   "first_seen": "20260810154837",
+   "first_seen_channel": "20260810154837",
+   "first_seen_any": "20260810154837",
+   "total": 1,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1780004528,
+   0
+  ],
+  "landed_after_floored": -73.8,
+  "landed_after_nightly": -73.8
+ },
+ {
+  "bug": 2062806,
+  "uuid": "4ba6dd3f-b0aa-4dcd-ac21-6a8180260811",
+  "worth": 97,
+  "conf": null,
+  "node": "07836de09a14",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-11",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Firefox::New Tab Page",
+  "sig": "callback_interface_ads_client_moz_ads_context_id_provider_context_id",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20260811085340",
+   "first_seen_channel": "20260811085340",
+   "first_seen_any": "20260811085340",
+   "total": 2,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "landed_after_floored": -3.0,
+  "landed_after_nightly": -3.0
+ },
+ {
+  "bug": 2062915,
+  "uuid": "a3c64061-aead-476d-a2cb-eacb10260812",
+  "worth": 97,
+  "conf": null,
+  "node": "71bf1c0cb979",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-12",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::JavaScript Engine",
+  "sig": "js::AvlTreeImpl<T>::leftshrunk",
+  "ncomments": 1,
+  "hist": {
+   "first_seen": "20250827004350",
+   "first_seen_channel": "20260808210518",
+   "first_seen_any": "20250827004350",
+   "total": 1,
+   "total_other_channels": 32
+  },
+  "pushdate": [
+   1776890864,
+   0
+  ],
+  "landed_after_floored": 238.8,
+  "landed_after_nightly": -108.0
+ },
+ {
+  "bug": 2062934,
+  "uuid": "41ec4f9e-27c2-4fe6-8dcd-9ecc50260812",
+  "worth": 97,
+  "conf": "but",
+  "node": "f840e09e83ac",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-12",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::CSS Parsing and Computation",
+  "sig": "nsStyleContent::NonAltContentItems",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20251009121631",
+   "first_seen_channel": "20260811085340",
+   "first_seen_any": "20251009121631",
+   "total": 5,
+   "total_other_channels": 26
+  },
+  "pushdate": [
+   1784694453,
+   0
+  ],
+  "landed_after_floored": 285.7,
+  "landed_after_nightly": -20.2
+ },
+ {
+  "bug": 2063002,
+  "uuid": "bfcf3016-b44a-4c44-8209-ae4030260812",
+  "worth": 97,
+  "conf": null,
+  "node": "60d6dd5b849b",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-12",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::CSS Parsing and Computation",
+  "sig": "_ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20260811085340",
+   "first_seen_channel": "20260811085340",
+   "first_seen_any": "20260811085340",
+   "total": 1,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "landed_after_floored": -3.0,
+  "landed_after_nightly": -3.0
+ },
+ {
+  "bug": 2063003,
+  "uuid": "56e7a6b2-776d-4e66-9419-388b60260812",
+  "worth": 97,
+  "conf": null,
+  "node": "60d6dd5b849b",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-12",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::CSS Parsing and Computation",
+  "sig": "nsCharTraits<T>::copy",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20250811145442",
+   "first_seen_channel": "20260803221840",
+   "first_seen_any": "20250811145442",
+   "total": 2,
+   "total_other_channels": 44
+  },
+  "pushdate": [
+   1786181404,
+   0
+  ],
+  "landed_after_floored": 361.8,
+  "landed_after_nightly": 4.5
+ },
+ {
+  "bug": 2063234,
+  "uuid": "081481b1-5dc3-4334-836a-084690260813",
+  "worth": 97,
+  "conf": null,
+  "node": "cafe8f49eb3f",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-13",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::DOM: Core & HTML",
+  "sig": "nsWrapperCache::GetWrapperMaybeDead",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20240603145132",
+   "first_seen_channel": "20260314162320",
+   "first_seen_any": "20240603145132",
+   "total": 18,
+   "total_other_channels": 3332
+  },
+  "pushdate": [
+   1648805283,
+   0
+  ],
+  "landed_after_floored": -794.2,
+  "landed_after_nightly": -1443.3
+ },
+ {
+  "bug": 2063364,
+  "uuid": "845d4cf8-1354-4722-ad72-63a820260813",
+  "worth": 97,
+  "conf": null,
+  "node": "e3b1400d908a",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-13",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::JavaScript Engine",
+  "sig": "js::jit::CompilerFrameInfo::sync",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20240603145132",
+   "first_seen_channel": "20260303095635",
+   "first_seen_any": "20240603145132",
+   "total": 19,
+   "total_other_channels": 513
+  },
+  "pushdate": [
+   1777454341,
+   0
+  ],
+  "landed_after_floored": 694.8,
+  "landed_after_nightly": 57.0
+ },
+ {
+  "bug": 2063678,
+  "uuid": "46544ed7-05f1-4923-baf1-1bb620260814",
+  "worth": 97,
+  "conf": null,
+  "node": "585a77d8786a",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-14",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::Audio/Video: Playback",
+  "sig": "libc.so.6 | cuEGLApiInit]\n[@ setsockopt_syscall",
+  "ncomments": 12,
+  "hist": {
+   "first_seen": null,
+   "first_seen_channel": null,
+   "first_seen_any": null,
+   "total": 0,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786680759,
+   0
+  ],
+  "landed_after_floored": null,
+  "landed_after_nightly": null
+ },
+ {
+  "bug": 2063782,
+  "uuid": "f95b9636-e153-471c-9c15-759c80260815",
+  "worth": 97,
+  "conf": null,
+  "node": "3f0439a2aec8",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-15",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::JavaScript: GC",
+  "sig": "js::jit::CacheIRStubInfo::fieldType",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20240526221752",
+   "first_seen_channel": "20260212095231",
+   "first_seen_any": "20240526221752",
+   "total": 40,
+   "total_other_channels": 2604
+  },
+  "pushdate": [
+   1786651731,
+   0
+  ],
+  "landed_after_floored": 808.9,
+  "landed_after_nightly": 182.4
+ },
+ {
+  "bug": 2063809,
+  "uuid": "2cd465d2-8027-4a85-b523-2baec0260815",
+  "worth": 97,
+  "conf": null,
+  "node": "585a77d8786a",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-15",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::Audio/Video: Playback",
+  "sig": "ff_vk_exec_add_dep_frame",
+  "ncomments": 11,
+  "hist": {
+   "first_seen": "20260706094132",
+   "first_seen_channel": "20260706094132",
+   "first_seen_any": "20260706094132",
+   "total": 109,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786680759,
+   0
+  ],
+  "landed_after_floored": 38.8,
+  "landed_after_nightly": 38.8
+ },
+ {
+  "bug": 2063826,
+  "uuid": "e9a47522-f096-4f2c-a639-9b3b10260815",
+  "worth": 97,
+  "conf": null,
+  "node": "bf4bd818a161",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-15",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Graphics: CanvasWebGL",
+  "sig": "DMABufSurfaceRGBA::ReleaseTextures",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20260102083805",
+   "first_seen_channel": "20260102083805",
+   "first_seen_any": "20260102083805",
+   "total": 31,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1764624946,
+   0
+  ],
+  "landed_after_floored": -31.5,
+  "landed_after_nightly": -31.5
+ },
+ {
+  "bug": 2063862,
+  "uuid": "49d9c596-2f36-43a6-ab97-a5ebc0260816",
+  "worth": 97,
+  "conf": null,
+  "node": "91f4959d84dc",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-16",
+  "status": "RESOLVED",
+  "res": "FIXED",
+  "comp": "Core::Networking: DNS",
+  "sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "ncomments": 4,
+  "hist": {
+   "first_seen": "20260814214318",
+   "first_seen_channel": "20260814214318",
+   "first_seen_any": "20260814214318",
+   "total": 17,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786743798,
+   0
+  ],
+  "landed_after_floored": 0.0,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2063864,
+  "uuid": "1e18d8d6-d188-424b-ba8a-9c31f0260816",
+  "worth": 97,
+  "conf": null,
+  "node": "585a77d8786a",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-16",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::Audio/Video: Playback",
+  "sig": "setsockopt_syscall",
+  "ncomments": 8,
+  "hist": {
+   "first_seen": "20260815213849",
+   "first_seen_channel": "20260815213849",
+   "first_seen_any": "20260310125956",
+   "total": 18,
+   "total_other_channels": 1
+  },
+  "pushdate": [
+   1786680759,
+   0
+  ],
+  "landed_after_floored": -1.7,
+  "landed_after_nightly": -1.7
+ },
+ {
+  "bug": 2063892,
+  "uuid": "80e01888-f10a-4a4b-9120-b2aac0260816",
+  "worth": 97,
+  "conf": "but",
+  "node": "e985e1aa0c19",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-16",
+  "status": "ASSIGNED",
+  "res": "",
+  "comp": "Core::Storage: Quota Manager",
+  "sig": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | kernelbase.dll | DispatchMessageWorker",
+  "ncomments": 5,
+  "hist": {
+   "first_seen": "20260814214318",
+   "first_seen_channel": "20260814214318",
+   "first_seen_any": "20260715202819",
+   "total": 1,
+   "total_other_channels": 10
+  },
+  "pushdate": [
+   1786743798,
+   0
+  ],
+  "landed_after_floored": 0.0,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2063898,
+  "uuid": "3a3ded5f-4629-4354-8a08-e6eb60260816",
+  "worth": 97,
+  "conf": null,
+  "node": "6f16d0ac376a",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-16",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Graphics: WebRender",
+  "sig": "webrender::device::gl::Device::update_vbo_data_unsynchronized",
+  "ncomments": 1,
+  "hist": {
+   "first_seen": "20260807200652",
+   "first_seen_channel": "20260807200652",
+   "first_seen_any": "20260807200652",
+   "total": 2,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786133212,
+   0
+  ],
+  "landed_after_floored": 0.0,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2063902,
+  "uuid": "e14a7eb4-2a99-4ee6-b014-e7fe20260816",
+  "worth": 97,
+  "conf": null,
+  "node": "3f0439a2aec8",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-16",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::JavaScript: GC",
+  "sig": "js::jit::ICScript::icEntry",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20240829075237",
+   "first_seen_channel": "20260815213849",
+   "first_seen_any": "20240829075237",
+   "total": 1,
+   "total_other_channels": 80
+  },
+  "pushdate": [
+   1786651731,
+   0
+  ],
+  "landed_after_floored": 714.5,
+  "landed_after_nightly": -2.1
+ },
+ {
+  "bug": 2064066,
+  "uuid": "05381864-aa6e-402f-a1fd-56a3e0260816",
+  "worth": 97,
+  "conf": null,
+  "node": "12f0ef62c249",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-17",
+  "status": "RESOLVED",
+  "res": "WORKSFORME",
+  "comp": "Core::DOM: Navigation",
+  "sig": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | nsDocShellLoadState::nsDocShellLoadState",
+  "ncomments": 4,
+  "hist": {
+   "first_seen": "20240819223648",
+   "first_seen_channel": "20260617212640",
+   "first_seen_any": "20240819223648",
+   "total": 68,
+   "total_other_channels": 139
+  },
+  "pushdate": [
+   1786506838,
+   0
+  ],
+  "landed_after_floored": 722.2,
+  "landed_after_nightly": 55.3
+ },
+ {
+  "bug": 2064137,
+  "uuid": "3c261523-734b-4aa5-8d70-0fbaf0260817",
+  "worth": 97,
+  "conf": null,
+  "node": "421d6d5e7647",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-17",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::JavaScript Engine: JIT",
+  "sig": "mozilla::Vector<T>::operator[] | js::jit::MPhi::getOperand",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20251106203603",
+   "first_seen_channel": "20260816214904",
+   "first_seen_any": "20251106203603",
+   "total": 1,
+   "total_other_channels": 21
+  },
+  "pushdate": [
+   1786698151,
+   0
+  ],
+  "landed_after_floored": 280.5,
+  "landed_after_nightly": -2.5
+ },
+ {
+  "bug": 2064274,
+  "uuid": "a56da0ba-560e-4a5e-acdc-ef1340260818",
+  "worth": 97,
+  "conf": null,
+  "node": "7630cafc691f",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-18",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Widget: Gtk",
+  "sig": "mozilla::detail::MutexImpl::mutexLock",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20260816083833",
+   "first_seen_channel": "20260816083833",
+   "first_seen_any": "20260216153405",
+   "total": 1,
+   "total_other_channels": 5
+  },
+  "pushdate": [
+   1783974394,
+   0
+  ],
+  "landed_after_floored": -33.5,
+  "landed_after_nightly": -33.5
+ },
+ {
+  "bug": 2064342,
+  "uuid": "23f897e0-a520-4b57-844e-016080260818",
+  "worth": 97,
+  "conf": null,
+  "node": "720f61a5596a",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-18",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Graphics",
+  "sig": "igd10iumd64.dll | CLayeredObjectWithCLS<T>::CContainedObject::AddRef",
+  "ncomments": 1,
+  "hist": {
+   "first_seen": "20260816083833",
+   "first_seen_channel": "20260816083833",
+   "first_seen_any": "20260816083833",
+   "total": 2,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1747067691,
+   0
+  ],
+  "landed_after_floored": -460.7,
+  "landed_after_nightly": -460.7
+ },
+ {
+  "bug": 2064436,
+  "uuid": "ec1ff67a-a835-4740-be14-572e50260818",
+  "worth": 97,
+  "conf": null,
+  "node": "e7ad1bf72931",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-18",
+  "status": "RESOLVED",
+  "res": "INVALID",
+  "comp": "Core::WebRTC: Audio/Video",
+  "sig": "shutdownhang | ntdll.dll | user32.dll | kernelbase.dll | mozilla::FutexImpl<T>::wait",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": null,
+   "first_seen_channel": null,
+   "first_seen_any": "20260706090322",
+   "total": 0,
+   "total_other_channels": 2
+  },
+  "pushdate": [
+   1787044826,
+   0
+  ],
+  "landed_after_floored": null,
+  "landed_after_nightly": null
+ },
+ {
+  "bug": 2064537,
+  "uuid": "38f1a5bc-2b3a-459c-ae37-1a99c0260818",
+  "worth": 97,
+  "conf": null,
+  "node": "91f4959d84dc",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-18",
+  "status": "RESOLVED",
+  "res": "DUPLICATE",
+  "comp": "Core::Networking: DNS",
+  "sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "ncomments": 3,
+  "hist": {
+   "first_seen": "20260814214318",
+   "first_seen_channel": "20260814214318",
+   "first_seen_any": "20260814214318",
+   "total": 17,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1786743798,
+   0
+  ],
+  "landed_after_floored": 0.0,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2064600,
+  "uuid": "92ce80ce-3c58-4fc3-ae1f-8ffde0260819",
+  "worth": 97,
+  "conf": null,
+  "node": "8ce43095b3e8",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-19",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Web Painting",
+  "sig": "mozilla::ActiveScrolledRoot::GetNearestScrollASR",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20260116091309",
+   "first_seen_channel": "20260321205152",
+   "first_seen_any": "20260116091309",
+   "total": 5,
+   "total_other_channels": 309
+  },
+  "pushdate": [
+   1763051600,
+   0
+  ],
+  "landed_after_floored": -63.7,
+  "landed_after_nightly": -128.2
+ },
+ {
+  "bug": 2065072,
+  "uuid": "a4ac8c69-7b93-48e5-8e5d-9a1ae0260819",
+  "worth": 97,
+  "conf": null,
+  "node": "1b7fbc53f0e0",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-20",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::WebRTC: Audio/Video",
+  "sig": "mozilla::MediaTrackGraphImpl::OnGraphThread",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20260818092026",
+   "first_seen_channel": "20260818092026",
+   "first_seen_any": "20260818092026",
+   "total": 9,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1787044826,
+   0
+  ],
+  "landed_after_floored": 0.0,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2065075,
+  "uuid": "cf139d7e-2652-4eab-a88f-04ce10260820",
+  "worth": 97,
+  "conf": null,
+  "node": "e7ad1bf72931",
+  "suspected": true,
+  "startpoint": false,
+  "created": "2026-08-20",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::WebRTC: Audio/Video",
+  "sig": "mozilla::MediaTrackGraphImpl::TailDispatchMessage",
+  "ncomments": 2,
+  "hist": {
+   "first_seen": "20260818092026",
+   "first_seen_channel": "20260818092026",
+   "first_seen_any": "20260818092026",
+   "total": 4,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1787044826,
+   0
+  ],
+  "landed_after_floored": 0.0,
+  "landed_after_nightly": 0.0
+ },
+ {
+  "bug": 2065085,
+  "uuid": "4fe3bb03-028a-4ccf-83e1-96ff50260820",
+  "worth": 97,
+  "conf": null,
+  "node": "8f425dcfd002",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-20",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Graphics: Color Management",
+  "sig": "std::vector<T>::_Resize_reallocate<T>",
+  "ncomments": 1,
+  "hist": {
+   "first_seen": "20260818092026",
+   "first_seen_channel": "20260818092026",
+   "first_seen_any": "20260217084723",
+   "total": 1,
+   "total_other_channels": 4
+  },
+  "pushdate": [
+   1784627208,
+   0
+  ],
+  "landed_after_floored": -28.0,
+  "landed_after_nightly": -28.0
+ },
+ {
+  "bug": 2065156,
+  "uuid": "136fdb89-73ba-41dd-b808-7dcc60260820",
+  "worth": 97,
+  "conf": null,
+  "node": "ccfa767dba64",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-20",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::Graphics: CanvasWebGL",
+  "sig": "stackoverflow | GL_GetGraphicsResetStatusKHR",
+  "ncomments": 1,
+  "hist": {
+   "first_seen": "20260718090721",
+   "first_seen_channel": "20260718090721",
+   "first_seen_any": "20260718090721",
+   "total": 2,
+   "total_other_channels": 0
+  },
+  "pushdate": [
+   1578541218,
+   0
+  ],
+  "landed_after_floored": -2382.2,
+  "landed_after_nightly": -2382.2
+ },
+ {
+  "bug": 2065373,
+  "uuid": "363ff2bf-990e-45f3-a361-b13f50260820",
+  "worth": 97,
+  "conf": null,
+  "node": "db1a48a97fed",
+  "suspected": false,
+  "startpoint": true,
+  "created": "2026-08-21",
+  "status": "NEW",
+  "res": "",
+  "comp": "Core::IPC",
+  "sig": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader",
+  "ncomments": 4,
+  "hist": {
+   "first_seen": "20260409210423",
+   "first_seen_channel": "20260409210423",
+   "first_seen_any": "20260106170501",
+   "total": 58,
+   "total_other_channels": 10
+  },
+  "pushdate": [
+   1785275008,
+   0
+  ],
+  "landed_after_floored": 110.0,
+  "landed_after_nightly": 110.0
+ }
+]

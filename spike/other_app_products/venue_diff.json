@@ -1,0 +1,1247 @@
+[
+ {
+  "bug": 2060920,
+  "sig": "OOM | unknown | memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::RTCEncodedFrameBase",
+  "candidates": [
+   [
+    2060920,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2060920,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2060920,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2060920,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2060920,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2060922,
+  "sig": "mozilla::MediaDecoder::SetCDMProxy",
+  "candidates": [
+   [
+    1990812,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 1990812,
+   "other_app": []
+  },
+  "A": {
+   "venue": 1990812,
+   "other_app": []
+  },
+  "B": {
+   "venue": 1990812,
+   "other_app": []
+  },
+  "C": {
+   "venue": 1990812,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2060924,
+  "sig": "mozilla::ipc::IProtocol::Id",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061124,
+  "sig": "huge_dalloc | js_free | js_delete",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061127,
+  "sig": "mozilla::dom::SessionHistoryEntry::GetParent",
+  "candidates": [
+   [
+    2061127,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2061127,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2061127,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2061127,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2061127,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061180,
+  "sig": "libvulkan_radeon.so",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061726,
+  "sig": "OffthreadGCPtr<T>::operator JSScript*",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061960,
+  "sig": "nsFind::FindFromRangeBoundaries",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061961,
+  "sig": "geckoservo::glue::Servo_Element_ReferencesAttribute::{{closure}}",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061962,
+  "sig": "xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061969,
+  "sig": "shutdownhang | __fstatat",
+  "candidates": [
+   [
+    2061969,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2061969,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2061969,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2061969,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2061969,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061973,
+  "sig": "zlib_rs::inflate::inflate_fast_help_impl",
+  "candidates": [
+   [
+    2061973,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2061973,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2061973,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2061973,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2061973,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2061975,
+  "sig": "zlib_rs::inflate::writer::Writer::copy_match_help",
+  "candidates": [
+   [
+    2061975,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2061975,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2061975,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2061975,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2061975,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062052,
+  "sig": "mozilla::dom::ScreenOrientation::Create",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062062,
+  "sig": "AsyncShutdownTimeout | profile-change-teardown | LoginManagerRustStorage: Interrupt IO operations on login store",
+  "candidates": [
+   [
+    2062062,
+    "Toolkit"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062062,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062062,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062062,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062062,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062114,
+  "sig": "js::gc::ChunkBase::isNurseryChunk",
+  "candidates": [
+   [
+    2062114,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062114,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062114,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062114,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062114,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062119,
+  "sig": "nsJARProtocolHandler::MimeService",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062168,
+  "sig": "PerformPromiseThenWithoutSettleHandlers",
+  "candidates": [
+   [
+    2062168,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062168,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062168,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062168,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062168,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062173,
+  "sig": "js::detail::BumpChunk::assertInvariants",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062219,
+  "sig": "nsAtom::IsStatic",
+  "candidates": [
+   [
+    1798397,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062286,
+  "sig": "FindSafeLength",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062335,
+  "sig": "OOM | large | NS_ABORT_OOM | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement<T> | mozilla::dom::TimeRanges::Add",
+  "candidates": [
+   [
+    2062335,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062335,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062335,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062335,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062335,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062495,
+  "sig": "mozilla::net::CacheStorageService::NoteNoVarySearchEntry",
+  "candidates": [
+   [
+    2062495,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062495,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062495,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062495,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062495,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062806,
+  "sig": "callback_interface_ads_client_moz_ads_context_id_provider_context_id",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062915,
+  "sig": "js::AvlTreeImpl<T>::leftshrunk",
+  "candidates": [
+   [
+    2062915,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062915,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062915,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062915,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062915,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2062934,
+  "sig": "nsStyleContent::NonAltContentItems",
+  "candidates": [
+   [
+    2062934,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2062934,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2062934,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2062934,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2062934,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063002,
+  "sig": "_ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S3_S3_",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063003,
+  "sig": "nsCharTraits<T>::copy",
+  "candidates": [
+   [
+    1863599,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063234,
+  "sig": "nsWrapperCache::GetWrapperMaybeDead",
+  "candidates": [
+   [
+    2063234,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2063234,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2063234,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2063234,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2063234,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063364,
+  "sig": "js::jit::CompilerFrameInfo::sync",
+  "candidates": [
+   [
+    1874575,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063678,
+  "sig": "libc.so.6 | cuEGLApiInit",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063782,
+  "sig": "js::jit::CacheIRStubInfo::fieldType",
+  "candidates": [
+   [
+    2063782,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2063782,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2063782,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2063782,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2063782,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063809,
+  "sig": "ff_vk_exec_add_dep_frame",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063826,
+  "sig": "DMABufSurfaceRGBA::ReleaseTextures",
+  "candidates": [
+   [
+    2063826,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2063826,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2063826,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2063826,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2063826,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063862,
+  "sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063864,
+  "sig": "setsockopt_syscall",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063892,
+  "sig": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | kernelbase.dll | DispatchMessageWorker",
+  "candidates": [
+   [
+    2063892,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2063892,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2063892,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2063892,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2063892,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063898,
+  "sig": "webrender::device::gl::Device::update_vbo_data_unsynchronized",
+  "candidates": [
+   [
+    2063898,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2063898,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2063898,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2063898,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2063898,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2063902,
+  "sig": "js::jit::ICScript::icEntry",
+  "candidates": [
+   [
+    2063902,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2063902,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2063902,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2063902,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2063902,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064066,
+  "sig": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | nsDocShellLoadState::nsDocShellLoadState",
+  "candidates": [
+   [
+    2057980,
+    "MailNews Core"
+   ]
+  ],
+  "shipped": {
+   "venue": null,
+   "other_app": [
+    2057980
+   ]
+  },
+  "A": {
+   "venue": null,
+   "other_app": [
+    2057980
+   ]
+  },
+  "B": {
+   "venue": null,
+   "other_app": [
+    2057980
+   ]
+  },
+  "C": {
+   "venue": 2057980,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064137,
+  "sig": "mozilla::Vector<T>::operator[] | js::jit::MPhi::getOperand",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064274,
+  "sig": "mozilla::detail::MutexImpl::mutexLock",
+  "candidates": [
+   [
+    1695119,
+    "Core"
+   ],
+   [
+    1777373,
+    "Core"
+   ],
+   [
+    2064274,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2064274,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2064274,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2064274,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2064274,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064342,
+  "sig": "igd10iumd64.dll | CLayeredObjectWithCLS<T>::CContainedObject::AddRef",
+  "candidates": [
+   [
+    2064342,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2064342,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2064342,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2064342,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2064342,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064436,
+  "sig": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+  "candidates": [
+   [
+    1505660,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064537,
+  "sig": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+  "candidates": [],
+  "shipped": {
+   "venue": null,
+   "other_app": []
+  },
+  "A": {
+   "venue": null,
+   "other_app": []
+  },
+  "B": {
+   "venue": null,
+   "other_app": []
+  },
+  "C": {
+   "venue": null,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2064600,
+  "sig": "mozilla::ActiveScrolledRoot::GetNearestScrollASR",
+  "candidates": [
+   [
+    2064600,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2064600,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2064600,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2064600,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2064600,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2065072,
+  "sig": "mozilla::MediaTrackGraphImpl::OnGraphThread",
+  "candidates": [
+   [
+    2065072,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2065072,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2065072,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2065072,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2065072,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2065075,
+  "sig": "mozilla::MediaTrackGraphImpl::TailDispatchMessage",
+  "candidates": [
+   [
+    2065075,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2065075,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2065075,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2065075,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2065075,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2065085,
+  "sig": "std::vector<T>::_Resize_reallocate<T>",
+  "candidates": [
+   [
+    2065085,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2065085,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2065085,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2065085,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2065085,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2065156,
+  "sig": "stackoverflow | GL_GetGraphicsResetStatusKHR",
+  "candidates": [
+   [
+    2065156,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2065156,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2065156,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2065156,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2065156,
+   "other_app": []
+  }
+ },
+ {
+  "bug": 2065373,
+  "sig": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader",
+  "candidates": [
+   [
+    2065373,
+    "Core"
+   ]
+  ],
+  "shipped": {
+   "venue": 2065373,
+   "other_app": []
+  },
+  "A": {
+   "venue": 2065373,
+   "other_app": []
+  },
+  "B": {
+   "venue": 2065373,
+   "other_app": []
+  },
+  "C": {
+   "venue": 2065373,
+   "other_app": []
+  }
+ }
+]

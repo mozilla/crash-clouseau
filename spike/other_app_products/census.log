@@ -1,0 +1,61 @@
+Tech Evangelism Graveyard                     all=4       open=0      active=False
+Focus                                         all=28      open=2      active=True
+Socorro                                       all=13      open=2      active=True
+Toolkit                                       all=1074    open=53     active=True
+Plugins Graveyard                             all=244     open=0      active=False
+Web Compatibility                             all=5       open=0      active=True
+bugzilla.mozilla.org                          all=1       open=0      active=True
+Remote Protocol                               all=16      open=0      active=True
+Invalid Bugs                                  all=71      open=0      active=True
+Camino Graveyard                              all=198     open=0      active=False
+Infrastructure & Operations Graveyard         all=4       open=0      active=False
+Mozilla Labs                                  all=1       open=0      active=False
+DevTools Graveyard                            all=10      open=0      active=False
+Taskcluster                                   all=3       open=0      active=True
+NSS                                           all=201     open=6      active=True
+Tracking Graveyard                            all=1       open=0      active=False
+Firefox for Android Graveyard                 all=2559    open=0      active=False
+MailNews Core                                 all=1250    open=21     active=True
+Firefox                                       all=1816    open=17     active=True
+Data Platform and Tools                       all=22      open=7      active=True
+Firefox for Android                           all=462     open=96     active=True
+Web Apps                                      all=1       open=0      active=False
+Firefox Health Report Graveyard               all=4       open=0      active=False
+Release Engineering Graveyard                 all=2       open=0      active=False
+Add-on SDK Graveyard                          all=3       open=0      active=False
+Toolkit Graveyard                             all=40      open=0      active=False
+Testing Graveyard                             all=9       open=0      active=False
+Other Applications Graveyard                  all=22      open=0      active=False
+Penelope Graveyard                            all=1       open=0      active=False
+Android Background Services Graveyard         all=3       open=0      active=False
+Thunderbird                                   all=1079    open=59     active=True
+Calendar                                      all=76      open=1      active=True
+SeaMonkey                                     all=472     open=2      active=True
+Application Services                          all=16      open=7      active=True
+GeckoView                                     all=359     open=38     active=True
+Release Engineering                           all=2       open=0      active=True
+Core Graveyard                                all=1750    open=0      active=False
+External Software Affecting Firefox Graveyard all=567     open=0      active=False
+Infrastructure & Operations                   all=1       open=1      active=True
+Chat Core                                     all=3       open=0      active=True
+Directory Graveyard                           all=5       open=0      active=False
+GeckoView Graveyard                           all=1       open=0      active=True
+Core                                          all=34857   open=1292   active=True
+Enterprise Products                           all=7       open=1      active=True
+Tamarin Graveyard                             all=2       open=0      active=False
+DevTools                                      all=260     open=0      active=True
+Firefox Graveyard                             all=10      open=0      active=False
+Firefox OS Graveyard                          all=350     open=0      active=False
+Developer Infrastructure                      all=6       open=0      active=True
+Other Applications                            all=26      open=0      active=True
+CA Program                                    all=1       open=0      active=True
+Air Mozilla                                   all=1       open=1      active=True
+Cloud Services                                all=10      open=4      active=True
+Firefox Build System                          all=53      open=2      active=True
+MailNews Core Graveyard                       all=2       open=0      active=False
+External Software Affecting Firefox           all=402     open=56     active=True
+Mozilla Localizations                         all=2       open=0      active=True
+NSPR                                          all=33      open=1      active=True
+Firefox for Metro Graveyard                   all=16      open=0      active=False
+Testing                                       all=599     open=5      active=True
+WebExtensions                                 all=482     open=16     active=True
