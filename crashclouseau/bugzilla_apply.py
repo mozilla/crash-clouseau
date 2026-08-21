@@ -297,33 +297,98 @@ def _set_needinfo(bug_id, email, token):
         return exc
 
 
-def _is_specific_signature(signature):
-    """Is this signature distinctive enough to match against free-text bug SUMMARIES?
+_SUMMARY_CRASH_FORMS = ("[@ {}]", "[@ {} ]")
 
-    A qualified symbol (``mozilla::MediaDecoder::SetCDMProxy``) identifies one crash. A bare
-    token does not: searching summaries for ``memcpy`` returns 32 open bugs, and commenting
-    on the wrong one is worse than filing a duplicate. ``cf_crash_signature`` needs no such
-    guard — that field only ever holds crash signatures."""
+
+def _summary_is_about(summary, signature):
+    """Does this bug SUMMARY carry *signature* the way a crash bug carries it — ``[@ sig]``?
+
+    Replaces a length-and-token gate (``len(sig) >= 16 and ("::" in sig or "|" in sig)``) read
+    off two points, ``memcpy`` on one side and ``mozilla::MediaDecoder::SetCDMProxy`` on the
+    other. On the top 200 Firefox-nightly signatures (SuperSearch facet 2026-08-07..08-21,
+    15131 crashes) the LENGTH half decided only 2 of the 200 — ``OOM | small`` and
+    ``js::IsProxy`` — the other 198 being settled by the ``::``/``|`` token alone; and
+    ``nsAtom::IsStatic``, the signature this whole venue rule was written about, is exactly 16
+    characters, so the panel's most consequential case sat ON the boundary. No test ever
+    exercised the threshold: every negative in tests/test_autofile.py was rejected by the token
+    test too.
+
+    What the summary search needed was the FORM, not a size. Same 200 signatures: cf-plus-
+    bracket adds a bug the ``cf_crash_signature`` search misses for 8/200 and moves the chosen
+    venue for 2/200 — the same counts as the gated bare-substring rule — while swapping two
+    false venues for two true ones. It DROPS bug 1891138 ("Crash in js::gc::HeaderWord::get
+    when doing native allocation profiling of www.itemkey.co.uk/…", Core::Gecko Profiler) and
+    bug 2009859 ("3% of doxbee-promise is nsCycleCollectingAutoRefCnt::incr from CallSetup and
+    xpc::NativeGlobal", a performance bug) — prose mentions, exactly what the old gate existed
+    to avoid. It GAINS bug 2016952 ("Crash in [@ OOM | small]") and bug 1960108 ("A Firefox 137
+    tab crashed on YouTube [@ EMPTY: no frame data available; EmptyMinidump ]"), real crash bugs
+    on generic signatures the length test refused to search for at all. On ``memcpy`` the bare
+    summary substring returns 26 open bugs today (the retired docstring said 32) and the
+    bracketed form returns 1, bug 1819825 — the precision the 16 was reaching for is delivered
+    by the form.
+
+    MUST NOT EAT bug 1990812, ``[Intermittent] Crash on canalplus.com … [@
+    mozilla::MediaDecoder::SetCDMProxy ]`` — hence the TRAILING-SPACE variant, which is how that
+    bug writes it in both its summary and its ``cf_crash_signature``. On the 51 filed-panel
+    signatures plus the four counter-example ones this rule differs from the retired one for
+    exactly ONE, ``mozilla::detail::MutexImpl::mutexLock``, where it removes both bad venues
+    that filing 2064274 would otherwise have landed on (1695119 "Crash @ …mutexLock() |
+    …WebProgressListener::OnStateChange" and 1777373 "Frequent Hit
+    MOZ_CRASH(mozilla::detail::MutexImpl::mutexLock: pthread_mutex_lock failed)").
+
+    Exact-form rather than the prefix BMO is asked for, and INSURANCE rather than a measured
+    save. ``[@ sig`` over-matched a LONGER signature for 3 of the 200 —
+    ``mozilla::widget::WlLogHandler`` against bug 1996736 ``Crash in [@
+    mozilla::widget::WlLogHandler_UnknownObject]``, plus ``amdxx64.dll`` and
+    ``IPCError-browser | ShutDownKill`` — but every one of those bugs ALSO carries the longer
+    signature in its ``cf_crash_signature``, which is a bare substring match, so the union the
+    caller keeps is identical: the exact form changes the keep-set for 0 of the 200 and moves
+    the venue for 0. What it guards is a shape the panel does not contain — a crash bug with an
+    EMPTY ``cf_crash_signature`` (1891138, 2009859 and 1960108 each have one) whose summary
+    carries a longer signature. Case-insensitive because BMO's ``substring`` operator is, and
+    anything this sees was already returned by that search."""
+    low = (summary or "").lower()
+    sig = (signature or "").strip().lower()
+    return bool(sig) and any(form.format(sig) in low for form in _SUMMARY_CRASH_FORMS)
+
+
+def _row_is_about(bug, signature):
+    """Does this BMO row really carry *signature*, or did the OR over-match?
+
+    One request asks ``cf_crash_signature`` for the bare signature OR ``short_desc`` for the
+    prefix ``[@ sig``, and the response does not say which clause matched, so both are
+    re-checked here. The cf side is a plain substring — that field only ever holds signatures,
+    which is why it needs no form test at all. The summary side demands the exact crash-bug
+    form (``_summary_is_about``), because the prefix over-matched a LONGER signature for 3 of
+    the top 200 nightly signatures. Measured cost and benefit both zero on that panel — all
+    three over-matches are cf-reachable anyway, so this re-check changes the keep-set for 0/200
+    and the venue for 0/200. It is insurance against an over-match on a bug whose
+    ``cf_crash_signature`` is empty, not a save the panel witnessed."""
     sig = (signature or "").strip()
-    return len(sig) >= 16 and ("::" in sig or "|" in sig)
+    if sig and sig.lower() in (bug.get("cf_crash_signature") or "").lower():
+        return True
+    return _summary_is_about(bug.get("summary"), sig)
 
 
 def _open_bugs_for_signature(signature):
-    """OPEN bugs referencing *signature* as ``[{"id", "creation_time", "product"}, ...]``,
-    oldest first.
+    """OPEN bugs referencing *signature* as
+    ``[{"id", "creation_time", "product", "keywords"}, ...]``, oldest first.
 
-    ``creation_time`` and ``product`` ride along because the oldest open bug is not
-    automatically the right place to comment — see ``_bug_for_this_regression`` for the date
-    and ``_split_by_application`` for the product.
+    Every field beyond the id is there because the oldest open bug is not automatically the
+    right place to comment: ``creation_time`` for ``_bug_for_this_regression``, ``product``
+    for ``_split_by_application``, ``keywords`` for ``_split_out_metas``.
 
     Read-only and unauthenticated (public bugs only, which is the right scope: we must not
     reason about a security bug we can only see because the filing account can).
 
-    Matches the BARE signature, not the ``[@ signature]`` form. Bug 1990812 carries
-    ``[@ mozilla::MediaDecoder::SetCDMProxy ]`` — with a trailing space — so the bracketed
-    form missed it and we filed 2060922 as a near-duplicate of a REOPENED bug for the exact
-    same crash. Summaries are searched too, gated on ``_is_specific_signature``, because
-    that is where 1990812 carried it.
+    ``cf_crash_signature`` is matched on the BARE signature, not the ``[@ signature]`` form:
+    bug 1990812 carries ``[@ mozilla::MediaDecoder::SetCDMProxy ]`` — with a trailing space —
+    so the bracketed form missed it and we filed 2060922 as a near-duplicate of a REOPENED bug
+    for the exact same crash. The SUMMARY half is the other way round and ungated: it asks for
+    the crash-bug form ``[@ sig`` and then keeps only an exact ``[@ sig]``/``[@ sig ]``
+    (``_summary_is_about``), which is what the retired ``_is_specific_signature`` length test
+    was really reaching for. One request, so the rows are re-checked here rather than in a
+    second query — BMO's OR does not say which clause matched.
 
     Oldest first, because among the bugs that could be about this crash the earliest is the
     canonical one, carrying whatever discussion already exists; newest-first would prefer a
@@ -333,12 +398,13 @@ def _open_bugs_for_signature(signature):
         return []
     sig = signature.strip()
     params = {
-        "include_fields": "id,summary,status,resolution,creation_time,product",
+        "include_fields": "id,summary,status,resolution,creation_time,product,keywords,"
+                          "cf_crash_signature",
+        "j_top": "OR",
         "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
+        "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
         "resolution": "---",
     }
-    if _is_specific_signature(sig):
-        params.update({"j_top": "OR", "f2": "short_desc", "o2": "substring", "v2": sig})
     try:
         r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
@@ -350,9 +416,9 @@ def _open_bugs_for_signature(signature):
         return None
     return [
         {"id": b["id"], "creation_time": b.get("creation_time"),
-         "product": b.get("product")}
+         "product": b.get("product"), "keywords": b.get("keywords") or []}
         for b in sorted(bugs, key=lambda b: b.get("id", 0))
-        if b.get("id")
+        if b.get("id") and _row_is_about(b, sig)
     ]
 
 
@@ -381,6 +447,38 @@ def _split_by_application(bugs, product):
     return ours, theirs
 
 
+def _split_out_metas(bugs):
+    """``(venues, metas)`` — the open bugs that can hold a crash report, and the ``[meta]``
+    trackers that cannot.
+
+    A meta bug is a list of other bugs. Posting a stack, a needinfo and a regressor claim into
+    one buries the analysis among dozens of unrelated dependencies and asks the question of
+    whoever happens to own the tracker. On the top 200 Firefox-nightly signatures (SuperSearch
+    facet 2026-08-07..08-21) the oldest open same-application bug is a meta for 9/200 = 4.5%
+    (95% CI 2.4–8.3), four distinct trackers: 1279293 ``[meta] Crash in [@ IPCError-browser |
+    ShutDownKill]``, 858032 ``[meta] crashes in EnterBaseline / EnterJit``, 1472062 and 1588498.
+
+    THE OBVIOUS DETECTOR IS THE WRONG ONE, and it is worth saying because it is the diagnosis
+    this rule arrived with: tightening the summary search fixes NOTHING here. All nine arrive
+    through ``cf_crash_signature`` — bug 1279293's own ``cf_crash_signature`` IS ``[@
+    IPCError-browser | ShutDownKill]`` — and the count is 9/200 either way with the summary
+    clause removed. The ``[meta]`` summary prefix is a convention, not a field; the ``meta``
+    KEYWORD is set on all four, so that is what this reads.
+
+    COST MEASURED ZERO: no meta appears among the 10 top-200 signatures where a two-day-old
+    regressor SHOULD comment on an open bug, nor among the 6 venues the filer has ever
+    accepted. It cannot: all four metas were filed 2013–2019, so ``_bug_for_this_regression``
+    already rejects them for any recent candidate. The hole is only reachable through a path
+    that SKIPS that test — which is why this ships with the unresolved-landing-date rule, where
+    metas were 9 of the 96 wrong venues. Cross-referenced in the new bug
+    (``report_bug.build_meta_bugs_note``) rather than silently dropped, for the same reason
+    ``_split_by_application``'s bucket is, and because a new meta filed inside the 30-day window
+    is the case this would otherwise get wrong in the other direction."""
+    ours = [b for b in bugs or [] if "meta" not in (b.get("keywords") or [])]
+    metas = [b for b in bugs or [] if "meta" in (b.get("keywords") or [])]
+    return ours, metas
+
+
 def _candidate_landed(dossier, channel):
     """When the suspected regressor landed, as a UTC datetime, or ``None``.
 
@@ -392,8 +490,21 @@ def _candidate_landed(dossier, channel):
     Free online, which is why this can sit on the filing path at all: the orchestrator already
     resolved this node's hg ``json-rev`` during the run (the backout gate and the git-commit
     link both go through it) and ``sigage`` caches per ``(node, channel)``, so this is a dict
-    hit rather than hg's measured 8-13s. Best-effort — an unresolved date leaves the caller on
-    its pre-existing behaviour."""
+    hit rather than hg's measured 8-13s.
+
+    NOT best-effort any more. ``None`` now costs every open bug its venue
+    (``_bug_for_this_regression``), so it is worth knowing how reachable ``None`` is. Replayed
+    offline over the 52 candidate nodes of the 52 bugs filed since 2026-08-05, this function
+    answered 52/52 (median 11.6 s cold). But the cache it rides on is a NEGATIVE cache —
+    ``sigage.json_rev`` stores ``{}`` on failure (``_JSON_REV_CACHE[key] = out``, sigage.py:491)
+    — so ONE hg 406 anywhere earlier in the run makes this return ``None`` in 0.00 s with hg
+    healthy again. The exposure is "did any json-rev read for this node fail earlier in the
+    run", not "did this read fail". Prod-time witness: the ``(gh)`` link comes from the SAME
+    ``json_rev`` dict (``orchestrator._resolve_candidate_git_commit``), so a filed comment with
+    an hg link and no ``[gh]`` is a run where it returned nothing. 5 of the 52 filings have no
+    ``[gh]``; 4 are pre-git-migration nodes with no ``git_commit`` in hg at all (2020-01,
+    2022-04, 2022-12, 2024-12), and the fifth — bug 2060924, node 74675cc139d9 — has
+    ``git_commit=9d7faea5127c…`` today. Witnessed 1/48 = 2.1% (95% CI 0.4–10.9)."""
     node = ((dossier or {}).get("candidate") or {}).get("node")
     if not node:
         return None
@@ -480,12 +591,41 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
     happening": a bug is always filed at or after the crash it reports, so it can only
     understate the gap, and understating it means commenting rather than filing.
 
-    Every unknown fails the same way, toward COMMENTING, because that is the pre-existing
-    behaviour and a duplicate on BMO costs a human's attention: no landing date (hg
-    unreachable, or an off-stack candidate with no node) keeps the oldest bug, and so does a
-    creation time BMO did not return or that will not parse. The one exception is the reopen
-    rescue, which is a rescue and not a gate — an unreachable history leaves the age verdict
-    standing rather than flipping it.
+    ONE-SIDED ON PURPOSE; THE TWO-SIDED VERSION IS MEASURED DEAD. A bug created long AFTER the
+    candidate landed is accepted unconditionally, which reads like a hole. It is not reachable
+    from the direction it looks reachable from — BMO cannot return a future ``creation_time`` —
+    and the direction it really exercises is a candidate that landed long BEFORE the bug, which
+    is the mechanism working. The one real venue acceptance that decides it is bug 1830323,
+    ``Crash in [@ mozilla::EbmlComposer::WriteSimpleBlock]``, ASSIGNED, created 2023-04-27,
+    where we commented on 2026-08-20 with candidate 7dfc286be921 ("Bug 1577198 - Don't write
+    cluster sizes…") that landed 2021-02-11 — 805 days before the bug existed, same signature,
+    still open and owned, and the right venue. Every bound tried (±30, ±90, ±180, ±365) eats it
+    and files a duplicate of an assigned bug, and with n=1 there is no panel to fit one on.
+
+    AN UNKNOWN LANDING DATE IS NOT A LICENCE TO COMMENT — the one unknown that does NOT fail
+    toward commenting, and the change that stopped it. Replaying the chooser over the top 200
+    Firefox-nightly signatures (SuperSearch facet 2026-08-07..08-21, 15131 crashes), 102 have at
+    least one open same-application bug; with a two-day-old regressor it files new for 92 of
+    them and comments on 10, and with the date withheld it comments on 102/102 and picks a
+    DIFFERENT venue for 96/102 = 94.1% (95% CI 87.8–97.3) — median age 1022 days (p25 327, p75
+    2500, max 6264), 74% older than a year, 48% older than three, 9% of them ``[meta]``. On the
+    52 real filings that is 5 hg-blind comments instead of 1, and 4 of the 5 are wrong:
+    2062219→1798397 (+1377 d, the nsAtom::IsStatic bug this docstring opens on), 2063003→1863599
+    (+1005 d, a JS Engine bug that merely lists ``nsCharTraits<T>::copy``), 2063364→1874575
+    (+836 d) and 2064274→1695119 (+1964 d). Failing CLOSED is wrong for the other 10/102 = 9.8%
+    (CI 5.4–17.1) — 9.6x less often — and its wrong outcome is a duplicate that NAMES what it
+    filed past (``report_bug.build_related_bugs_note``) instead of a needinfo'd analysis buried
+    in a median-2.8-year-old stranger's bug.
+
+    IT MUST NOT EAT the three legitimate comment venues, and it does not: all three resolve a
+    landing date, so they never reach this branch — bug 1898399 (gap −9 d), 1999518 (−4 d) and
+    1830323 (−805 d) get the same venue as before. Nor bug 1990812, which the ``candidate_bug``
+    shortcut above answers before any date logic, with or without a date.
+
+    The other unknowns still fail toward COMMENTING, because there a duplicate on BMO is the
+    worse noise: a creation time BMO did not return or that will not parse keeps the bug, and so
+    does an unreachable reopen history — that one is a rescue and not a gate, so a BMO blip
+    leaves the age verdict standing rather than flipping it.
 
     Scans oldest-first and takes the first plausible bug rather than testing only the oldest:
     with a 2022 bug and one we filed last week both open, the right answer is last week's, not
@@ -495,10 +635,13 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
     ids = [b["id"] for b in bugs or []]
     if candidate_bug and candidate_bug in ids:
         return candidate_bug, []
+    if landed is None:
+        # No clock, no verdict. Returned as `predating` so the caller files a new bug that
+        # cross-references these and says WHY (`report_bug.build_related_bugs_note`), rather
+        # than skipping: a silent skip loses the analysis, and this is a hg blip, not evidence.
+        return None, ids
     predating = []
     for bug in bugs or []:
-        if landed is None:
-            return bug["id"], []
         created = sigage.to_datetime(bug.get("creation_time"))
         if created is None:
             return bug["id"], []
@@ -559,8 +702,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
       is a nuisance while a bad gate at 300/day is an incident;
     * if an OPEN bug already references the signature AND that bug belongs to this crash's own
-      application (``_split_by_application``) AND it can be about this regression
-      (``_bug_for_this_regression``), comment there instead of filing a duplicate — and if that
+      application (``_split_by_application``) AND it is not a ``[meta]`` tracker
+      (``_split_out_metas``) AND it can be shown to be about this regression
+      (``_bug_for_this_regression``, which needs the candidate's landing date and refuses the
+      venue without one), comment there instead of filing a duplicate — and if that
       lookup FAILS we skip entirely rather than risk the duplicate;
     * never twice on one BUG for one signature (``Dossier.already_commented``), which is a
       different question from "never twice for one crash": several proto-signature clusters of
@@ -628,20 +773,47 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                     [b["id"] for b in other_app],
                     ", ".join(sorted({b.get("product") or "?" for b in other_app})),
                     uuid_info.get("product") or "?")
+    # A ``[meta]`` tracker is not a venue either, for the same reason and with the same
+    # treatment: it is dropped BEFORE the kill-switch below, because "an open bug exists, do
+    # not write" means an open bug we could have written IN (``_split_out_metas``).
+    existing, meta_bugs = _split_out_metas(existing)
+    if meta_bugs:
+        logger.info("autofile: open bug(s) %s reference this signature but are [meta] trackers "
+                    "— not a venue for a crash report", [b["id"] for b in meta_bugs])
     if existing and not cfg["comment_on_existing"]:
         return {"filed": False, "skipped": "open bug {} exists".format(existing[0]["id"])}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
-    # cannot (``_bug_for_this_regression``). Resolved before the preview is built so a new bug
-    # filed past an older one can say so in its opening comment.
+    # cannot, and with no landing date NONE of them can be shown to
+    # (``_bug_for_this_regression``). Resolved before the preview is built so a new bug filed
+    # past an older one can say so, and say which of the two reasons it was.
+    landed = _candidate_landed(dossier, uuid_info.get("channel"))
     bug_id, predating = _bug_for_this_regression(
         existing,
-        _candidate_landed(dossier, uuid_info.get("channel")),
+        landed,
         cfg["comment_max_bug_age_days"],
         candidate_bug=((dossier or {}).get("candidate") or {}).get("bug"),
     )
+    landing_unresolved = landed is None and bug_id is None and bool(predating)
     if predating and bug_id is None:
-        logger.info("autofile: open bug(s) %s all predate the suspected regressor — filing a "
-                    "new bug for %s rather than commenting there", predating, uuid)
+        if landing_unresolved:
+            # WARNING, not info: this is the only path on which a filing is routed by a fact
+            # the run never established, and ``_candidate_landed`` itself is silent when the
+            # poisoned ``json_rev`` cache serves the ``None``. If the rule is ever wrong, this
+            # line and ``venue_landing_unresolved`` below are how we would find out.
+            #
+            # It also costs this run the one-bug-one-analysis protection, and that is the
+            # honest price rather than a bug: ``already_commented`` is only asked about a
+            # CHOSEN venue, so two proto-signature clusters of the same crash that both go
+            # hg-blind file two new bugs where one would have filed and the other skipped
+            # (3 of 31 bugs were proto-split). At a ~2% blind rate that is ~0.2% of writes,
+            # against the 94% wrong-venue rate this replaces.
+            logger.warning(
+                "autofile: could not resolve when %s landed — open bug(s) %s on this signature "
+                "cannot be shown to be about it, filing a new bug for %s instead",
+                ((dossier or {}).get("candidate") or {}).get("node") or "?", predating, uuid)
+        else:
+            logger.info("autofile: open bug(s) %s all predate the suspected regressor — filing "
+                        "a new bug for %s rather than commenting there", predating, uuid)
 
     # Said it once already. `already_filed` above is keyed on the UUID, which is the wrong
     # grain: one (signature, build) splits into one cluster per distinct stack, each analysed
@@ -664,7 +836,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         preview = report_bug.build_bug_preview(
             uuid_info, stack, dossier,
             related_bugs=predating if bug_id is None else None,
+            landing_unresolved=landing_unresolved,
             other_app_bugs=other_app if bug_id is None else None,
+            meta_bugs=meta_bugs if bug_id is None else None,
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
@@ -713,11 +887,19 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             # rows are how we would find out.
             if predating:
                 result["predating_bugs"] = predating
+                # ...and WHICH of the two reasons, because they are not the same claim.
+                # ``predating_bugs`` alone reads as "these were filed before the cause", which
+                # is precisely what the run could NOT check here.
+                if landing_unresolved:
+                    result["venue_landing_unresolved"] = True
             # Same audit trail for the other reason we file past an open bug: it is somebody
             # else's application. If that judgement is ever wrong, these rows are how we find
             # out — the mistake it replaces was invisible from every side but the bug's.
             if other_app:
                 result["other_app_bugs"] = [b["id"] for b in other_app]
+            # And the third bucket, for the same audit reason (``_split_out_metas``).
+            if meta_bugs:
+                result["meta_bugs"] = [b["id"] for b in meta_bugs]
             # Blockers need a second call — create discards them silently (see
             # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
             wanted = preview.get("blocked") or []

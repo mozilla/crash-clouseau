@@ -744,7 +744,9 @@ def build_bug_comment(
     version=None,
     needinfo=None,
     related_bugs=None,
+    landing_unresolved=False,
     other_app_bugs=None,
+    meta_bugs=None,
     max_frames=_MAX_PREVIEW_FRAMES,
 ):
     """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
@@ -761,8 +763,8 @@ def build_bug_comment(
     4c. how much of the signature is hardware error, when that is above background;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
-    7. why this is a new bug rather than a comment on ``related_bugs`` /
-       ``other_app_bugs``, when there are any;
+    7. why this is a new bug rather than a comment on ``related_bugs`` / ``other_app_bugs`` /
+       ``meta_bugs``, when there are any — three different reasons, never merged;
     8. the needinfo ask.
 
     Sections with no data are dropped, never emitted empty."""
@@ -785,8 +787,11 @@ def build_bug_comment(
         ),
         build_code_references((dossier or {}).get("verdict"), channel),
         build_skeptic_block(dossier),
-        build_related_bugs_note(related_bugs),
+        build_related_bugs_note(
+            related_bugs, landing_unresolved=landing_unresolved,
+            node=((dossier or {}).get("candidate") or {}).get("node")),
         build_other_app_bugs_note(other_app_bugs),
+        build_meta_bugs_note(meta_bugs),
         needinfo,
         _PROVENANCE,
     ]
@@ -805,16 +810,48 @@ _PROVENANCE = (
 )
 
 
-def build_related_bugs_note(related_bugs):
+def build_related_bugs_note(related_bugs, landing_unresolved=False, node=None):
     """Why this is a NEW bug when ``related_bugs`` are open on the same signature, or ``""``.
 
-    The filer only ever skips past an open bug because that bug predates the suspected
-    regressor (``bugzilla_apply._bug_for_this_regression``), so say so, in the bug itself,
-    where the triager deciding whether to duplicate it can see the reasoning and overrule it.
-    An unexplained second bug on a live signature just looks like a broken deduplicator."""
+    Two reasons, two sentences, because they are not the same claim. Normally the filer skips
+    past an open bug because that bug predates the suspected regressor
+    (``bugzilla_apply._bug_for_this_regression``). Under ``landing_unresolved`` it skipped past
+    it because it could not resolve when the changeset landed at all, and the ordinary wording
+    — "they were filed before the changeset above landed" — would then be asserting the very
+    thing the run failed to establish. That is the defect :jstutte flagged on bug 2065373,
+    where the filed bug stated as fact something checkable against data the run already held
+    and had not checked; a reader who cannot tell a verdict from a blind spot cannot overrule
+    either. ``node`` names the changeset when we have it, and is omitted rather than guessed.
+
+    KNOWN GAP, and it is the same class of defect: the SAME comment can carry section 4b
+    (``build_stale_signature_note``), which says the signature was already being reported "N
+    days before the changeset named below landed" — a sentence that only exists because
+    ``_apply_signature_age_gate`` DID resolve that landing date, from the seed's free
+    ``candidate_pushdates`` map rather than from hg (orchestrator.py:1568). The filer's
+    ``_candidate_landed`` has no access to that map and asks hg, so on the poisoned-cache path
+    one bug can state the gap in 4b and disclaim all knowledge of it here. Rare — it needs a
+    stale filing (~24% of filings), an open same-application bug (~18%) and an hg blip (~2%) at
+    once, so of order one filing a year — but it is not hypothetical, and the fix is the
+    recommendation's unshipped adjunct: give the filer the pushdate the run already has.
+
+    Said in the bug itself, where the triager deciding whether to duplicate it can see the
+    reasoning: an unexplained second bug on a live signature just looks like a broken
+    deduplicator."""
     bugs = [b for b in (related_bugs or []) if b]
     if not bugs:
         return ""
+    if landing_unresolved:
+        return (
+            "Filed as a new bug rather than a comment on {} — {} open on this signature, but "
+            "we could not resolve when {} landed, so we could not tell whether {} about this "
+            "regression. Please duplicate if {}.".format(
+                ", ".join("bug {}".format(b) for b in bugs),
+                "which is" if len(bugs) == 1 else "which are",
+                "changeset {}".format(node) if node else "the changeset above",
+                "it is" if len(bugs) == 1 else "they are",
+                "it is" if len(bugs) == 1 else "one of them is",
+            )
+        )
     return (
         "Filed as a new bug rather than a comment on {} — {} open on this signature, but "
         "{} filed before the changeset above landed, so {} cannot be about this regression. "
@@ -853,6 +890,32 @@ def build_other_app_bugs_note(other_app_bugs):
             "it is" if len(bugs) == 1 else "they are",
             ", ".join(products) or "another product",
             "another application" if len(products) < 2 else "other applications",
+        )
+    )
+
+
+def build_meta_bugs_note(meta_bugs):
+    """Cross-reference the open ``[meta]`` trackers on this signature, or ``""``.
+
+    The third reason the filer files past an open bug (``bugzilla_apply._split_out_metas``),
+    after "it predates the cause" and "it is another application's". A meta bug is a list of
+    other bugs: an analysis posted into one sits among its dependencies instead of in front of
+    anyone, and the needinfo goes to whoever owns the tracker. Named rather than dropped
+    because the tracker IS the right place for the link — bug 1279293 tracks every
+    ``IPCError-browser | ShutDownKill`` there is — just not the right place for the analysis.
+
+    Rows are ``{"id", "keywords", ...}`` as ``_open_bugs_for_signature`` returns them."""
+    bugs = [b for b in (meta_bugs or []) if (b or {}).get("id")]
+    if not bugs:
+        return ""
+    return (
+        "{} {} this signature too, but {} [meta] tracking {}, so an analysis posted there "
+        "would sit among the dependencies rather than in front of anyone. Filed here instead; "
+        "please add it to the tracker if it belongs.".format(
+            ", ".join("bug {}".format(b["id"]) for b in bugs),
+            "references" if len(bugs) == 1 else "reference",
+            "it is a" if len(bugs) == 1 else "they are",
+            "bug" if len(bugs) == 1 else "bugs",
         )
     )
 
@@ -1433,7 +1496,8 @@ def _bug_version(channel):
     return "Trunk" if (channel or "").lower() == "nightly" else "unspecified"
 
 
-def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None):
+def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None,
+                      landing_unresolved=False, meta_bugs=None):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -1445,12 +1509,14 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     product/component are best-effort from the regressor (``resolve_product_component``).
     Returns ``None`` when there is no candidate regressor to file a bug against.
 
-    ``related_bugs`` and ``other_app_bugs`` are open bugs on this signature that the automatic
-    filer decided NOT to comment on — the first because they predate the suspected regressor,
-    the second because they belong to another application built on Gecko; passing them puts the
-    reason in the bug. The page preview passes neither — it does not know, because deciding
-    needs a Bugzilla search and a changeset's landing date, neither of which belongs in a
-    render.
+    ``related_bugs``, ``other_app_bugs`` and ``meta_bugs`` are open bugs on this signature that
+    the automatic filer decided NOT to comment on — respectively because the changeset landed
+    after they were filed (or, under ``landing_unresolved``, because we could not tell WHEN it
+    landed, which is a different sentence and not the same claim), because they belong to
+    another application built on Gecko, and because they are ``[meta]`` trackers; passing them
+    puts the reason in the bug. The page preview passes none of them — it does not know, because
+    deciding needs a Bugzilla search and a changeset's landing date, neither of which belongs in
+    a render.
 
     The metadata below ``component`` is what a hand-filed crash bug carries and what
     ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO, and
@@ -1508,7 +1574,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             version=version,
             needinfo=_needinfo_line(person),
             related_bugs=related_bugs,
+            landing_unresolved=landing_unresolved,
             other_app_bugs=other_app_bugs,
+            meta_bugs=meta_bugs,
         ),
         "product": product,
         "component": component,

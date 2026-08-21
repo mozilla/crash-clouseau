@@ -47,6 +47,14 @@ _PREVIEW = {
     "needinfo_email": "dev@moz.example",
 }
 _INFO = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "nightly", "product": "Firefox"}
+# Bug 1798397 (`Crash in [@ nsAtom::IsStatic]`, open since 2022, its own comments proposing
+# nsAtom for the irrelevant-signature list) versus the changeset named for crash
+# ddeac1a4-64d1-4413-b03b-f79540260809, which landed 1375 days later. The numbers below are
+# that crash and the one filing this rule must NOT change (bug 2060924, which we had filed
+# ourselves 9 days after its own regressor landed).
+_OLD = "2022-10-31T19:44:56Z"
+_LANDED = datetime(2026, 8, 7, tzinfo=timezone.utc)
+_RECENT = "2026-08-01T00:00:00Z"                       # 6 days before `_LANDED`
 
 
 def _cfg(**over):
@@ -57,10 +65,15 @@ def _cfg(**over):
     return base
 
 
-def _bug(bid, created=None, product="Core"):
+def _bug(bid, created=_RECENT, product="Core", keywords=()):
     """One row of what `_open_bugs_for_signature` returns. A Firefox-side product by default:
-    the age tests are about dates, and a bug in somebody else's product never reaches them."""
-    return {"id": bid, "creation_time": created, "product": product}
+    the age tests are about dates, and a bug in somebody else's product never reaches them.
+
+    Created six days before `_LANDED` by default, i.e. INSIDE the 30-day window, so a test that
+    is not about timing exercises the real age path rather than one of its fail-open branches.
+    No keywords: a `[meta]` tracker is not a venue (`_split_out_metas`)."""
+    return {"id": bid, "creation_time": created, "product": product,
+            "keywords": list(keywords)}
 
 
 class _Base(unittest.TestCase):
@@ -83,11 +96,11 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply.models.Dossier, "record_filed_bug",
                               side_effect=lambda u, i: self.filed.append((u, i)) or True),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
-            # Unresolvable by default (it would otherwise ask hg over the network). That is
-            # also the honest default for these tests: with no landing date the filer keeps
-            # its pre-existing "comment on the oldest open bug" behaviour, so every test below
-            # that does not care about timing exercises exactly what it used to.
-            mock.patch.object(bugzilla_apply, "_candidate_landed", return_value=None),
+            # RESOLVED by default (it would otherwise ask hg over the network), because that is
+            # what production does: the shipped resolver answered 52/52 of the filed candidate
+            # nodes. An unresolved date is no longer a neutral default — it now refuses every
+            # venue — so a test that leaves it unresolved is testing that rule, not timing.
+            mock.patch.object(bugzilla_apply, "_candidate_landed", return_value=_LANDED),
             # Never reopened, unless a test says otherwise (it is a Bugzilla request).
             mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None),
             mock.patch.object(bugzilla_apply, "_create_bug",
@@ -417,9 +430,66 @@ class TestOtherApplications(_Base):
         self.assertEqual(bugzilla_apply._split_by_application([tb], None), ([], [tb]))
 
 
+class TestMetaBugsAreNotVenues(_Base):
+    """A `[meta]` bug is a list of other bugs: an analysis posted into one sits among its
+    dependencies rather than in front of anyone, and the needinfo goes to whoever owns the
+    tracker. On the top 200 nightly signatures the oldest open same-application bug is a meta
+    for 9/200 (four trackers: 1279293, 1472062, 858032, 1588498), all nine arriving through
+    `cf_crash_signature` — the count is the same with the summary clause removed, though
+    1279293 is reachable both ways — and all four carrying the `meta` KEYWORD."""
+
+    def test_a_meta_tracker_is_not_a_venue(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1279293, "2016-06-09T00:00:00Z", keywords=["crash", "meta", "topcrash"])]
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (999, "new_bug"))
+        self.assertEqual(self.comments, [])
+        self.assertEqual(res["meta_bugs"], [1279293])
+
+    def test_the_new_bug_cross_references_the_tracker(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1279293, keywords=["meta"])]
+        with mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        return_value=_PREVIEW) as preview:
+            self._file()
+        self.assertEqual([b["id"] for b in preview.call_args.kwargs["meta_bugs"]], [1279293])
+
+    def test_a_normal_crash_bug_is_untouched(self):
+        # The cost side: this must not cost a single ordinary venue. None of the 10 top-200
+        # signatures where commenting is right, and none of the 6 venues we have accepted, is
+        # a meta.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1798397, keywords=["crash", "topcrash"])]
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_a_usable_bug_beside_a_tracker_still_gets_the_comment(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1279293, keywords=["meta"]), _bug(2061999)]
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2061999, "comment_on_existing"))
+        self.assertEqual(self.created, [])
+
+    def test_the_kill_switch_is_not_tripped_by_a_tracker(self):
+        # Same reading as another application's bug: "an open bug exists, do not write" means
+        # an open bug we could have written IN.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1279293, keywords=["meta"])]
+        res = self._file(comment_on_existing=False)
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+
+    def test_the_split_reads_the_keyword_not_the_summary(self):
+        # All four measured trackers carry the keyword; the "[meta]" prefix is a convention.
+        meta = _bug(1, keywords=["crash", "meta"])
+        plain = _bug(2, keywords=["crash"])
+        self.assertEqual(bugzilla_apply._split_out_metas([meta, plain]), ([plain], [meta]))
+        self.assertEqual(bugzilla_apply._split_out_metas([]), ([], []))
+        self.assertEqual(bugzilla_apply._split_out_metas(None), ([], []))
+        self.assertEqual(bugzilla_apply._split_out_metas([{"id": 3}]), ([{"id": 3}], []))
+
+
 class TestTheLookupCarriesTheProduct(unittest.TestCase):
-    """The venue filter is blind unless BMO is asked for the product, and that request is the
-    one place it can be lost."""
+    """The venue filter is blind unless BMO is asked for the product and the keywords, and that
+    request is the one place they can be lost."""
 
     def test_the_search_asks_for_it_and_the_rows_carry_it(self):
         params = []
@@ -432,6 +502,9 @@ class TestTheLookupCarriesTheProduct(unittest.TestCase):
 
             def json(self):
                 return {"bugs": [{"id": 2057980, "product": "MailNews Core",
+                                  "summary": "Crash in [@ mozilla::ipc::FatalError | Foo::Bar]",
+                                  "keywords": ["crash", "meta"],
+                                  "cf_crash_signature": "",
                                   "creation_time": "2026-07-27T07:40:41Z"}]}
 
         def fake_get(url, **kw):
@@ -440,18 +513,65 @@ class TestTheLookupCarriesTheProduct(unittest.TestCase):
 
         with mock.patch.object(bugzilla_apply.net, "get", side_effect=fake_get):
             rows = bugzilla_apply._open_bugs_for_signature("mozilla::ipc::FatalError | Foo::Bar")
-        self.assertIn("product", params[0]["include_fields"])
+        for field in ("product", "keywords", "cf_crash_signature"):
+            self.assertIn(field, params[0]["include_fields"])
         self.assertEqual(rows, [{"id": 2057980, "product": "MailNews Core",
+                                 "keywords": ["crash", "meta"],
                                  "creation_time": "2026-07-27T07:40:41Z"}])
 
+    def test_the_summary_clause_is_ungated_and_asks_for_the_bracketed_form(self):
+        # No `_is_specific_signature` any more: `memcpy` gets a summary clause too, and it is
+        # `[@ memcpy` rather than `memcpy`, which is 1 open bug today instead of 26.
+        params = []
 
-# Bug 1798397 (`Crash in [@ nsAtom::IsStatic]`, open since 2022, its own comments proposing
-# nsAtom for the irrelevant-signature list) versus the changeset named for crash
-# ddeac1a4-64d1-4413-b03b-f79540260809, which landed 1375 days later. The numbers below are
-# that crash and the one filing this rule must NOT change (bug 2060924, which we had filed
-# ourselves 9 days after its own regressor landed).
-_OLD = "2022-10-31T19:44:56Z"
-_LANDED = datetime(2026, 8, 7, tzinfo=timezone.utc)
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"bugs": []}
+
+        def fake_get(url, **kw):
+            params.append(kw["params"])
+            return _Resp()
+
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=fake_get):
+            bugzilla_apply._open_bugs_for_signature("memcpy")
+        self.assertEqual(params[0]["f2"], "short_desc")
+        self.assertEqual(params[0]["v2"], "[@ memcpy")
+        self.assertEqual(params[0]["j_top"], "OR")
+
+    def test_a_row_matched_only_by_the_summary_prefix_is_dropped(self):
+        # BMO's substring is a prefix here, so the OR can return a bug whose summary carries a
+        # LONGER signature. The summaries below are real (bug 1996736 and bug 2059617, both on
+        # `mozilla::widget::WlLogHandler`); 1996736's EMPTY `cf_crash_signature` is NOT — the
+        # real bug carries the longer signature there too, so the lookup keeps it through the
+        # cf branch. That is the whole finding about this filter: on the 200-signature panel it
+        # changes the keep-set for 0, and the row shape it drops is one the panel never
+        # produced. Pinned here so a future prefix widening cannot pass unnoticed.
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"bugs": [
+                    {"id": 1996736, "product": "Core", "creation_time": "2025-10-28T00:41:07Z",
+                     "keywords": [], "cf_crash_signature": "",
+                     "summary": "Crash in [@ mozilla::widget::WlLogHandler_UnknownObject]"},
+                    {"id": 2059617, "product": "Core", "creation_time": "2026-07-31T02:05:19Z",
+                     "keywords": [], "cf_crash_signature": "",
+                     "summary": "Crash in [@ mozilla::widget::WlLogHandler] (kde) "
+                                "xdg_session_v1#76: error 1: the specified toplevel id is "
+                                "already used"},
+                ]}
+
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp()):
+            rows = bugzilla_apply._open_bugs_for_signature("mozilla::widget::WlLogHandler")
+        self.assertEqual([r["id"] for r in rows], [2059617])
 
 
 class TestBugPredatesTheCause(_Base):
@@ -507,12 +627,85 @@ class TestBugPredatesTheCause(_Base):
         self.assertNotIn("predating_bugs", res)
         self.assertEqual(self.created, [])
 
-    def test_an_unresolved_landing_date_changes_nothing(self):
-        # hg unreachable, or a candidate with no node. Unknown timing must leave the filer on
-        # its previous behaviour rather than invent a duplicate.
+    def test_an_unresolved_landing_date_refuses_every_venue(self):
+        # hg unreachable — in practice `sigage.json_rev`'s NEGATIVE cache serving a `{}` that a
+        # single earlier 406 put there. This used to comment on the oldest open bug. Measured
+        # over the top 200 nightly signatures, that lands somewhere DIFFERENT from the dated
+        # answer for 96 of the 102 signatures with an open bug (94.1%), median venue age 1022
+        # days; on the 52 real filings it produced 5 hg-blind comments of which 4 were wrong.
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
         bugzilla_apply._candidate_landed.return_value = None
-        self.assertEqual(self._file()["mode"], "comment_on_existing")
+        res = self._file()
+        self.assertEqual(res["mode"], "new_bug")
+        self.assertEqual(self.comments, [])
+
+    def test_an_unresolved_landing_date_files_past_a_bug_it_could_have_commented_on(self):
+        # The COST side, named: bug 2061546 and nine others on the 200-signature panel are open
+        # bugs a two-day-old regressor SHOULD have commented on (10/102 = 9.8%, CI 5.4-17.1).
+        # Blind, we file a new bug there instead — a duplicate that names what it duplicated,
+        # which is the 9.6x cheaper of the two errors, not a free one.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061546, _RECENT)]
+        bugzilla_apply._candidate_landed.return_value = None
+        res = self._file()
+        self.assertEqual((res["mode"], res["predating_bugs"]), ("new_bug", [2061546]))
+        self.assertTrue(res["venue_landing_unresolved"])
+
+    def test_it_never_skips_silently_when_the_date_is_unknown(self):
+        # Fail-closed must route into the file-new path, not into the "do not risk a duplicate"
+        # skip: the analysis is already paid for and a hg blip is not evidence about the crash.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = None
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(len(self.created), 1)
+
+    def test_the_new_bug_says_the_date_was_unknown_not_that_the_bug_predates(self):
+        # The jstutte/2065373 defect exactly: the ordinary wording asserts the open bugs "were
+        # filed before the changeset above landed", which is the one thing this run could not
+        # check. The preview gets told which sentence to write.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        bugzilla_apply._candidate_landed.return_value = None
+        with mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        return_value=_PREVIEW) as preview:
+            self._file()
+        self.assertEqual(preview.call_args.kwargs["related_bugs"], [1798397])
+        self.assertTrue(preview.call_args.kwargs["landing_unresolved"])
+
+    def test_a_dated_filing_does_not_claim_the_date_was_unknown(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]
+        with mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        return_value=_PREVIEW) as preview:
+            res = self._file()
+        self.assertFalse(preview.call_args.kwargs["landing_unresolved"])
+        self.assertNotIn("venue_landing_unresolved", res)
+
+    def test_the_regressors_own_bug_still_wins_with_no_date_at_all(self):
+        # THE COUNTER-EXAMPLE. Filing 2060922 / bug 1990812: the candidate `e6335c6fffd3` is
+        # "Bug 1990812 - handle the case where switching the decoder state machine fails due to
+        # shutdown". The shortcut is above the date logic, so fail-closed must not reach it —
+        # replayed at that filing's reconstructed BMO state, shipped and repaired both answer
+        # 1990812 with the date AND without it.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1990812, "2025-09-25T13:46:32Z")]
+        bugzilla_apply._candidate_landed.return_value = None
+        res = bugzilla_apply.autofile_bug(
+            "u-1", _INFO, {}, {"candidate": {"node": "e6335c6fffd3", "bug": 1990812}},
+            "lead", 70)
+        self.assertEqual((res["bug"], res["mode"]), (1990812, "comment_on_existing"))
+        self.assertEqual(self.created, [])
+
+    def test_a_bug_filed_long_before_the_cause_is_still_a_venue(self):
+        # THE KILL. Bug 1830323, `Crash in [@ mozilla::EbmlComposer::WriteSimpleBlock]`,
+        # ASSIGNED, created 2023-04-27; we commented there on 2026-08-20 with candidate
+        # 7dfc286be921, which landed 2021-02-11 — 805 days BEFORE the bug existed. Same
+        # signature, still open and owned: the right venue. Every two-sided bound tried
+        # (+/-30, +/-90, +/-180, +/-365) eats it, and n=1 is no panel to fit one on.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1830323, "2023-04-27T14:42:50Z")]
+        bugzilla_apply._candidate_landed.return_value = datetime(
+            2021, 2, 11, tzinfo=timezone.utc)
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (1830323, "comment_on_existing"))
 
     def test_an_unusable_creation_time_changes_nothing(self):
         # BMO did not return the field, or returned something unparseable. Same rule: fail
@@ -594,6 +787,15 @@ class TestBugForThisRegression(unittest.TestCase):
         got = bugzilla_apply._bug_for_this_regression(
             [_bug(1798397, _OLD)], _LANDED, 30, candidate_bug=2043000)
         self.assertEqual(got, (None, [1798397]))
+
+    def test_no_landing_date_returns_every_open_bug_as_unadjudicated(self):
+        # Not "(None, [])": the caller needs the ids to cross-reference them in the new bug.
+        got = bugzilla_apply._bug_for_this_regression(
+            [_bug(1798397, _OLD), _bug(2061999, "2026-08-08T00:00:00Z")], None, 30)
+        self.assertEqual(got, (None, [1798397, 2061999]))
+
+    def test_no_landing_date_and_no_open_bugs_is_not_a_finding(self):
+        self.assertEqual(bugzilla_apply._bug_for_this_regression([], None, 30), (None, []))
 
     def test_no_open_bugs_means_no_venue_and_nothing_skipped(self):
         self.assertEqual(
@@ -786,16 +988,62 @@ class TestRegressedBy(_Base):
 
 
 class TestSignatureMatching(_Base):
-    def test_specific_signatures_also_search_summaries(self):
-        for sig in ("mozilla::MediaDecoder::SetCDMProxy",
-                    "OOM | unknown | memcpy_repmovs_Intel | RTCEncodedFrameBase"):
-            self.assertTrue(bugzilla_apply._is_specific_signature(sig), sig)
+    """The summary half of the lookup. The old gate was `len(sig) >= 16 and ("::" in sig or
+    "|" in sig)`; on the top 200 nightly signatures the length decided 2 of the 200 and
+    `nsAtom::IsStatic` — the case the venue rule exists for — is exactly 16."""
 
-    def test_short_or_bare_tokens_do_not(self):
-        # Searching summaries for "memcpy" returns 32 open bugs; commenting on the wrong
-        # one is worse than filing a duplicate.
-        for sig in ("memcpy", "OOM", "", None, "shortish"):
-            self.assertFalse(bugzilla_apply._is_specific_signature(sig), repr(sig))
+    def test_the_bracketed_crash_bug_form_matches(self):
+        for summary in ("Crash in [@ OOM | small]",
+                        "A Firefox 137 tab crashed on YouTube [@ OOM | small ]",
+                        "crash in [@ oom | SMALL] on shutdown"):
+            self.assertTrue(
+                bugzilla_apply._summary_is_about(summary, "OOM | small"), summary)
+
+    def test_the_trailing_space_variant_matches(self):
+        # Bug 1990812, `[Intermittent] Crash on canalplus.com ... [@ mozilla::MediaDecoder::
+        # SetCDMProxy ]`. Filing 2060922 went out as a near-duplicate of it once already.
+        self.assertTrue(bugzilla_apply._summary_is_about(
+            "[Intermittent] Crash on canalplus.com after short playback of specific titles "
+            "[@ mozilla::MediaDecoder::SetCDMProxy ]", "mozilla::MediaDecoder::SetCDMProxy"))
+
+    def test_a_prose_mention_does_not(self):
+        # The two the length test was really buying, both real BMO summaries: bug 1891138
+        # (Core::Gecko Profiler) and bug 2009859 (a performance bug). Neither is a crash bug.
+        self.assertFalse(bugzilla_apply._summary_is_about(
+            "Crash in js::gc::HeaderWord::get when doing native allocation profiling of "
+            "www.itemkey.co.uk/workerTests/workerTest.html", "js::gc::HeaderWord::get"))
+        self.assertFalse(bugzilla_apply._summary_is_about(
+            "3% of doxbee-promise is nsCycleCollectingAutoRefCnt::incr from CallSetup and "
+            "xpc::NativeGlobal", "nsCycleCollectingAutoRefCnt::incr"))
+
+    def test_a_longer_signature_in_the_brackets_does_not(self):
+        # BMO is asked for the PREFIX `[@ sig`, which over-matched a LONGER signature for 3 of
+        # the 200. This is bug 1996736's REAL summary against the signature
+        # `mozilla::widget::WlLogHandler`. Note what the panel says about it: all three
+        # over-matches also carry the longer signature in `cf_crash_signature`, so the lookup
+        # keeps them anyway and the exact form changes nothing there (0/200). This predicate
+        # test is the only place the rule is pinned, and it is insurance, not a measured save.
+        self.assertFalse(bugzilla_apply._summary_is_about(
+            "Crash in [@ mozilla::widget::WlLogHandler_UnknownObject]",
+            "mozilla::widget::WlLogHandler"))
+        # And the shape the retired bare-substring rule picked up, which has no `[@` at all:
+        # bug 1695119's real summary, one of the two venues filing 2064274 landed on. The
+        # bracketed QUERY never returns it; this is what that drop looks like at the predicate.
+        self.assertFalse(bugzilla_apply._summary_is_about(
+            "Crash @ mozilla::detail::MutexImpl::mutexLock() | mozilla::dom::"
+            "`anonymous namespace'::WebProgressListener::OnStateChange",
+            "mozilla::detail::MutexImpl::mutexLock"))
+
+    def test_nothing_matches_nothing(self):
+        for summary, sig in (("", "Foo::Bar"), (None, "Foo::Bar"),
+                             ("Crash in [@ Foo::Bar]", ""), ("Crash in [@ Foo::Bar]", None)):
+            self.assertFalse(bugzilla_apply._summary_is_about(summary, sig))
+
+    def test_a_generic_signature_is_searched_too(self):
+        # `OOM | small` is 11 characters, so the retired gate refused to search summaries for
+        # it at all and never found bug 2016952, "Crash in [@ OOM | small]".
+        self.assertTrue(bugzilla_apply._summary_is_about(
+            "Crash in [@ OOM | small]", "OOM | small"))
 
     def test_payload_carries_what_bmo_requires(self):
         self._file()

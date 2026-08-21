@@ -1635,6 +1635,52 @@ class TestBugPreview(unittest.TestCase):
         self.assertIn("bug 1798397, bug 1900000 — which are open", two)
         self.assertIn("they were filed before", two)
 
+    def test_an_unknown_landing_date_is_not_reported_as_a_predating_bug(self):
+        # The jstutte/2065373 defect: "they were filed before the changeset above landed" is a
+        # claim about a date the run never resolved. Saying it anyway is the thing this audit
+        # is about — the bug must say which of the two it is.
+        note = report_bug.build_related_bugs_note(
+            [1798397], landing_unresolved=True, node="60d6dd5b849b")
+        self.assertNotIn("filed before", note)
+        self.assertIn("we could not resolve when changeset 60d6dd5b849b landed", note)
+        self.assertIn("we could not tell whether it is about this regression", note)
+        self.assertIn("Please duplicate if it is.", note)
+
+    def test_the_unknown_date_note_agrees_with_itself_in_the_plural(self):
+        two = report_bug.build_related_bugs_note(
+            [1798397, 1900000], landing_unresolved=True, node="60d6dd5b849b")
+        self.assertIn("bug 1798397, bug 1900000 — which are open", two)
+        self.assertIn("whether they are about this regression", two)
+        self.assertIn("Please duplicate if one of them is.", two)
+
+    def test_the_unknown_date_note_never_invents_a_changeset(self):
+        # Defensive rather than witnessed: on the FILING path a candidate with no node never
+        # gets this far (`build_bug_preview` returns falsy and the filer skips), so this pins
+        # the wording for every other caller of the note.
+        note = report_bug.build_related_bugs_note([1798397], landing_unresolved=True)
+        self.assertIn("when the changeset above landed", note)
+        self.assertNotIn("None", note)
+
+    def test_the_unknown_date_note_is_still_absent_without_related_bugs(self):
+        self.assertEqual(
+            report_bug.build_related_bugs_note([], landing_unresolved=True, node="n"), "")
+
+    def test_the_meta_note_cross_references_the_tracker(self):
+        note = report_bug.build_meta_bugs_note([{"id": 1279293, "keywords": ["meta"]}])
+        self.assertIn("bug 1279293 references this signature too", note)
+        self.assertIn("it is a [meta] tracking bug", note)
+        self.assertIn("please add it to the tracker if it belongs", note)
+
+    def test_the_meta_note_is_absent_by_default(self):
+        for metas in (None, [], [None], [{}]):
+            with self.subTest(metas=metas):
+                self.assertEqual(report_bug.build_meta_bugs_note(metas), "")
+
+    def test_the_meta_note_agrees_with_itself_in_the_plural(self):
+        two = report_bug.build_meta_bugs_note([{"id": 858032}, {"id": 1279293}])
+        self.assertIn("bug 858032, bug 1279293 reference this signature too", two)
+        self.assertIn("they are [meta] tracking bugs", two)
+
     def test_build_bug_comment_drops_empty_sections(self):
         # No reason, no stats, no citations, no needinfo -> no empty headings, no blank runs.
         info = {"uuid": "u-1", "channel": "nightly", "buildid": "1"}
