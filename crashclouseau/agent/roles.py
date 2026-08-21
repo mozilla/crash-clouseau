@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from claude_agent_sdk import AgentDefinition
 
-from crashclouseau import config
+from crashclouseau import compiled_out, config
 
 _SEARCHFOX = [
     f"mcp__searchfox__{name}"
@@ -59,6 +59,59 @@ _GROUND = (
     "`mcp__source__raw_file` — prefer it over searchfox `define` whenever the exact "
     "build-time source matters, because searchfox indexes ~tip and can show code that "
     "only exists AFTER the fix landed."
+)
+
+# The compiled-out clause. 270 words -- 20 of them the three macro lists -- where the walk it
+# replaces was 279 (`defe860`, `9216f51`), and three gates where that walk was one instrument.
+#
+# WHY IT SHRANK. Measured over 1996 prod dossiers (2026-07-06..08-05; 8901 skeptic claims, 1765
+# `fail`): 124 claims reason about a build guard and 39 of them `fail`. Classified, PLATFORM 15
+# (38%), DEBUG/assert 6 (15%), moz.configure-option 7 (18%), other 11 (cargo features /
+# USE_MEMFD_CREATE / prefs). So the `set_define` -> `option()` -> `default=` walk this clause used
+# to spell out served 2 of 39 -- and BOTH of those filings (bugs 2063782, 2063902) are now
+# suppressed with no LLM at all by `_apply_compiled_out_gate`, verified end to end at a real
+# pinned node where the diff ranker puts `gc::AutoMarkingLock` #1 of 8 and `hollow_symbols` fires
+# on it and on none of its 7 siblings. Meanwhile 21 of the 39 name a macro in
+# `compiled_out.GUARD_DENY` -- exactly the ones the CODE refuses to reason about, and the PROMPT
+# named none of them. The sub-clause about the CITED LINE sitting inside an `#if` went with it:
+# its own author measured it 0-of-3, and its trigger is noise (4 of 44 corpus_ship top-frame
+# crash lines sit inside an `#if`, and 3 of those 4 are include guards -- GLCONTEXT_H_,
+# SANDBOX_WIN_SRC_POLICY_ENGINE_PARAMS_H_ -- or MOZ_HAS_MOZGLUE).
+#
+# WHAT STAYED IS THE CONTEXT, NOT THE INSTRUMENT. Deleting the idea, or reverting `defe860`
+# (`fail` -> `unverifiable`), or restricting `fail` to macros the walk can resolve, each turns
+# ~38% of the correct noise-kills back into filed leads: the PLATFORM shape is 15 of the 39
+# build-guard fails and 3 of the 8 BINDING vetoes in that month, and it is right every time
+# (crash 560c0f2f-07cc-46c6-950c-1d8240260731, Windows nightly, a candidate touching 4 of 6 files
+# under `widget/gtk/`). The three limits below are the deny-list the code already had, the `OS:`
+# line `triage._crash_facts` already puts in this prompt, and the pref caveat that nothing had.
+#
+# THE THREE MACRO LISTS ARE RENDERED FROM `compiled_out` so the prompt and the gate cannot drift
+# -- `tests/test_compiled_out_guard.py` pins that all 20 are present.
+_COMPILED_OUT = (
+    "ONE THING THAT LOOKS LIKE A HOLE AND IS NOT: code that is not in THIS build. A symbol can "
+    "be real, findable and linked while doing NOTHING because its whole body sits inside "
+    "`#ifdef X` — `js::gc::AutoMarkingLock` (`js/src/gc/Cell.h`, \"a no op outside "
+    "concurrent marking builds\") refuted three of our filings. So ask it of every symbol the "
+    "MECHANISM DEPENDS ON, not just the ones you cited, reading bodies with "
+    "`mcp__source__raw_file`. Machinery absent from the build that crashed makes the candidate "
+    "demonstrably UNRELATED: that is `fail`, not `unverifiable`. THREE LIMITS, because a wrong "
+    "\"off\" silently kills a good lead. (1) Never conclude \"off\" for {channel_on}: they are "
+    "ON in the nightly we analyse (an opt build DEFINES `NDEBUG`), and 9-11% of the crashes we "
+    "analyse are MOZ_DIAGNOSTIC_ASSERT crashes. {build_type_off} are the opposite — an "
+    "official Nightly is an OPT build, so "
+    "\"this `#ifdef DEBUG` assertion is not in the shipped binary\" is true and free; read that "
+    "off the build type, never off `moz.configure`. (2) A PLATFORM macro ({platform}) is "
+    "answered by this report\'s own `OS:` line above, never by a `moz.configure` walk. (3) A "
+    "path reachable only when a `StaticPrefList.yaml` pref is on is `unverifiable`, NEVER "
+    "`fail`: the YAML default is not what shipped (16 prefs ship the opposite value from "
+    "firefox.js; 82 more default to a nightly-on build template). And a `moz.configure` default "
+    "is evidence, not proof — a mozconfig can turn a default-off switch on — so a "
+    "`fail` resting only on one is re-checked in code; say in your note which ground you used. "
+).format(
+    channel_on=", ".join(sorted(compiled_out.CHANNEL_ON_DENY)),
+    build_type_off=", ".join(sorted(compiled_out.BUILD_TYPE_DENY - compiled_out.CHANNEL_ON_DENY)),
+    platform=", ".join(sorted(compiled_out.PLATFORM_DENY)),
 )
 
 _ROLES: dict[str, dict] = {
@@ -179,28 +232,8 @@ _ROLES: dict[str, dict] = {
         "mechanism you simply cannot verify end-to-end is `unverifiable` (it lowers confidence "
         "but KEEPS the lead) — NOT `fail`: a credible-but-unproven clue is exactly what we "
         "want to surface. Use `unverifiable` for searchfox holes such as virtual/IPC/FFI/"
-        "macro/template edges. ONE THING THAT LOOKS LIKE A HOLE AND IS NOT: code that was "
-        "never compiled into this build. Ask it of every symbol the MECHANISM DEPENDS ON, not "
-        "just the ones you cited — the lock, flag or helper whose existence makes the story "
-        "work. A symbol can be perfectly real, findable in searchfox and compiled into the "
-        "binary while doing NOTHING, because its body is wrapped in `#ifdef X`: "
-        "`js::gc::AutoMarkingLock` is exactly this (`js/src/gc/Cell.h`, \"This is a no op "
-        "outside concurrent marking builds\") and it refuted three of our filings. So when a "
-        "mechanism turns on a lock/barrier/assert/counter, OPEN ITS DEFINITION with "
-        "`mcp__source__raw_file` and read whether the body is guarded. If it is guarded, or a "
-        "cited line itself sits inside `#ifdef X` / `#if defined(X)`, find out whether X is "
-        "actually defined in THIS build before accepting the mechanism — "
-        "`mcp__searchfox__search` for X lands on the "
-        "`set_define(\"X\", ...)` in a `moz.configure`, and `mcp__source__raw_file` reads the "
-        "`option()` above it. Read its DEFAULT: `option(\"--enable-X\")` with no `default=` is "
-        "OFF unless someone asked for it; `option(\"--disable-X\")` is ON. Default-off, with no "
-        "override in the crash annotations, means that code did not run in the binary that "
-        "crashed — a mechanism resting on it cannot be the cause and the candidate is "
-        "demonstrably UNRELATED, so `fail` it and cite the `moz.configure` line you read. Same for a path reachable only when a "
-        "`StaticPrefList.yaml` pref is on: read the pref's default. `unverifiable` is the wrong "
-        "answer here — \"could not confirm whether this Nightly compiles X\" is the note a module "
-        "owner had to correct by hand on bug 2063782. Only when you cannot find the option at "
-        "all is this `unverifiable`. A claim without a fresh citation cannot pass. A fault-address↔field "
+        "macro/template edges. " + _COMPILED_OUT + "A claim without a fresh citation "
+        "cannot pass. A fault-address↔field "
         "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (with namespaces, no template `<...>` args — "
         "e.g. `mozilla::detail::nsTStringRepr`) and mark it `pass` (with a "

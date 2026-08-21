@@ -40,19 +40,55 @@ import re
 from .logger import logger
 
 # Macros we will not reason about even if the resolver somehow answers, because being wrong about
-# them is expensive and being right adds nothing. `NIGHTLY_BUILD` and `EARLY_BETA_OR_EARLIER` are
-# ON in the only channel we analyse; `DEBUG`/`MOZ_DIAGNOSTIC_ASSERT_ENABLED` decide whether an
-# assertion exists, which is a different question from whether a mechanism can happen; platform
-# macros are answered by the crash's own OS, not by moz.configure. Measured: none of these can
-# reach `_option_is_default_off` anyway -- `NIGHTLY_BUILD`/`EARLY_BETA_OR_EARLIER` are fed by
-# `milestone.*` rather than an `option()`, and `DEBUG`/`MOZ_DIAGNOSTIC_ASSERT_ENABLED` have no
-# `set_define` at all -- so this list is a second lock on a door that is already shut.
-GUARD_DENY = frozenset({
-    "DEBUG", "NDEBUG", "MOZ_DIAGNOSTIC_ASSERT_ENABLED", "MOZ_ASSERT_ENABLED",
-    "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER", "RELEASE_OR_BETA", "MOZILLA_OFFICIAL",
+# them is expensive and being right adds nothing. THREE lists, and the split is load-bearing: the
+# skeptic prompt says something DIFFERENT about each (`agent.roles._COMPILED_OUT` renders all
+# three, so prompt and gate cannot drift) and `is_build_flag_ground` reads them apart.
+#
+# CHANNEL_ON -- ON in the nightly we analyse, so "off" is simply the wrong answer.
+# `MOZ_DIAGNOSTIC_ASSERT_ENABLED` is the expensive one: 9-11% of the crashes we analyse are
+# MOZ_DIAGNOSTIC_ASSERT crashes (23/255 corpus_study, 9/83 corpus_ship, 20/216 corpus_neg75; 1106
+# nightly reports in 30 days). `NDEBUG` is the counter-intuitive one and it belongs HERE, not
+# with `DEBUG`: `moz.configure`'s `debug_defines` returns `["DEBUG", ...]` for a debug build and
+# `["NDEBUG", "TRIMMED"]` otherwise, so an official opt Nightly DEFINES `NDEBUG` and
+# `#ifdef NDEBUG` code is exactly the code that shipped. The one skeptic claim in the whole
+# 8901-claim dump that mentions it says so itself -- "Nightly defines NDEBUG" (ANGLE asserts,
+# a `pass`) -- so putting it on the "off" side would contradict the model's own correct read.
+#
+# THE REST OF BUILD_TYPE IS THE OPPOSITE CASE, and that distinction is measured rather than
+# assumed. An official Nightly is an OPT build, so "this `#ifdef DEBUG` assertion is not in the
+# shipped binary" is TRUE and free -- `mfbt/Assertions.h:563` is `#ifdef DEBUG` around
+# `MOZ_ASSERT` with a `do {} while (false)` #else -- and 4 of the 21 real skeptic notes that
+# reach `is_build_flag_ground` on the 1996-dossier dump are exactly that shape, all 4 correct.
+# What is wrong is reaching the same conclusion through a moz.configure walk. Same for
+# `RELEASE_OR_BETA`, which really is off on nightly.
+#
+# PLATFORM -- answered by the crash's own `OS:` line (`triage._crash_facts`), not by
+# moz.configure. There is no `option()` behind `MOZ_WIDGET_GTK` for a walk to find anyway.
+#
+# THIS LIST IS THE LOCK, NOT A SECOND LOCK. An earlier version of this comment said
+# `DEBUG`/`MOZ_DIAGNOSTIC_ASSERT_ENABLED` "have no `set_define` at all". That is FALSE for the
+# second one: moz.configure:174-178 is `set_define("MOZ_DIAGNOSTIC_ASSERT_ENABLED", True,
+# when=moz_debug | milestone.is_nightly | moz_dev_edition)`, and the nearest `option()` above it
+# is `option("--enable-debug", nargs="?")` with NO `default=` -- literally the shape the walk
+# below calls "off unless someone asks for it", for a macro that is on in every Nightly. What
+# actually keeps it out of `_option_is_default_off` is the REGEX: the walk only accepts a BARE
+# IDENTIFIER second argument (`set_define("MOZ_DEBUG", moz_debug)`, moz.configure:153), and this
+# one passes `True` plus a `when=` keyword. `DEBUG`/`NDEBUG` really do have no `set_define`
+# (moz.configure:187-194 folds them into the `MOZ_DEBUG_DEFINES` *list* via `set_config`), but
+# that is an accident of how one file happens to be written today. Do not thin any of the three
+# lists on the strength of it.
+CHANNEL_ON_DENY = frozenset({
+    "MOZ_DIAGNOSTIC_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
+    "MOZILLA_OFFICIAL", "NDEBUG",
+})
+BUILD_TYPE_DENY = CHANNEL_ON_DENY | frozenset({
+    "DEBUG", "MOZ_ASSERT_ENABLED", "RELEASE_OR_BETA",
+})
+PLATFORM_DENY = frozenset({
     "XP_WIN", "XP_UNIX", "XP_LINUX", "XP_MACOSX", "XP_DARWIN", "XP_IOS", "ANDROID",
     "MOZ_WIDGET_GTK", "MOZ_WIDGET_ANDROID", "MOZ_WIDGET_COCOA", "MOZ_X11", "MOZ_WAYLAND",
 })
+GUARD_DENY = BUILD_TYPE_DENY | PLATFORM_DENY
 
 # How many identifiers off the candidate's diff are worth a searchfox lookup. The diff is ranked
 # by how often an identifier appears in CHANGED lines, because the thing a patch is about is the
@@ -180,14 +216,30 @@ def guard_macros(text):
 
 
 def _configure_text(path, channel, rev):
-    """The text of a ``moz.configure`` AS OF the crash build, or ``""``."""
+    """The text of a ``moz.configure`` AS OF the crash build, or ``""``.
+
+    AN EMPTY ANSWER IS A DEAD GATE, NOT A VERDICT, so it is LOGGED. All
+    ``_option_is_default_off`` can do with it is ``continue``, which is indistinguishable
+    from "this macro is not established off" -- i.e. the whole compiled-out suppression
+    silently stops existing, with the corroborations that would make it countable never
+    written. That is one misconfiguration away: the caller passes ``pin_rev``, an empty
+    ``pin_rev`` falls back to ``tip``, and m-c ``tip`` is periodically a ``.hgtags``-only
+    commit whose manifest holds no ``js/moz.configure`` at all (hg-edge then answers 404,
+    "not found in manifest"). The gate works today only because ``2d71e11`` made the pinned
+    read resolve; nothing anywhere would have said so if it had not."""
     from . import hgedge
 
     try:
-        return hgedge.raw_file(path, rev or "tip", channel or "nightly") or ""
+        text = hgedge.raw_file(path, rev or "tip", channel or "nightly") or ""
     except Exception as exc:                       # pragma: no cover - network
-        logger.warning("compiled_out: cannot read %s: %s", path, exc)
+        logger.warning("compiled_out: cannot read %s@%s: %s", path, rev or "tip", exc)
         return ""
+    if not text:
+        logger.warning(
+            "compiled_out: %s@%s came back EMPTY -- the guard walk cannot answer, so nothing will "
+            "be suppressed on this run (rev=%r, channel=%r). Check pin_rev.",
+            path, rev or "tip", rev, channel)
+    return text
 
 
 def _option_call(text, switch):
@@ -228,9 +280,22 @@ def _option_is_default_off(macro, client, channel="nightly", rev=""):
 
     Three things fall off that walk on purpose, and they are the ones that would hurt:
     ``NIGHTLY_BUILD`` and ``EARLY_BETA_OR_EARLIER`` are fed by ``milestone.*`` rather than a
-    function, so step one finds no bare name; ``DEBUG`` and ``MOZ_DIAGNOSTIC_ASSERT_ENABLED``
-    have no ``set_define`` at all; and a switch carrying any ``default=`` is an expression we
-    decline to evaluate."""
+    function, so step one finds no bare name; ``MOZ_DIAGNOSTIC_ASSERT_ENABLED`` DOES have a
+    ``set_define`` (moz.configure:174) and is kept out by the bare-identifier regex plus
+    :data:`CHANNEL_ON_DENY`, not by its absence; and a switch carrying any ``default=`` is
+    an expression we decline to evaluate.
+
+    AND THE ORACLE IS WRONG WHERE IT WAS MEASURED, which is why nothing may treat a ``True``
+    from here as proof on its own. Walking ``js/moz.configure`` at a real build node
+    (8e966e6c894a) labels 9 macros default-off and 3 of those 9 are ON in official Nightly:
+    ``MOZ_RUST_SIMD`` (``ac_add_options --enable-rust-simd`` in ``build/mozconfig.rust``,
+    inherited by every official build), ``MOZ_INSTRUMENTS``
+    (``browser/config/mozconfigs/macosx64/nightly``) and ``MOZ_PROFILING`` (implied by it at
+    js/moz.configure:342). THIS WALK NEVER READS A MOZCONFIG. It is safe where it is used
+    because :func:`hollow_symbols` additionally requires the symbol's whole body to vanish
+    with the macro off -- a far rarer shape (1 symbol in 274 across the 56-filing corpus) --
+    and it is why :func:`is_build_flag_ground` refuses to let an LLM run the same walk in
+    prose and bind a verdict on the answer."""
     try:
         hits = client.search('set_define("%s"' % macro, limit=4)
     except Exception as exc:                       # pragma: no cover - network/binary
@@ -245,7 +310,7 @@ def _option_is_default_off(macro, client, channel="nightly", rev=""):
             continue                               # `milestone.is_nightly` -- not a switch
         text = _configure_text(hit.file, channel, rev)
         if not text:
-            continue
+            continue                               # unreadable (logged), NOT 'not off'
         switches = _switches_for(text, m.group(1))
         # A `--disable-x` switch means the feature is ON unless someone turns it off, and any
         # `default=` is an expression we will not guess at. Either way: not established off.
@@ -318,3 +383,149 @@ def hollow_symbols(symbols, client=None, channel="nightly", rev=""):
                 found[symbol] = {"macro": macro, "functions": functions}
                 break
     return found
+
+
+# --------------------------------------------------------------------------- #
+# Does a skeptic `fail` REST on a compile-flag claim?
+# --------------------------------------------------------------------------- #
+# THE TWO VETOES ON THE VETO, both checked before the predicate can fire, both measured on the
+# 1996-dossier prod dump (spike/_dossier_dump.jsonl, 2026-07-06..08-05).
+#
+# PLATFORM is deliberately WIDER than PLATFORM_DENY, because the skeptic writes prose, not macro
+# names. It is what keeps 15 of the 39 build-guard fails (3 of the 8 binding vetoes) intact.
+_PLATFORM_GROUND = re.compile(
+    r"\b(?:%s|windows|win32|win64|linux|macos|mac ?os ?x|osx|darwin|android|ios|gtk\d?|"
+    r"wayland|x11|cocoa|widget/(?:gtk|android|cocoa|windows))\b"
+    % "|".join(sorted(PLATFORM_DENY)), re.I)
+# BUILD TYPE is the other thing a build answers for free: an official Nightly is an opt build, so
+# `#ifdef DEBUG` code is genuinely not in it. CASE-SENSITIVE on purpose -- a lowercase "debug
+# tooling" is a WebRender cargo-feature note, which must still unbind. `NDEBUG` is deliberately
+# NOT here: an opt build DEFINES it (:data:`CHANNEL_ON_DENY`), so "this `#ifdef NDEBUG` code is
+# not in the build" is wrong by construction and must NOT be given a veto that makes it bind.
+_BUILD_TYPE_GROUND = re.compile(r"\b(?:DEBUG|MOZ_ASSERT\w*|RELEASE_OR_BETA)\b")
+_OPT_BUILD_GROUND = re.compile(r"\b(?:opt|non-?debug|release) (?:build|nightly)", re.I)
+
+# The two halves of a build-flag GROUND, required together: a macro-shaped token or a
+# configure/preprocessor word, AND a "the compiler left it out" conclusion. Requiring both is what
+# keeps "the field is not defined on that type" and "line 2165 is not present in the diff" --
+# ordinary contradiction fails -- out of this predicate entirely.
+_MACRO_TOKEN = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+_BUILD_FLAG_WORDS = re.compile(
+    r"moz\.configure|set_define|--(?:enable|disable)-[\w-]+|#\s*if(?:n?def)?\b|\bifdef\b|"
+    r"\bcompiled (?:in|into|out)\b|\bcompile[- ]time\b|\bbuild[- ]time\b|\bpreprocessor\b|"
+    r"\bconfigure (?:switch|option|flag)\b", re.I)
+# The conclusion comes in TWO TIERS, and that split is a replay result rather than taste. Tier 1
+# is compile-specific enough to stand next to a bare macro name. Tier 2 ("off by default") is the
+# vocabulary of PREFS and enum flags as much as of the build, so it only counts beside an actual
+# build-flag word: on the dump, `ClearCache::RENDER_TARGETS only drains render_target_pool ...
+# feature is pref-gated off by default` is a structural noise-kill that reads as a build claim
+# the moment you accept any ALL_CAPS token plus any "off".
+_OFF_COMPILED = re.compile(
+    r"\bnot (?:compiled|defined|built)\b|\bundefined\b|\bcompiled out\b|\bnever compiled\b|"
+    r"\bnot (?:in|present in|part of) (?:this|the) build\b", re.I)
+_OFF_DEFAULT = re.compile(
+    r"\bdefault[- ]off\b|\boff by default\b|\bdisabled by default\b|"
+    r"\bnot (?:enabled|set|turned on|available)\b|\b(?:is|was|are|were) off\b(?!-)", re.I)
+
+
+def is_build_flag_ground(note, citations=()):
+    """Does this skeptic ``fail`` rest on "a CONFIGURE SWITCH kept this code out of the binary"?
+
+    A question about the claim's GROUND, not its conclusion.
+    ``agent.schema.Dossier._skeptic_veto`` uses it to decide whether a ``fail`` may turn a LEAD
+    into an ABSTAIN; ``True`` means it may not, unless the deterministic gate agrees.
+
+    WHY THE BINDING DECISION MOVED INTO CODE. Measured over 1996 prod dossiers
+    (2026-07-06..08-05; 8901 skeptic claims, 1765 ``fail``): 124 claims reason about a build
+    guard and 39 of them ``fail``. The ``set_define`` -> ``option()`` -> ``default=`` walk the
+    prompt used to spell out serves 2 of those 39, and BOTH of those filings (2063782, 2063902)
+    are now suppressed with no LLM at all by ``_apply_compiled_out_gate``, off a hollow symbol
+    the diff ranker puts #1 of 8. That walk is a four-hop chain (symbol -> ``#ifdef`` ->
+    ``set_define`` -> ``option``) run by the cheapest model tier, its oracle is measurably wrong
+    3 times in 9 (see :func:`_option_is_default_off`), and its consequence is the harshest one we
+    have -- an abstain, which files nothing, skips the second opinion and never reaches
+    ``Feedback``, so a false one is invisible forever. The LLM keeps the doubt (its note still
+    rides the dossier and the bug comment); the deterministic gate keeps the teeth.
+
+    REPLAYED, because a rule whose failure mode is a false abstain cannot be audited by outcome.
+    Over the same 1996 dossiers this predicate fires on 5 of 1765 ``fail``s (0.3%) and changes
+    the outcome of 0 of the 216 stored (1b) vetoes. The five are the shapes it is for: the
+    concurrent-marking pair (``--enable-gc-concurrent-marking``, ``JS_GC_CONCURRENT_MARKING
+    undefined``), two WebRender ``#[cfg(feature = "replay")]`` notes, and a packaging script
+    "never compiled/linked into any shipped Firefox binary". Note the corpus PREDATES the clause
+    (``defe860`` landed 2026-08-21, the dump ends 08-05), so 0-of-216 is a statement of
+    NARROWNESS, not of uselessness: the guard exists for what that clause will now produce.
+
+    THE COUNTER-EXAMPLE THIS MUST NOT EAT -- crash 560c0f2f-07cc-46c6-950c-1d8240260731 (Firefox
+    nightly 20260730132738, Windows NT 10.0.19044, signature ``mozilla::FileBlockCache::Flush``).
+    Its only candidate, ``ff789e9f149e``, touches 6 files of which 4 are under ``widget/gtk/``;
+    the skeptic ``fail``ed it with "GTK-gated Linux ibus/fcitx key-event plumbing, not compiled
+    into Windows builds" and that fail was BINDING and RIGHT. That shape is 15 of the 39
+    build-guard fails and 3 of the 8 binding vetoes in the month (sibling:
+    8b7edf2e-7e4f-4a44-9b6d-a92370260731, same candidate, ``shutdownhang |
+    InfallibleQuoteJSONString``). The deterministic gate is designed never to see it --
+    ``_option_is_default_off`` returns False for all 20 :data:`GUARD_DENY` macros, verified 20/20
+    at a real pinned node -- and there is no ``option()`` behind ``MOZ_WIDGET_GTK`` for the walk
+    to find either. Hence :data:`_PLATFORM_GROUND`, checked first: a platform claim is one of the
+    two build questions a crash report answers by itself, from the ``OS:`` line
+    ``triage._crash_facts`` puts in every prompt. :data:`_BUILD_TYPE_GROUND` is the other, and it
+    was found the same way -- 4 of the 21 notes the first draft of this predicate fired on were
+    "`#ifdef DEBUG` / `MOZ_ASSERT` is compiled out of the opt Nightly", which is simply TRUE
+    (``mfbt/Assertions.h:563`` is `#ifdef DEBUG` around `MOZ_ASSERT`, `do {} while (false)`
+    otherwise) and cost nothing to establish. ``NDEBUG`` LOOKS LIKE IT BELONGS IN THAT VETO AND
+    MUST NOT BE PUT THERE: `moz.configure`'s ``debug_defines`` emits ``["NDEBUG", "TRIMMED"]``
+    for a non-debug build, so the opt Nightly DEFINES it and "`#ifdef NDEBUG` code is not in
+    this build" is false. It is in :data:`CHANNEL_ON_DENY`, which forces this predicate True, so
+    such a ``fail`` unbinds instead of silently abstaining a lead.
+
+    TWO THINGS THE REPLAY REFUTED, both in the first draft, both dropped:
+
+    * A PREF ARM. ``StaticPrefList``/``pref`` looked like a third ground (the prompt does route
+      pref-gated paths to ``unverifiable``). On the dump it fires on 8 notes and in 7 of them the
+      pref clause is an ADJUNCT to a structural kill -- "only drains render_target_pool, never
+      touches cached_render_tasks; feature is pref-gated off by default" -- while the 8th is the
+      skeptic REFUTING a pref argument ("Pref actually defaults to 2 ... the 'disabled by
+      default' mitigating argument was wrong"). It caused both of the two outcome changes the
+      first draft would have made, and both were wrong. Prefs stay in the PROMPT only.
+    * ``default=`` AS AN OFF-CONCLUSION. It reads as "off" but a note that contains it usually
+      says ``default=True`` -- the opposite -- and via the citations it silently fired on a
+      blame-attribution kill (``seed_candidate_9005591b06bb``: "blame attributes every line to
+      older, unrelated bugs"). Only ``no default=``-style prose survives, through the other
+      alternatives.
+    * "OFF BY DEFAULT" BESIDE A BARE ALL-CAPS TOKEN. It caught a sixth note,
+      ``ClearCache::RENDER_TARGETS only drains render_target_pool, never touches
+      cached_render_tasks; feature is pref-gated off by default`` -- an enum variant and a pref,
+      read as a macro and a build flag. Hence the two OFF tiers: "off by default" now needs a
+      real build-flag WORD beside it, while "not compiled"/"undefined" can stand next to a bare
+      macro.
+
+    FALSE-FIRE DIRECTION, stated because this is a regex over free text. It fires when the text
+    carries BOTH a build-flag token and an "off" conclusion and NEITHER a platform nor a
+    build-type word, so it also unbinds a correct kill the deterministic gate cannot see -- a
+    cargo feature, ``USE_MEMFD_CREATE``, a build-only packaging script: the "other 11 of 39"
+    bucket, 3 of the 5 it fires on. Those leads get FILED instead of dropped, which is the
+    recoverable direction under the worth-investigating pivot (a needinfo a human closes, rather
+    than an abstain nobody can count) but is a real cost. And a ``fail`` that contradicts a
+    citation AND mentions a flag in the same note unbinds too -- except that the skeptic emits
+    one result per CLAIM, so an unrelated contradiction normally lives in its own
+    ``SkepticResult`` and still binds, which is exactly why ``_skeptic_veto`` applies this per
+    result and not per dossier."""
+    text = " ".join([note or ""] + [str(c) for c in (citations or [])])
+    if not text.strip():
+        return False
+    off_hard = bool(_OFF_COMPILED.search(text))
+    if _BUILD_FLAG_WORDS.search(text):
+        grounded = off_hard or bool(_OFF_DEFAULT.search(text))
+    else:
+        grounded = off_hard and bool(_MACRO_TOKEN.search(text))
+    if not grounded:
+        return False
+    if _PLATFORM_GROUND.search(text):
+        return False
+    # A CHANNEL_ON macro is checked BEFORE the build-type veto: `MOZ_DIAGNOSTIC_ASSERT_ENABLED is
+    # off` is wrong by construction even when the same note also says `#ifdef DEBUG`.
+    if any(re.search(r"\b%s\b" % m, text) for m in CHANNEL_ON_DENY):
+        return True
+    if _BUILD_TYPE_GROUND.search(text) or _OPT_BUILD_GROUND.search(text):
+        return False
+    return True

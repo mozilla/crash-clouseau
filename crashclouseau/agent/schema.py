@@ -12,8 +12,10 @@ JSON-schema exported to any API: structured output is validated *after* parse, a
 validation failure it SALVAGES — keeps the sub-objects (and verdict) that validate,
 drops the ones that don't — so a single malformed optional field can't discard a
 properly-cited verdict; a verdict that fails its own grounding rules is still forced
-to abstain. Only stdlib + pydantic + ``config``/``logger`` are imported here (no
-db/SDK/network).
+to abstain. Only stdlib + pydantic + ``config``/``logger`` are imported at module scope
+here (no db/SDK/network); ``_skeptic_veto`` additionally does a LOCAL import of
+``crashclouseau.compiled_out``, which is pure stdlib ``re`` + ``logger`` at import time and
+keeps its own hgedge/searchfox imports lazy, so the no-network property is unchanged.
 """
 from __future__ import annotations
 
@@ -570,9 +572,10 @@ class Verdict(BaseModel):
             # reaches `high` (``_apply_corroboration_gate`` raises a corroborated lead only to
             # `probable`, not `high`), so a lead's `high` is clamped one notch to `probable`.
             # The noise guard is NOT this clamp: it is the abstain decision + the
-            # (noise-focused) skeptic — a skeptic `fail` demotes a lead to abstain, and an
-            # anchorless lead is demoted too (``_skeptic_veto``) — which is what protects
-            # against sending people after noise.
+            # (noise-focused) skeptic — a skeptic `fail` demotes a lead to abstain (unless
+            # its ground is a configure-switch claim: ``_skeptic_veto`` (1c)), and an
+            # anchorless lead is demoted too — which is what protects against sending
+            # people after noise.
             if self.confidence == Confidence.high:
                 self.confidence = Confidence.probable
         elif self.decision == Decision.abstain:
@@ -670,13 +673,43 @@ class Dossier(BaseModel):
         unproven (that is ``unverifiable``, which KEEPS the lead). We do not push a lead the
         skeptic flagged as noise — this is the teeth the reoriented skeptic needs on leads.
 
+        (1c) A ``fail`` whose STATED GROUND is a configure-switch compile-flag claim does
+        NOT bind on a lead — it is treated exactly like ``unverifiable`` — unless the
+        deterministic gate agrees (``corroborations['compiled_out_suppressed']``). The
+        invariant this buys: such a ``fail`` costs a verdict its STRONG-EVIDENCE status
+        (rule 1 is untouched) but never its existence. Rationale, the replay panel and the
+        GTK-on-Windows counter-example it must not eat: ``compiled_out.is_build_flag_ground``
+        — in short, that ``fail`` is the one place where the cheapest model tier walks the
+        longest multi-hop chain (symbol -> ``#ifdef`` -> ``set_define`` -> ``option``) for
+        the harshest consequence we have, and an abstain reaches no scoreboard, so a wrong
+        one is invisible. Note the ordering: ``_apply_compiled_out_gate`` runs much LATER
+        (in ``apply_deterministic_gates``), so live the corroboration is never set by the
+        time this runs and it always unbinds — the gate then does the suppressing itself,
+        deterministically. The clause earns its keep on a RE-VALIDATED stored payload,
+        where the flag IS present and must not be undone.
+
         (2) ANY surviving lead must carry a cited anchor; an anchorless lead is demoted to
         abstain (nothing to hand a human)."""
+        # Local: this module's contract is stdlib + pydantic + config/logger, and
+        # ``compiled_out`` lazily imports hgedge/searchfox. Cheap after the first call.
+        from crashclouseau import compiled_out
+
         v = self.verdict
         if v is None:
             return self
-        failed = [s.claim_ref for s in self.skeptic
-                  if s.status == SkepticStatus.failed]
+        # Split the fails by what they REST ON, not by what they conclude (1c). Per RESULT,
+        # because the skeptic emits one per claim: a genuine contradiction sitting in its
+        # own entry must keep its teeth even when another entry cites a configure switch.
+        gate_agrees = bool((self.corroborations or {}).get("compiled_out_suppressed"))
+        failed, binding, unbound = [], [], []
+        for s in self.skeptic:
+            if s.status != SkepticStatus.failed:
+                continue
+            failed.append(s.claim_ref)
+            if not gate_agrees and compiled_out.is_build_flag_ground(s.note, s.citations):
+                unbound.append(s.claim_ref)
+            else:
+                binding.append(s.claim_ref)
         # (1) Skeptic ladder on a strong-evidence verdict.
         if v.decision == Decision.strong_evidence and failed:
             detail = "skeptic refuted the mechanism (failed: {})".format(
@@ -697,13 +730,24 @@ class Dossier(BaseModel):
                     abstain_reason=detail + "; no cited candidate/hunk/edge remains",
                 )
         # (1b) A skeptic fail on a model-emitted lead = noise -> abstain (guardrail teeth).
-        elif v.decision == Decision.lead and failed:
+        elif v.decision == Decision.lead and binding:
             self.verdict = Verdict(
                 decision=Decision.abstain,
                 confidence=Confidence.low,
                 abstain_reason="skeptic flagged this lead as noise / unrelated "
-                               "(failed: {})".format(", ".join(failed) or "?"),
+                               "(failed: {})".format(", ".join(binding) or "?"),
             )
+        # (1c) The only fails left rest on a configure-switch claim, which the deterministic
+        # compiled-out gate decides. Keep the lead and RECORD it, so a rule whose whole
+        # failure mode is a false abstain is countable instead of invisible.
+        elif v.decision == Decision.lead and unbound:
+            self.corroborations = {
+                **(self.corroborations or {}),
+                "skeptic_build_flag_unbound": unbound,
+            }
+            logger.info("schema: skeptic fail(s) %s rest on a configure-switch claim, not on this "
+                        "crash's own facts; lead kept (the compiled-out gate decides that)",
+                        ", ".join(unbound) or "?")
         # (2) A lead (from the ladder OR emitted directly) needs a cited anchor.
         if self.verdict.decision == Decision.lead and not self._has_lead_anchor():
             self.verdict = Verdict(
