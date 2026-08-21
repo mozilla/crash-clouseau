@@ -22,6 +22,25 @@ from unittest import mock  # noqa: E402
 from crashclouseau import db, models  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 
+# This module drives `run_evidence_agent` end to end, and one step of it is ONLINE:
+# `_resolve_compiled_out` asks searchfox whether the mechanism's machinery is compiled into the
+# build, and fetches the candidate's diff. Against this file's synthetic nodes and symbols those
+# are pure cost -- a 404 with retries per run -- so the resolver is stubbed for the module. Its
+# behaviour, AND the fact that `run_evidence_agent` really does call it, are covered by
+# `tests/test_compiled_out_gate.py`, so stubbing it here cannot hide a wiring regression.
+_NO_ONLINE_LOOKUP = None
+
+
+def setUpModule():
+    global _NO_ONLINE_LOOKUP
+    _NO_ONLINE_LOOKUP = mock.patch.object(orch, "_resolve_compiled_out")
+    _NO_ONLINE_LOOKUP.start()
+
+
+def tearDownModule():
+    _NO_ONLINE_LOOKUP.stop()
+
+
 _UUID = "11111111-2222-3333-4444-555555602607"  # uuids.uuid is String(36)
 
 

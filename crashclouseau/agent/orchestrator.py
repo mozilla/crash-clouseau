@@ -2043,6 +2043,93 @@ def _apply_bit_flip_gate(dossier, seed):
     )
 
 
+def _resolve_compiled_out(dossier, seed):
+    """Ask searchfox whether the mechanism's own machinery is compiled into this build, and
+    store the answer on the seed for ``_apply_compiled_out_gate`` to act on.
+
+    ONLINE ONLY, and deliberately not inside ``apply_deterministic_gates`` — the same split as
+    ``_resolve_candidate_backout``, and for the same reason: that function is shared with the
+    offline eval runner, which must stay network-free. Resolve here, decide there.
+
+    Costs a handful of ``searchfox --define`` lookups plus one cached ``raw-rev`` fetch, and only
+    for a verdict that is still reportable after every free gate above has had its chance — the
+    ~80% of runs that abstain pay nothing. Best-effort: a failed lookup records nothing, and the
+    gate then treats the mechanism as fine. Never suppress on a lookup failure."""
+    v = getattr(dossier, "verdict", None)
+    if v is None or v.decision == Decision.abstain or getattr(v, "mechanism", None) is None:
+        return
+    from crashclouseau import compiled_out
+    from crashclouseau.agent import patch_extract
+
+    channel = (seed or {}).get("channel") or "nightly"
+    cand = getattr(dossier, "candidate", None)
+    diff = ""
+    if cand is not None and getattr(cand, "node", ""):
+        diff = patch_extract.fetch_raw_diff(cand.node, channel) or ""
+    symbols = compiled_out.mechanism_symbols(v.mechanism, diff)
+    if not symbols:
+        return
+    try:
+        hollow = compiled_out.hollow_symbols(
+            symbols, channel=channel, rev=(seed or {}).get("pin_rev") or "")
+    except Exception:  # pragma: no cover - defensive; never break a verdict
+        logger.warning("agent: compiled-out lookup failed for %s",
+                       (seed or {}).get("uuid"), exc_info=True)
+        return
+    if hollow:
+        symbol, found = sorted(hollow.items())[0]
+        seed["compiled_out"] = {"symbol": symbol, **found}
+
+
+def _apply_compiled_out_gate(dossier, seed):
+    """SUPPRESS a verdict whose mechanism rests on code that is not in the build that crashed.
+
+    Three of the four module-owner refutations of our `Core :: JavaScript*` filings are this, all
+    three from Jon Coppeard and all three about concurrent marking — "It does not" (2063782),
+    "Concurrent marking is not compiled in by default" (2063902), "not present in any release
+    builds so is not relevant to these crashes" (2062114). Two of them named the SAME changeset,
+    by Coppeard: a subsystem behind a default-off flag fills the pushlog window with commits whose
+    code cannot run, so it manufactures false regressors faster than anything else we have seen.
+
+    THE TEST IS ON THE SYMBOL'S BODY, not on the citation's line, and that distinction was
+    measured rather than assumed — see ``compiled_out``. PURE: ``_resolve_compiled_out`` did the
+    looking up, so offline the seed simply lacks the key and this no-ops, the same documented
+    fidelity gap as ``prior_hints`` and the backout gate.
+
+    Back-tested over all 56 filings: fires on exactly 2, both refuted by their module owner for
+    exactly this reason, and on 0 of the 16 a human FIXED or duplicated. That is why it suppresses
+    rather than merely recording — but the corroborations are written whenever a hollow symbol is
+    found, so a future false positive is countable rather than invisible."""
+    v = getattr(dossier, "verdict", None)
+    found = (seed or {}).get("compiled_out")
+    if v is None or v.decision == Decision.abstain or not found:
+        return
+    symbol, macro = found.get("symbol"), found.get("macro")
+    reason = (
+        "the mechanism rests on `{}`, which is a NO-OP in this build: its {} body is entirely "
+        "inside `#ifdef {}`, and `{}` comes from a moz.configure switch that is off unless "
+        "someone asks for it. The symbol is real and compiles; it simply does nothing here, so "
+        "no story that depends on it can be what crashed. Suppressed rather than reported"
+        .format(symbol, "/".join((found.get("functions") or [])[:3]), macro, macro)
+    )
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=reason,
+        mechanism=v.mechanism,
+        consistency=v.consistency,
+    )
+    dossier.corroborations = {
+        **(dossier.corroborations or {}),
+        "compiled_out_symbol": symbol,
+        "compiled_out_macro": macro,
+        "compiled_out_suppressed": True,
+    }
+    logger.info("agent: compiled_out_suppressed (%s is a no-op without %s) -> %s/%s "
+                "suppressed to abstain for %s", symbol, macro,
+                v.decision.value, v.confidence.value, (seed or {}).get("uuid"))
+
+
 def _apply_is_backout_gate(dossier, seed):
     """The candidate IS ITSELF a backout. Two different things follow, so this is two rules.
 
@@ -2320,6 +2407,11 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # hardware gates because it is a weaker instrument than they are — it reads the verdict's
         # prose rather than a Socorro field — and so it is a clamp, not a suppression.
         _apply_absent_thread_gate(result.dossier, seed)
+        # The mechanism's own machinery is not in this build (bug 2063782 and two siblings).
+        # LAST of the gates: it is the only one that spends network per verdict, and it returns
+        # at once on an abstain, so everything above it has already had its chance to abstain
+        # for free.
+        _apply_compiled_out_gate(result.dossier, seed)
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.
         _record_window_membership(result.dossier, seed)
@@ -2565,6 +2657,12 @@ def run_evidence_agent(uuid, force=False):
             # request on the ~0.5% of runs that name a backout); the gates that act on the
             # answers live in the shared ladder.
             _resolve_candidate_backout(result.dossier, seed)
+
+            # Is the mechanism's own machinery even in this build? Online (searchfox + one
+            # cached raw-rev), and beside the backout resolver for the same reason: the gate
+            # that acts on the answer lives in the shared, offline-safe ladder. After the
+            # backout resolve so a candidate we are about to suppress buys no lookups.
+            _resolve_compiled_out(result.dossier, seed)
 
             # Blind second-opinion (#SO): an independent, no-context re-analysis of a
             # would-be-reported lead, run from the RAW verdict (async home) and folded inside the
