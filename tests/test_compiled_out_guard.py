@@ -59,6 +59,22 @@ class TestTheSkepticIsToldToCheckTheBuildFlag(unittest.TestCase):
     def test_the_clause_reaches_the_skeptic_prompt(self):
         self.assertIn("never compiled into this build", _SKEPTIC["prompt"])
 
+    def test_it_asks_about_the_mechanism_symbols_not_only_the_cited_ones(self):
+        """The refutations were checked against the bugs, and the obvious test is the wrong one.
+
+        On all three (2062114, 2063782, 2063902) the CITED line is ordinary always-compiled code
+        -- `CacheIRStubInfo::fieldType` at `js/src/jit/CacheIRCompiler.h#1366` has no enclosing
+        `#ifdef` within 140 lines -- and neither named changeset so much as mentions
+        `JS_GC_CONCURRENT_MARKING` in its diff. What is compiled out is the mechanism's PREMISE:
+        `js::gc::AutoMarkingLock`, whose members, constructor body and destructor body are each
+        wrapped in `#ifdef JS_GC_CONCURRENT_MARKING` and which documents itself "This is a no op
+        outside concurrent marking builds". So a rule that looks only at the citation's own line
+        fires on 0 of 3."""
+        prompt = _SKEPTIC["prompt"]
+        self.assertIn("every symbol the MECHANISM DEPENDS ON, not just the ones you cited", prompt)
+        self.assertIn("compiled into the binary while doing NOTHING", prompt)
+        self.assertIn("AutoMarkingLock", prompt)
+
     def test_it_names_the_default_rule_that_decides_the_answer(self):
         # The one thing a model gets wrong unaided: `--enable-X` with no `default=` is OFF.
         prompt = _SKEPTIC["prompt"]
@@ -68,6 +84,7 @@ class TestTheSkepticIsToldToCheckTheBuildFlag(unittest.TestCase):
     def test_it_routes_to_fail_and_not_to_unverifiable(self):
         prompt = _SKEPTIC["prompt"]
         self.assertIn("demonstrably UNRELATED, so `fail` it", prompt)
+        self.assertIn("a mechanism resting on it cannot be the cause", prompt)
         self.assertIn("`unverifiable` is the wrong answer here", prompt)
 
     def test_it_keeps_the_conservative_default_when_the_option_cannot_be_found(self):
