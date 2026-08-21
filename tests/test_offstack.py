@@ -251,6 +251,35 @@ class TestBuildSeedOffstack(unittest.TestCase):
         self.assertTrue(seed["is_offstack"])
         self.assertEqual(seed["pin_rev"], "")             # pinning disabled
 
+    def test_an_hg_build_node_still_pins(self):
+        """The regression that made `pin_rev` dead on every run since the hg->git migration.
+
+        The guard was `if inspector.git2hg(build_node)`, which assumes the build node is a git
+        hash. It is not: it comes from OUR `nodes` table, filled from the hg pushlog. Measured
+        2026-08-21 against prod, 5 of 5 build nodes and 5 of 5 crash-stack frame nodes resolve on
+        hg.mozilla.org and 0 of 10 on GitHub -- so lando answered `LandoMissingCommit` every time,
+        `pin_rev` stayed "", and every source/blame/history read silently ran against tip while
+        the tools' docstrings promised as-of-the-build. So: git2hg returning "" must NOT stop the
+        pin."""
+        window = [{"node": "w1", "date": _dt(3), "backedout": False, "merge": False,
+                   "bug": 1, "desc": "x"}]
+        with mock.patch.object(orch.config, "get_agent_offstack", return_value=_offstack_cfg()), \
+             mock.patch.object(orch.models.CrashStack, "get_by_uuid",
+                               return_value=(self._RES, self._UI)), \
+             mock.patch.object(orch.models.UUID, "get_info", return_value={"channel": "nightly"}), \
+             mock.patch.object(orch.models.Build, "get_two_last",
+                               return_value=[{"revision": "r0"}, {"revision": "r1"}]), \
+             mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window), \
+             mock.patch.object(orch.models.Node, "authors_for", return_value={}), \
+             mock.patch.object(orch, "_crashing_area_experts", return_value=[]), \
+             mock.patch("crashclouseau.inspector.get_crash_data", return_value={}), \
+             mock.patch("crashclouseau.inspector.git2hg", return_value="") as g2h:
+            seed = orch.build_seed("u-1")
+        self.assertEqual(seed["pin_rev"], "buildnode123")
+        # And nothing in the seed path needs to ask lando at all -- the tools each already do
+        # `git2hg(node) or node`, so they take a node from either forge.
+        g2h.assert_not_called()
+
     def test_empty_window_returns_none(self):
         with mock.patch.object(orch.config, "get_agent_offstack", return_value=_offstack_cfg()), \
              mock.patch.object(orch.models.CrashStack, "get_by_uuid",

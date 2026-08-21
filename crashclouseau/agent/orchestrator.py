@@ -580,20 +580,25 @@ def build_seed(uuid):
     # Pin blame/history/source reads to the crash BUILD rev (never tip). ON-STACK: always —
     # reading the crashing line as-of the build is strictly more correct (tip can attribute
     # it to the post-build fix or a later refactor). OFF-STACK: gated by OFFSTACK_PINNED.
-    # We pin ONLY when the (git, post-migration) build node actually resolves to an hg rev
-    # the hg endpoints accept; otherwise pin_rev stays "" and the tools read tip — a WORKING
-    # read — rather than 404-ing an unresolvable git hash. A transient git2hg/lando miss thus
-    # degrades that run to tip instead of breaking the agent's evidence tools.
+    #
+    # THIS USED TO BE GUARDED BY `git2hg(build_node)`, AND THAT GUARD NEVER ONCE PASSED. It
+    # assumed the build node was a git hash, on the reasoning that Socorro hands those out
+    # post-migration — but this node does not come from Socorro. It comes from OUR `nodes`
+    # table, which is populated from the hg pushlog, so it is already an hg rev and lando
+    # answers `LandoMissingCommit` for it every time. Measured 2026-08-21 against prod: 5 of 5
+    # sampled build nodes and 5 of 5 crash-stack frame nodes resolve on hg.mozilla.org, 0 of 10
+    # resolve on GitHub, and `pin_rev` was "" on every run since the migration.
+    #
+    # Nothing broke loudly, which is why it survived: `pin_node` reads an empty build_rev as
+    # "use tip" and tip reads succeed, so the tools' leak-free-as-of-the-build guarantee was
+    # silently void while their docstrings went on promising it — every blame and source read
+    # has been showing post-build code, which is exactly the shape of the refactor+blame false
+    # positive. No resolver call is needed here at all: `source`/`patch`/`history` each already
+    # do `git2hg(node) or node`, so they accept a node from either forge.
     pin_rev = ""
     build_node = uuid_info.get("node", "")
     if build_node and (not is_offstack or offstack_cfg["pinned"]):
-        try:
-            from crashclouseau import inspector
-
-            if inspector.git2hg(build_node):
-                pin_rev = build_node
-        except Exception:  # pragma: no cover - defensive; degrade to tip
-            pin_rev = ""
+        pin_rev = build_node
 
     # Off-stack area-experts: blame the crashing lines (pinned to the build rev when it
     # resolves) so "recently worked in this area" names who actually wrote the crashing
