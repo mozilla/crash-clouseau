@@ -771,14 +771,28 @@ def _matching_archetypes(info, stack_text, raw_crash):
     Matched HERE rather than in the gates because the point is to change how the agent
     investigates, not how its answer is scored — a rule that only ran after the verdict would be
     a critic, and what bug 2062119 needed was a different first move. Never raises: a hint that
-    cannot be fetched is a hint we do without."""
+    cannot be fetched is a hint we do without.
+
+    THIS DICT IS THE ENTIRE INPUT to every matcher (``models.Archetype.matches`` is a pure
+    function of it), so a fact that is not here cannot be a condition — which is how
+    `shutdown-singleton` came to assert a cleared-singleton mechanism on 23 crashes per 1051
+    nightly reports, 21 of which had aborted deliberately and 3 of which were not in shutdown.
+    ``shutdown_progress`` and ``moz_crash_reason`` are read with the SAME accessors that print
+    them into the same prompt (``triage._crash_facts``: "Shutdown phase reached" and
+    MOZ_CRASH_REASON), so the matcher and the brief cannot disagree about what the crash says.
+    Both keys are always PRESENT, None included: ``no_moz_crash_reason`` treats an absent key as
+    "nobody looked" and refuses it."""
     try:
-        crash_info = ((raw_crash or {}).get("json_dump") or {}).get("crash_info") or {}
+        raw = raw_crash or {}
+        dump = raw.get("json_dump") or {}
+        crash_info = dump.get("crash_info") or {}
         return models.Archetype.for_crash({
             "signature": info.get("signature", ""),
             "stack": stack_text,
-            "crash_type": crash_info.get("type") or (raw_crash or {}).get("reason") or "",
-            "fault_address": crash_info.get("address") or (raw_crash or {}).get("address"),
+            "crash_type": crash_info.get("type") or raw.get("reason") or "",
+            "fault_address": crash_info.get("address") or raw.get("address"),
+            "shutdown_progress": raw.get("shutdown_progress"),
+            "moz_crash_reason": raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
         })
     except Exception:                                   # pragma: no cover - defensive
         logger.warning("agent: archetype match failed", exc_info=True)

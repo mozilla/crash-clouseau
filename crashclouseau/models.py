@@ -2779,16 +2779,47 @@ class Archetype(db.Model):
         return False
 
     def matches(self, facts):
-        """Does this archetype apply to a crash? ``facts`` is
-        ``{signature, stack, crash_type, fault_address}``.
+        """Does this archetype apply to a crash? ``facts`` is ``{signature, stack, crash_type,
+        fault_address, shutdown_progress, moz_crash_reason}``.
 
         AND across the keys a row specifies, OR within each key's list, and an unspecified key
         is not a constraint. Deliberately boring: a rule an operator cannot predict the firing
         of is worse than no rule.
 
-        ``max_fault_address`` is the one non-regex condition, because "a small address" is the
-        signature of a null base plus a field offset and no regex expresses it. Missing or
-        unparseable, it does not match -- an unknown must not satisfy a condition."""
+        THREE NON-REGEX CONDITIONS, because what they test is not text and no regex expresses
+        it. All three read the same way: missing, unparseable or unknown does NOT satisfy them.
+
+        * ``max_fault_address`` -- "a small address" is a null base plus a field offset. Not an
+          n=1 bound: over 96 nightly in-shutdown EXCEPTION_ACCESS_VIOLATION_READ reports
+          (2026-05-21..08-21) 72 of the 96 are small -- {0x0: 50, 0x28: 13, 0x8: 2, 0x1c: 2,
+          0x470: 2, 0x10: 1, 0x14: 1, 0x80: 1} -- and the next value up is 0x80000, two orders
+          of magnitude away.
+        * ``require_shutdown_progress`` -- Socorro's ``shutdown_progress`` annotation is set,
+          i.e. the process really had begun shutting down. Its recall cost is NOT measurable on
+          the 96-report corpus above, which is selected on this very field and where the
+          condition is therefore a tautology; measured separately instead, over 3 months of
+          Firefox-nightly SuperSearch, the reports that carry one of this row's stack tokens in
+          ``proto_signature`` with ``shutdown_progress`` unset, no ``moz_crash_reason`` and a
+          small address number ONE -- an ``IPCError-browser | ShutDownKill`` at
+          EXCEPTION_BREAKPOINT, i.e. a content process killed on purpose, which dereferenced
+          nothing.
+        * ``no_moz_crash_reason`` -- ``moz_crash_reason`` is EMPTY, i.e. Socorro has no record
+          of a deliberate abort, so something really was dereferenced. An ABSENT key fails this
+          and not merely a non-empty one: a caller that never looked up the field has not
+          established that nothing aborted, and getting that backwards fails silently.
+
+        Both new keys came from `shutdown-singleton` (crashclouseau/archetypes.py), which had
+        neither and therefore asserted a cleared-singleton mechanism on 23 crashes per 1051
+        nightly reports of which 21 had aborted on purpose and 3 were not in shutdown at all.
+
+        WHAT THIS MUST NOT EAT, and why there is deliberately no ``min_fault_address``: a
+        genuine read at EXACTLY 0x0 during shutdown is the majority shape, not an artefact --
+        50 of those 96 crashes fault at 0x0, every one with a recorded memory access and none
+        with a ``moz_crash_reason``. e23bec95-9350-40c7-80d3-827d20260531
+        (``MOZ_StripRelativeComponents``, ``movzx eax, byte [r9]``) and
+        032c9db1-f5c5-49a8-80ba-0c0500260616 (``URLQueryStringStripper::ManageObservers``,
+        whose stack literally reads ``KillClearOnShutdown`` -- the archetype's own mechanism)
+        both fault at 0x0 and both must keep matching."""
         m = self.matcher or {}
         if not self._any_match(m.get("signature"), (facts or {}).get("signature")):
             return False
@@ -2802,6 +2833,17 @@ class Archetype(db.Model):
                 if int(str((facts or {}).get("fault_address") or ""), 16) > int(limit):
                     return False
             except (TypeError, ValueError):
+                return False
+        if m.get("require_shutdown_progress"):
+            if not str((facts or {}).get("shutdown_progress") or "").strip():
+                return False
+        if m.get("no_moz_crash_reason"):
+            # An ABSENT key fails, not just a non-empty one. "Nobody looked" is not "there was
+            # no abort", and reading it the other way round would quietly restore the old
+            # behaviour for any caller (or fixture) built before the field existed.
+            if "moz_crash_reason" not in (facts or {}):
+                return False
+            if str((facts or {}).get("moz_crash_reason") or "").strip():
                 return False
         return True
 

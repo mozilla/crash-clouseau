@@ -13,6 +13,7 @@
 # handling?'".
 #   DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \
 #     python -m unittest tests.test_feedback_archetypes
+import json
 import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -25,15 +26,46 @@ from crashclouseau import archetypes, models  # noqa: E402
 from crashclouseau.agent import triage  # noqa: E402
 
 
+# THE PANEL IS REAL PRODUCTION INPUT, and that is the whole point of it. A matcher is a pure
+# function of the dict `orchestrator._matching_archetypes` builds, so the only honest back-test
+# is that dict: signature, `_stack_text` of the first 40 frames of
+# `inspector.thread_for_analysis`, `crash_info.type or reason`, `crash_info.address or address`,
+# plus the two context fields added 2026-08-21. Captured from unauthenticated Socorro
+# (https://crash-stats.mozilla.org/api/ProcessedCrash/?crash_id=<uuid>) into
+# tests/archetypes/shutdown_singleton_panel.json, so it can be regenerated and re-measured.
+#
+# WHAT IT REPLACES, because that test was the trap rather than the safety net: the previous
+# back-test asserted the row matched "AsyncShutdownTimeout | profile-change-teardown |
+# LoginStore::shutdown" and "#3 ...QuotaManager::Shutdown | shutdownhang" -- SIGNATURE text fed
+# into the `stack` field, which `_matching_archetypes` cannot produce. Those tokens occur 0
+# times in the stack field over 1051 nightly reports and 101 times in the SIGNATURE field, which
+# this row does not test. So the row's only green test was green on an impossible input, while
+# the row itself fired on 23 real crashes of which 21 contradicted its own guidance.
+_PANEL_PATH = os.path.join(os.path.dirname(__file__), "archetypes",
+                           "shutdown_singleton_panel.json")
+
+with open(_PANEL_PATH, encoding="utf-8") as _fh:
+    PANEL = json.load(_fh)
+
+
+def _facts(entry):
+    """The dict `orchestrator._matching_archetypes` hands to `Archetype.for_crash`."""
+    return {
+        "signature": entry["signature"],
+        "stack": "\n".join(entry["stack_lines"]),
+        "crash_type": entry["crash_type"],
+        "fault_address": entry["fault_address"],
+        "shutdown_progress": entry["shutdown_progress"],
+        "moz_crash_reason": entry["moz_crash_reason"],
+    }
+
+
+def _panel(prefix):
+    return next(e for e in PANEL if e["uuid"].startswith(prefix))
+
+
 # The real crash behind bug 2062119.
-_JENS = {
-    "signature": "nsJARProtocolHandler::MimeService",
-    "stack": ("#0 nsJARChannel::GetContentTypeGuess modules/libjar/nsJARChannel.cpp:765\n"
-              "#19 mozilla::AppShutdown::AdvanceShutdownPhaseInternal "
-              "xpcom/base/AppShutdown.cpp:427"),
-    "crash_type": "EXCEPTION_ACCESS_VIOLATION_READ",
-    "fault_address": "0x0000000000000028",
-}
+_JENS = _facts(_panel("413d6058"))
 
 
 def _archetype(**over):
@@ -44,8 +76,20 @@ def _archetype(**over):
                             enabled=True)
 
 
+def _hang_row():
+    spec = archetypes._SHUTDOWN_HANG
+    return models.Archetype(slug=spec["slug"], title=spec["title"],
+                            guidance=spec["guidance"], matcher=spec["matcher"], enabled=True)
+
+
 class TestShutdownSingletonMatcher(unittest.TestCase):
-    """The one archetype we ship, against the crash that taught it to us."""
+    """The one archetype we ship, against real crashes in both directions."""
+
+    def test_the_whole_panel_lands_where_it_should(self):
+        row = _archetype()
+        for entry in PANEL:
+            with self.subTest(uuid=entry["uuid"]):
+                self.assertIs(row.matches(_facts(entry)), entry["want"], entry["why"])
 
     def test_it_matches_the_crash_it_came_from(self):
         self.assertTrue(_archetype().matches(_JENS))
@@ -59,13 +103,87 @@ class TestShutdownSingletonMatcher(unittest.TestCase):
         self.assertFalse(_archetype().matches(
             {**_JENS, "stack": "#0 mozilla::dom::Element::UnsetAttr dom/base/Element.cpp:4273"}))
 
-    def test_the_other_shutdown_crashes_in_the_corpus_match(self):
-        # 4 of the canary's first 20 filings carry shutdown machinery; this is not a one-off.
-        for stack in ("#3 mozilla::dom::quota::QuotaManager::Shutdown | shutdownhang",
+    def test_signature_text_is_not_stack_text(self):
+        # The three strings the deleted back-test fed into `stack`. They are SIGNATURE text and
+        # `_matching_archetypes` puts `_stack_text` there and nothing else (measured 0/1051 in
+        # the stack field). Pinned in the FALSE direction so the shortcut cannot come back.
+        for bogus in ("#3 mozilla::dom::quota::QuotaManager::Shutdown | shutdownhang",
                       "AsyncShutdownTimeout | profile-change-teardown | LoginStore::shutdown",
                       "#7 mozJSModuleLoader::UnloadLoaders"):
-            with self.subTest(stack=stack):
-                self.assertTrue(_archetype().matches({**_JENS, "stack": stack}))
+            with self.subTest(stack=bogus):
+                self.assertFalse(_archetype().matches({**_JENS, "stack": bogus}))
+
+    def test_a_deliberate_abort_is_not_a_null_deref(self):
+        # The defect this row shipped with: 21 of its 23 firings over 1051 nightly reports
+        # carried a `moz_crash_reason`, so its opening sentence ("a GLOBAL/SINGLETON was read
+        # after it was cleared") was false on 91% of the prompts it reached.
+        for prefix in ("424b0ab0", "58ffaf90", "60681b60", "61228138"):
+            with self.subTest(uuid=prefix):
+                self.assertFalse(_archetype().matches(_facts(_panel(prefix))))
+        # ...and it is the ABORT RECORD that discriminates, not the address and not the
+        # shutdown tokens: clear the field on the same crash and the row fires again.
+        self.assertTrue(_archetype().matches(
+            {**_facts(_panel("58ffaf90")), "moz_crash_reason": None}))
+
+    def test_a_crash_that_is_not_in_shutdown_at_all_is_not_this_archetype(self):
+        # 61228138 is a MOZ_Crash during STARTUP (`nsXREDirProvider::DoStartup` ->
+        # `ProfileStarted`) matched only because the crashing FUNCTION is named
+        # `GetShutdownPhase`. Both new conditions reject it; pin the shutdown one alone.
+        startup = {**_facts(_panel("61228138")), "moz_crash_reason": None}
+        self.assertIsNone(startup["shutdown_progress"])
+        self.assertFalse(_archetype().matches(startup))
+
+    def test_a_genuine_read_at_exactly_zero_still_matches(self):
+        # Against the obvious fix, a non-zero `min_fault_address` ("0x0 means nothing was
+        # dereferenced"): 50 of the 96 nightly in-shutdown ACCESS_VIOLATION_READ crashes fault
+        # at exactly 0x0, all with a recorded memory access and none with a moz_crash_reason,
+        # so a floor deletes 40% of this row's correct firings. 032c9db1 is the mechanism
+        # verbatim at 0x0 -- `URLQueryStringStripper::Shutdown()` <- the `GetSingleton` lambda
+        # <- `mozilla::KillClearOnShutdown(mozilla::ShutdownPhase)`.
+        for prefix in ("e23bec95", "032c9db1"):
+            with self.subTest(uuid=prefix):
+                facts = _facts(_panel(prefix))
+                self.assertEqual(int(facts["fault_address"], 16), 0)
+                self.assertTrue(_archetype().matches(facts))
+
+    def test_the_mechanism_is_not_on_the_stack_of_the_crash_that_taught_us_it(self):
+        # Against the second obvious fix ("shrink the alternation to the tokens that name the
+        # mechanism"): bug 2062119's own crashes are the counter-example, because the singleton
+        # is read through an inlined accessor. That predicate scores 1 firing per 1051 nightly
+        # reports and 0 on the crash it was learned from.
+        for prefix in ("413d6058", "b65b3c02"):
+            stack = _facts(_panel(prefix))["stack"]
+            for token in ("ClearOnShutdown", "StaticRefPtr"):
+                with self.subTest(uuid=prefix, token=token):
+                    self.assertNotIn(token, stack)
+
+    def test_it_no_longer_fires_beside_the_shutdown_hang_row(self):
+        # Both rows go into the SAME prompt. On a shutdownhang the sibling said "A shutdown
+        # hang is not a fault: nothing crashed" while this one said a cleared global had been
+        # read. Fixed here without touching the sibling, by `no_moz_crash_reason`. NOT because
+        # "every shutdownhang carries a moz_crash_reason" -- measured over 3 months of nightly,
+        # 116 of 3332 `^shutdownhang` reports do not. It holds because 0 of those 116 has BOTH
+        # a small fault address and `shutdown_progress` set, which this row also requires, so
+        # the double-fire is gone at 0 per 3 months rather than by an absolute rule.
+        hang, singleton = _hang_row(), _archetype()
+        hangs = [e for e in PANEL if hang.matches(_facts(e))]
+        self.assertTrue(hangs, "the panel must contain a shutdown hang")
+        for entry in hangs:
+            with self.subTest(uuid=entry["uuid"]):
+                self.assertFalse(singleton.matches(_facts(entry)))
+
+    def test_the_dead_branches_are_gone_from_the_alternation(self):
+        # Each measured 0 hits in the STACK field over 1051 nightly reports; `XPCOMShutdown`
+        # never could match, the symbol is `ShutdownXPCOM`. Three of them are SIGNATURE tokens
+        # (101 hits there) and relocating them to a `signature` key would re-admit exactly the
+        # 18 deliberate-abort firings this fix removes, so the absence of that key is pinned
+        # too.
+        alternation = " ".join(archetypes._SHUTDOWN_SINGLETON["matcher"]["stack"])
+        for dead in ("XPCOMShutdown", "::Teardown", "UnloadLoaders", "AsyncShutdownTimeout",
+                     "shutdownhang", "profile-change-teardown"):
+            with self.subTest(dead=dead):
+                self.assertNotIn(dead, alternation)
+        self.assertNotIn("signature", archetypes._SHUTDOWN_SINGLETON["matcher"])
 
     def test_an_unparseable_fault_address_does_not_satisfy_the_bound(self):
         # An unknown must never satisfy a condition -- otherwise the archetype fires on every
@@ -74,11 +192,33 @@ class TestShutdownSingletonMatcher(unittest.TestCase):
             with self.subTest(addr=addr):
                 self.assertFalse(_archetype().matches({**_JENS, "fault_address": addr}))
 
+    def test_an_unset_shutdown_phase_does_not_satisfy_its_condition(self):
+        for value in (None, "", "   "):
+            with self.subTest(value=value):
+                self.assertFalse(_archetype().matches({**_JENS, "shutdown_progress": value}))
+        self.assertFalse(_archetype().matches(
+            {k: v for k, v in _JENS.items() if k != "shutdown_progress"}))
+
+    def test_a_caller_that_never_looked_up_moz_crash_reason_does_not_satisfy_it(self):
+        # The subtle half. An ABSENT key is not "there was no abort", it is "nobody checked",
+        # and reading it as the former would silently restore the old behaviour for every
+        # caller and fixture written before the field existed.
+        blind = {k: v for k, v in _JENS.items() if k != "moz_crash_reason"}
+        self.assertFalse(_archetype().matches(blind))
+        for empty in (None, "", "  "):
+            with self.subTest(value=empty):
+                self.assertTrue(_archetype().matches({**blind, "moz_crash_reason": empty}))
+        self.assertFalse(_archetype().matches({**blind, "moz_crash_reason": "MOZ_CRASH(oops)"}))
+
     def test_an_unspecified_key_is_not_a_constraint(self):
         row = models.Archetype(slug="s", title="t", guidance="g",
                                matcher={"signature": ["Foo::bar"]})
         self.assertTrue(row.matches({"signature": "mozilla::Foo::bar", "stack": "anything"}))
         self.assertFalse(row.matches({"signature": "Other::thing"}))
+        # Including the two keys added 2026-08-21: a row that does not name them must behave
+        # exactly as it did, whatever the crash's shutdown_progress / moz_crash_reason say.
+        self.assertTrue(row.matches({"signature": "mozilla::Foo::bar",
+                                     "moz_crash_reason": "MOZ_CRASH(x)"}))
 
     def test_an_empty_matcher_matches_everything(self):
         # Deliberate: it is how you write a rule that always applies. Worth pinning so nobody
@@ -97,6 +237,55 @@ class TestShutdownSingletonMatcher(unittest.TestCase):
         row = models.Archetype(slug="s", title="t", guidance="g",
                                matcher={"signature": ["(a+)+" * 100]})
         self.assertFalse(row.matches({"signature": "a" * 50}))
+
+
+class TestTheFactsTheMatcherIsGiven(unittest.TestCase):
+    """`models.Archetype.matches` is a pure function of one dict, so a fact that is not in it
+    cannot be a condition. Two were missing and they were the two that decide whether a small
+    fault address during shutdown means anything at all."""
+
+    @staticmethod
+    def _facts_built_for(raw_crash):
+        from crashclouseau.agent import orchestrator
+
+        seen = {}
+        with mock.patch.object(models.Archetype, "for_crash",
+                               side_effect=lambda f: seen.update(f) or []):
+            orchestrator._matching_archetypes({"signature": "S"}, "#0 f", raw_crash)
+        return seen
+
+    def test_the_shutdown_phase_and_the_abort_record_reach_the_matcher(self):
+        facts = self._facts_built_for({
+            "shutdown_progress": "XPCOMShutdownFinal",
+            "moz_crash_reason": "Shutdown hanging at step AppShutdownQM.",
+            "json_dump": {"crash_info": {"type": "SIGSEGV", "address": "0x28"}},
+        })
+        self.assertEqual(facts["shutdown_progress"], "XPCOMShutdownFinal")
+        self.assertEqual(facts["moz_crash_reason"], "Shutdown hanging at step AppShutdownQM.")
+        self.assertEqual(facts["fault_address"], "0x28")
+
+    def test_moz_crash_reason_is_read_the_way_the_prompt_reads_it(self):
+        # triage.py's MOZ_CRASH_REASON line falls back to `json_dump`; a matcher reading only
+        # the top level would contradict the fact printed into the same prompt.
+        facts = self._facts_built_for(
+            {"json_dump": {"moz_crash_reason": "MOZ_CRASH(nope)", "crash_info": {}}})
+        self.assertEqual(facts["moz_crash_reason"], "MOZ_CRASH(nope)")
+
+    def test_both_keys_are_present_even_when_the_crash_has_neither(self):
+        # `no_moz_crash_reason` refuses an ABSENT key, so the caller must always put one there
+        # or the row silently stops firing on the crashes it exists for.
+        facts = self._facts_built_for({"json_dump": {"crash_info": {}}})
+        self.assertIn("moz_crash_reason", facts)
+        self.assertIn("shutdown_progress", facts)
+        self.assertIsNone(facts["moz_crash_reason"])
+
+    def test_a_missing_processed_crash_satisfies_neither_condition(self):
+        # `build_seed` carries on when the ProcessedCrash fetch fails (raw_crash=None). An
+        # unknown must not satisfy a condition, so the row simply does not fire.
+        facts = self._facts_built_for(None)
+        self.assertIsNone(facts["shutdown_progress"])
+        self.assertIsNone(facts["moz_crash_reason"])
+        self.assertFalse(_archetype().matches({**_JENS, "shutdown_progress": None}))
 
 
 class TestGuidanceReachesTheAgent(unittest.TestCase):
@@ -212,6 +401,26 @@ class TestSeeding(unittest.TestCase):
         self.assertIn("will NOT be in this build's pushlog window", guidance)
         self.assertIn("2062119", guidance)
 
+    def test_the_guidance_opens_with_a_condition_rather_than_an_assertion(self):
+        # It used to open "A small fault address during shutdown usually means a
+        # GLOBAL/SINGLETON was read after it was cleared" -- an assertion, false on 21 of the
+        # 23 crashes it reached, because those had a MOZ_CRASH_REASON and had dereferenced
+        # nothing. The matcher now excludes them; the text still has to say how to tell, since
+        # rows are DB-editable and a relaxed matcher must not silently revive the claim.
+        guidance = archetypes._SHUTDOWN_SINGLETON["guidance"]
+        self.assertIn("MOZ_CRASH_REASON", guidance)
+        self.assertIn("this row does not apply", guidance)
+
+    def test_leaving_the_pushlog_window_is_gated_on_finding_the_declaration(self):
+        # "the origin will NOT be in this build's pushlog window" is the most expensive thing
+        # this row can ask for, and a searchfox hit on the `StaticRefPtr`/`ClearOnShutdown`
+        # declaration is its only evidence. It was unconditional, on 21 crashes a week where no
+        # pointer had been read at all.
+        guidance = archetypes._SHUTDOWN_SINGLETON["guidance"]
+        self.assertLess(guidance.index("SEARCHFOX THE DECLARATION"),
+                        guidance.index("will NOT be in this build's pushlog window"))
+        self.assertIn("If you did NOT find such a declaration", guidance)
+
     def test_seeding_never_clobbers_an_edited_row(self):
         # The table is DB-editable on purpose; a deploy reverting tuned text (or re-enabling a
         # row somebody turned off after it misfired) would make it untrustworthy.
@@ -271,6 +480,69 @@ class TestSeeding(unittest.TestCase):
             src.index("models.create()"), src.index("seed_quietly"),
             "seed archetypes AFTER models.create(), which is what creates the table",
         )
+
+
+class TestSeedReachesADatabaseThatAlreadyHasTheRow(unittest.TestCase):
+    """A shipped fix to a ROW has to be able to reach prod, and until 2026-08-21 none could.
+
+    `seed(overwrite=False)` skipped on SLUG alone, so a database that already held the row kept
+    the text it was first seeded with for ever -- and no page renders this table, so the
+    divergence from archetypes.py was invisible too. The obvious fix, `overwrite=True`, is
+    wrong in the measured direction: it reverts a `guidance` an operator tuned after a misfire
+    and re-seeds a row somebody switched off, which is exactly what seed() promises not to do.
+    So a row is replaced only when its stored text fingerprints to a version this file has
+    SUPERSEDED -- i.e. only when nobody has touched it."""
+
+    def _seed(self, row, superseded):
+        query = mock.Mock()
+        query.filter.return_value.one_or_none.return_value = row
+        with mock.patch.dict(archetypes._SUPERSEDED, superseded, clear=True), \
+             mock.patch.object(models.db, "session",
+                               mock.Mock(query=mock.Mock(return_value=query))), \
+             mock.patch.object(models.Archetype, "upsert") as upsert:
+            return archetypes.seed(), upsert
+
+    def test_an_untouched_older_seed_is_upgraded(self):
+        row = mock.Mock(enabled=True, guidance="old text", matcher={"stack": ["Old"]})
+        written, upsert = self._seed(
+            row, {"shutdown-singleton":
+                  frozenset({archetypes._fingerprint("old text", {"stack": ["Old"]})})})
+        self.assertEqual(written, ["shutdown-singleton"])
+        self.assertEqual(upsert.call_args.kwargs["matcher"],
+                         archetypes._SHUTDOWN_SINGLETON["matcher"])
+
+    def test_a_hand_edited_row_is_still_never_touched(self):
+        row = mock.Mock(enabled=True, guidance="an operator tuned this",
+                        matcher={"stack": ["Old"]})
+        written, upsert = self._seed(
+            row, {"shutdown-singleton":
+                  frozenset({archetypes._fingerprint("old text", {"stack": ["Old"]})})})
+        self.assertEqual(written, [])
+        upsert.assert_not_called()
+
+    def test_the_text_shipping_today_is_not_listed_as_superseded(self):
+        # Otherwise a release rewrites a row that is already correct, and an operator's edit
+        # gets reverted on the next deploy instead of being kept.
+        for spec in archetypes.SEED_ARCHETYPES:
+            with self.subTest(slug=spec["slug"]):
+                self.assertNotIn(archetypes._fingerprint(spec["guidance"], spec["matcher"]),
+                                 archetypes._SUPERSEDED.get(spec["slug"], ()))
+
+    def test_only_the_text_prod_can_actually_hold_is_listed(self):
+        # `shutdown-singleton` was seeded by 312e153 and unchanged until this fix, so exactly
+        # one stored text is known not to be somebody's edit. `shutdown-hang` is unchanged and
+        # lists nothing, which is what keeps this from becoming a blanket overwrite.
+        self.assertEqual(len(archetypes._SUPERSEDED["shutdown-singleton"]), 1)
+        self.assertNotIn("shutdown-hang", archetypes._SUPERSEDED)
+
+    def test_a_row_that_will_not_serialise_is_left_alone_not_raised_on(self):
+        # bin/release.py runs this on every deploy; a weird row must not fail a release.
+        self.assertEqual(archetypes._fingerprint("g", {"bad": object()}), "")
+        row = mock.Mock(enabled=True, guidance="g", matcher={"bad": object()})
+        written, upsert = self._seed(
+            row, {"shutdown-singleton": frozenset({archetypes._fingerprint("g", {})})})
+        self.assertEqual(written, [])
+        upsert.assert_not_called()
 
 
 class TestScoreboard(unittest.TestCase):
