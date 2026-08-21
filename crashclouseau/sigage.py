@@ -350,12 +350,45 @@ BROKEN_CPUS = ("family 6 model 183 stepping 1",)
 POPULATION_BIT_FLIP_RATE = 0.025
 POPULATION_BROKEN_CPU_RATE = 0.041
 
+# Where the TOP `cpu_info` share sits across the population, so "58 of 58 reports are on one
+# processor model" can be read as remarkable or as ordinary instead of merely quoted. Measured
+# 2026-08-21 over 200 Firefox-nightly signatures drawn the way the spike selector draws them
+# (>=5 reports in a 14-day window; 318 qualified, 200 sampled, seed 20260821): min 0.05, p25
+# 0.14, MEDIAN 0.32, p75 0.78, max 1.00, and 26 of the 200 (13%) sit on exactly ONE model.
+# `_POPULATION_DEFAULTS["concentrated_share"]` 0.5 is NOT this number and must not be borrowed
+# for it: that one was fit on `install_time`, whose median is 0.18 and p75 0.47, whereas 0.5 on
+# `cpu_info` fires on 35% of the population. Reporting only -- see `hardware_noise` for the
+# sweep that killed every attempt to suppress on this.
+POPULATION_TOP_CPU_SHARE_MEDIAN = 0.32
+
+# The floor under the share BEFORE it may be stated, and it is the definition of the sample above
+# rather than a tuned number: every signature in that 200 had >=5 reports, so a share computed
+# from fewer has no population to be compared with. It is also forced. A signature with ONE
+# report has one `cpu_info` string, hence one term and a top share of exactly 1.00 -- arithmetic,
+# not an observation -- and single-report crashes are this pipeline's normal case: 18 of the 52
+# bugs the canary has filed have exactly one report, 17 of them read 1.00, and 19 of the 27
+# filings that clear `report_bug._HARDWARE_NOTE_LIFT` sit under 5 reports (measured 2026-08-21).
+# Reporting only: `_apply_bit_flip_gate` records the share for every verdict whatever the sample,
+# because the whole point of recording it is to find out later whether it predicts anything.
+POPULATION_TOP_CPU_SHARE_MIN_REPORTS = 5
+
+# The full shape of a `hardware_noise` answer, every value unknown. Callers that must produce
+# the shape without asking (the gate disabled, the lookup raised) copy this rather than
+# re-listing the keys: a hand-copied list is exactly how a newly added key ends up present on
+# the answered path and absent on the disabled one.
+NO_HARDWARE_NOISE = {
+    "reports": None, "bit_flip_reports": None, "broken_cpu_reports": None,
+    "bit_flip_rate": None, "broken_cpu_rate": None,
+    "cpu_reports": None, "cpu_terms": None, "top_cpu_term": None, "top_cpu_share": None,
+}
+
 
 def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
     """How much of this SIGNATURE is hardware error rather than a bug anyone can fix?
 
-    ``{"reports", "bit_flip_reports", "broken_cpu_reports", "bit_flip_rate", "broken_cpu_rate"}``,
-    every value ``None`` when we could not find out.
+    ``{"reports", "bit_flip_reports", "broken_cpu_reports", "bit_flip_rate", "broken_cpu_rate",
+    "cpu_reports", "cpu_terms", "top_cpu_term", "top_cpu_share"}``. ``NO_HARDWARE_NOISE`` is the
+    same shape with every value ``None``, which is what "we could not find out" returns.
 
     WRITTEN FOR BUG 2064600. Clouseau filed a display-list crash at 97% worth-investigating and
     Timothy Nikkel replied within twenty minutes: "About 50% of the crashes with this signature
@@ -373,15 +406,16 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
     a different third of the signature. A per-report flip check -- all Clouseau had -- sees
     neither.
 
-    THE DENOMINATOR IS THE WHOLE RULE, and getting it wrong is not a detail. Computed across all
-    products and channels over 180 days this fires on 6 of the 47 bugs the canary had filed, and
-    one of them is bug 2062219 (``nsAtom::IsStatic``), RESOLVED FIXED -- a real defect, killed,
-    because that signature runs 49% bit flips over a release population and only 13% in nightly.
-    Restricted to the crash's OWN product and channel it fires on 6 different signatures and kills
-    ZERO of the 18 filings that are FIXED, DUPLICATE or ASSIGNED, while still catching the INVALID
-    one (bug 2062173) and bug 2064600 itself. Release accumulates years of failing consumer
-    hardware on a hot signature; that says nothing about whether a nightly crash is real, and
-    averaging the two populations together lets the larger one decide.
+    THE DENOMINATOR IS THE WHOLE RULE, and getting it wrong is not a detail. Re-measured
+    2026-08-21 over all 52 bugs the canary has filed (19 FIXED/DUPLICATE/ASSIGNED, 8
+    INVALID/WORKSFORME, 25 still open): computed across all products and channels over 180 days
+    the same thresholds fire on 8 of the 52, and one of them is bug 2062219 (``nsAtom::IsStatic``),
+    RESOLVED FIXED -- a real defect, killed, because that signature runs 49% bit flips over a
+    release population and 12% in nightly. Restricted to the crash's OWN product and channel it
+    fires on 6 and kills ZERO of the 19 FIXED/DUPLICATE/ASSIGNED filings, while still catching
+    two INVALID ones (2062173 and 2063364) and bug 2064600 itself. Release accumulates years of
+    failing consumer hardware on a hot signature; that says nothing about whether a nightly crash
+    is real, and averaging the two populations together lets the larger one decide.
 
     THE FULL 364-DAY WINDOW, unlike bugbot's few weeks, for the same reason in reverse: a nightly
     slice is SMALL. Bug 2064600's signature has 6 nightly reports in a year and 1 in the last 28
@@ -395,11 +429,53 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
     the largest contributing 3. Read ``distinct_signatures`` in ``machine.py`` for the
     complementary rule that catches the one-broken-machine case directly.
 
+    THE FOUR CPU-SPREAD KEYS ARE FREE, and bug 2065373 is why they are kept. The `cpu_info`
+    facet is already fetched to count Raptor Lakes and every row but one was being thrown away.
+    :jstutte reviewed that filing and asked "could clouseau do some OS / install distribution
+    checks on the socorro data?" -- and the run already held the answer: 58 reports, ONE
+    `cpu_info` row, `[["family 25 model 117 stepping 2", 58]]`. What the two models and the filed
+    bug were shown instead was `broken_cpu_rate` 0.0, a hardware clean bill computed from the
+    same rows that say the whole population is a single processor model. `top_cpu_share` is
+    denominated on `cpu_reports`, the reports that HAVE a cpu_info string, not on `total`:
+    Socorro carries one for 2,552 of 15,329 Firefox-nightly macOS reports (16.6%) against 99.8%
+    on Windows and 98.1% on Linux, so dividing by `total` would report a mac-heavy signature as
+    unconcentrated when it is simply unmeasured.
+
+    `top_cpu_share` IS NOT A SUPPRESSOR AND MUST NOT BECOME ONE -- measured, not assumed. On the
+    52 filings at the gate's own `min_signature_reports` floor of 5, every threshold from 0.40 to
+    0.95 suppresses at least one of the 19 controls while catching at most the single INVALID the
+    shipped `broken_cpu_rate` rule already catches. 0.50 eats FIVE: 2062052 (FIXED,
+    `ScreenOrientation::Create`, 6 reports, 6/6 on one CPU), 2063678 (FIXED,
+    `libc.so.6 | cuEGLApiInit`, 1111 reports at 0.97, a Mageia/NVIDIA bug), 2063809 (FIXED,
+    `ff_vk_exec_add_dep_frame`, 0.54, AMD Vulkan), 2061180 (DUPLICATE, `libvulkan_radeon.so`,
+    0.77) and 2063864 (DUPLICATE, `setsockopt_syscall`, 0.83); 0.80 still eats those last three,
+    0.90 and 0.95 eat 2062052 and 2063678, and even 1.00 eats 2062052 -- no value of this
+    statistic is free. The shipped rule eats 0 of the 19. Against the 8 bad filings
+    the statistic reads AUC 0.333 on 3 bad versus 13 controls at that floor -- it separates them
+    in the wrong direction (median top share 0.148 bad, 0.407 control). The one variant that eats
+    no control, `cpu_terms == 1 and reports >= 20`, fires on 20 of 174 eligible background
+    signatures and 8 of those 20 carry a real Firefox bug, among them
+    `sync15::bso::content::content_with_id_to_json` -> bug 2056116, this repo's own off-stack
+    pref-flip archetype. Concentration is a SCOPE hint -- a driver, a distribution, an
+    instruction set -- so it is reported (`triage._cpu_spread_line`,
+    `report_bug.build_hardware_note`) and never gated.
+
+    AN EMPTY `cpu_info` FACET IS UNKNOWN, NOT ZERO, and the two facets differ on exactly this.
+    Socorro sets `possible_bit_flips_max_confidence` only when the stackwalker found a candidate,
+    so no rows there means no report has one: a real zero. `cpu_info` is simply missing on some
+    reports, and on macOS it is missing on 83% of them, so no rows there means we do not know
+    what hardware this signature runs on. This used to return `broken_cpu_rate` 0.0 for a
+    population Socorro says nothing about -- a fabricated clean bill on 3 of the 52 filings
+    (2062806 FIXED, 2063002 DUPLICATE, 2062335) and on 3 of the 200 background signatures, 39 of
+    which are missing more than 10% of their CPU strings. It changes no suppression, because
+    `orchestrator._signature_is_mostly_hardware`'s rate tests are positive requirements and both
+    ``None`` and 0.0 answer False; what it stops is the crash brief and the filed bug stating a
+    clean bill nobody measured.
+
     ONE SuperSearch, ~300ms, on a run that already takes ~20 minutes. ``None`` rather than 0 on
     every failure path, because this feeds a suppression and "we could not find out" must never
     be able to satisfy a threshold."""
-    empty = {"reports": None, "bit_flip_reports": None, "broken_cpu_reports": None,
-             "bit_flip_rate": None, "broken_cpu_rate": None}
+    empty = dict(NO_HARDWARE_NOISE)
     if not signature:
         return empty
     days = max(1, min(int(days or MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
@@ -415,11 +491,25 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         # material share of a signature is always near the top, and anything the cut hides is by
         # construction too small to clear a threshold. That is the exact inverse of the `build_id`
         # trap documented at the top of this module, where the row we needed was the rarest.
+        #   That argument is about the two RATES and does not extend to `cpu_reports`, which
+        #   sums this facet and denominates `top_cpu_share`: a truncated facet shrinks the
+        #   denominator and INFLATES the share. Left unguarded deliberately -- across the 252
+        #   signatures measured on 2026-08-21 the widest `cpu_info` facet held 190 terms and
+        #   none was truncated -- and the share is reported, never gated, so the cost of being
+        #   wrong is a sentence, not a suppression.
         "_facets_size": 200,
         "_results_number": 0,
     }
     if channel:
-        params["release_channel"] = channel
+        # Through `utils.get_search_channel`, never raw. Socorro files a third of beta under
+        # `aurora`: a raw "beta" returns 154,768 of the 264,278 Firefox beta+aurora reports in a
+        # 364-day window, dropping 41% of the channel (measured 2026-08-21). A no-op on nightly,
+        # which is all that runs today, and not a cosmetic one the day beta or Fenix is enabled
+        # -- on `js::jit::CompilerFrameInfo::sync` the raw channel reads cpu 0.077 against 0.045
+        # corrected, so a shrunken denominator can push a signature OVER the suppression line,
+        # and `mozilla::ActiveScrolledRoot::GetNearestScrollASR` reads n=5 raw against n=10,
+        # straddling `min_signature_reports`.
+        params["release_channel"] = utils.get_search_channel(channel)
     got = {}
 
     def handler(json_, data):
@@ -438,21 +528,37 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         return empty
     facets = result.get("facets") or {}
 
-    def _sum(field, keep=None):
+    def _sum(field, keep=None, if_empty=0):
+        # `if_empty` is the None-vs-0.0 distinction and it differs per facet, which is why it is
+        # a parameter and not a constant: an empty flip facet is a measured ZERO (Socorro only
+        # sets the field when the stackwalker found a candidate), an empty `cpu_info` facet is
+        # an UNKNOWN (the field is simply absent on those reports).
         rows = facets.get(field)
         if not isinstance(rows, list):
             return None
+        if not rows:
+            return if_empty
         return sum(r.get("count") or 0 for r in rows
                    if isinstance(r, dict) and (keep is None or r.get("term") in keep))
 
     flips = _sum("possible_bit_flips_max_confidence")
-    broken = _sum("cpu_info", keep=set(BROKEN_CPUS))
+    broken = _sum("cpu_info", keep=set(BROKEN_CPUS), if_empty=None)
+    # The rows the Raptor Lake sum throws away. Already paid for, and they answer the question
+    # `broken_cpu_rate` cannot: WHICH processor, and how many different ones.
+    cpu_rows = [r for r in (facets.get("cpu_info") or []) if isinstance(r, dict)]
+    cpu_reports = sum(r.get("count") or 0 for r in cpu_rows)
+    top = max(cpu_rows, key=lambda r: r.get("count") or 0, default=None)
     return {
         "reports": total,
         "bit_flip_reports": flips,
         "broken_cpu_reports": broken,
         "bit_flip_rate": None if flips is None else flips / total,
         "broken_cpu_rate": None if broken is None else broken / total,
+        "cpu_reports": cpu_reports or None,
+        "cpu_terms": len(cpu_rows) or None,
+        "top_cpu_term": None if top is None else top.get("term"),
+        "top_cpu_share": (((top.get("count") or 0) / cpu_reports)
+                          if (top is not None and cpu_reports) else None),
     }
 
 

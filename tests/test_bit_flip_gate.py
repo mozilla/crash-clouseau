@@ -20,7 +20,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import config, sigage  # noqa: E402
+from crashclouseau import config, report_bug, sigage  # noqa: E402
 from crashclouseau.agent import orchestrator as orch, triage  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
     Candidate,
@@ -83,14 +83,23 @@ def _cfg(**over):
     return base
 
 
-def _noise(reports=6, flip=0.5, cpu=0.167):
+def _noise(reports=6, flip=0.5, cpu=0.167, terms=5, share=0.2,
+           term="family 23 model 8 stepping 2"):
     """`sigage.hardware_noise` for bug 2064600's signature on Firefox nightly over 364 days,
     measured 2026-08-19: 6 reports, 3 of them flip-annotated -- which is exactly the "about 50%"
-    Timothy Nikkel quoted at us."""
+    Timothy Nikkel quoted at us. The cpu spread is the same signature re-read 2026-08-21: 5
+    distinct models, the commonest an ordinary Zen at 20%.
+
+    Full shape, `sigage.NO_HARDWARE_NOISE` keys and all, because a fixture that is missing a key
+    the production caller reads is how a gate test passes on an input production never builds."""
     def _n(rate):
         return None if (rate is None or reports is None) else int(reports * rate)
-    return {"reports": reports, "bit_flip_rate": flip, "broken_cpu_rate": cpu,
-            "bit_flip_reports": _n(flip), "broken_cpu_reports": _n(cpu)}
+    out = dict(sigage.NO_HARDWARE_NOISE)
+    out.update(reports=reports, bit_flip_rate=flip, broken_cpu_rate=cpu,
+               bit_flip_reports=_n(flip), broken_cpu_reports=_n(cpu))
+    if reports is not None and terms is not None:
+        out.update(cpu_reports=reports, cpu_terms=terms, top_cpu_term=term, top_cpu_share=share)
+    return out
 
 
 class TestBitFlipGate(unittest.TestCase):
@@ -766,11 +775,258 @@ class TestHardwareNoiseLookup(unittest.TestCase):
         self.assertIsNone(out["bit_flip_rate"])
 
     def test_a_missing_facet_is_unknown_not_zero(self):
+        # This used to assert `broken_cpu_rate == 0.0` under this exact name. An empty `cpu_info`
+        # facet is not a signature with no Raptor Lakes, it is a signature Socorro has no CPU
+        # string for -- 2,552 of 15,329 Firefox-nightly macOS reports carry one (16.6%) against
+        # 99.8% on Windows, and 3 of the canary's 52 filings (2062806 FIXED, 2063002 DUPLICATE,
+        # 2062335) plus 3 of 200 background signatures had the whole facet empty. The old 0.0 was
+        # a hardware clean bill printed to a model and to a filed bug on no measurement at all.
         out, _ = self._run({"total": 100, "facets": {"cpu_info": []}})
         self.assertIsNone(out["bit_flip_rate"])
+        self.assertIsNone(out["broken_cpu_rate"])
+        self.assertIsNone(out["broken_cpu_reports"])
+        self.assertIsNone(out["top_cpu_share"])
+
+    def test_an_empty_flip_facet_is_a_real_zero(self):
+        # The asymmetry, and why `_sum` takes `if_empty` instead of a constant: Socorro sets
+        # `possible_bit_flips_max_confidence` only when the stackwalker found a candidate, so no
+        # rows there means no report has one. `cpu_info` is simply absent on some reports.
+        out, _ = self._run({
+            "total": 100,
+            "facets": {"possible_bit_flips_max_confidence": [],
+                       "cpu_info": [{"term": "family 6 model 60 stepping 3", "count": 100}]}})
+        self.assertEqual(out["bit_flip_rate"], 0.0)
         self.assertEqual(out["broken_cpu_rate"], 0.0)
+        self.assertEqual(out["top_cpu_share"], 1.0)
 
     def test_a_failed_lookup_never_raises(self):
         with mock.patch.object(sigage.socorro, "SuperSearch", side_effect=RuntimeError("boom")):
             self.assertEqual(sigage.hardware_noise("S")["reports"], None)
         self.assertEqual(sigage.hardware_noise("")["reports"], None)
+
+    def test_it_keeps_the_cpu_rows_it_already_paid_for(self):
+        # BUG 2065373, verbatim from Socorro on 2026-08-21: 58 reports, ONE `cpu_info` row. The
+        # gate saw `broken_cpu_rate` 0.0 -- a hardware clean bill computed from the same rows
+        # that say the whole population is one AMD model -- and threw the rows away.
+        out, _ = self._run({
+            "total": 58,
+            "facets": {"cpu_info": [{"term": "family 25 model 117 stepping 2", "count": 58}]}})
+        self.assertEqual(out["broken_cpu_rate"], 0.0)
+        self.assertEqual(out["cpu_reports"], 58)
+        self.assertEqual(out["cpu_terms"], 1)
+        self.assertEqual(out["top_cpu_term"], "family 25 model 117 stepping 2")
+        self.assertEqual(out["top_cpu_share"], 1.0)
+
+    def test_the_share_is_of_the_reports_that_have_a_cpu_string(self):
+        # NOT of `total`. Socorro has a cpu_info for 16.6% of Firefox-nightly macOS reports, so
+        # denominating on `total` would report a mac-heavy signature as unconcentrated when it
+        # is only unmeasured. 6 of the 10 known CPUs is 60%, not 6%.
+        out, _ = self._run({
+            "total": 100,
+            "facets": {"cpu_info": [{"term": "family 6 model 60 stepping 3", "count": 6},
+                                    {"term": "family 6 model 158 stepping 9", "count": 4}]}})
+        self.assertEqual(out["cpu_reports"], 10)
+        self.assertAlmostEqual(out["top_cpu_share"], 0.6)
+
+    def test_the_top_row_is_the_biggest_one_not_the_first(self):
+        # Socorro returns facets count-ordered, but nothing in the contract says so and the
+        # `build_id` trap at the top of this module is the same mistake in the other direction.
+        out, _ = self._run({
+            "total": 10,
+            "facets": {"cpu_info": [{"term": "a", "count": 3}, {"term": "b", "count": 7}]}})
+        self.assertEqual(out["top_cpu_term"], "b")
+        self.assertAlmostEqual(out["top_cpu_share"], 0.7)
+
+    def test_every_answer_has_the_same_keys_as_the_unknown_one(self):
+        # `orchestrator._hardware_noise` has to hand back this shape when the gate is off, and it
+        # used to do that from a second hand-written literal that would silently fall behind.
+        out, _ = self._run({"total": 1, "facets": {}})
+        self.assertEqual(set(out), set(sigage.NO_HARDWARE_NOISE))
+        self.assertEqual(set(sigage.hardware_noise("")), set(sigage.NO_HARDWARE_NOISE))
+        with mock.patch.object(config, "get_agent_bit_flip", return_value=_cfg(enabled=False)):
+            self.assertEqual(set(orch._hardware_noise({"signature": "S"}, "nightly")),
+                             set(sigage.NO_HARDWARE_NOISE))
+
+    def test_beta_is_asked_for_as_beta_plus_aurora(self):
+        # Socorro files a third of beta under `aurora`: a raw "beta" returns 154,768 of the
+        # 264,278 Firefox beta+aurora reports in a 364-day window (2026-08-21), so the rate is
+        # computed on 59% of the channel. A no-op on nightly, which is all that runs today.
+        with mock.patch.object(sigage.socorro, "SuperSearch") as ss:
+            def ctor(params=None, handler=None, handlerdata=None, **kw):
+                handler({"total": 1, "facets": {}}, handlerdata)
+                return mock.Mock(wait=mock.Mock())
+            ss.side_effect = ctor
+            sigage.hardware_noise("S", channel="beta")
+            self.assertEqual(ss.call_args.kwargs["params"]["release_channel"],
+                             ["beta", "aurora"])
+            sigage.hardware_noise("S", channel="nightly")
+            self.assertEqual(ss.call_args.kwargs["params"]["release_channel"], "nightly")
+
+
+class TestCpuConcentrationIsReportedNeverGated(unittest.TestCase):
+    """The rank-8 audit result: the cpu_info concentration is a FACT the pipeline already paid
+    for, and it is NOT a suppressor. Measured 2026-08-21 on the canary's 52 filings (19
+    FIXED/DUPLICATE/ASSIGNED controls) at the gate's own `min_signature_reports` floor: every
+    threshold from 0.40 to 0.95 eats at least one control, 0.50 eats five, AUC is 0.333 on 3 bad
+    against 13 controls, and the shape is present in 13-35% of the triaged population."""
+
+    # (bug, resolution, reports, flip rate, cpu rate, cpu terms, top share) -- real values,
+    # `sigage.hardware_noise` on Firefox nightly over 364 days, 2026-08-21.
+    CONTROLS = [
+        (2062052, "FIXED", 6, 0.0, 0.0, 1, 1.000),      # ScreenOrientation::Create, 6/6 one CPU
+        (2063678, "FIXED", 1111, 0.0, 0.0, 2, 0.973),   # libc.so.6 | cuEGLApiInit, Mageia/NVIDIA
+        (2063809, "FIXED", 109, 0.0, 0.0, 5, 0.541),    # ff_vk_exec_add_dep_frame, AMD Vulkan
+        (2061180, "DUPLICATE", 1251, 0.001, 0.0, 8, 0.767),   # libvulkan_radeon.so
+        (2063864, "DUPLICATE", 18, 0.0, 0.0, 2, 0.833),       # setsockopt_syscall
+    ]
+
+    def setUp(self):
+        p = mock.patch.object(config, "get_agent_bit_flip", return_value=_cfg())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_five_controls_a_concentration_rule_would_have_eaten(self):
+        for bug, res, n, flip, cpu, terms, share in self.CONTROLS:
+            with self.subTest(bug=bug, resolution=res):
+                d = _lead()
+                orch._apply_bit_flip_gate(d, _seed(
+                    confidence=None, reports=n,
+                    hardware_noise=_noise(reports=n, flip=flip, cpu=cpu, terms=terms,
+                                          share=share)))
+                self.assertEqual(d.verdict.decision, Decision.lead)
+                self.assertEqual(d.corroborations["signature_top_cpu_share"], round(share, 3))
+
+    def test_bug_2065373_is_measured_and_left_alone(self):
+        # 58 reports, all on `family 25 model 117 stepping 2`, no bit flip, no Raptor Lake.
+        # :jstutte called that filing "meaningful, but with some details to correct" and it is
+        # still NEW, so a rule tuned to eat it would have eaten a filing the reviewer wanted.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(
+            confidence=None, reports=58,
+            hardware_noise=_noise(reports=58, flip=0.0, cpu=0.0, terms=1, share=1.0,
+                                  term="family 25 model 117 stepping 2")))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.corroborations["signature_top_cpu_share"], 1.0)
+        self.assertEqual(d.corroborations["signature_cpu_terms"], 1)
+        self.assertEqual(d.corroborations["signature_top_cpu_term"],
+                         "family 25 model 117 stepping 2")
+        self.assertEqual(d.corroborations["signature_cpu_reports"], 58)
+
+    def test_an_unmeasured_spread_records_nothing(self):
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(
+            confidence=None, reports=99,
+            hardware_noise=_noise(reports=99, flip=0.0, cpu=None, terms=None)))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertNotIn("signature_top_cpu_share", d.corroborations)
+        self.assertNotIn("signature_broken_cpu_rate", d.corroborations)
+
+    def test_the_prompt_states_the_spread_with_its_background(self):
+        lines = triage._crash_facts({"raw_crash": {}, "hardware_noise": _noise(
+            reports=58, flip=0.0, cpu=0.0, terms=1, share=1.0,
+            term="family 25 model 117 stepping 2")})
+        spread = [ln for ln in lines if "CPU-MODEL SPREAD" in ln]
+        self.assertEqual(len(spread), 1)
+        self.assertIn("100% are on family 25 model 117 stepping 2", spread[0])
+        self.assertIn("Of the 58 reports", spread[0])
+        self.assertIn("32%", spread[0])          # the population median it must be read against
+        self.assertIn("13% of them", spread[0])  # 26 of 200 sampled signatures
+        self.assertIn("ORDINARY", spread[0])
+
+    def test_the_spread_is_outside_the_suppression_paragraph(self):
+        # THE COUNTER-EXAMPLE AGAINST MY OWN REPORTING FIX. "One cpu_info value" folded into the
+        # "the higher these are, the likelier a failing-hardware artefact" paragraph is the
+        # suppressor this audit killed, in prose: it would push a model to abstain on bugs 2056116
+        # (the off-stack pref-flip archetype), 1993828 and 2063678, all real, all one-model.
+        lines = triage._crash_facts({"raw_crash": {}, "hardware_noise": _noise(
+            reports=58, flip=0.0, cpu=0.0, terms=1, share=1.0)})
+        artefact = [ln for ln in lines if "failing-hardware artefact" in ln]
+        self.assertEqual(len(artefact), 1)
+        self.assertNotIn("CPU-MODEL SPREAD", artefact[0])
+        spread = [ln for ln in lines if "CPU-MODEL SPREAD" in ln][0]
+        self.assertNotIn("failing-hardware artefact", spread)
+        self.assertIn("SCOPE", spread)
+
+    def test_nothing_is_said_when_socorro_has_no_cpu_string(self):
+        self.assertEqual(triage._cpu_spread_line({}), "")
+        self.assertEqual(triage._cpu_spread_line(_noise(terms=None)), "")
+
+    def test_the_filed_bug_prints_the_same_number(self):
+        # The whole note on bug 2065373: no bit flip, no Raptor Lake, and the one fact about the
+        # signature nothing else printed.
+        note = report_bug.build_hardware_note({
+            "signature_hardware_sample": 58, "signature_bit_flip_rate": 0.0,
+            "signature_broken_cpu_rate": 0.0, "signature_cpu_reports": 58,
+            "signature_cpu_terms": 1, "signature_top_cpu_share": 1.0,
+            "signature_top_cpu_term": "family 25 model 117 stepping 2"})
+        self.assertIn("CPU-model spread", note)
+        self.assertIn("100% of the 58 reports", note)
+        self.assertIn("family 25 model 117 stepping 2", note)
+        self.assertIn("32%", note)
+        self.assertIn("SCOPE", note)
+        self.assertNotIn("Raptor Lake", note)
+        self.assertNotIn("Hardware-error share", note)
+
+    def test_one_report_is_not_a_spread(self):
+        # THE SHAPE PRODUCTION ACTUALLY PRODUCES. One report carries one `cpu_info` string, so
+        # `top_cpu_share` is 1.00 by arithmetic and clears any lift -- 18 of the canary's 52
+        # filings have exactly one report and 17 of them read 1.00. Without the floor the crash
+        # brief and every such bug comment would state "100% of the 1 reports are on one model,
+        # and 13% of the population does that", against a background measured only on
+        # signatures with >=5 reports. The share is still RECORDED; only the prose is silent.
+        noise = _noise(reports=1, flip=0.0, cpu=0.0, terms=1, share=1.0,
+                       term="family 6 model 94 stepping 3")
+        self.assertEqual(triage._cpu_spread_line(noise), "")
+        lines = triage._crash_facts({"raw_crash": {}, "hardware_noise": noise})
+        self.assertEqual([ln for ln in lines if "CPU-MODEL SPREAD" in ln], [])
+        # ... while the hardware-share paragraph it sits next to is unaffected.
+        self.assertEqual(len([ln for ln in lines if "failing-hardware artefact" in ln]), 1)
+        self.assertEqual(report_bug.build_hardware_note({
+            "signature_hardware_sample": 1, "signature_bit_flip_rate": 0.0,
+            "signature_broken_cpu_rate": 0.0, "signature_cpu_reports": 1,
+            "signature_cpu_terms": 1, "signature_top_cpu_share": 1.0,
+            "signature_top_cpu_term": "family 6 model 94 stepping 3"}), "")
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=1, hardware_noise=noise))
+        self.assertEqual(d.corroborations["signature_top_cpu_share"], 1.0)
+
+    def test_the_floor_is_the_share_s_own_denominator(self):
+        # 4 known CPU strings out of 200 reports is still a share of four things. `cpu_reports`,
+        # not `reports`, is what the percentage is computed from -- on macOS Socorro carries a
+        # cpu_info for 16.6% of reports, so a busy signature can have a tiny one.
+        noise = _noise(reports=200, flip=0.0, cpu=0.0, terms=1, share=1.0)
+        noise.update(cpu_reports=4)
+        self.assertEqual(triage._cpu_spread_line(noise), "")
+        noise.update(cpu_reports=5)
+        self.assertIn("Of the 5 reports", triage._cpu_spread_line(noise))
+
+    def test_the_prompt_states_neither_direction(self):
+        # The measurement says concentration is ANTI-correlated with carrying a real bug: 9 of
+        # the 26 background signatures at 100% do, against 118 of 200 overall. So the line may
+        # not tell the model a concentrated signature "usually has a code path behind it" --
+        # that is the killed suppressor with its sign flipped, and it inflates leads.
+        spread = triage._cpu_spread_line(_noise(reports=58, flip=0.0, cpu=0.0, terms=1,
+                                                share=1.0))
+        self.assertIn("NEITHER direction", spread)
+        self.assertIn("LESS often", spread)
+        self.assertNotIn("usually has a code path", spread)
+
+    def test_an_ordinary_spread_is_not_mentioned(self):
+        # The median nightly signature is at 32% and `_HARDWARE_NOTE_LIFT` puts the line at 0.64
+        # -- 58 of 200 sampled signatures, 29%. Saying "41% are on one model" of a population
+        # whose median is 32% is noise in a bug comment.
+        note = report_bug.build_hardware_note({
+            "signature_hardware_sample": 54, "signature_broken_cpu_rate": 0.24,
+            "signature_cpu_reports": 54, "signature_cpu_terms": 14,
+            "signature_top_cpu_share": 0.41, "signature_top_cpu_term": "family 6 model 154"})
+        self.assertNotIn("CPU-model spread", note)
+
+    def test_the_spread_rides_with_the_rates_when_both_fire(self):
+        note = report_bug.build_hardware_note({
+            "signature_hardware_sample": 19, "signature_bit_flip_rate": 0.0,
+            "signature_broken_cpu_rate": 0.789, "signature_cpu_reports": 19,
+            "signature_cpu_terms": 5, "signature_top_cpu_share": 0.789,
+            "signature_top_cpu_term": "family 6 model 183 stepping 1"})
+        self.assertIn("Hardware-error share", note)
+        self.assertIn("79% come from the known-buggy Intel Raptor Lake", note)
+        self.assertIn("CPU-model spread", note)

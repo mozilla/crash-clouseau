@@ -246,6 +246,60 @@ def _cpu_summary(raw: dict, sysinfo: dict) -> str:
     return out
 
 
+def _cpu_spread_line(noise: dict) -> str:
+    """Which PROCESSOR MODELS this signature's reports come from, as one line, or ``""``.
+
+    BUG 2065373, and :jstutte's review of it: "could clouseau do some OS / install distribution
+    checks on the socorro data?" The run already had the answer and threw it away — 58 reports,
+    a single `cpu_info` row, `family 25 model 117 stepping 2` — while handing both models
+    `broken_cpu_rate` 0.0, a hardware clean bill computed from the very rows that say the whole
+    population is one processor.
+
+    STATED WITH ITS BACKGROUND, AND OUTSIDE THE PARAGRAPH ABOVE. Both are load-bearing. "58 of
+    58 reports are on one CPU model" as bare text is an abstain instruction, and it would be the
+    wrong one: 26 of 200 sampled nightly signatures (13%) sit on exactly one model, and 8 of the
+    20 that are one-model with >=20 reports carry a real Firefox bug — among them bug 2056116,
+    the off-stack pref-flip archetype this repo ships, and bug 1993828. Swept as a suppressor
+    over the 52 filed bugs, every threshold from 0.40 to 0.95 ate a FIXED or DUPLICATE one (see
+    `orchestrator._signature_is_mostly_hardware`). So the line says SCOPE, carries the 0.32
+    population median in the same breath, and sits outside the "the higher these are, the
+    likelier a failing-hardware artefact" paragraph, which is a suppression instruction.
+
+    SILENT UNDER `sigage.POPULATION_TOP_CPU_SHARE_MIN_REPORTS`, because below it the number is
+    arithmetic rather than evidence: one report carries one `cpu_info` string, so the share is
+    exactly 1.00 by construction, and the 32%/13% background it is stated against was measured
+    only over signatures with >=5 reports. That is not a corner: 18 of the canary's 52 filings
+    have exactly one report and 17 of those read 1.00. The gate's own `min_signature_reports`
+    exists for the same reason -- "below it any percentage is noise, 1 of 3 being 33%".
+
+    Costs nothing: `sigage.hardware_noise` fetched the whole `cpu_info` facet already, to count
+    Raptor Lakes."""
+    share = noise.get("top_cpu_share")
+    seen = noise.get("cpu_reports")
+    terms = noise.get("cpu_terms")
+    if share is None or not seen or not terms:
+        return ""
+    if seen < sigage.POPULATION_TOP_CPU_SHARE_MIN_REPORTS:
+        return ""
+    return (
+        "CPU-MODEL SPREAD OF THIS SIGNATURE — a fact, not a verdict, and deliberately stated "
+        "apart from the paragraph above. Of the {} reports that carry a cpu_info string, "
+        "{:.0f}% are on {}{}. Background: the median Firefox-nightly signature with at least 5 "
+        "reports sits at {:.0f}%, and 13% of them (26 of 200 sampled 2026-08-21) sit at 100% — "
+        "one processor model is ORDINARY, and every suppression threshold tested on this "
+        "statistic suppressed a crash that was later FIXED. Read it as SCOPE and as evidence "
+        "in NEITHER direction: when a signature is confined to one CPU model, one GPU driver "
+        "or one distribution, naming which is worth more than calling the population small — "
+        "but concentration is not support for a bug either, since in that same sample the most "
+        "concentrated signatures carry a known Firefox bug LESS often than the rest (9 of the "
+        "26 at 100%, against 118 of the 200 overall).".format(
+            seen, 100 * share, noise.get("top_cpu_term") or "one model",
+            ", the only model seen" if terms == 1
+            else ", one of {} models seen".format(terms),
+            100 * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN)
+    )
+
+
 def _hardware_noise_lines(crash: dict) -> list[str]:
     """How much of this SIGNATURE is hardware error, as prompt lines, or ``[]``.
 
@@ -255,7 +309,12 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     non-zero bit flip probability. That might be something you want to include in your llm prompt
     to consider." He was right, and the report we had triaged was clean on both counts — no flip
     annotation, an ordinary Rocket Lake CPU — so nothing a per-report check could ever read would
-    have revealed that 71% of the signature is hardware noise.
+    have revealed how much of the signature is hardware noise. (The 71% this docstring used to
+    quote was 29.3% flips + 42.6% Raptor Lake over ALL products and channels across 180 days,
+    n=331 — the denominator `sigage.hardware_noise` refuses, because it kills bug 2062219, FIXED.
+    On the denominator that runs, Firefox nightly over 364 days, the same signature read 6
+    reports at 50% and 17% on 2026-08-19 and 5 reports at 60% and 20% on 2026-08-21. A share
+    without its denominator and its date is not a measurement.)
 
     Stated WITH the population rate, because a bare "50%" is unreadable: a model cannot know
     whether that is alarming without knowing that nightly as a whole runs at 2.5%.
@@ -284,7 +343,7 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
         bits.append("{:.0f}% come from a known-defective Intel Raptor Lake CPU (family 6 model "
                     "183 stepping 1, meta bug 1975808; crash population: {:.0f}%)".format(
                         100 * cpu, 100 * sigage.POPULATION_BROKEN_CPU_RATE))
-    return [
+    out = [
         "",
         "HARDWARE-ERROR SHARE OF THIS SIGNATURE, on this crash's own channel over the last "
         "year. Of its {} reports, {}. The two rarely overlap, so they add up.".format(
@@ -296,6 +355,12 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
         "here, the burden is to show a signal in the crashes that are NOT hardware error — this "
         "report's own CPU and bit-flip fields above are the first place to check.",
     ]
+    # Appended as its OWN paragraph, never folded into the two above: concentration is not a
+    # hardware-error share and must not inherit that paragraph's instruction.
+    spread = _cpu_spread_line(noise)
+    if spread:
+        out.append(spread)
+    return out
 
 
 def _days_phrase(days):

@@ -483,6 +483,13 @@ def fetch_signature_stats(uuid, info):
 # anything (`_apply_bit_flip_gate` does that, at bugbot's much higher thresholds), it only tells
 # the reader something they would otherwise have to go and measure. Timothy Nikkel, on bug
 # 2064600: "I always look for these two things in crash reports."
+#
+# Reused by `_cpu_spread_sentence` for the CPU-model concentration, against
+# `sigage.POPULATION_TOP_CPU_SHARE_MEDIAN` (0.32) rather than against a rate, so that sentence
+# appears at a top share >= 0.64 -- 58 of 200 sampled nightly signatures, 29% (measured
+# 2026-08-21). Reusing the constant instead of adding a second one is the point: the alternative
+# was a fresh tunable with nothing behind it, and this one at least says what the two rates say,
+# "twice the population". It suppresses nothing either way.
 _HARDWARE_NOTE_LIFT = 2.0
 
 
@@ -637,8 +644,17 @@ def build_hardware_note(corroborations):
 
     Says explicitly whether THIS report is implicated, because that is the distinction the
     numbers otherwise hide and the one that decides what the reader should do next: on bug
-    2064600 the signature was 71% hardware and the triaged report was clean, which is precisely
-    the case Nikkel called "the next step"."""
+    2064600 the signature was mostly hardware — 60% bit flips and 20% Raptor Lake on Firefox
+    nightly, re-measured 2026-08-21 over 5 reports — and the triaged report was clean, which is
+    precisely the case Nikkel called "the next step". (The 71% quoted here before came from all
+    products and all channels over 180 days, 29.3% + 42.6% of 331 reports: the denominator
+    `sigage.hardware_noise` refuses, because it suppresses bug 2062219, FIXED.)
+
+    THE CPU-MODEL SPREAD rides in the same paragraph when it clears `_HARDWARE_NOTE_LIFT`, so
+    the human reads the number the crash brief gave the model (`triage._cpu_spread_line`). On
+    bug 2065373 it is the WHOLE note — 58 of 58 reports on one AMD model, `broken_cpu_rate` 0.0,
+    no bit flip — which is why it has to be able to stand alone: the signature's only unusual
+    property is the one nothing else printed."""
     c = corroborations or {}
     sample = c.get("signature_hardware_sample")
     flip = c.get("signature_bit_flip_rate")
@@ -655,8 +671,6 @@ def build_hardware_note(corroborations):
         parts.append("{:.0f}% come from the known-buggy Intel Raptor Lake (family 6 model 183 "
                      "stepping 1, bug 1975808; crash population: {:.0f}%)".format(
                          100 * cpu, 100 * sigage.POPULATION_BROKEN_CPU_RATE))
-    if not parts:
-        return ""
     # Whether the crash we actually analysed is one of the suspect ones. Both flags are recorded
     # for every verdict, so an absent one means "not established" and is left unsaid.
     cpu_known = "report_on_broken_cpu" in c
@@ -665,8 +679,59 @@ def build_hardware_note(corroborations):
     tail = (" The report analysed above is not one of them — it has no bit-flip annotation and "
             "did not come from one of those CPUs — so if this signature is worth anything, it "
             "is worth it on crashes like that one." if clean else "")
-    return ("Hardware-error share of this signature: of its {} reports on this channel over the "
-            "last year, {}.{}".format(sample, "; and ".join(parts), tail))
+    note = ""
+    if parts:
+        note = ("Hardware-error share of this signature: of its {} reports on this channel over "
+                "the last year, {}.{}".format(sample, "; and ".join(parts), tail))
+    spread = _cpu_spread_sentence(c)
+    if spread:
+        note = (note + " " + spread) if note else spread
+    return note
+
+
+def _cpu_spread_sentence(corroborations):
+    """The CPU-model concentration for the filed bug, when it is unusual, or ``""``.
+
+    THE SAME NUMBER THE CRASH BRIEF GAVE THE MODEL (`triage._cpu_spread_line`), stated with the
+    same 0.32 population median, because a bug comment and a prompt disagreeing about a figure
+    is how a reviewer stops trusting both. :jstutte asked for exactly this on bug 2065373 —
+    "could clouseau do some OS / install distribution checks on the socorro data?" — after a
+    filing whose 58 reports all came from one AMD model and whose comment 0 said nothing about
+    it.
+
+    A SCOPE HINT, NEVER AN ACCUSATION, and the wording is the whole safeguard: 13% of nightly
+    signatures sit on a single model, and of the 20 one-model signatures with >=20 reports in
+    the background sample 8 carry a real Firefox bug. Every attempt to turn this into a
+    suppression threshold ate a FIXED filing (`orchestrator._signature_is_mostly_hardware`), so
+    the sentence has to carry its base rate or it becomes that suppressor in the reader's head.
+
+    AND IT SAYS NOTHING UNDER `sigage.POPULATION_TOP_CPU_SHARE_MIN_REPORTS`. Unlike the two rate
+    sentences this one has no sample floor of its own, and without one it would print on almost
+    every filing for free: a one-report signature has one `cpu_info` string, so its share is
+    1.00 by construction and clears any lift. Of the 27 filings among the canary's 52 whose
+    share clears `_HARDWARE_NOTE_LIFT`, 19 have fewer than 5 reports and 17 have exactly one
+    (measured 2026-08-21) -- so the floor is the difference between a fact about the population
+    and a sentence in every bug comment saying 100% of one report is one model."""
+    from crashclouseau import sigage
+
+    c = corroborations or {}
+    share = c.get("signature_top_cpu_share")
+    seen = c.get("signature_cpu_reports")
+    terms = c.get("signature_cpu_terms")
+    if share is None or not seen or not terms:
+        return ""
+    if seen < sigage.POPULATION_TOP_CPU_SHARE_MIN_REPORTS:
+        return ""
+    if share < _HARDWARE_NOTE_LIFT * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN:
+        return ""
+    return ("CPU-model spread: {:.0f}% of the {} reports that carry a cpu_info string are on "
+            "{}{}. The median Firefox-nightly signature sits at {:.0f}% and 13% of them are on "
+            "a single model, so this is a hint about SCOPE — a driver, a distribution, an "
+            "instruction set — and not a hardware verdict.".format(
+                100 * share, seen, c.get("signature_top_cpu_term") or "one model",
+                ", the only model seen" if terms == 1
+                else ", one of {} models seen".format(terms),
+                100 * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN))
 
 
 def build_bug_comment(

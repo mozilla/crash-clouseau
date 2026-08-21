@@ -713,18 +713,22 @@ def _hardware_noise(info, channel):
     consumes it is on, and never raises — an unknown share leaves every verdict alone.
 
     Scoped to the crash's OWN product and channel, which is the whole rule rather than a
-    refinement: measured over the canary's first 47 filings, the same thresholds applied to an
-    all-products/all-channels rate suppress bug 2062219 (``nsAtom::IsStatic``, RESOLVED FIXED),
-    because release carries years of failing consumer hardware on a hot signature. See
-    ``sigage.hardware_noise``. Passing the channel through rather than defaulting also keeps this
-    correct for the non-Firefox products the pipeline is being extended to."""
-    empty = {"reports": None, "bit_flip_reports": None, "broken_cpu_reports": None,
-             "bit_flip_rate": None, "broken_cpu_rate": None}
+    refinement: re-measured 2026-08-21 over the canary's 52 filings, the same thresholds applied
+    to an all-products/all-channels rate fire on 8 of them and suppress bug 2062219
+    (``nsAtom::IsStatic``, RESOLVED FIXED), because release carries years of failing consumer
+    hardware on a hot signature. See ``sigage.hardware_noise``. Passing the channel through
+    rather than defaulting also keeps this correct for the non-Firefox products the pipeline is
+    being extended to.
+
+    The unknown answer is ``sigage.NO_HARDWARE_NOISE`` and not a second literal: this function
+    and ``hardware_noise`` have to return the same KEYS, and a hand-copied key list is how a new
+    one ends up missing from the disabled path only."""
+    from crashclouseau import sigage
+
+    empty = dict(sigage.NO_HARDWARE_NOISE)
     if not config.get_agent_bit_flip()["enabled"]:
         return empty
     try:
-        from crashclouseau import sigage
-
         return sigage.hardware_noise(
             info.get("signature", ""),
             product=info.get("product") or "Firefox",
@@ -2090,9 +2094,36 @@ def _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
     Both rate tests are POSITIVE requirements and the sample test is a floor, so every unknown
     (a failed ``sigage.hardware_noise`` leaves all three ``None``) answers False and the verdict
     is reported. Either rate alone is enough: the two signals are nearly disjoint, so requiring
-    both would miss each other's cases: measured over the canary's filings, bug 2064600 trips only
-    the flip rate (50% flips, 17% Raptor Lake) and `js::jit::CompilerFrameInfo::sync` trips only
-    the CPU rate (0% flips, 71% Raptor Lake)."""
+    both would miss each other's cases: re-measured 2026-08-21, bug 2064600's signature trips
+    only the flip rate (60% flips, 20% Raptor Lake over 5 nightly reports) and
+    `js::jit::CompilerFrameInfo::sync` — bug 2063364, INVALID — trips only the CPU rate (0%
+    flips, 79% Raptor Lake, 15 of 19 reports).
+
+    THE 71% THIS DOCSTRING QUOTED FOR THAT SECOND SIGNATURE DOES NOT REPRODUCE under any of the
+    eight product/channel/window combinations tried (Firefox/nightly at 364d 0.789, 180d 0.789,
+    28d 0.000; Firefox/all-channels 0.203; all-products/all-channels 0.188), and the shipped
+    figure itself moved 4.4pp in a fortnight: 15 of 18 = 0.833 until 2026-08-14, 15 of 19 =
+    0.789 since. So this arm is FITTED ON n=1 and the panel cannot separate any threshold in
+    (0.302, 0.789] — bug 2062219 (FIXED) sits at 0.302, bug 2063364 (INVALID) at 0.789, and
+    nothing on the 52 filings lands between them. 0.7 stays because it is bugbot's published
+    line and eats 0 of the 19 FIXED/DUPLICATE/ASSIGNED controls, not because this panel chose
+    it. Lowering it to 0.5 buys 0 extra bad filings and newly suppresses three background
+    signatures that all carry FIXED bugs: `arena_dalloc | BaseAllocator::free |
+    MozJemalloc::free` at 0.57 (1893270/1893340/1962421), `mozilla::detail::VectorImpl<T>::new_`
+    at 0.60 (1890909) and `webrender_bindings::moz2d_renderer` at 0.56 (1967071/2002983).
+
+    CPU CONCENTRATION WAS TRIED AS A THIRD ARM HERE AND KILLED, 2026-08-21. Bug 2065373's
+    signature reads `broken_cpu_rate` 0.0 while 58 of its 58 reports sit on ONE processor model,
+    so "the top `cpu_info` share" looks like the arm this gate is missing. It is not: on the 52
+    filings at the same sample floor every threshold from 0.40 to 0.95 suppresses at least one
+    control — 0.50 eats five (2062052, 2063678, 2063809 FIXED; 2061180, 2063864 DUPLICATE) —
+    while catching at most the one INVALID the CPU rate already catches, and it reads AUC 0.333
+    on 3 bad against 13 controls. The only variant that eats no control, `cpu_terms == 1 and
+    reports >= 20`, fires on 20 of 174 eligible background signatures and 8 of those carry a
+    real Firefox bug, including bug 2056116 — the off-stack pref-flip archetype this repo ships.
+    The share is REPORTED instead, always beside its 0.32 population median, by
+    `triage._cpu_spread_line` and `report_bug.build_hardware_note`. See `sigage.hardware_noise`
+    for the panels."""
     if sample is None or sample < cfg["min_signature_reports"]:
         return False
     if flip_rate is not None and flip_rate >= cfg["max_bit_flip_rate"]:
@@ -2214,6 +2245,16 @@ def _apply_bit_flip_gate(dossier, seed):
         flags["signature_bit_flip_rate"] = round(flip_rate, 3)
     if cpu_rate is not None:
         flags["signature_broken_cpu_rate"] = round(cpu_rate, 3)
+    # The CPU-model spread, recorded and never compared with a threshold: it is what the filed
+    # bug prints (`report_bug.build_hardware_note`) and, in prod, the only way to ask later
+    # whether concentration predicts anything at all. Swept as a suppressor and killed — see
+    # `_signature_is_mostly_hardware`.
+    top_share = noise.get("top_cpu_share")
+    if top_share is not None:
+        flags["signature_cpu_reports"] = noise.get("cpu_reports")
+        flags["signature_cpu_terms"] = noise.get("cpu_terms")
+        flags["signature_top_cpu_term"] = noise.get("top_cpu_term")
+        flags["signature_top_cpu_share"] = round(top_share, 3)
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
     if v.decision == Decision.abstain:
         return

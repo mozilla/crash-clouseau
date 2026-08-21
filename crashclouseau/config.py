@@ -183,6 +183,11 @@ _POPULATION_DEFAULTS = {
     # the ``population`` module docstring for the sample.
     #  - top share: median 0.18, p75 0.47 -> 0.5 sits just above the third quartile (fired on
     #    13/59), so the flag means "unusually concentrated", not "more than a couple".
+    #    THIS 0.5 BELONGS TO `install_time` ONLY. The same statistic over the `cpu_info` facet
+    #    runs median 0.32 / p75 0.78 (200 Firefox-nightly signatures, 2026-08-21), where 0.5
+    #    fires on 35% of the population and, swept as a suppressor, eats five of the canary's 19
+    #    FIXED/DUPLICATE/ASSIGNED filings. See `sigage.POPULATION_TOP_CPU_SHARE_MEDIAN` and
+    #    `orchestrator._signature_is_mostly_hardware`; do not inherit this number for that facet.
     #  - median gap between consecutive installs: p10 4430s (74 min), median 8h -> 300s is far
     #    below the tenth percentile (fired on 4/59). Those four are 20s, 62s, 89s and 142s:
     #    populations that cannot be independent users.
@@ -613,10 +618,28 @@ def get_agent_bit_flip():
     annotation is already a positive finding by the stackwalker, whereas merely owning a Raptor
     Lake is common enough (4.1% of nightly reports) that it takes a landslide to mean anything.
 
-    ``min_signature_reports`` 5 is the sample floor, and it is MEASURED rather than picked. On the
-    47 bugs the canary had filed, floors of 3 and 5 give identical answers -- 0 of the 18
-    FIXED/DUPLICATE/ASSIGNED filings suppressed, the INVALID bug 2062173 caught -- while a floor
-    of 8 or more loses bug 2064600 itself, whose signature has just 6 nightly reports in a year.
+    ``max_broken_cpu_rate`` IS FITTED ON ONE CASE, and the panel cannot do better than that. On
+    the canary's 52 filings the highest control is bug 2062219 (FIXED) at 0.302 and the only
+    INVALID this arm catches is bug 2063364 at 0.789, with nothing in between, so every value in
+    (0.30, 0.79] scores identically and 0.7 is defensible by provenance rather than by fit;
+    lowering it to 0.5 catches no extra bad filing and newly suppresses three background
+    signatures that all carry FIXED bugs. A THIRD ARM on how concentrated the signature's
+    ``cpu_info`` facet is -- the obvious repair for bug 2065373, whose 58 reports are all one CPU
+    model at ``broken_cpu_rate`` 0.0 -- was measured on that panel on 2026-08-21 and KILLED:
+    every threshold from 0.40 to 0.95 eats at least one FIXED/DUPLICATE/ASSIGNED filing (0.50
+    eats five), AUC is 0.333 at this sample floor, and the shape is present in 13-35% of the
+    triaged population. Do not rebuild it, and do not borrow
+    ``_POPULATION_DEFAULTS["concentrated_share"]`` 0.5 for it -- that one was fit on
+    ``install_time``. The spread is REPORTED instead; see
+    ``orchestrator._signature_is_mostly_hardware`` and ``sigage.hardware_noise``.
+
+    ``min_signature_reports`` 5 is the sample floor, and it is MEASURED rather than picked.
+    Re-measured 2026-08-21 on the 52 bugs the canary has filed, floors of 3 and 5 give identical
+    answers -- 6 filings suppressed, 0 of the 19 FIXED/DUPLICATE/ASSIGNED ones among them, the
+    INVALID bugs 2062173 and 2063364 caught -- while a floor of 6 or more now loses bug 2064600
+    itself, whose signature held 6 nightly reports in a year when this was written and 5 two days
+    later. The margin here is ONE report, not three: a floor is cheap to raise and this one is
+    already at the edge of the case it was written for.
     It is far below bugbot's own low-volume line of 20 because ``sigage.hardware_noise`` counts
     only the crash's OWN product and channel, where volumes are an order of magnitude smaller;
     see that function for why the wider denominator is not usable (it kills bug 2062219, FIXED).
