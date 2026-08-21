@@ -1542,9 +1542,21 @@ def _apply_backout_gate(dossier, seed):
 # ``the `"MediaTrackGrph"` thread``. QUOTED is the whole point: quoting a name is the model
 # asserting a literal runtime identifier, which is checkable, whereas prose about a subsystem
 # ("a MediaTrackGraph would be shut down here") is not and must not be gated on.
+#
+# ``(?<![-\w])`` and NOT ``\b``, because a word boundary sits after a HYPHEN and an X-thread
+# compound is ordinary writing: "main-thread", "off-thread", "background-thread". Replaying this
+# gate over all 52 filings, its entire lifetime reach is 3 quoted-thread matches and this bug was
+# 1 of them: bug 2062286's consistency statement, "Crash is a main-thread
+# `EXCEPTION_ACCESS_VIOLATION_READ` reading a `char16_t` buffer", read the EXCEPTION NAME as a
+# claimed thread, found it absent from an 86-thread inventory that is complete, and clamped 97%
+# to medium — under `autofile.min_confidence`. That filing is the one BMO resolves FIXED with a
+# `regressed_by` naming exactly the changeset we named, so the clamp would have cost the single
+# confirmed-correct filing in the corpus. 10 of the 52 filings use an X-thread compound, so the
+# construction is generic and live, not one typo. The other 2 matches are correct (2064436 fires,
+# 2065075 does not).
 _QUOTED_THREAD_RE = re.compile(
     r"""(?: ["'`]{1,2}([^"'`\n]{2,40})["'`]{1,2}\s+threads?\b
-          | \bthreads?(?:\s+named)?\s+["'`]{1,2}([^"'`\n]{2,40})["'`]{1,2} )""",
+          | (?<![-\w])threads?(?:\s+named)?\s+["'`]{1,2}([^"'`\n]{2,40})["'`]{1,2} )""",
     re.I | re.X,
 )
 # Below this, a squashed name is too generic to check ("ui", "io", "gpu").

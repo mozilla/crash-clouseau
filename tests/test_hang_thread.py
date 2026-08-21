@@ -278,6 +278,21 @@ class TestAbsentThreadGate(unittest.TestCase):
             self.assertEqual(self._run(statement).verdict.confidence, Confidence.probable,
                              statement)
 
+    def test_an_x_thread_compound_is_not_a_claimed_thread(self):
+        # Bug 2062286, verbatim: the exception NAME was read as a claimed thread because a word
+        # boundary sits after the hyphen in "main-thread". Absent from an 86-thread complete
+        # inventory, it clamped 97% to medium -- below `autofile.min_confidence` -- on the one
+        # filing BMO resolves FIXED with `regressed_by` naming the changeset we named. 10 of 52
+        # filings use an X-thread compound.
+        for statement in (
+                "Crash is a main-thread `EXCEPTION_ACCESS_VIOLATION_READ` reading a "
+                "`char16_t` buffer at a computed offset",
+                "the off-thread `nsThread` parse completes after teardown",
+                "a background-thread `MediaTrackGraph` reference outlives the driver"):
+            dossier = self._run(statement)
+            self.assertEqual(dossier.verdict.confidence, Confidence.probable, statement)
+            self.assertEqual(dossier.corroborations, {}, statement)
+
     def test_a_truncated_inventory_cannot_prove_absence(self):
         names = [{"thread_name": "T%d" % i} for i in range(triage._MAX_THREAD_NAMES + 5)]
         raw = {"json_dump": {"threads": names}}
