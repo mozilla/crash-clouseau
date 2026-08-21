@@ -1155,6 +1155,15 @@ def _bug_people(bugids):
     return out
 
 
+def _is_bot(email, name="", nick=""):
+    """``agent.experts._is_bot``, imported on call. ``report_bug`` is pulled in by ``html``
+    on the first web request, and ``crashclouseau/agent/__init__`` states that nothing in the
+    agent package is imported at Flask-app startup; keeping that true costs one lazy import,
+    the same shape and the same reason as ``orchestrator._crashing_area_experts``."""
+    from .agent.experts import _is_bot as impl
+    return impl(email, name, nick)
+
+
 def _match_author(people, name, email=""):
     """The entry in ``people`` that IS the hg author, or ``None``.
 
@@ -1173,11 +1182,25 @@ def _match_author(people, name, email=""):
     a different person than a stronger one. A fourth key -- local part equal across
     DIFFERENT domains -- would reach 74%, and is deliberately not here: 10 of the 17 it adds
     are ``moz-wptsync-bot``, which we must never ask to investigate a crash, and across
-    domains a bare local part is weak evidence that two addresses are one human."""
+    domains a bare local part is weak evidence that two addresses are one human.
+
+    That paragraph was right about the hazard and wrong about the defence, so the defence is
+    now here: an AUTOMATION account is dropped from ``people`` before any key is tried. The
+    old ``_BOT_MARKERS`` substring rule did not match ``moz-wptsync-bot <wptsync@mozilla.com>``
+    at all, and the hole it did leave is one space wide -- against the five real Updatebot bugs
+    in our own filing windows (2059609, 2059649, 2059934, 2059935, 2064449) the hg name
+    "Updatebot" matches nobody, but "Update Bot" resolves key 2 to ``update-bot@bmo.tld``
+    "Update Bot" and the bare local part ``update-bot`` resolves key 3 to the same account.
+    Updatebot lands 121 source changesets a year in vendored media/crypto code (security/nss,
+    gfx/harfbuzz, third_party/aom, media/libvpx, media/libopus), so that is a real crash class,
+    not a hypothetical. Measured cost: 0 of the 51 needinfo requestees our filings have
+    actually set is dropped by this filter."""
     want_email = (email or "").strip().casefold()
     want_name = _norm_name(name)
     want_local = want_email.split("@")[0]
-    people = people or []
+    # Never let ANY key land on a robot -- see the paragraph above.
+    people = [p for p in (people or [])
+              if not _is_bot(p.get("email") or "", p.get("real") or "", p.get("nick") or "")]
     for p in people:
         if want_email and (p.get("email") or "").strip().casefold() == want_email:
             return p
@@ -1293,6 +1316,24 @@ def _needinfo_person(candidate, channel):
     if not name and author:
         name = author.split("<", 1)[0].strip()
     if not (email or name):
+        return {}
+    # Never ask a robot to investigate its own crash. STATE OF THE EVIDENCE, so nobody
+    # re-derives it: no filing has done it yet. The 51 needinfos our filings have set are all
+    # human (BMO creator=cdenizet, >=2026-08-05, "Crash in [@"; 0/51, 95% CI 0.0-7.0%) -- but
+    # that panel is the resolved ACCOUNT and this line reads the HG AUTHOR, so the figure that
+    # bounds it is the other one: of the 475 distinct in-window hg author triples across those
+    # same 26 build windows this rule fires on 10, and all 10 are real automation. Rung 1
+    # cannot reach a bot either -- all 14 automation identities in a year of mozilla-central
+    # (ffxbld@ at mozilla.com and lando.moz.tools, updatebot@, wptsync@, release+landoscript@,
+    # lando@ at lando.moz.tools and lando.test, blink-w3c-test-autoroller@, luci-bisection@
+    # appspot and crash@system on gserviceaccount.com, and wpt-pr-bot@, dependabot[bot]@,
+    # github-actions[bot]@, servo-wpt-sync@ on users.noreply.github.com) answer
+    # ``{"exists": False}`` from ``_bugzilla_user``. What this line closes that nothing else
+    # does is the LAST rung: when BMO cannot be reached ``_bugzilla_user`` says ``unverified``
+    # and ``_needinfo_account`` hands back the raw hg address, bot or not. It also suppresses
+    # the PROSE line, which ``_needinfo_line`` writes even when no account resolves. The rungs
+    # that can reach a bot ACCOUNT are closed in ``_match_author``.
+    if _is_bot(email, name, ""):
         return {}
     account = _needinfo_account(c, channel, email, name)
     return {"nick": account.get("nick", ""), "name": name, "email": email,

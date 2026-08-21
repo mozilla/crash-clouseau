@@ -1908,6 +1908,25 @@ class TestBugPreview(unittest.TestCase):
         self.assertEqual((p["nick"], p["name"], p["email"]), ("", "Real Name", "real@x.com"))
         self.assertEqual(p["account"], "")
 
+    def test_needinfo_person_refuses_a_bot_author(self):
+        """A robot is never asked to investigate its own crash -- no flag AND no prose. 0 of
+        the 51 needinfos our filings have set is affected; this closes the hg-author side,
+        `_match_author` closes the account side."""
+        with mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch.object(report_bug, "_bugzilla_user") as bz:
+            p = report_bug._needinfo_person(
+                {"author": "Lando <lando@lando.moz.tools>"}, "nightly")
+        self.assertEqual(p, {})
+        self.assertIsNone(report_bug._needinfo_line(p))
+        bz.assert_not_called()   # refused before any Bugzilla lookup
+        # ...and the wrong-direction case: a GitHub privacy address is a HUMAN.
+        with mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch.object(report_bug, "_bugzilla_user",
+                                  return_value={"exists": False, "nick": ""}):
+            p = report_bug._needinfo_person(
+                {"author": "Keith Cirkel <keithamus@users.noreply.github.com>"}, "nightly")
+        self.assertEqual(p["name"], "Keith Cirkel")
+
     def test_bugzilla_user_lookup(self):
         """``exists`` is the point: a real account with no nick is NOT the same as no
         account, and only the second may not be put in a needinfo flag."""
@@ -2244,6 +2263,25 @@ class TestNeedinfoAccount(unittest.TestCase):
         # An empty name must never match another empty name.
         self.assertIsNone(report_bug._match_author([{"real": ""}], ""))
         self.assertIsNone(report_bug._match_author([{"real": ""}], "Dev"))
+
+    def test_match_author_refuses_an_automation_account(self):
+        """The measured hole: hg says "Updatebot", which matches nobody, but "Update Bot"
+        matches `update-bot@bmo.tld` by name (key 2) and the bare local part `update-bot`
+        matches it by nick (key 3) -- verified against bugs 2059609/2059649/2059934/2059935/
+        2064449, all filed by that account. Both keys must now decline."""
+        bot = {"email": "update-bot@bmo.tld", "real": "Update Bot", "nick": "update-bot"}
+        human = {"email": "dev@mozilla.com", "real": "A Dev", "nick": "adev"}
+        self.assertIsNone(report_bug._match_author([bot], "Update Bot"))
+        self.assertIsNone(report_bug._match_author([bot], "", "update-bot@elsewhere.com"))
+        self.assertIsNone(report_bug._match_author([bot], "x", "update-bot@bmo.tld"))
+        # the same list still answers for the human on it, by every key
+        self.assertEqual(report_bug._match_author([bot, human], "A Dev"), human)
+        self.assertEqual(report_bug._match_author([bot, human], "", "dev@mozilla.com"), human)
+        self.assertEqual(report_bug._match_author([bot, human], "", "adev@other.com"), human)
+        # ...and a GitHub privacy address is a person, not automation.
+        gh = {"email": "keithamus@users.noreply.github.com", "real": "Keith Cirkel",
+              "nick": "keithamus"}
+        self.assertEqual(report_bug._match_author([gh], "Keith Cirkel"), gh)
 
     def test_bug_people_skips_the_unassigned_placeholder(self):
         got = {}
