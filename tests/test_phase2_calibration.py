@@ -117,6 +117,48 @@ class TestStudyCorpusAdapter(unittest.TestCase):
         self.cases, _ = C.load_corpus(self.corpus)
         self.by_uuid = {c.uuid: c for c in self.cases}
 
+    def test_fixture_keeps_the_fault_fields_but_not_the_thread_index(self):
+        """The writer used to hardcode `crash_info = {"crashing_thread": 0}`, which is why all
+        1257 committed fixtures have no fault address and neither corroboration arm can be
+        back-tested. `crashing_thread` still must NOT come through: `threads` here is a
+        one-element synthesis of the bug comment's stack, so a real index (46-thread minidumps
+        are normal) would empty the stack via `threads[ct] if ct < len(threads) else []`."""
+        out = SC._processed_crash(
+            {"top_frames": [{"stackpos": 0, "function": "F::g", "file": "a.cpp", "line": 1}]},
+            {"version": "1", "buildid": "2"},
+            {"address": "0x8", "type": "SIGSEGV / SEGV_MAPERR",
+             "instruction": "mov rax, qword [rax + 0x8]", "crashing_thread": 27},
+        )
+        info = out["json_dump"]["crash_info"]
+        self.assertEqual(info["address"], "0x8")
+        self.assertEqual(info["type"], "SIGSEGV / SEGV_MAPERR")
+        self.assertEqual(info["crashing_thread"], 0)
+        self.assertEqual(len(out["json_dump"]["threads"][0]["frames"]), 1)
+
+    def test_fixture_shape_is_unchanged_without_a_fetch(self):
+        # Default build stays offline and byte-compatible with the committed corpora.
+        out = SC._processed_crash({"top_frames": []}, {"version": "1", "buildid": "2"})
+        self.assertEqual(out["json_dump"]["crash_info"], {"crashing_thread": 0})
+
+    def test_fetch_is_opt_in_and_reaches_the_fault_address_prompt_line(self):
+        """End to end: fetched fields -> fixture -> `_crash_facts`. Measured today the block
+        is 4 lines with no "Fault address" on 90/90 corpus_ship cases."""
+        from crashclouseau.agent import triage
+
+        with mock.patch.object(SC, "_fetch_crash_info") as fetch:
+            SC.build_study_corpus(self.blind, self.answer, self.corpus)
+            self.assertFalse(fetch.called)          # off by default
+            fetch.return_value = {"address": "0x8"}
+            SC.build_study_corpus(self.blind, self.answer, self.corpus,
+                                  fetch_crash_info=True)
+            self.assertTrue(fetch.called)
+        raw = json.load(open(os.path.join(self.corpus, "uuid-111",
+                                          "processed_crash.json")))
+        self.assertEqual(raw["json_dump"]["crash_info"]["address"], "0x8")
+        facts = triage._crash_facts({"raw_crash": raw})
+        self.assertIn("Fault address: 0x8", facts)
+        self.assertEqual(ORCH._fault_address(raw), 8)
+
     def test_counts_and_skip_aggregate(self):
         # 3 target fixtures (111, 222, 111.neg); _sf_cases.json + the Java 333 skipped.
         self.assertEqual(len(self.cases), 3)

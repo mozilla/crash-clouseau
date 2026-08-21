@@ -206,7 +206,13 @@ class TestThroughTheGates(unittest.TestCase):
         )
         r = self._result(d)
         orch.apply_deterministic_gates(
-            r, {**_SEED, "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}}})
+            r, {**_SEED, "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}},
+                # The gate fails closed, so without searchfox's answer there is no bump for
+                # the backout gate to get the last word over and this passes vacuously.
+                "struct_layout": {
+                    "fault": 8, "status": "verified", "refuted": [], "unresolved": [],
+                    "verified": [{"type": "T", "field": "mLength", "offset": 8,
+                                  "actual": "mLength"}]}})
         self.assertTrue(r.dossier.corroborations["fault_address_offset_match"])
         self.assertEqual(r.dossier.verdict.decision, Decision.abstain)
 

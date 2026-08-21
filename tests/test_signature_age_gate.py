@@ -236,7 +236,13 @@ class TestThroughTheGates(unittest.TestCase):
         )
         r = self._result(d)
         seed = {**_seed(178.0),
-                "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}}}
+                "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}},
+                # The gate fails closed: without the searchfox answer there is no bump to
+                # clamp, and this test would pass for the wrong reason.
+                "struct_layout": {
+                    "fault": 8, "status": "verified", "refuted": [], "unresolved": [],
+                    "verified": [{"type": "T", "field": "mLength", "offset": 8,
+                                  "actual": "mLength"}]}}
         orch.apply_deterministic_gates(r, seed)
         # corroboration raised medium -> probable, then the stale clamp took it back to medium.
         self.assertTrue(r.dossier.corroborations["fault_address_offset_match"])

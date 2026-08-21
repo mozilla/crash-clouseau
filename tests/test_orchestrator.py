@@ -131,8 +131,28 @@ async def _triage_must_not_run(**kwargs):
     raise AssertionError("run_crash_triage should not have been called")
 
 
-def _seed_with_fault(addr="0x0000000000000008"):
-    return {"raw_crash": {"json_dump": {"crash_info": {"address": addr}}}}
+_LAYOUT_TYPE = "mozilla::detail::nsTStringRepr"
+
+
+def _layout(status="verified", type_name=_LAYOUT_TYPE, field="mLength", offset=8,
+            actual=None):
+    """What `_resolve_struct_layout` leaves on the seed after asking searchfox.
+
+    Every test that expects the fault-offset corroboration to PROMOTE has to carry one of
+    these now: the gate fails closed, so an unverified citation is not corroboration."""
+    entry = {"type": type_name, "field": field, "offset": offset,
+             "actual": actual if actual is not None else field}
+    out = {"fault": offset, "status": status,
+           "verified": [], "refuted": [], "unresolved": []}
+    out[status if status != "unresolved" else "unresolved"].append(entry)
+    return out
+
+
+def _seed_with_fault(addr="0x0000000000000008", layout="verified", **kwargs):
+    seed = {"raw_crash": {"json_dump": {"crash_info": {"address": addr}}}}
+    if layout:
+        seed["struct_layout"] = _layout(layout, **kwargs)
+    return seed
 
 
 def _lead_with_struct(offset=8):
@@ -143,7 +163,7 @@ def _lead_with_struct(offset=8):
             operation="null",
             citations=[
                 StructLayoutCitation(
-                    type_name="mozilla::detail::nsTStringRepr",
+                    type_name=_LAYOUT_TYPE,
                     field="mLength",
                     offset=offset,
                 )
@@ -155,6 +175,170 @@ def _lead_with_struct(offset=8):
             needinfo_draft="could you take a look?",
         ),
     )
+
+
+from crashclouseau.searchfox import FieldEntry, FieldLayout   # noqa: E402
+
+
+# The REAL `searchfox-cli --field-layout mozilla::detail::nsTStringRepr` output, 2026-08-21
+# (size 16, align 8), in the REAL parsed type rather than a hand-rolled stub. That matters:
+# `FieldLayout.field_at` falls back to the field whose [offset, offset+size) range CONTAINS
+# the address, and `mLength` is offset 8 SIZE 4, so [8,12) contains 0xa. Only a fixture that
+# carries the sizes makes `test_refutes_an_offset_that_is_not_a_field_start` a back-test of
+# the exact-START rule — against a stub with no `size`/`field_at`, swapping the resolver over
+# to `field_at` fails on AttributeError, which proves nothing about the semantics.
+_NSTSTRINGREPR = FieldLayout(
+    class_name=_LAYOUT_TYPE, size=16, align=8, repo="mozilla-central",
+    fields=[
+        FieldEntry(offset=0, size=8, type="char *", name="mData"),
+        FieldEntry(offset=8, size=4, type="...nsTStringLengthStorage<char>", name="mLength"),
+        FieldEntry(offset=12, size=2, type="...StringDataFlags", name="mDataFlags"),
+        FieldEntry(offset=14, size=2, type="...StringClassFlags", name="mClassFlags"),
+    ],
+)
+
+
+class _FakeClient:
+    def __init__(self, layout=_NSTSTRINGREPR, raises=None):
+        self.layout, self.raises, self.calls = layout, raises, []
+
+    def field_layout(self, class_name, repo=None, rev_label=None):
+        self.calls.append(class_name)
+        if self.raises is not None:
+            raise self.raises
+        return self.layout
+
+
+class TestStructLayoutResolver(unittest.TestCase):
+    """The ONLINE half: make "a signal the model cannot fabricate" true."""
+
+    def _resolve(self, dossier, seed, client):
+        import crashclouseau.searchfox as SF
+        with mock.patch.object(SF, "SearchfoxClient", return_value=client):
+            orch._resolve_struct_layout(dossier, seed)
+        return seed.get("struct_layout")
+
+    def test_verifies_the_motivating_case(self):
+        # bug 2053521: fault 0x8 == nsTStringRepr::mLength (VERIFIED/FIXED, regressed_by
+        # 2053211). searchfox agrees, so the flag is earned rather than echoed.
+        d = _lead_with_struct(offset=8)
+        seed = _seed_with_fault("0x8", layout=None)
+        out = self._resolve(d, seed, _FakeClient())
+        self.assertEqual(out["status"], "verified")
+        self.assertEqual(out["verified"][0]["type"], _LAYOUT_TYPE)
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+
+    def test_refutes_a_field_that_is_not_at_that_offset(self):
+        d = _lead_with_struct(offset=8)
+        d.data_flow.citations = [StructLayoutCitation(
+            type_name=_LAYOUT_TYPE, field="mDataFlags", offset=8)]
+        seed = _seed_with_fault("0x8", layout=None)
+        out = self._resolve(d, seed, _FakeClient())
+        self.assertEqual(out["status"], "refuted")
+        self.assertEqual(out["refuted"][0]["actual"], "mLength")
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_refutes_an_offset_that_is_not_a_field_start(self):
+        # 4-alignment is NOT the rule (nsINode really places mChildCount at 68 = 0x44, and
+        # production shows live 4-aligned small faults 0x1c / 0x2c); what disqualifies 0xa
+        # here is that no field of THIS class begins there.
+        d = _lead_with_struct(offset=10)
+        seed = _seed_with_fault("0xa", layout=None)
+        out = self._resolve(d, seed, _FakeClient())
+        self.assertEqual(out["status"], "refuted")
+        self.assertIsNone(out["refuted"][0]["actual"])
+
+    def test_base_class_offset_is_unresolved_not_refuted(self):
+        """`--field-layout` prints inherited members in a separate table the parser drops, so
+        a derived type's `fields` start above 0 (measured: nsINode 48, dom::Element 120). A
+        small fault there is UNCHECKABLE, not a fabricated offset — putting it in `refuted`
+        would poison the count that exists to measure fabrication."""
+        derived = FieldLayout(
+            class_name="mozilla::dom::Element", size=200, align=8, repo="mozilla-central",
+            fields=[FieldEntry(offset=120, size=8, type="void *", name="mState")],
+        )
+        d = _lead_with_struct(offset=8)
+        seed = _seed_with_fault("0x8", layout=None)
+        out = self._resolve(d, seed, _FakeClient(layout=derived))
+        self.assertEqual(out["status"], "unresolved")
+        self.assertEqual(out["refuted"], [])
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_a_citation_that_names_no_field_verifies_nothing(self):
+        """`field` defaults to "", so "the fault is an offset into T" is a legal citation —
+        and it asserts only the number `_crash_facts` printed. Verifying it against "T has
+        SOME field there" would make the whole check opt-out-able by omitting one key, at a
+        coincidence rate the audit measured at 33% mean / 93.5% for nsPresContext."""
+        d = _lead_with_struct(offset=8)
+        d.data_flow.citations = [StructLayoutCitation(type_name=_LAYOUT_TYPE, offset=8)]
+        seed = _seed_with_fault("0x8", layout=None)
+        client = _FakeClient()
+        out = self._resolve(d, seed, client)
+        self.assertEqual(client.calls, [])          # and it costs no lookup
+        self.assertEqual(out["status"], "unresolved")
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertEqual(d.corroborations["fault_offset_unverified"], "unresolved")
+
+    def test_searchfox_no_result_fails_closed(self):
+        # `--field-layout` exits 0 with "No field layout information found." for a template
+        # or an under-qualified name (`nsTStringRepr<char>`); the client turns that into
+        # SearchfoxNoResult. Unverifiable is not corroboration.
+        from crashclouseau.searchfox import SearchfoxNoResult
+        d = _lead_with_struct(offset=8)
+        seed = _seed_with_fault("0x8", layout=None)
+        out = self._resolve(d, seed, _FakeClient(raises=SearchfoxNoResult("nope")))
+        self.assertEqual(out["status"], "unresolved")
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_missing_binary_fails_closed_without_raising(self):
+        from crashclouseau.searchfox import SearchfoxNotFound
+        import crashclouseau.searchfox as SF
+        d = _lead_with_struct(offset=8)
+        seed = _seed_with_fault("0x8", layout=None)
+        with mock.patch.object(SF, "SearchfoxClient",
+                               side_effect=SearchfoxNotFound("no binary")):
+            orch._resolve_struct_layout(d, seed)   # must not raise
+        self.assertEqual(seed["struct_layout"]["status"], "unresolved")
+
+    def test_costs_nothing_when_there_is_nothing_to_verify(self):
+        client = _FakeClient()
+        # No fault address at all (this is every corpus fixture today).
+        self._resolve(_lead_with_struct(offset=8), {"raw_crash": {}}, client)
+        # A fault the gate would never promote on (0x0 is the generic null pointer).
+        self._resolve(_lead_with_struct(offset=0),
+                      _seed_with_fault("0x0", layout=None), client)
+        # An abstain.
+        d = _lead_with_struct(offset=8)
+        d.verdict = Verdict(decision=Decision.abstain, confidence=Confidence.low,
+                            abstain_reason="nothing credible")
+        self._resolve(d, _seed_with_fault("0x8", layout=None), client)
+        self.assertEqual(client.calls, [])
+
+    def test_lookup_count_is_bounded_by_the_cap(self):
+        d = _lead_with_struct(offset=8)
+        d.data_flow.citations = [
+            StructLayoutCitation(type_name="T%d" % i, field="f", offset=8)
+            for i in range(orch._MAX_LAYOUT_LOOKUPS + 3)
+        ]
+        client = _FakeClient()
+        self._resolve(d, _seed_with_fault("0x8", layout=None), client)
+        self.assertEqual(len(client.calls), orch._MAX_LAYOUT_LOOKUPS)
+
+    def test_gates_stay_network_free_and_the_callers_resolve(self):
+        """`apply_deterministic_gates` is shared with the offline eval runner, so the lookup
+        must live OUTSIDE it — and both online callers must actually make it."""
+        import inspect
+        from crashclouseau.eval import runner as EV
+        self.assertNotIn("_resolve_struct_layout",
+                         inspect.getsource(orch.apply_deterministic_gates))
+        self.assertIn("_resolve_struct_layout",
+                      inspect.getsource(orch.run_evidence_agent))
+        self.assertIn("_resolve_struct_layout", inspect.getsource(EV.rerun_corpus))
 
 
 class TestCorroborationGate(unittest.TestCase):
@@ -195,6 +379,63 @@ class TestCorroborationGate(unittest.TestCase):
         orch._apply_corroboration_gate(d, _seed_with_fault("0x0"))
         self.assertEqual(d.verdict.confidence, Confidence.medium)
 
+    def test_no_promotion_below_the_second_opinion_boost_floor(self):
+        """`_fold_second_opinion` refuses to boost a lead/low ("a boost would jump two rungs,
+        p_worth 0.50 -> 0.97 ... the corroborate side was never part of the calibration
+        fit"). The corroboration gate is the OTHER promoter and lands on exactly
+        `autofile.min_confidence`, so it takes the same floor. Ship-corpus cost: 2 of 90."""
+        d = _lead_with_struct(offset=8)
+        d.verdict = Verdict(decision=Decision.lead, confidence=Confidence.low,
+                            needinfo_draft="?")
+        flags = orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        # The FLAG is still recorded — the floor withholds the jump, not the evidence.
+        self.assertTrue(flags["fault_address_offset_match"])
+        self.assertTrue(d.corroborations["fault_address_offset_match"])
+        self.assertEqual(d.verdict.confidence, Confidence.low)
+
+    def test_medium_is_at_the_floor_and_still_promotes(self):
+        # 50 >= min_boost_confidence(50): the floor must not eat the 7-of-90 medium arm.
+        self.assertEqual(
+            orch.config.get_agent_second_opinion()["min_boost_confidence"], 50)
+        d = _lead_with_struct(offset=8)
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+
+    def test_will_corroboration_promote_mirrors_the_floor(self):
+        """The SO peek and the gate must agree, or a lead buys a ~$1 review for a promotion
+        that can no longer happen."""
+        low = _lead_with_struct(offset=8)
+        low.verdict = Verdict(decision=Decision.lead, confidence=Confidence.low,
+                              needinfo_draft="?")
+        self.assertFalse(
+            orch._will_corroboration_promote(low, _seed_with_fault("0x8")))
+        self.assertTrue(
+            orch._will_corroboration_promote(
+                _lead_with_struct(offset=8), _seed_with_fault("0x8")))
+
+    def test_no_promotion_when_the_citation_was_never_verified(self):
+        """FAIL CLOSED. `_crash_facts` hands the model the fault address and `roles.py` tells
+        it to answer with a matching `struct_layout` citation, so agreement alone is
+        agreement-by-construction. No searchfox answer on the seed -> no flag."""
+        d = _lead_with_struct(offset=8)
+        flags = orch._apply_corroboration_gate(d, _seed_with_fault("0x8", layout=None))
+        self.assertNotIn("fault_address_offset_match", flags)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_refuted_citation_is_recorded_and_does_not_promote(self):
+        d = _lead_with_struct(offset=8)
+        seed = _seed_with_fault("0x8", layout="refuted", actual="mData")
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        # Countable: an absent flag cannot be told apart from "no citation at all".
+        self.assertEqual(d.corroborations["fault_offset_unverified"], "refuted")
+
+    def test_searchfox_outage_does_not_promote(self):
+        d = _lead_with_struct(offset=8)
+        orch._apply_corroboration_gate(d, _seed_with_fault("0x8", layout="unresolved"))
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertEqual(d.corroborations["fault_offset_unverified"], "unresolved")
+
     def test_no_promotion_without_struct_citation(self):
         d = Dossier(
             candidate=Candidate(node="abc123def456", bug=42),
@@ -215,7 +456,8 @@ class TestCorroborationGate(unittest.TestCase):
             citations=[StructLayoutCitation(
                 type_name="T", field="f", offset=8)],
         )
-        orch._apply_corroboration_gate(d, _seed_with_fault("0x8"))
+        orch._apply_corroboration_gate(
+            d, _seed_with_fault("0x8", type_name="T", field="f"))
         # gate only promotes leads; a strong-evidence verdict is left alone
         self.assertEqual(d.verdict.decision, Decision.strong_evidence)
         self.assertEqual(d.verdict.confidence, Confidence.high)

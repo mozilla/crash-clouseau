@@ -95,7 +95,11 @@ def _case_to_crash(case):
         "pin_rev": getattr(case, "pin_rev", "") or "",
         "build_node": getattr(case, "pin_rev", "") or "",
         # Prior-signature corroboration needs a live Socorro+Bugzilla lookup; left empty
-        # offline (documented fidelity gap — the fault-offset corroboration arm still fires).
+        # offline (documented fidelity gap). The fault-offset arm does NOT compensate, and the
+        # comment that said it did was wrong for as long as it stood: the corpus fixtures
+        # carry `json_dump.crash_info == {"crashing_thread": N}` and nothing else, so
+        # `_fault_address` returns None on 255/255 distinct crashes and BOTH corroboration
+        # arms are dead offline. `study_corpus._processed_crash` is where that is fixed.
         "prior_hints": [],
         "prior_regressor_bugs": [],
         "experts": [],
@@ -146,7 +150,10 @@ async def rerun_corpus(cases, sweep_config=None, concurrency=None):
 
     # Lazy: apply_deterministic_gates lives in orchestrator (pulls models/DB); import once
     # here rather than at module load so importing this module stays light.
-    from crashclouseau.agent.orchestrator import apply_deterministic_gates
+    from crashclouseau.agent.orchestrator import (
+        _resolve_struct_layout,
+        apply_deterministic_gates,
+    )
     report_thresholds = (sweep_config or {}).get("confidence_thresholds") or {}
 
     async def _one(case):
@@ -160,6 +167,17 @@ async def rerun_corpus(cases, sweep_config=None, concurrency=None):
             )
             result = (await asyncio.wait_for(coro, timeout=timeout) if timeout
                       else await coro)
+            # Verify the cited struct layout the same way prod does, BEFORE the gates. The
+            # gates themselves must stay network-free (they are shared with prod's offline
+            # ladder), so the resolver is called here exactly as `run_evidence_agent` calls
+            # it. Without this the fault-offset corroboration arm would be permanently
+            # unmeasurable offline — one `searchfox --field-layout` per case that has a
+            # fault-matching citation, against a case that just spent ~20 min of agent time.
+            # OFF THE EVENT LOOP: unlike `run_evidence_agent` (sync, one crash), this is a
+            # coroutine running `max_concurrency` cases at once, and the resolver is a
+            # BLOCKING `subprocess.run` with a 60s timeout x retries. Called inline it would
+            # freeze every other in-flight case's I/O for the duration.
+            await asyncio.to_thread(_resolve_struct_layout, result.dossier, crash)
             # Apply the SAME post-verdict deterministic reshaping prod applies (callpath /
             # exposer / corroboration), so calibration scores the shipped verdict, not the
             # raw model output.

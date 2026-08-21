@@ -864,23 +864,110 @@ def _iter_dossier_citations(dossier):
 _MAX_FIELD_FAULT = 0x1000
 
 
+def _is_promotable_bare_lead(verdict):
+    """May ``_apply_corroboration_gate`` raise this verdict to ``probable``?
+
+    A ``lead`` below ``probable`` AND at/above the second opinion's ``min_boost_confidence``
+    (50). THE FLOOR IS NOT NEW — it is the one ``_fold_second_opinion`` has always applied,
+    whose written justification describes THIS gate word for word: "a boost would jump two
+    rungs (low -> probable, p_worth 0.50 -> 0.97) ... the corroborate side was never part of
+    the calibration fit". The corroboration gate is the pipeline's only PROMOTING gate and it
+    lands a bare lead on exactly ``autofile.min_confidence`` (70, shipped in
+    config/global.json), so before this a lead/low went 25 -> 70 deterministically, straight
+    through the filing bar, on a signal that was never in the fit at all. Two promoters, one
+    argument, one floor.
+
+    COST, counted on corpus_ship/results.jsonl (90 verdicts): the promotable population is 9
+    — 7 lead/medium and 2 lead/low — so 2 verdicts sit below the floor. That is the
+    population AT RISK, not a measured loss: no fixture in any committed corpus carries a
+    fault address (``fault_address_offset_match`` appears 0 times in
+    results_gate_facts.jsonl), so the observed delta on that corpus is 0 of 90 and 2 is the
+    ceiling. It cannot be more, because ``Verdict._consistency_rule`` clamps a lead at
+    ``high`` back to ``probable``, leaving ``low`` (25) and ``medium`` (50) as the only
+    bare-lead rungs.
+
+    WHAT IT MUST NOT EAT: this is a floor on the PROMOTION, never on the flag.
+    ``_corroborations`` still records ``fault_address_offset_match`` /
+    ``prior_signature_match`` on a lead/low, the UI and the persisted dossier still show
+    them, and a lead/low is still REPORTED (any lead is) and still buys a second opinion
+    (``second_opinion.min_confidence`` is 25). All the floor withholds is the two-rung jump
+    onto the autofile bar."""
+    if verdict is None or verdict.decision != Decision.lead:
+        return False
+    if verdict.confidence == Confidence.probable:
+        return False
+    rung = int(round(CONFIDENCE_SCORE.get(verdict.confidence, 0.0) * 100))
+    return rung >= config.get_agent_second_opinion()["min_boost_confidence"]
+
+
 def _corroborations(dossier, seed):
     """Deterministic, non-LLM corroboration flags for a dossier. Currently the
     fault-address<->struct-field-offset match: a NON-ZERO small faulting address N that
     equals the byte offset of a field cited via a ``struct_layout`` citation is a
     machine-verifiable null-deref of THAT field (the ab3238a5 0x8==mLength signal).
+
+    THE MATCH IS ONLY DETERMINISTIC IF SOMEONE CHECKS IT, and until this landed nobody did.
+    ``triage._crash_facts`` prints ``Fault address: 0xN`` straight into the prompt and
+    ``agent/roles.py`` tells the data-flow tracer to answer it with a ``struct_layout``
+    citation naming the field at byte N — so ``cit.offset == fault`` was
+    agreement-by-construction: the model was shown the number it had to reproduce, and the
+    gate's docstring nonetheless called it "a signal the model cannot fabricate". It now is
+    one: ``_resolve_struct_layout`` re-derives the layout from searchfox and this reads the
+    answer. FAIL CLOSED — no verification, no flag (see that function for why the promoting
+    gate takes the opposite failure direction from the suppressing ones).
+
+    STRUCTURAL LIMIT, recorded because it bounds what the flag can ever mean: this loop tests
+    only ``cit.offset == fault``, so nothing here links the matched field to the CANDIDATE.
+    Verified or not, the match is a fact about the CRASH ("a null-deref of field X of class
+    T") — which the signature usually already states — and says nothing about the changeset.
+    Live proof: ``mozilla::dom::ThreadSafeWorkerRef::Private`` puts ``mRef`` at offset 8 and
+    is 48.9% 0x8 all-channel (116/237 since 2026-01-01); 36 of its 60 nightly reports since
+    2026-07-01 fault at 0x8 across 9 DISTINCT buildids = 9 distinct pushlog windows = 9
+    distinct candidate sets promoted identically by one offset fact. The sibling flag below,
+    ``prior_signature_match``, does tie to the candidate (``cand.bug in pbugs``) and carries
+    a focus guard; this one does not.
+
+    DO NOT CLOSE THAT GAP BY REQUIRING THE CANDIDATE'S DIFF TO TOUCH THE MATCHED
+    STRUCT/FIELD — measured and refuted on the motivating case. Bug 2053521 ("crash at null
+    [@ ComputeKeyHash]", VERIFIED/FIXED, ``regressed_by`` 2053211) is a true 0x8 ==
+    ``nsTStringRepr::mLength`` match, and its real regressor d86be929745b touches
+    dom/base/Element.cpp, dom/base/Element.h and dom/html/nsGenericHTMLElement.cpp with ZERO
+    occurrences of ``mLength`` or ``nsTString``. That rule would suppress the one
+    Bugzilla-verified case the gate exists for. The open question is DISCRIMINATIVENESS
+    instead (is this offset the signature's modal fault?), and it needs a panel: the two
+    known points are that same bug's signature at 86.7% 0x0 (so 0x8 was informative there)
+    and ``ThreadSafeWorkerRef::Private`` at 48.9% 0x8 (so 0x8 is the signature restating
+    itself). Those are the panel's first two MEMBERS, not the fit — do not read a threshold
+    off them.
+
     Never raises."""
     flags: dict = {}
     try:
         fault = _fault_address((seed or {}).get("raw_crash"))
         if fault is not None and 0 < fault <= _MAX_FIELD_FAULT:
+            layout = (seed or {}).get("struct_layout") or {}
+            confirmed = {
+                (e.get("type"), e.get("field"), e.get("offset"))
+                for e in (layout.get("verified") or [])
+            }
             for cit in _iter_dossier_citations(dossier):
-                if isinstance(cit, StructLayoutCitation) and cit.offset == fault:
-                    flags["fault_address_offset_match"] = True
-                    flags["fault_offset"] = fault
-                    flags["fault_field"] = cit.field
-                    flags["fault_type"] = cit.type_name
-                    break
+                if not (isinstance(cit, StructLayoutCitation) and cit.offset == fault):
+                    continue
+                if (cit.type_name, cit.field, cit.offset) not in confirmed:
+                    continue  # fail closed: unverified is not corroboration
+                flags["fault_address_offset_match"] = True
+                flags["fault_offset"] = fault
+                flags["fault_field"] = cit.field
+                flags["fault_type"] = cit.type_name
+                break
+            if layout and not flags.get("fault_address_offset_match"):
+                # COUNTABILITY. A citation the model made and searchfox would not back is the
+                # exact event this verification exists to find, and an absent flag cannot be
+                # told apart from "the model cited no layout at all" in the persisted
+                # dossier. ``refuted`` vs ``unresolved`` also separates "the model invented an
+                # offset" from "searchfox could not answer", which is the difference between
+                # a model problem and an infrastructure problem.
+                flags["fault_offset_unverified"] = layout.get("status") or "unresolved"
     except Exception:  # pragma: no cover - defensive; never break a run
         logger.warning("agent: corroboration computation failed", exc_info=True)
     # Prior-signature (P4) match: the verdict's candidate is the SAME bug a prior FIXED
@@ -911,7 +998,17 @@ def _apply_corroboration_gate(dossier, seed):
     model cannot fabricate). A strong corroboration is a fault-address<->struct-field-offset
     match OR a prior-signature match (the candidate is a bug a prior FIXED sibling of this
     signature was regressed by). Strong-evidence/abstain are untouched; a lead already at
-    ``probable`` is unchanged. Returns the flags. Mutates ``dossier`` in place; never raises."""
+    ``probable`` is unchanged. Returns the flags. Mutates ``dossier`` in place; never raises.
+
+    TWO CORRECTIONS THIS GATE CARRIED FOR A LONG TIME, both now fixed in the helpers it calls.
+    (a) "A signal the model cannot fabricate" was not true: nothing verified a
+    ``struct_layout`` citation against searchfox while the prompt handed the model the fault
+    address to match — see ``_resolve_struct_layout``. (b) Promoting had NO rung floor while
+    ``_fold_second_opinion`` refused the identical two-rung jump — see
+    ``_is_promotable_bare_lead``. The mitigation that WAS already right stays:
+    ``_will_corroboration_promote`` (and it mirrors the same predicate) makes sure a
+    corroboration-rescued lead still buys the blind second opinion, so a medium-confidence SO
+    refutation can clamp it back."""
     if dossier is None:
         return {}
     flags = _corroborations(dossier, seed)
@@ -920,7 +1017,7 @@ def _apply_corroboration_gate(dossier, seed):
     # dossier.corroborations here would silently drop them from the persisted payload/UI.
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
     v = dossier.verdict
-    is_bare_lead = v is not None and v.decision == Decision.lead and v.confidence != Confidence.probable
+    is_bare_lead = _is_promotable_bare_lead(v)
     if is_bare_lead and flags.get("fault_address_offset_match"):
         dossier.verdict = v.model_copy(update={"confidence": Confidence.probable})
         logger.info(
@@ -2162,6 +2259,187 @@ def _apply_bit_flip_gate(dossier, seed):
     )
 
 
+# How many distinct cited types one run may buy a ``searchfox --field-layout`` lookup for. The
+# citation list is unbounded MODEL OUTPUT and every lookup is a subprocess, so without a cap a
+# verdict could spend a run on CLI invocations. This is a COST BOUND, not a fitted threshold —
+# there is no reachable corpus of ``struct_layout`` citations to fit it on (see
+# ``_resolve_struct_layout``) — and its failure direction is the safe one: a citation past the
+# cap is simply unverified, which under fail-closed means no promotion, never a wrong one.
+_MAX_LAYOUT_LOOKUPS = 4
+
+
+def _resolve_struct_layout(dossier, seed):
+    """Re-derive the cited C++ layout from searchfox so the corroboration gate's fault-address
+    match is a machine fact, and leave the answer on the seed for ``_corroborations``.
+
+    WHY. The gate promoted on "the faulting address equals the byte offset of a field the
+    model cited", and called that "a signal the model cannot fabricate". It was not one:
+    ``triage._crash_facts`` prints ``Fault address: 0xN`` into the prompt, ``agent/roles.py``
+    instructs the data-flow tracer to CONFIRM that fault by calling
+    ``mcp__searchfox__field_layout`` and to emit a matching ``struct_layout`` citation, and
+    nothing downstream re-derived anything — so the equality compared the model's number with
+    the model's number, and a model that simply echoed the prompt scored identically to one
+    that really looked. One CLI call closes it. Measured cost: 1.5s cold for
+    ``mozilla::detail::nsTStringRepr`` (mData 0 / mLength 8 / mDataFlags 12 / mClassFlags 14 —
+    the motivating case, bug 2053521, verifies) and 2.1s for ``nsINode``, against a ~20-minute
+    run, and only on the runs that actually carry a fault-matching citation.
+
+    FAIL CLOSED, WHICH IS THE OPPOSITE OF ``_resolve_compiled_out`` ON PURPOSE. Both obey one
+    rule — a lookup we could not make must never MOVE a verdict — and they come out mirrored
+    because that one suppresses and this one promotes: compiled-out says "never suppress on a
+    lookup failure", so this says "never promote on one". searchfox-cli missing
+    (``SearchfoxNotFound`` at construction), a timeout (retries+1 = 3 attempts x
+    ``agent.searchfox.timeout_secs``=60 = ~3 min PER LOOKUP, so ~12 min if all four hang —
+    against ``agent.job_timeout``=1800s on a ~20-min run, which is the tail worth watching;
+    the measured happy path is 1.0-2.1s and the agent's own tool calls already run on the
+    same budget many more times), a non-zero exit,
+    or ``No field layout information found`` — which the CLI returns with EXIT 0 for a
+    template, an under-qualified name or a non-class symbol, verified on
+    ``nsTStringRepr<char>`` and ``mozilla::NoSuchTypeXyz`` — all land in ``unresolved``, and
+    the lead keeps its raw rung. Nothing is lost when that happens: ANY lead is reported
+    (there is no separate report gate), so the only thing withheld is the promotion to
+    ``probable``, i.e. the autofile bar. That is the direction ``config`` already argues for
+    in ``get_agent_second_opinion``: "promote conservatively, suppress readily".
+
+    A REFUTATION IS NOT A SUPPRESSION. When searchfox answers and the cited field is NOT at
+    that offset we record ``refuted`` (with the real field name at that offset in ``actual``)
+    and withhold the promotion — we do not abstain the verdict. There is no measurement
+    saying a bad layout citation predicts a bad lead, and inventing one would be the same
+    n=1 error this audit is about.
+
+    WHAT THIS COSTS, NAMED RATHER THAN ASSUMED AWAY. Verified end to end against the real
+    binary: ``mozilla::detail::nsTStringRepr`` + ``mLength`` + 0x8 -> verified in 1.45s
+    (bug 2053521 promotes, as it must); ``nsINode`` + ``mChildCount`` + 0x44 -> verified in
+    2.12s, which is the deliberate proof that NO 8-alignment rule was shipped — nsINode really
+    does place a 4-aligned uint32 there, and production shows live 4-aligned small faults
+    (0x1c, 0x2c); ``mDataFlags`` at 0x8 -> refuted (the real member is ``mLength``); and the
+    one that costs recall — the BARE ``nsTStringRepr`` -> unresolved, because
+    ``--field-layout`` needs the fully-qualified name and answers "No field layout information
+    found" for an under-qualified one. That failure is real enough that ``roles.py`` spends
+    three lines warning the model about it, so some true matches WILL now be withheld for a
+    spelling. Two things make that acceptable and both are recorded rather than hoped:
+    the loss is a promotion, never a report, and ``fault_offset_unverified`` = ``unresolved``
+    makes each one countable — if that count is large in prod, the fix is to re-qualify the
+    symbol from the crash signature, which is a measurement the next session can now make and
+    could not before.
+
+    AND THE WRONG-DIRECTION CASE THIS CANNOT SEE: ``--field-layout`` prints INHERITED members
+    in a separate "Base Classes" table that ``_parse_field_layout`` drops, so ``layout.fields``
+    is the class's OWN members only. Measured live 2026-08-21: ``nsINode``'s own fields start
+    at 48, ``mozilla::dom::Element``'s at 120 — so on a deeply-derived type every small fault
+    sits in a region searchfox told us nothing about. Those record ``unresolved``, not
+    ``refuted``, deliberately: it is a limit of the tool, not a model that invented an offset,
+    and the two must not share a bucket or the ``refuted`` count means nothing. It is still a
+    recall cost — a real base-class field deref cannot be promoted today — and it is the one
+    most likely to dominate the ``unresolved`` column in prod.
+
+    A CITATION THAT NAMES NO FIELD IS ``unresolved``, NOT ``verified``, AND THAT IS THE WHOLE
+    POINT. ``StructLayoutCitation.field`` defaults to ``""``, so "the fault address is an
+    offset into T" is a legal citation — and it asserts only the number ``_crash_facts``
+    already printed. Verifying it against "T has SOME field starting there" would leave the
+    door this function exists to close wide open, and cheaply: the audit measured that the
+    mean class has a field starting on 33% of production's 13-value small-fault alphabet, and
+    ``nsPresContext`` on 93.5% of it. So a field-less citation buys no lookup and no
+    promotion. It costs recall only for a model that declines to say what it found, and it is
+    countable like every other unresolved.
+
+    ONLINE ONLY, and deliberately not inside ``apply_deterministic_gates`` — the same split as
+    ``_resolve_candidate_backout`` / ``_resolve_compiled_out``, for the same reason (that
+    ladder is shared with the offline eval runner). It runs BEFORE
+    ``_maybe_run_second_opinion`` so ``_will_corroboration_promote``'s peek and the gate see
+    the same answer. ``eval/runner.py`` calls it too — it already runs the fully online agent
+    — because otherwise the change that makes this gate honest would also make it permanently
+    unmeasurable offline, which is the opposite of what this audit needs.
+
+    Resolves for any non-abstaining verdict carrying a fault-matching citation, not only for a
+    promotable lead: ``dossier.corroborations`` is the only registry of what the gate saw, and
+    a refuted citation on a strong-evidence verdict is exactly the event worth counting.
+    Never raises."""
+    v = getattr(dossier, "verdict", None)
+    if v is None or v.decision == Decision.abstain:
+        return
+    fault = _fault_address((seed or {}).get("raw_crash"))
+    if fault is None or not (0 < fault <= _MAX_FIELD_FAULT):
+        return
+    wanted, seen = [], set()
+    for cit in _iter_dossier_citations(dossier):
+        if not (isinstance(cit, StructLayoutCitation) and cit.offset == fault):
+            continue
+        key = (cit.type_name, cit.field)
+        if key in seen:
+            continue
+        seen.add(key)
+        wanted.append(cit)
+    if not wanted:
+        return
+    wanted = wanted[:_MAX_LAYOUT_LOOKUPS]
+    out = {"fault": fault, "verified": [], "refuted": [], "unresolved": []}
+
+    from crashclouseau.searchfox import SearchfoxClient
+
+    try:
+        client = SearchfoxClient()
+    except Exception as exc:  # pragma: no cover - binary missing / misconfigured
+        logger.warning("agent: no searchfox client for struct-layout verification: %s", exc)
+        client = None
+    for cit in wanted:
+        entry = {"type": cit.type_name, "field": cit.field, "offset": cit.offset}
+        if not (cit.field or "").strip():
+            # NOTHING TO RE-DERIVE. ``StructLayoutCitation.field`` defaults to "", so a
+            # citation may name only a type and an offset — and the offset is the number the
+            # prompt handed the model. Accepting it because the class happens to have SOME
+            # field starting there would make the whole verification opt-out-able by omitting
+            # one optional key, at the audit's own measured coincidence rate (mean 34% of
+            # classes have a field starting on a given member of production's 13-value
+            # small-fault alphabet; nsPresContext 93.5%). Unverifiable is unresolved.
+            out["unresolved"].append({**entry, "reason": "citation names no field"})
+            continue
+        if client is None:
+            out["unresolved"].append({**entry, "reason": "no searchfox client"})
+            continue
+        try:
+            layout = client.field_layout(cit.type_name)
+        except Exception as exc:
+            # SearchfoxNoResult (template / under-qualified / non-class), timeout, non-zero
+            # exit: all "we could not check", all fail closed.
+            out["unresolved"].append({**entry, "reason": str(exc)[:200]})
+            continue
+        # EXACT field START, not ``field_at`` — that helper falls back to the field whose
+        # [offset, offset+size) range CONTAINS the address, and a hit inside a 40-byte member
+        # is not the "byte N is where field F begins" claim the gate promotes on.
+        at = next((f for f in layout.fields if f.offset == cit.offset), None)
+        if at is not None:
+            if at.name.strip() != cit.field.strip():
+                out["refuted"].append({**entry, "actual": at.name})
+            else:
+                out["verified"].append({**entry, "actual": at.name})
+        elif not layout.fields or cit.offset < min(f.offset for f in layout.fields):
+            # BELOW THE FIRST OWN FIELD = inside the BASE-CLASS SUBOBJECT, and searchfox
+            # prints those in a SEPARATE "Base Classes" table that `_parse_field_layout`
+            # drops (it keeps only 4-column rows). Measured against the real binary
+            # 2026-08-21: `nsINode`'s own fields start at 48 and `mozilla::dom::Element`'s at
+            # 120, so on a deeply-derived type EVERY small fault lands in a region the tool
+            # told us nothing about. Calling that `refuted` would be a claim we cannot make,
+            # and it would poison the one number this whole function exists to produce —
+            # `refuted` is supposed to count "the model invented an offset". Unresolved, so
+            # it fails closed like every other thing we could not check.
+            out["unresolved"].append(
+                {**entry, "reason": "offset is inside the unenumerated base-class subobject"}
+            )
+        else:
+            out["refuted"].append({**entry, "actual": None})
+    out["status"] = (
+        "verified" if out["verified"] else "refuted" if out["refuted"] else "unresolved"
+    )
+    seed["struct_layout"] = out
+    logger.info(
+        "agent: struct-layout verification for %s at fault 0x%x -> %s (%d verified, "
+        "%d refuted, %d unresolved)",
+        (seed or {}).get("uuid"), fault, out["status"],
+        len(out["verified"]), len(out["refuted"]), len(out["unresolved"]),
+    )
+
+
 def _resolve_compiled_out(dossier, seed):
     """Ask searchfox whether the mechanism's own machinery is compiled into this build, and
     store the answer on the seed for ``_apply_compiled_out_gate`` to act on.
@@ -2350,9 +2628,12 @@ def _will_corroboration_promote(dossier, seed):
     second opinion — the corroboration gate is an UPGRADE that runs AFTER the SO is dispatched,
     so a raw lead below ``min_confidence`` can still ship as a REPORTED ``probable`` lead.
     Mirrors the gate's ``is_bare_lead`` + strong-flag condition; ``_corroborations`` never
-    raises. A no-op read (does not mutate the dossier)."""
+    raises. A no-op read (does not mutate the dossier). Shares ``_is_promotable_bare_lead``
+    with the gate rather than restating it: when the two drifted, a lead the gate could no
+    longer promote would still have bought a ~$1 independent review for a promotion that
+    cannot happen (and, in the other direction, a promotable lead would ship unreviewed)."""
     v = dossier.verdict if dossier is not None else None
-    if v is None or v.decision != Decision.lead or v.confidence == Confidence.probable:
+    if not _is_promotable_bare_lead(v):
         return False
     flags = _corroborations(dossier, seed)
     return bool(flags.get("fault_address_offset_match") or flags.get("prior_signature_match"))
@@ -2782,6 +3063,13 @@ def run_evidence_agent(uuid, force=False):
             # that acts on the answer lives in the shared, offline-safe ladder. After the
             # backout resolve so a candidate we are about to suppress buys no lookups.
             _resolve_compiled_out(result.dossier, seed)
+
+            # Does the cited struct layout actually say what the model said it says? One
+            # `searchfox --field-layout` call, and only when a `struct_layout` citation
+            # already matches the fault address. BEFORE the second opinion because
+            # `_will_corroboration_promote` peeks at the same answer to decide whether a
+            # sub-threshold lead is worth reviewing.
+            _resolve_struct_layout(result.dossier, seed)
 
             # Blind second-opinion (#SO): an independent, no-context re-analysis of a
             # would-be-reported lead, run from the RAW verdict (async home) and folded inside the

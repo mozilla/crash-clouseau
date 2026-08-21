@@ -138,11 +138,63 @@ def _on_stack_label(answer):
     return any(flags)
 
 
-def _processed_crash(crash, first_build):
+# The ``json_dump.crash_info`` keys a fixture is allowed to carry. Deliberately NOT
+# ``crashing_thread``: see ``_processed_crash``.
+_CRASH_INFO_KEYS = ("address", "type", "instruction", "assertion")
+
+
+def _fetch_crash_info(uuid):
+    """Socorro's ``json_dump.crash_info`` for ``uuid``, or ``{}``.
+
+    Opt-in (``build_study_corpus(fetch_crash_info=True)`` / ``--fetch-crash-info``) because the
+    rest of this module is offline and deterministic. Best-effort by design: a crash Socorro
+    has expired is a fixture without fault fields, exactly as today."""
+    if not uuid:
+        return {}
+    try:
+        from libmozdata import socorro
+
+        data = socorro.ProcessedCrash.get_processed(uuid).get(uuid) or {}
+    except Exception as exc:  # pragma: no cover - network / expired / rate limit
+        logger.warning("study_corpus: no processed crash for %s: %s", uuid, exc)
+        return {}
+    info = (data.get("json_dump") or {}).get("crash_info") or {}
+    return {k: info[k] for k in _CRASH_INFO_KEYS if info.get(k) not in (None, "")}
+
+
+def _processed_crash(crash, first_build, crash_info=None):
     """A minimal processed-crash dict in the shape ``runner._render_stack`` / ``triage.
-    _crash_facts`` read: ``json_dump.threads[0].frames`` + product/build/version. The study
-    fixtures carry no OS/CPU/fault-address, so the crash-facts block is signature+stack only
-    (a documented fidelity limit — the fixtures were mined for the pushlog study)."""
+    _crash_facts`` read: ``json_dump.threads[0].frames`` + product/build/version, plus
+    whatever fault fields ``crash_info`` supplies.
+
+    WHY THE FAULT FIELDS MATTER ENOUGH TO PLUMB. This function used to hardcode
+    ``crash_info = {"crashing_thread": 0}``, so ``address`` / ``type`` / ``instruction`` could
+    never reach a fixture no matter what the source held. Measured consequence: all 1257
+    ``processed_crash.json`` files across the 10 committed corpus dirs carry
+    ``{"crashing_thread": N}`` and nothing else; ``triage._crash_facts`` therefore emits a
+    4-line block (Product / Version / Build ID / Analysed thread) with no "Fault address" line
+    on 90/90 corpus_ship cases, ``orchestrator._fault_address`` returns None on all of them,
+    and ``fault_address_offset_match`` appears 0 times in
+    ``corpus_ship/results_gate_facts.jsonl`` — 0/64 positive arm, 0/26 negative arm. No
+    back-test of the fault-offset corroboration gate is possible in EITHER arm, and that
+    0-vs-0 non-answer is what a reader mistakes for "the gate never fires".
+
+    ``crashing_thread`` IS STILL HARDCODED TO 0, AND MUST STAY THAT WAY. It is the one
+    crash_info key that would break things: ``threads`` here is a ONE-element synthesis of the
+    bug comment's stack, while the real index can be anything (46-thread minidumps are normal,
+    and on a shutdown hang the crashing thread is the watchdog). ``corpus._is_target_crash``,
+    ``corpus._stack_files`` and ``runner._render_stack`` all do
+    ``threads[ct]["frames"] if ct < len(threads) else []``, so passing the real index through
+    would silently empty the stack of every affected case.
+
+    WHAT A RE-RECORD COSTS, measured 2026-08-21 against the live ProcessedCrash API: Socorro
+    keeps a processed crash about six months. Of the 206 distinct real uuids in the committed
+    corpora, sampled 4 per month: 0/28 fetchable for 2025-07 .. 2026-01, 21/23 for 2026-02
+    onward — so ~80 of 206 can be re-recorded and the rest are gone for good. Of the 21
+    recovered, 6 carry a gate-eligible fault (0x8, 0x10, 0x18, 0xe0, 0xf0, 0x1d), 4 are 0x0 and
+    8 are large — i.e. a re-recorded corpus would give this gate roughly a 29% eligible arm to
+    back-test on instead of zero. The fetch is one unauthenticated GET per case; the expensive
+    part of a rebuild is re-running the agent, not this."""
     frames = []
     for f in crash.get("top_frames") or []:
         frames.append({
@@ -152,6 +204,11 @@ def _processed_crash(crash, first_build):
             "file": f.get("file") or "",
             "line": f.get("line") or 0,
         })
+    info = {"crashing_thread": 0}
+    for key in _CRASH_INFO_KEYS:
+        value = (crash_info or {}).get(key)
+        if value not in (None, ""):
+            info[key] = value
     return {
         # These are Firefox crashes (the BMO product is "Core"); the crash-facts reader keys
         # off "product"/"version"/"build", not the BMO product taxonomy.
@@ -161,7 +218,7 @@ def _processed_crash(crash, first_build):
         "release_channel": "nightly",
         "moz_crash_reason": crash.get("moz_crash_reason", ""),
         "json_dump": {
-            "crash_info": {"crashing_thread": 0},
+            "crash_info": info,
             "threads": [{"frames": frames}],
         },
     }
@@ -221,8 +278,13 @@ def _candidates(window, stack_files, signature, is_offstack, max_candidates):
     return out
 
 
-def _case_from_fixture(bug_id, is_neg, blind, answer, corpus_dir):
-    """Assemble one CorpusCase + write processed_crash.json; returns the case (or None)."""
+def _case_from_fixture(bug_id, is_neg, blind, answer, corpus_dir, fetch_crash_info=False):
+    """Assemble one CorpusCase + write processed_crash.json; returns the case (or None).
+
+    ``fetch_crash_info`` re-reads the fault fields from Socorro for the uuid the ANSWER KEY
+    already carries (233 of 289 study answers have one). It is off by default so the normal
+    build stays offline and deterministic; see ``_processed_crash`` for why the fields matter
+    and what fraction is still within Socorro's retention."""
     crash = blind.get("crash") or {}
     signature = crash.get("signature", "")
     stack_files = _basenames(crash.get("stack_files"))
@@ -251,8 +313,12 @@ def _case_from_fixture(bug_id, is_neg, blind, answer, corpus_dir):
     case_dir = os.path.join(corpus_dir, uuid)
     os.makedirs(case_dir, exist_ok=True)
     crash_path = os.path.join(case_dir, "processed_crash.json")
+    # The blind fixture is a Bugzilla-COMMENT parse (spike/collect_regressor_dataset.py) and
+    # has never carried fault fields — nothing is being "kept" here, they have to be fetched.
+    # Keyed on the uuid, so a `.neg` case gets the same crash facts as its positive twin.
+    crash_info = _fetch_crash_info(uuid.replace("-neg", "")) if fetch_crash_info else {}
     with open(crash_path, "w") as handle:
-        json.dump(_processed_crash(crash, first_build), handle)
+        json.dump(_processed_crash(crash, first_build, crash_info), handle)
 
     case = CorpusCase(
         uuid=uuid,
@@ -295,12 +361,14 @@ def _write_manifest(corpus_dir, cases):
     return digest
 
 
-def build_study_corpus(blind_dir, answer_dir, corpus_dir, limit=None):
+def build_study_corpus(blind_dir, answer_dir, corpus_dir, limit=None,
+                       fetch_crash_info=False):
     """Freeze the study fixtures into ``corpus_dir``; returns the list of CorpusCases.
 
     A positive fixture with no matching answer key is skipped (can't score it). A negative
     ``.neg`` reuses its bug's answer key only for the build rev / uuid — its regressor sets
-    stay empty."""
+    stay empty. ``fetch_crash_info`` adds one Socorro GET per case to recover the fault
+    address/type/instruction (see ``_processed_crash``); default off keeps the build offline."""
     os.makedirs(corpus_dir, exist_ok=True)
     cases = []
     skipped = 0
@@ -319,7 +387,8 @@ def build_study_corpus(blind_dir, answer_dir, corpus_dir, limit=None):
             if not _is_target_crash(blind.get("crash") or {}):
                 skipped_nontarget += 1
                 continue
-            case = _case_from_fixture(bug_id, is_neg, blind, answer, corpus_dir)
+            case = _case_from_fixture(bug_id, is_neg, blind, answer, corpus_dir,
+                                      fetch_crash_info=fetch_crash_info)
         except Exception as exc:  # pragma: no cover - defensive per-fixture
             logger.warning("study_corpus: skip %s: %s", path, exc)
             skipped += 1
@@ -348,9 +417,13 @@ def main(argv=None):
     parser.add_argument("--out", default=None, help="corpus output dir")
     parser.add_argument("--limit", type=int, default=None,
                         help="freeze only the first N fixtures (cheap dry-run)")
+    parser.add_argument("--fetch-crash-info", action="store_true",
+                        help="re-read fault address/type/instruction from Socorro per case "
+                             "(one GET each; only ~6 months of crashes are still retained)")
     args = parser.parse_args(argv)
     corpus_dir = args.out or config.get_eval().get("corpus_dir", "corpus")
-    build_study_corpus(args.blind, args.answer, corpus_dir, limit=args.limit)
+    build_study_corpus(args.blind, args.answer, corpus_dir, limit=args.limit,
+                       fetch_crash_info=args.fetch_crash_info)
 
 
 if __name__ == "__main__":

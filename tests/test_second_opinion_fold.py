@@ -38,8 +38,18 @@ _SF = SearchfoxCitation(
 )
 _SEED = {"uuid": "u-1", "signature": "S", "channel": "nightly", "stack": "#0 f a:1"}
 
+# `config.get_agent_second_opinion()` returns ONE normalized dict ("so callers never
+# re-derive defaults") and BOTH promoters index `min_boost_confidence` off it directly, so a
+# mock that omits the key is a shape the caller can never see in prod.
 _ENABLED = {"enabled": True, "model": "opus", "effort": "max", "max_turns": 20,
-            "min_confidence": 50}
+            "min_confidence": 50, "min_boost_confidence": 50}
+
+# What `_resolve_struct_layout` leaves on the seed once searchfox has CONFIRMED the citation.
+# The corroboration gate fails closed, so every test that expects the fault-offset bump has to
+# carry it — an unverified citation is just the model echoing the fault address back at us.
+_VERIFIED_LAYOUT = {"fault": 8, "status": "verified", "refuted": [], "unresolved": [],
+                    "verified": [{"type": "T", "field": "mLength", "offset": 8,
+                                  "actual": "mLength"}]}
 
 
 def _lead(confidence=Confidence.medium, candidate=True):
@@ -437,7 +447,8 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
                             needinfo_draft="?"),
         )
         r = self._result(d)
-        seed = {**_SEED, "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}}}
+        seed = {**_SEED, "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}},
+                "struct_layout": _VERIFIED_LAYOUT}
         cfg = {**_ENABLED, "min_confidence": 60}
         called = {"n": 0}
 
@@ -616,7 +627,8 @@ class TestAppliedMoveIsDistinguishable(unittest.TestCase):
         )
 
     _FAULT_SEED = {**_SEED, "is_offstack": False,
-                   "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}}}
+                   "raw_crash": {"json_dump": {"crash_info": {"address": "0x8"}}},
+                   "struct_layout": _VERIFIED_LAYOUT}
 
     def test_clamp_after_a_corroboration_bump_is_still_visible(self):
         r = self._result(self._corroborated_lead(Confidence.medium))
