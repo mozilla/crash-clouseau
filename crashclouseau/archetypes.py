@@ -68,6 +68,23 @@ from crashclouseau.logger import logger
 #   * Suppressing on Socorro's `report_type=hang`. b65b3c02 is report_type=crash, the family is
 #     filed from both shapes, and bug 2063892's `shutdownhang` at 0x7ffc... is already excluded
 #     by the address bound. The ABORT RECORD is the discriminator, not the hang label.
+#
+# THE CLOSER USED TO SAY "a latent shutdown bug with no recent regressor is a perfectly good
+# verdict, and better than naming a changeset", which contradicts the paragraph directly above
+# it: on this row's OWN bug the origin was a changeset. Jens Stutte set `regressed_by` to bug
+# 1412726 (2017) at 2026-08-10T06:29:02Z, 1h44m after we filed bug 2062119 at 04:44:52Z, and
+# the bug is RESOLVED FIXED -- our error there was naming a 2022-12-13 changeset because it was
+# in the window, not naming a changeset at all. So the closer now refuses the no-regressor
+# conclusion and the window-filler both, and asks for the third answer (an origin outside the
+# window) or an admission that the declaration was not found.
+#
+# THE SIBLING'S 144-BUG PANEL IS DELIBERATELY NOT QUOTED HERE. `shutdown-hang` lost the same
+# sentence with a measured denominator behind it, but that denominator is `shutdownhang |`
+# crash bugs and this row is pinned NOT to fire on a shutdown hang: 0 of the 116 `^shutdownhang`
+# nightly reports in 3 months that carry no `moz_crash_reason` also has a small fault address
+# and `shutdown_progress` set (`test_it_no_longer_fires_beside_the_shutdown_hang_row`, and the
+# three shutdownhang rows of the panel JSON are `want: false`). Importing that denominator into
+# this row would be the same scope-exceeds-evidence error one row over.
 _SHUTDOWN_SINGLETON = {
     "slug": "shutdown-singleton",
     "title": "Null deref during shutdown — check the singleton's shutdown handling",
@@ -151,8 +168,15 @@ _SHUTDOWN_SINGLETON = {
         "Also check whether the clear happens before a phase that still uses the object: the "
         "second fix there moved the clear to `CCPostLastCycleCollection` because chrome JS "
         "module loading still reads `omni.ja` through jar channels after `XPCOMShutdownFinal`. "
-        "If the shutdown-handling gap is what you find, say so — a latent shutdown bug with no "
-        "recent regressor is a perfectly good verdict, and better than naming a changeset."
+        "If the shutdown-handling gap is what you find, say so — but that gap is not itself a "
+        "reason to conclude nothing caused this. On this row's own bug the origin WAS a "
+        "changeset: Jens Stutte set `regressed_by` to bug 1412726 (2017) 1h44m after we filed "
+        "bug 2062119, and it is RESOLVED FIXED. What the gap supports is 'the origin is the "
+        "conversion changeset, which is outside this build's pushlog window' — not 'no "
+        "changeset did this', and not a changeset lifted out of the window because one was "
+        "needed, which is the mistake this row exists to stop (we named a 2022-12-13 changeset "
+        "and needinfo'd its author). If you could not find the declaration, report that you "
+        "could not."
     ),
 }
 
@@ -169,6 +193,88 @@ _SHUTDOWN_SINGLETON = {
 # (`triage._thread_inventory`) that also reaches the blind second opinion, and the analysed-thread
 # half is a code fix (`inspector.thread_for_analysis`). What is left over is genuinely a prior —
 # how to work a shutdown hang once you can see one properly — and that is what this row carries.
+#
+# IT ALSO SHIPPED A POPULATION PRIOR -- "Finally, expect NO regressor ... better than naming a
+# changeset because the window had to contain one" -- and that half is measured FALSE. It was
+# generalised from one INVALID bug the day after it closed, and the context that made apehrson
+# right was an UNGROUNDED MECHANISM, not the absence of a regressor: he never said there wasn't
+# one. It was also the only sentence in the row with neither a fact nor a counter-example.
+#
+# PANEL, all public BMO: `cf_crash_signature` substring `shutdownhang |` is 613 bugs all-time;
+# created >= 2020-01-01 (before that `regressed_by` does not exist) and product in
+# Core/Toolkit/Firefox is 152, minus the 6 filed by the ACCOUNT this pipeline files under
+# (only the 3 from 2026 are its filings; the other 3 are the same human's own bugs from
+# 2020-2022 and 2 of them carry a `regressed_by`, so putting them back would only RAISE
+# every figure below) leaves 146. 144 of those enter the panel; the 2 drops are `[@ ...]`
+# PARSE failures and NOT Socorro gaps -- 1685337 writes its signature with no brackets at
+# all, 1736568 as `[ @shutdownhang`, and Socorro dates both signatures. Including them
+# moves nothing (rb 19/146 = 13.0%, rb-among-FIXED 15/43 = 34.9%). On those 144: RESOLVED
+# FIXED 42 (29.2% [22.4-37.1]), a human-set `regressed_by` 19 (13.2% [8.6-19.7]), and
+# `regressed_by` among the FIXED 15 of 42 (35.7% [23.0-50.8]). That is a LOWER bound --
+# nobody backfills the field -- and reading the 27 FIXED-without-`regressed_by` bugs'
+# comments finds the word "regression" in 2 more (1738984, 1779040), so 17 of 42 = 40%
+# bounds it above. The clause's world is real and is a quarter of this one: 40 of 144
+# closed WORKSFORME/INCOMPLETE/INVALID, 21 DUPLICATE, 5 WONTFIX. Panel
+# committed as tests/archetypes/shutdownhang_bug_panel.json, regenerated end-to-end by
+# spike/_shutdownhang_regressor_panel.py, and every number above is recomputed from it by
+# `test_the_numbers_in_the_closer_recompute_from_the_committed_panel`.
+#
+# TWO REPAIRS THAT LOOK RIGHT AND ARE REFUTED, so nobody re-tries them:
+#   * "Keep `expect NO regressor` but gate it on signature age." Sliced by `SignatureFirstDate`
+#     at filing: <30d n=23 rb 34.8%, 30-365d n=31 rb 12.9%, >365d n=90 rb 7.8% -- the gradient
+#     is real (7 of that youngest 23 have a NEGATIVE age, i.e. Socorro's first_date postdates
+#     the filing; drop them and it is 5 of 16 = 31%, so they are not what makes it) and it
+#     still does not license the clause, because among the FIXED bugs of that
+#     oldest slice it is 7 of 25 = 28.0% [14.3-47.6]: bugs 2037923 (signature 3855 days old at
+#     filing, regressed by 2026686), 1801819 (2429d), 1704391 (1968d), 1772281 (1218d), 2019599
+#     (1022d), 1752326 (893d), 1676851 (876d). 365 is not where the fit is either:
+#     rb-among-FIXED over that slice runs 23-35% at EVERY cut from 90 to 1460 days, so the
+#     repair dies wherever the line is drawn. The triage prompt forbids the inference beside
+#     these very lines as well -- `triage._signature_age_lines` appends exactly ONE of three
+#     closers (mutually exclusive branches, not a chorus), and on an old signature that one is
+#     `_OLD_SIGNATURE_GUIDANCE`: "a new patch can perfectly well start crashing code that has
+#     crashed under this name for years, and we have been right about exactly that (bug
+#     2061960)". `_UNDATED_SIGNATURE_GUIDANCE` bans the same inference ("'long-standing, so no
+#     changeset created it' is not supported here") on the undated branch. So the clause
+#     contradicted whichever of the two was printed above it.
+#   * "Gate it on whether the blocked shutdown PHASE names a subsystem" (`AppShutdownQM` does,
+#     `XPCOMShutdownThreads` does not). It fits 3 of our 3 shutdown-hang filings, which is an
+#     n=3 threshold by construction, and of the 11 `mozilla::ShutdownPhase` values
+#     (xpcom/base/ShutdownPhase.h) three name a subsystem -- `AppShutdownNetTeardown`,
+#     `AppShutdownQM`, `AppShutdownTelemetry` -- so the general-looking gate is a
+#     three-value lookup fitted on the one of the three we have ever seen block a hang.
+#
+# WHAT IT WAS AIMED AT: our own 3 `^shutdownhang` filings of 52, re-adjudicated 2026-08-21 from
+# BMO history plus the ProcessedCrash. This corrects an earlier "2 of 3 got a human-confirmed
+# regressor": BOTH of those `regressed_by` values were written by dmeehan on 08-17/08-20 by
+# MOVING our own `blocks:<bug>` into the field, visible in the history as a paired `blocks`
+# removal, so neither is independent. The record is 1 right, 1 refuted, 1 contradicted.
+#   * 2063892 RIGHT, and confirmed independently: abienner accepted the mechanism in his own
+#     words 11h after filing ("a rescan happened while the user was closing Firefox ... we
+#     should check if a shutdown is ongoing and stop rescan"), self-assigned, and put up
+#     attachment 9627227 22h after filing. The row fires on it, so the deleted sentence reached
+#     the one shutdown hang this pipeline has got right and told the model the other answer was
+#     better (80e01888-f10a-4a4b-9120-b2aac0260816).
+#   * 2064436 WRONG, INVALID by apehrson in 3h: 46 threads, no `MediaTrackGrph`, no
+#     `GraphRunner`, and `xpcom_spin_event_loop_stack` names `nsThreadPool::ShutdownWithTimeout
+#     BgIOThreadPool` (ec1ff67a-a835-4740-be14-572e50260818).
+#   * 2061969 NOT CONFIRMED and contradicted by its own payload: we put the `__fstatat` in
+#     `QuotaManager::InitializeRepository`'s per-origin walk on the IO thread, while in the
+#     report it is on the MAIN thread under `nsTimerEvent::Run` ->
+#     `gfxFcPlatformFontList::CheckFontUpdates` -> `FcConfigNewestFile`, none of the 75 threads
+#     is QuotaManager's, and there is no `xpcom_spin_event_loop_stack` at all
+#     (424b0ab0-af81-4b33-b045-83c5b0260808).
+# Both wrong ones are wrong about GROUNDING, not about whether a regressor exists. THE HONEST
+# COST OF THE DELETION, and do not read it as bigger than it is: the clause would also have
+# discouraged 2061969 as a side effect, and what replaces it THERE is prompt-level only --
+# this row's thread check and the FACT block `triage._thread_inventory`, both advice. The
+# deterministic backstop does NOT cover that shape: `orchestrator._apply_absent_thread_gate`
+# only reads QUOTED thread names (`_QUOTED_THREAD_RE`), and 2061969's mechanism wrote "(IO
+# thread)" in prose while quoting none, so the gate is a no-op on it -- pinned by
+# `test_the_deterministic_backstop_does_not_cover_what_the_clause_covered`. It DOES fire on
+# 2064436, which wrote "the `MediaTrackGrph` thread". So the trade is a false population
+# prior that reached every hang, including the one filing this pipeline got right, against
+# one accidental brake on one shape.
 _SHUTDOWN_HANG = {
     "slug": "shutdown-hang",
     "title": "Shutdown hang — the blocked spin-loop names the subsystem; check it exists here",
@@ -195,10 +301,25 @@ _SHUTDOWN_HANG = {
         "hang is not evidence about it; and many subsystems hold a TIMER that clears their own "
         "shutdown blocker on a stall, which means they cannot hang shutdown indefinitely, so "
         "check for one (searchfox the blocker's registration) before blaming them. "
-        "Finally, expect NO regressor. A shutdown hang is usually a latent ordering or "
-        "wait-for-ever bug that needed a timing change to become visible, so 'this is a real "
+        "Finally, carry NO prior about whether a regressor exists — measured, there often is "
+        "one. Of 144 Gecko `shutdownhang` crash bugs filed since 2020 (ours excluded), 19 (13%) "
+        "carry a human-set `regressed_by`; of the 42 that reached RESOLVED FIXED, 15 (36%) do; "
+        "and among the FIXED ones whose signature was ALREADY OVER A YEAR OLD when the bug was "
+        "filed it is still 7 of 25 (28%) — bug 2037923 is a 3855-day-old signature regressed "
+        "by bug 2026686 — so 'the signature is old, therefore latent' is not an argument here "
+        "either. Those rates are FLOORS — nobody backfills `regressed_by` — and the other "
+        "direction is real as well: 40 of the same 144 closed WORKSFORME/INCOMPLETE/INVALID "
+        "with no cause established. Both endings are legitimate and both have to be EARNED "
+        "the same way: 'a real "
         "shutdown-ordering defect in X, no changeset in this window introduced it' is a good "
-        "verdict — better than naming a changeset because the window had to contain one."
+        "verdict when the evidence points there and a bad one when it only means you did not "
+        "find a changeset, exactly as naming a changeset is bad when it only means the window "
+        "had to contain one. And when a mechanism fails the thread check above, THAT REFUTATION "
+        "IS THE FINDING: report it, do not reach for another subsystem to keep the story alive. "
+        "Bug 2064436 named MediaTrackGraph while the blocked spin-loop in the same payload said "
+        "`nsThreadPool::ShutdownWithTimeout BgIOThreadPool`; bug 2061969 named QuotaManager "
+        "while the hung main thread was in fontconfig and none of the process's 75 threads was "
+        "QuotaManager's."
     ),
 }
 
@@ -227,12 +348,24 @@ def _fingerprint(guidance, matcher):
 # The obvious fix, `overwrite=True`, is wrong in the measured direction: it reverts a
 # `guidance` an operator tuned after a misfire, which is exactly the promise `seed` makes.
 #
-# 854a7c1d... is `shutdown-singleton` as first seeded (312e153) and unchanged until the
-# 2026-08-21 context fix above -- the only text a production row can hold that we know was not
-# written by hand. `shutdown-hang` is not being changed and so lists nothing.
+# EVERY ENTRY IS A TEXT THIS FILE ONCE SHIPPED, and it has to be added in the SAME commit that
+# changes a row -- forget it and the change is dead on arrival in prod again, silently, which is
+# the whole failure this mechanism exists for. The list is `git log --oneline -- \
+# crashclouseau/archetypes.py`; each hash is `_fingerprint(spec["guidance"], spec["matcher"])`
+# evaluated on that revision's copy of the file.
+#   shutdown-singleton 854a7c1d = 312e153, first seeded, unchanged through 5f169b6
+#                      24092d24 = 07d593e, the require_shutdown_progress/no_moz_crash_reason fix
+#   shutdown-hang      2bb22027 = 5f169b6, the row as first seeded and unchanged until now
+# Both slugs are listed because both rows' closers changed in this commit; a prod row can hold
+# any of these three texts depending on which deploy last touched it, and none of them was
+# written by hand.
 _SUPERSEDED = {
     "shutdown-singleton": frozenset({
         "854a7c1dc52988e5df1da7db6dd442bcc0b8559690c6c609000c74b100625a4c",
+        "24092d24e81f89f68437ef5aa434db12fec606d9e8de68a3b233c196ecf25fb1",
+    }),
+    "shutdown-hang": frozenset({
+        "2bb22027da52995373d98fe920881b32be5ab2dd3182fd59e56b38f41124d184",
     }),
 }
 

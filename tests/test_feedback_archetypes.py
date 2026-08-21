@@ -480,6 +480,33 @@ class TestSeeding(unittest.TestCase):
         self.assertIn("MOZ_CRASH_REASON", guidance)
         self.assertIn("this row does not apply", guidance)
 
+    def test_the_closer_does_not_conclude_that_nothing_caused_the_crash(self):
+        # It used to end "a latent shutdown bug with no recent regressor is a perfectly good
+        # verdict, and better than naming a changeset", which contradicts the paragraph
+        # directly above it -- that paragraph sends the agent to find exactly such a changeset
+        # in the declaration's history. On this row's OWN bug the origin was one: jstutte set
+        # `regressed_by` to bug 1412726 (2017) at 2026-08-10T06:29:02Z, 1h44m after we filed
+        # bug 2062119 at 04:44:52Z, and the bug is RESOLVED FIXED.
+        guidance = archetypes._SHUTDOWN_SINGLETON["guidance"]
+        self.assertNotIn("perfectly good verdict", guidance)
+        self.assertNotIn("better than naming a changeset", guidance)
+        self.assertIn("1412726", guidance)
+        self.assertIn("outside this build's pushlog window", guidance)
+        # And it does not swing the other way: a changeset lifted out of the window because one
+        # was needed is still the mistake the row exists to stop (we named a 2022-12-13 one).
+        self.assertIn("2022-12-13", guidance)
+
+    def test_it_does_not_borrow_the_shutdown_hang_rows_denominator(self):
+        # The sibling's closer was replaced using 144 `shutdownhang |` crash bugs. This row is
+        # pinned NOT to fire on a shutdown hang -- three `want: false` shutdownhang entries in
+        # shutdown_singleton_panel.json, and 0 of the 116 `^shutdownhang` nightly reports in 3
+        # months without a `moz_crash_reason` also has a small fault address and
+        # `shutdown_progress` set -- so that panel describes a population this row never sees.
+        # Quoting it here would be the same scope-exceeds-evidence error, one row over.
+        self.assertIn("Of 144 Gecko `shutdownhang` crash bugs",
+                      archetypes._SHUTDOWN_HANG["guidance"])
+        self.assertNotIn("shutdownhang", archetypes._SHUTDOWN_SINGLETON["guidance"])
+
     def test_leaving_the_pushlog_window_is_gated_on_finding_the_declaration(self):
         # "the origin will NOT be in this build's pushlog window" is the most expensive thing
         # this row can ask for, and a searchfox hit on the `StaticRefPtr`/`ClearOnShutdown`
@@ -598,11 +625,29 @@ class TestSeedReachesADatabaseThatAlreadyHasTheRow(unittest.TestCase):
                                  archetypes._SUPERSEDED.get(spec["slug"], ()))
 
     def test_only_the_text_prod_can_actually_hold_is_listed(self):
-        # `shutdown-singleton` was seeded by 312e153 and unchanged until this fix, so exactly
-        # one stored text is known not to be somebody's edit. `shutdown-hang` is unchanged and
-        # lists nothing, which is what keeps this from becoming a blanket overwrite.
-        self.assertEqual(len(archetypes._SUPERSEDED["shutdown-singleton"]), 1)
-        self.assertNotIn("shutdown-hang", archetypes._SUPERSEDED)
+        # One entry per text this file has ever shipped for the slug and nothing else: a hash
+        # nobody can point at a revision for would turn the upgrade into a blanket overwrite.
+        # `shutdown-singleton` was seeded by 312e153 and rewritten by 07d593e (two texts);
+        # `shutdown-hang` was seeded by 5f169b6 and unchanged until its closer was replaced
+        # (one). Recheck a hash with `git show <rev>:crashclouseau/archetypes.py` and
+        # `_fingerprint(spec["guidance"], spec["matcher"])` on that revision's copy.
+        self.assertEqual(set(archetypes._SUPERSEDED),
+                         {"shutdown-singleton", "shutdown-hang"})
+        self.assertEqual(len(archetypes._SUPERSEDED["shutdown-singleton"]), 2)
+        self.assertEqual(len(archetypes._SUPERSEDED["shutdown-hang"]), 1)
+        for slug, fingerprints in archetypes._SUPERSEDED.items():
+            for fingerprint in fingerprints:
+                with self.subTest(slug=slug, fingerprint=fingerprint[:8]):
+                    self.assertEqual(len(fingerprint), 64)
+
+    def test_a_row_whose_text_changed_records_the_text_it_replaced(self):
+        # The mechanism only works if the entry is added in the SAME commit as the edit;
+        # forget it and the change is dead on arrival in prod again, silently, because no page
+        # renders this table. Both closers changed on 2026-08-21, so both slugs are listed --
+        # this is the assertion that would have failed had one been forgotten.
+        for spec in archetypes.SEED_ARCHETYPES:
+            with self.subTest(slug=spec["slug"]):
+                self.assertTrue(archetypes._SUPERSEDED.get(spec["slug"]))
 
     def test_a_row_that_will_not_serialise_is_left_alone_not_raised_on(self):
         # bin/release.py runs this on every deploy; a weird row must not fail a release.

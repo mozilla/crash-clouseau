@@ -13,6 +13,7 @@
 #
 #     DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \
 #         uv run python -m unittest tests.test_hang_thread
+import json
 import os
 import unittest
 
@@ -549,6 +550,185 @@ class TestShutdownHangArchetype(unittest.TestCase):
         self.assertIn("CONTENT process", guidance)
         self.assertIn("TIMER", guidance)
         self.assertIn("2064436", guidance)
+
+    def test_the_clauses_the_panel_validated_survive_verbatim(self):
+        # Only the closer was replaced. Everything else scored 3/3 on our own shutdown hangs:
+        # the spin-loop annotation named the subsystem on the two crashes that carry one, and
+        # the thread list refuted the mechanism on both of the wrong ones.
+        from crashclouseau import archetypes
+
+        guidance = archetypes._SHUTDOWN_HANG["guidance"]
+        for kept in ("A shutdown hang is not a fault",
+                     "BLOCKED SPIN-EVENT-LOOP STACK",
+                     "Shutdown phase reached",
+                     "BEFORE YOU NAME A SUBSYSTEM, find its thread"):
+            with self.subTest(kept=kept):
+                self.assertIn(kept, guidance)
+
+    def test_it_carries_no_prior_about_whether_a_regressor_exists(self):
+        # The row used to close "Finally, expect NO regressor ... better than naming a
+        # changeset because the window had to contain one" -- generalised from one INVALID bug
+        # (2064436) the day after it closed, and the only sentence in the row with neither a
+        # fact nor a counter-example. What made apehrson right there was an UNGROUNDED
+        # MECHANISM, not the absence of a regressor; he never said there wasn't one.
+        # NOT INVERTED EITHER: 40 of the 144 panel bugs closed WORKSFORME/INCOMPLETE/INVALID,
+        # so the clause's world is real, it is just a quarter of this one, and the closer says
+        # that out loud beside the rates.
+        from crashclouseau import archetypes
+
+        guidance = archetypes._SHUTDOWN_HANG["guidance"]
+        for gone in ("expect NO regressor", "better than naming a changeset",
+                     "usually a latent ordering"):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, guidance)
+        self.assertIn("carry NO prior about whether a regressor exists", guidance)
+        self.assertIn("Both endings are legitimate", guidance)
+        self.assertNotIn("expect a regressor", guidance)
+
+    def test_the_refutation_clause_does_not_restate_the_absence_absolute(self):
+        # `triage._thread_inventory` deliberately conditions "REFUTED" on a cross-process step,
+        # because 71% of thread families are >=95% confined to one process type and so the
+        # absence of a content-process thread from a parent crash is the BASE RATE. The closer
+        # points back at "the thread check above", which carries that caveat two sentences
+        # earlier, rather than re-asserting a flat absolute in a second place where it would
+        # quietly undo that fix.
+        from crashclouseau import archetypes
+
+        guidance = archetypes._SHUTDOWN_HANG["guidance"]
+        self.assertIn("when a mechanism fails the thread check above", guidance)
+        self.assertLess(guidance.index("BEFORE YOU NAME A SUBSYSTEM"),
+                        guidance.index("when a mechanism fails the thread check above"))
+
+    def test_the_numbers_in_the_closer_recompute_from_the_committed_panel(self):
+        # Every figure in the closer, against the bugs it was measured on.
+        panel = _shutdownhang_bug_panel()
+        fixed = [b for b in panel if b["resolution"] == "FIXED"]
+        rb = [b for b in panel if b["regressed_by"]]
+        rb_fixed = [b for b in fixed if b["regressed_by"]]
+        old_fixed = [b for b in fixed if b["signature_age_days_at_filing"] >= 365]
+        old_fixed_rb = [b for b in old_fixed if b["regressed_by"]]
+        self.assertEqual(
+            (len(panel), len(fixed), len(rb), len(rb_fixed), len(old_fixed), len(old_fixed_rb)),
+            (144, 42, 19, 15, 25, 7))
+        self.assertEqual(round(100 * len(rb) / len(panel)), 13)
+        self.assertEqual(round(100 * len(rb_fixed) / len(fixed)), 36)
+        self.assertEqual(round(100 * len(old_fixed_rb) / len(old_fixed)), 28)
+        oldest = max(old_fixed_rb, key=lambda b: b["signature_age_days_at_filing"])
+        self.assertEqual((oldest["id"], oldest["signature_age_days_at_filing"],
+                          oldest["regressed_by"]), (2037923, 3855, [2026686]))
+        # Nobody backfills `regressed_by`, so 19/144 is a floor, not an estimate; the closer
+        # says "carry NO prior", never "there is one", and it says the floor out loud so the
+        # smallest of the three rates cannot be read back as the sentence it replaced.
+        self.assertLess(len(rb), len(panel))
+        # The other direction, also quoted: the deleted clause's world is real, just not the
+        # whole world. INACTIVE is not in the panel at all, so it is not in the sentence.
+        negative = [b for b in panel
+                    if b["resolution"] in ("WORKSFORME", "INCOMPLETE", "INVALID")]
+        self.assertEqual(len(negative), 40)
+
+        from crashclouseau import archetypes
+
+        guidance = archetypes._SHUTDOWN_HANG["guidance"]
+        for quoted in ("Of 144 Gecko `shutdownhang` crash bugs filed since 2020",
+                       "19 (13%)", "of the 42 that reached RESOLVED FIXED, 15 (36%)",
+                       "7 of 25 (28%)",
+                       "Those rates are FLOORS",
+                       "40 of the same 144 closed WORKSFORME/INCOMPLETE/INVALID",
+                       "bug 2037923 is a 3855-day-old signature regressed by bug 2026686"):
+            with self.subTest(quoted=quoted):
+                self.assertIn(quoted, guidance)
+
+    def test_an_age_gated_version_of_the_clause_is_refuted_by_the_panel(self):
+        # THE OBVIOUS GRADED REPAIR, killed: keep "expect NO regressor" and fire it only on an
+        # old signature. The rate does fall with age (<30d 34.8% of n=23 carry a regressor,
+        # 30-365d 12.9% of n=31, >365d 7.8% of n=90) and it still does not license the clause,
+        # because 7 of the 25 FIXED bugs in that oldest slice name one -- signatures 876 to
+        # 3855 days old at filing. The gate would also have contradicted its neighbour in the
+        # same prompt: `triage._signature_age_lines` appends exactly ONE of three closers, and
+        # on an old signature that one is `_OLD_SIGNATURE_GUIDANCE` ("a new patch can perfectly
+        # well start crashing code that has crashed under this name for years"), while the
+        # undated branch bans the inference in as many words.
+        panel = _shutdownhang_bug_panel()
+        eaten = [b for b in panel
+                 if b["resolution"] == "FIXED" and b["regressed_by"]
+                 if b["signature_age_days_at_filing"] >= 365]
+        self.assertEqual(sorted(b["id"] for b in eaten),
+                         [1676851, 1704391, 1752326, 1772281, 1801819, 2019599, 2037923])
+        self.assertEqual(min(b["signature_age_days_at_filing"] for b in eaten), 876)
+        # And 365 is not where the fit is: the same rate is 23-35% at every cut from 90 to
+        # 1460 days, so the repair dies wherever the line is drawn rather than at one lucky
+        # boundary.
+        rates = []
+        for cut in (90, 180, 365, 548, 730, 1095, 1460):
+            old = [b for b in panel if b["resolution"] == "FIXED"
+                   if b["signature_age_days_at_filing"] >= cut]
+            rates.append(len([b for b in old if b["regressed_by"]]) / len(old))
+        self.assertGreater(min(rates), 0.2)
+        self.assertLess(max(rates), 0.36)
+        # The youngest slice quoted in the comment above carries 7 bugs whose signature age is
+        # NEGATIVE -- Socorro's first_date postdates the filing, so the age is not usable.
+        # Dropping them leaves 5 of 16, which is why the gradient is not their artefact.
+        young = [b for b in panel if b["signature_age_days_at_filing"] < 30]
+        dated = [b for b in young if b["signature_age_days_at_filing"] >= 0]
+        self.assertEqual((len(young), len(dated),
+                          sum(1 for b in dated if b["regressed_by"])), (23, 16, 5))
+
+    def test_the_deterministic_backstop_does_not_cover_what_the_clause_covered(self):
+        # THE HONEST COST OF THE DELETION, pinned so the comment above cannot drift into a
+        # promise. `orchestrator._apply_absent_thread_gate` is the only DETERMINISTIC check of
+        # a named-but-absent thread, and it reads QUOTED names only. Bug 2061969's mechanism
+        # wrote "(IO thread)" in prose and quoted no thread, so the gate is a no-op on exactly
+        # the filing whose accidental brake the deleted sentence was; what is left there is
+        # this row's thread check and `triage._thread_inventory`, which are advice. Bug
+        # 2064436, which wrote "the `MediaTrackGrph` thread", is caught.
+        mechanism_2061969 = (
+            "`QuotaManager::InitializeRepository`'s per-origin directory walk (IO thread) is "
+            "deliberately not short-circuited by a shutdown request. `QuotaManager::Shutdown` "
+            "on PBackground blocks the main thread's shutdown spin-wait on this IO thread "
+            "finishing (`shutdownAndJoinIOThread`).")
+        self.assertEqual(
+            [m.group(1) or m.group(2)
+             for m in orchestrator._QUOTED_THREAD_RE.finditer(mechanism_2061969)], [])
+        self.assertEqual(
+            [m.group(1) or m.group(2) for m in orchestrator._QUOTED_THREAD_RE.finditer(
+                "the `MediaTrackGrph` thread owned by `ThreadedDriver`")], ["MediaTrackGrph"])
+
+    def test_it_fires_on_all_three_of_our_own_shutdown_hang_filings(self):
+        # A guidance change only matters where the row fires. Signatures verbatim from the
+        # ProcessedCrash of each filing's crash uuid; 2063892 is the one this pipeline got
+        # right (abienner accepted the mechanism 11h after filing and attached a patch at 22h),
+        # and it is the crash the deleted sentence was reaching.
+        from crashclouseau import archetypes, models
+
+        spec = archetypes._SHUTDOWN_HANG
+        row = models.Archetype(slug=spec["slug"], title=spec["title"],
+                               guidance=spec["guidance"], matcher=spec["matcher"])
+        for bug, uuid, signature in (
+            (2064436, "ec1ff67a-a835-4740-be14-572e50260818",
+             "shutdownhang | RtlWaitOnAddress | WaitOnAddress"),
+            (2063892, "80e01888-f10a-4a4b-9120-b2aac0260816",
+             "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | "
+             "RtlWaitOnAddress | kernelbase.dll | DispatchMessageWorker"),
+            (2061969, "424b0ab0-af81-4b33-b045-83c5b0260808",
+             "shutdownhang | __fstatat"),
+        ):
+            with self.subTest(bug=bug, uuid=uuid):
+                self.assertTrue(row.matches({"signature": signature, "stack": "",
+                                             "crash_type": "", "fault_address": None}))
+
+
+def _shutdownhang_bug_panel():
+    """The 144 bugs behind the `shutdown-hang` closer.
+
+    BMO `cf_crash_signature` substring `shutdownhang |` is 613 bugs all-time; created
+    >= 2020-01-01 (before that `regressed_by` does not exist) and product in
+    Core/Toolkit/Firefox with our own filings excluded leaves 146, of which 144 have a Socorro
+    `SignatureFirstDate` for the matched signature. Regenerate end to end with
+    `spike/_shutdownhang_regressor_panel.py`."""
+    path = os.path.join(os.path.dirname(__file__), "archetypes",
+                        "shutdownhang_bug_panel.json")
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 if __name__ == "__main__":
