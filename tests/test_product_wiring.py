@@ -445,6 +445,59 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Why it may be related", html)
         self.assertIn("use-after-free of mPtr", html)
 
+    def test_a_stale_clamp_the_blind_review_reversed_says_so_next_to_the_badge(self):
+        # `stale_signature_clamped` had one writer and zero readers: a lead clamped for 202 days
+        # of staleness and re-inflated by the blind second opinion rendered a badge identical to
+        # a clean rung-70 one. The chip row is the page's half of that round trip; the filed
+        # bug's half is `report_bug.build_stale_signature_note`.
+        ev = _evidence(verdict="lead", confidence=70)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["corroborations"] = {
+            "stale_signature": True,
+            "candidate_landed_after_first_seen_days": 202.5,
+            "signature_first_seen_buildid": "20260117213627",
+            "stale_signature_clamped": True,
+            "second_opinion_boosted": True,
+        }
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("crash predates this changeset by 202d", html)
+        self.assertIn("confidence restored by the independent review", html)
+        self.assertNotIn(">confidence lowered one step<", html)
+
+    def test_a_clamp_nothing_reversed_says_the_badge_is_the_lowered_rung(self):
+        ev = _evidence(verdict="lead", confidence=50)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["corroborations"] = {
+            "stale_signature": True,
+            "candidate_landed_after_first_seen_days": 178.0,
+            "stale_signature_clamped": True,
+        }
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn(">confidence lowered one step<", html)
+        self.assertNotIn("confidence restored by the independent review", html)
+
+    def test_a_clamp_a_later_gate_abstained_claims_nothing_about_the_badge(self):
+        # THE MAJORITY SHAPE, and the reason both chips are gated on `is_lead`: the clamp fires
+        # while the verdict is a lead, and a later gate can abstain it. 50 of the 67
+        # `stale_signature_clamped` dossiers in the 1996 persisted prod dossiers ship as an
+        # abstain (48 abstained by the second opinion itself), and 45 of those still render this
+        # panel because an abstain carrying area-experts is shown under `show_experts`. The old
+        # stale chip belongs there — it is a statement about the SIGNATURE. "The badge above is
+        # the lowered rung" does not: the badge says ABSTAIN.
+        ev = _evidence(verdict="abstain", confidence=25)
+        ev["dossier"]["area_experts"] = [
+            {"name": "Dev One", "email": "d@moz.example", "reason": "owns the file"}]
+        ev["dossier"]["corroborations"] = {
+            "stale_signature": True,
+            "candidate_landed_after_first_seen_days": 178.0,
+            "stale_signature_clamped": True,
+            "second_opinion_abstained": True,
+        }
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("crash predates this changeset by 178d", html)   # the signature fact stays
+        self.assertNotIn("confidence lowered one step", html)
+        self.assertNotIn("confidence restored by the independent review", html)
+
     def test_ref_citation_renders_and_survives_untyped_hunk_lines(self):
         # `DiffHunk.lines` is deliberately an UNTYPED list (the model emits bare strings
         # there), and the `cite()` macro is fed it directly — so a model-supplied int or

@@ -547,6 +547,78 @@ def build_signature_age_note(corroborations, buildid=None):
     return ""
 
 
+def build_stale_signature_note(corroborations):
+    """One sentence saying the signature's onset runs AGAINST the changeset below, or ``""``.
+
+    `build_signature_age_note` above says how old the signature is. This says what that number
+    was USED for: ``_apply_signature_age_gate`` compared the signature's first report against the
+    CANDIDATE's landing date, found the crash older, and lowered our own confidence one rung for
+    it. Until this, that comparison had ONE writer and ZERO readers outside tests —
+    ``stale_signature_clamped`` reached no prompt, no chip and no bug comment.
+
+    THE PAIR IS THE POINT. A lead clamped for 202 days of staleness and then re-inflated by the
+    blind second opinion ships at p_worth 0.9714, byte-identical to a clean rung-70 lead, and the
+    recipient is told neither half — not that the timing evidence ran against the changeset, nor
+    that the confidence they are reading rests on an independent blind agreement rather than on
+    the first analysis. That is the bug-2065373 lesson (:jstutte, 2026-08-21): every claim he
+    corrected was checkable against something the run already held and printed nowhere.
+
+    SAYING IT IS NOT A REASON TO WITHHOLD THE REPORT, and the sentence must not read like one. Of
+    the 11 stale filings of 2026-08, 4 were acted on (36%) against 9 of 39 fresh ones (23%), and
+    bug 2062219 — 202.5 days stale, clamped, re-inflated, filed at 97% — is a topcrash, RESOLVED
+    FIXED, with ``regressed_by`` set by :dveditz to exactly the bug of the changeset Clouseau
+    named.
+
+    WHAT IT MUST NOT SAY: "this changeset is not the cause", and the claim is scoped to the
+    SIGNATURE for a measured reason rather than a stylistic one. The SAME POST that carries this
+    paragraph sets ``regressed_by=[the candidate's bug]`` and ``keywords=[crash, regression]``
+    whenever the candidate came from the build's pushlog window (``build_bug_preview``,
+    report_bug.py:1328/1341) — so a sentence saying the changeset "cannot be what INTRODUCED this
+    crash" contradicts our own structured field inside one filing, and on the counter-example it
+    contradicts the human too: on bug 2062219 :dveditz kept the ``regressed_by`` we asserted and
+    renamed the bug "(regression from bug 2043000)". SIGNATURE REUSE is why the gate downweights
+    instead of abstaining — an old signature can acquire a new cause, and a rare crash can be
+    made frequent by a change that did not create it. Landing late disproves the ORIGIN OF THE
+    SIGNATURE, not relevance and not causation for this report, so the note states the dates and
+    leaves the call to the reader, in the same voice as the crashstack.html chip.
+
+    Three shapes, because all three get filed: flagged-only (strong-evidence is flagged and not
+    moved), clamped, and clamped-then-restored. Rounds the gap the same way the chip does
+    (half-to-even) so the two surfaces never print different numbers for one fact. Costs nothing:
+    ``_apply_signature_age_gate`` already put every value in ``corroborations``."""
+    c = corroborations or {}
+    days = c.get("candidate_landed_after_first_seen_days")
+    if not c.get("stale_signature") or days is None:
+        return ""
+    # NAME THE BUILD the gap was measured from. The paragraph immediately above this one
+    # (`build_signature_age_note`) prints an age from ``signature_first_seen_ever``, Socorro's
+    # all-time table; this gate measures from ``signature_first_seen_buildid``, the 364-day
+    # SuperSearch answer, and the two are DOCUMENTED as disagreeing (`sigage.age_facts`,
+    # `signature_clock_drift_days`, and the measured "five of the seven dossiers whose windowed
+    # clock said 0 days old sat on signatures 1098 to 2255 days old" in the note above). Without
+    # the buildid the filed bug prints two unexplained day counts a paragraph apart -- "3207 days
+    # before the build above" and "202 days before the changeset" -- for what a reader takes to
+    # be one fact. The crashstack chip already names the build for exactly this reason.
+    seen = c.get("signature_first_seen_buildid")
+    where = " in build {},".format(seen) if seen else ""
+    note = (
+        "Timing check: this signature was already being reported{} {:.0f} days before the "
+        "changeset named below landed, so that changeset cannot be what INTRODUCED this "
+        "SIGNATURE. It may still be relevant, and it may still be the cause of the crash in "
+        "this particular report — an old signature can acquire a new cause, and a rare crash "
+        "can be made frequent by a change that did not create it — but the signature's own "
+        "history is not evidence that it is.".format(where, days)
+    )
+    if not c.get("stale_signature_clamped"):
+        return note
+    if c.get("second_opinion_boosted"):
+        return note + (
+            " Clouseau lowered its own confidence one step for that, and then put it back: an "
+            "independent blind re-analysis, given none of the reasoning above, still agreed the "
+            "changeset can cause this crash. The confidence stated below is that restored one.")
+    return note + " Clouseau lowered its own confidence one step for that."
+
+
 def build_hardware_note(corroborations):
     """One paragraph on how much of this signature is hardware error, or ``""``.
 
@@ -619,7 +691,9 @@ def build_bug_comment(
     4. one sentence on how much this signature is crashing;
     4a. when the signature first appeared, which is the onset anchor every hand-filed crash
         bug that names a regressor carries and ours did not;
-    4b. how much of the signature is hardware error, when that is above background;
+    4b. whether that onset runs AGAINST the changeset in 5 — and, when it does, whether the
+        blind second opinion is what put the stated confidence back;
+    4c. how much of the signature is hardware error, when that is above background;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
     7. why this is a new bug rather than a comment on ``related_bugs`` /
@@ -638,6 +712,7 @@ def build_bug_comment(
         build_frames_block(stack, max_frames=max_frames, details=details),
         build_stats_sentence(first, stats, info),
         build_signature_age_note((dossier or {}).get("corroborations"), info.get("buildid")),
+        build_stale_signature_note((dossier or {}).get("corroborations")),
         build_hardware_note((dossier or {}).get("corroborations")),
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,

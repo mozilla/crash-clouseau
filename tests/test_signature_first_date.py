@@ -525,5 +525,77 @@ class TestTheFiledBugStatesTheAge(unittest.TestCase):
                         comment.find("This signature is not new"))
 
 
+class TestStaleSignatureNote(unittest.TestCase):
+    """The other half of the onset paragraph: not "how old is this signature" but "does that age
+    run AGAINST the changeset we are about to name". `stale_signature_clamped` had one writer and
+    zero readers outside tests, so a lead clamped for staleness and then re-inflated by the blind
+    second opinion read exactly like a clean one -- the bug-2065373 failure shape, where the run
+    already held the fact and printed it nowhere."""
+
+    _STALE = {"stale_signature": True, "candidate_landed_after_first_seen_days": 202.5,
+              "signature_first_seen_buildid": "20260117213627"}
+
+    def test_nothing_stale_says_nothing(self):
+        for corr in (None, {}, {"signature_first_seen_ever": "20171028220326"},
+                     {"stale_signature": True}):          # gap unknown -> no claim
+            self.assertEqual(report_bug.build_stale_signature_note(corr), "")
+
+    def test_flagged_but_not_moved_states_the_dates_only(self):
+        # strong-evidence is flagged and NOT clamped, and the note must not claim a clamp.
+        note = report_bug.build_stale_signature_note(self._STALE)
+        self.assertIn("202 days before the changeset", note)
+        self.assertNotIn("lowered its own confidence", note)
+
+    def test_it_names_the_build_its_gap_was_measured_from(self):
+        # The paragraph above this one prints an age from the ALL-TIME clock; this gate measures
+        # from the 364-day SuperSearch one, and the two are documented as disagreeing. Naming the
+        # build is what stops the filed bug printing two unexplained day counts for one fact.
+        self.assertIn("in build 20260117213627,",
+                      report_bug.build_stale_signature_note(self._STALE))
+        # and it degrades rather than inventing one
+        note = report_bug.build_stale_signature_note(
+            {"stale_signature": True, "candidate_landed_after_first_seen_days": 202.5})
+        self.assertIn("already being reported 202 days before", note)
+
+    def test_a_clamp_says_that_it_lowered_its_own_confidence(self):
+        note = report_bug.build_stale_signature_note(
+            {**self._STALE, "stale_signature_clamped": True})
+        self.assertIn("lowered its own confidence one step", note)
+        self.assertNotIn("put it back", note)
+
+    def test_the_pair_says_both_halves(self):
+        note = report_bug.build_stale_signature_note(
+            {**self._STALE, "stale_signature_clamped": True, "second_opinion_boosted": True})
+        self.assertIn("lowered its own confidence one step", note)
+        self.assertIn("put it back", note)
+        self.assertIn("independent blind re-analysis", note)
+
+    def test_it_never_claims_the_changeset_is_innocent(self):
+        # Signature REUSE is why the gate downweights instead of abstaining (bug 2062219: 202
+        # days stale, human-confirmed regressor, FIXED), so the sentence leaves the call to the
+        # reader instead of dismissing the changeset for them.
+        note = report_bug.build_stale_signature_note(
+            {**self._STALE, "stale_signature_clamped": True, "second_opinion_boosted": True})
+        self.assertIn("may still be relevant", note)
+        self.assertNotIn("is not the cause", note)
+
+    def test_the_note_is_in_the_filed_comment_between_the_onset_and_the_changeset(self):
+        corr = dict(sigage.age_facts(_BUG_2062173["buildid"],
+                                     _BUG_2062173["signature_first_seen_buildid"],
+                                     _BUG_2062173["signature_first_seen_ever"]))
+        corr.update({**self._STALE, "stale_signature_clamped": True,
+                     "second_opinion_boosted": True})
+        dossier = {"candidate": {"node": "abc123"}, "verdict": {}, "corroborations": corr}
+        stack = {"frames": [{"stackpos": 0, "function": "Foo::bar", "filename": "dom/Foo.cpp",
+                             "line": 51, "module": "xul.dll"}]}
+        comment = report_bug.build_bug_comment(
+            {"uuid": "u-1", "channel": "nightly", "buildid": "20260810000000"},
+            stack, dossier, stats={"count": 2, "installs": 2}, first=True, version="155.0a1")
+        self.assertIn("Timing check:", comment)
+        # after the onset sentence it qualifies, and before the changeset it is talking about
+        self.assertLess(comment.find("This signature is not new"), comment.find("Timing check:"))
+        self.assertLess(comment.find("Timing check:"), comment.find("abc123"))
+
+
 if __name__ == "__main__":
     unittest.main()

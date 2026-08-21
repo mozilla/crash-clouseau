@@ -941,6 +941,87 @@ def _has_verified_callpath(dossier) -> bool:
     )
 
 
+# Whether a DELIBERATE suppression may be UNDONE by an independent second-opinion
+# corroboration, keyed by the flag the suppressing gate writes. `_record_suppression` refuses to
+# write a flag that is not declared here, so a new gate has to CHOOSE: before this table the
+# fold tested ONE hard-coded flag name and every other suppression silently inherited
+# "boostable".
+#
+# The value is an argument about the AXIS the gate ruled on, never a preference:
+#
+# * ``block`` — the gate found the changeset RELATED BUT NOT THE CAUSE (SF-3's missing call
+#   path, the exposer classifier). An SO ``corroborates`` says "this changeset can plausibly
+#   cause this crash", i.e. relatedness — the one thing already granted — so it carries no
+#   information on the axis the gate ruled on. That is what `ce6b8fc` blocked, and an exposer is
+#   the case in point: reverting it DOES stop the crash, and it must still stay a medium lead
+#   rather than become a probable cause.
+# * ``allow`` — the gate ruled on a DIFFERENT axis from the one the SO reviews, so a blind
+#   agreement is genuinely new evidence. `_apply_signature_age_gate` rules on ORIGIN ("landing
+#   late disproves ORIGIN, not relevance", its own docstring); the SO reviews the MECHANISM. And
+#   the agreement is independent evidence only BECAUSE `_maybe_run_second_opinion` runs before
+#   these gates and never sees the clamp — telling it would destroy the very property that
+#   licenses ``allow``.
+#
+# WIDENING THE BLOCK TO "ANY SUPPRESSION" IS REFUTED, cost measured on the 11 stale filings of
+# 2026-08: it loses 3 FIXED bugs (2 topcrash, all three with a HUMAN-set `regressed_by` naming
+# exactly the changeset Clouseau named — bugs 2062219, 2061960, 2063809) plus 1 ASSIGNED
+# (2061127), and gains 6 low-value filings avoided; the stale cohort is acted on MORE often
+# (4/11 = 36%) than the fresh one (9/39 = 23%). Do not re-derive it, and do not "fail safe" here.
+#
+# Only a gate running BEFORE `_fold_second_opinion` in `apply_deterministic_gates` can be seen
+# here. The nine suppressions BELOW the fold (backed-out, is-backout x2, bit-flip, broken-cpu,
+# hardware-noise, bad-machine, absent-thread, compiled-out) are unreachable by construction and
+# are deliberately absent rather than declared ``block``.
+#
+# UNEXAMINED COINCIDENCE, recorded so it is not mistaken for a fit: `min_boost_confidence` (50)
+# and the rung the stale clamp lands a `probable` lead on (`medium`, 50) are the same number by
+# accident — neither was fit against the other, and a one-rung move in either would end the
+# clamp-then-boost round trip outright. n=9 clamps / 3 reversals is enough to notice and nowhere
+# near enough to tune; re-measure at n>=30 before touching either.
+_SO_BOOST_POLICY = {
+    "downgraded_from_strong": "block",
+    "stale_signature_clamped": "allow",
+}
+
+
+def _record_suppression(dossier, flag):
+    """Record that a deterministic gate deliberately moved this verdict DOWN, under a flag whose
+    second-opinion boost policy is declared in ``_SO_BOOST_POLICY``.
+
+    Raises ``KeyError`` for an undeclared flag, and that raise is the point of the function: it
+    is the only thing that makes the author of the NEXT suppressing gate pick an axis instead of
+    inheriting "boostable" from a flag name they never read. It cannot fire in production — both
+    call sites pass a literal and both are pinned by tests — so it is a development-time failure
+    by construction, which is what leaves the two calling gates their "never raises".
+
+    Mutates ``dossier`` in place."""
+    if flag not in _SO_BOOST_POLICY:
+        raise KeyError(
+            "{}: a deliberate suppression must declare in _SO_BOOST_POLICY whether an "
+            "independent second-opinion corroboration may undo it — 'block' when the gate ruled "
+            "on the same axis the second opinion reviews, 'allow' when it did not".format(flag))
+    dossier.corroborations = {**(dossier.corroborations or {}), flag: True}
+
+
+def _so_boost_blocked_by(corroborations):
+    """The suppression flag that forbids a corroborating second opinion from re-inflating this
+    lead, or ``None``.
+
+    Replaces a hard-coded ``downgraded_from_strong`` test and is behaviour-identical to it
+    today, exactly one entry in ``_SO_BOOST_POLICY`` being a ``block``. That identity is measured
+    rather than asserted: across the 1996 persisted prod dossiers of 2026-07-06 → 2026-08-05
+    ``downgraded_from_strong`` appears on 2, and on BOTH the second opinion REFUTED (the other
+    branch of the fold) — so the guard blocked a boost 0 times and there is no live behaviour for
+    this refactor to change. Any difference you can produce is a bug in it.
+
+    What the flag name hid: the guard read as "a deliberately suppressed lead stays suppressed"
+    but named only ONE suppression, so `stale_signature_clamped` — added three days later, and
+    the only other suppression that runs before the fold — escaped it silently. It is now
+    ``allow`` on the argument in the table, which is a decision rather than an omission."""
+    c = corroborations or {}
+    return next((f for f, p in _SO_BOOST_POLICY.items() if p == "block" and c.get(f)), None)
+
+
 def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason):
     """Shared downgrade used by the off-stack precision gates: turn a
     ``strong-evidence`` verdict into a soft ``lead`` when a cited anchor
@@ -956,13 +1037,14 @@ def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason):
             consistency=v.consistency,
         )
         # Mark that this lead is a PRECISION-DOWNGRADE of a strong-evidence verdict (SF-3 /
-        # exposer / a confident second-opinion refutation). The second-opinion boost keys on
-        # this so an independent "it's related" agreement can NOT re-inflate a deliberately
-        # suppressed verdict back to `probable` — e.g. an exposer IS "related" (reverting it
-        # stops the crash) yet must stay a medium lead, not become a probable cause.
-        dossier.corroborations = {
-            **(dossier.corroborations or {}), "downgraded_from_strong": True
-        }
+        # exposer / a confident second-opinion refutation) and, through `_SO_BOOST_POLICY`,
+        # declare that a corroborating second opinion may NOT undo it: this gate ruled on
+        # RELATEDNESS, which is the one thing an SO `corroborates` already grants — an exposer IS
+        # "related" (reverting it stops the crash) and must still stay a medium lead rather than
+        # become a probable cause. The fold used to test this flag BY NAME, which is why the
+        # stale-signature clamp escaped it; it now reads the table, so a gate that ruled on
+        # another axis is no longer forced into this gate's answer.
+        _record_suppression(dossier, "downgraded_from_strong")
         logger.info("agent: %s -> lead for %s", reason, (seed or {}).get("uuid"))
     else:
         dossier.verdict = Verdict(
@@ -1224,7 +1306,7 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
     flags: dict = {}
     if so.corroborates is True and conf in ("medium", "high"):
         flags["second_opinion_corroborated"] = True
-        downgraded = bool((dossier.corroborations or {}).get("downgraded_from_strong"))
+        blocked_by = _so_boost_blocked_by(dossier.corroborations)
         is_bare_lead = v.decision == Decision.lead and CONFIDENCE_SCORE.get(v.confidence, 0.0) < CONFIDENCE_SCORE[Confidence.probable]
         # Measuring a lead does NOT license re-ranking it: below `min_boost_confidence` a boost
         # would jump two rungs (low -> probable, p_worth 0.50 -> 0.97) on the weaker of the SO's
@@ -1240,7 +1322,7 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 "recording agreement WITHOUT raising the band for %s",
                 rung, (seed or {}).get("uuid"),
             )
-        elif is_bare_lead and not downgraded:
+        elif is_bare_lead and blocked_by is None:
             dossier.verdict = v.model_copy(update={"confidence": Confidence.probable})
             # Records that the boost was APPLIED, which `second_opinion_corroborated` does not:
             # that flag marks the SO's OPINION and is set even when the band never moved. Without
@@ -1252,14 +1334,16 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 "agent: second-opinion corroborated -> lead raised to probable for %s",
                 (seed or {}).get("uuid"),
             )
-        elif is_bare_lead and downgraded:
-            # A precision gate (SF-3 / exposer) demoted a strong verdict to this lead; an
-            # independent "it's related" agreement can't tell an exposer from a root cause, so
-            # keep it suppressed (record the agreement, don't re-inflate the band).
+        elif is_bare_lead and blocked_by:
+            # A gate suppressed this lead on the axis the SO itself reviews and declared `block`
+            # in `_SO_BOOST_POLICY` (SF-3 / exposer): an independent "it's related" agreement
+            # can't tell an exposer from a root cause, so keep it suppressed (record the
+            # agreement, don't re-inflate the band). A suppression on a DIFFERENT axis — the
+            # stale-signature clamp, `allow` — deliberately does not land here.
             logger.info(
-                "agent: second-opinion corroborated but lead was precision-downgraded from "
-                "strong-evidence; NOT re-inflating to probable for %s",
-                (seed or {}).get("uuid"),
+                "agent: second-opinion corroborated but %s suppressed this lead on the axis the "
+                "second opinion cannot speak to; NOT re-inflating to probable for %s",
+                blocked_by, (seed or {}).get("uuid"),
             )
     elif so.corroborates is False and conf in ("medium", "high"):
         # ``medium`` counts, symmetrically with the corroborate branch above. It did not, and the
@@ -1395,8 +1479,13 @@ def _apply_signature_age_gate(dossier, seed):
     if clamped is None:
         return
     dossier.verdict = v.model_copy(update={"confidence": clamped})
-    flags["stale_signature_clamped"] = True
-    dossier.corroborations = {**dossier.corroborations, **flags}
+    # ``allow`` in `_SO_BOOST_POLICY`: this gate rules on ORIGIN and the blind second opinion
+    # reviews the MECHANISM, so an independent agreement is evidence on the other axis and MAY
+    # undo this clamp. Measured, not assumed — blocking it would have cost 3 FIXED bugs (2
+    # topcrash) whose `regressed_by` a HUMAN set to exactly the changeset named here, and bought
+    # 6 low-value filings avoided. The flag is also the label the filed bug and the UI chip read
+    # to tell the recipient the timing evidence ran against this changeset.
+    _record_suppression(dossier, "stale_signature_clamped")
     logger.info(
         "agent: candidate %s landed %.1fd AFTER this signature was first seen (%s) -> lead %s "
         "clamped to %s for %s",

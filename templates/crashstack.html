@@ -226,6 +226,25 @@
       {% if corrob.get('stale_signature') -%}
       <div class="corrob-chips">
         <span class="corrob-chip refute" title="This crash signature was already being reported before the candidate landed, so the candidate cannot be what INTRODUCED it. A lead's confidence is lowered one step; a fully verified strong-evidence chain is flagged without being moved, so it may appear here without having changed the badge above. It is not dismissed either way: an old signature can acquire a new cause, and a rare pre-existing crash can be made frequent by a new change — so this changeset may still be relevant, just not the origin.">crash predates this changeset by {{ corrob.get('candidate_landed_after_first_seen_days', 0)|round|int }}d{% if corrob.get('signature_first_seen_buildid') %} (first seen in build {{ corrob.get('signature_first_seen_buildid')|e }}){% endif %}</span>
+        {#- The round trip, said out loud. `stale_signature_clamped` had one writer and zero
+            readers: a lead clamped for 202 days of staleness and re-inflated by the blind
+            second opinion rendered a badge byte-identical to a clean rung-70 one, so the page
+            never told anyone the timing evidence had run against the changeset it names.
+            BOTH CHIPS SPEAK ABOUT THE BADGE, so both are gated on ``is_lead``: the clamp fires
+            while the verdict is still a lead, and a LATER gate can abstain it afterwards. That
+            is the majority case, not an edge — of the 67 `stale_signature_clamped` dossiers in
+            the 1996 persisted prod dossiers of 2026-07-06 -> 2026-08-05, 50 ship as an ABSTAIN
+            (48 of them abstained by the second opinion itself, 2 by the backout gate) and 45 of
+            those still render this panel, because an abstain carrying `area_experts` is shown
+            under `show_experts` (config/global.json). Ungated, "the badge above is the lowered
+            rung" would be false on 45 of the 62 pages the chip appears on, next to an ABSTAIN
+            badge and next to the `independent review disputes this` chip that says what really
+            happened. -#}
+        {% if is_lead and corrob.get('stale_signature_clamped') and corrob.get('second_opinion_boosted') -%}
+        <span class="corrob-chip" title="Clouseau lowered this lead one confidence step because the crash predates the changeset, then put it back: an independent blind re-analysis, given none of the reasoning on this page, still agreed the changeset can cause this crash. The badge above is that restored rung — it rests on the blind agreement, not on the timing.">confidence restored by the independent review</span>
+        {% elif is_lead and corrob.get('stale_signature_clamped') -%}
+        <span class="corrob-chip refute" title="Clouseau lowered this lead one confidence step for the staleness above; the badge above is the lowered rung.">confidence lowered one step</span>
+        {% endif -%}
       </div>
       {% endif -%}
       {% if is_lead -%}

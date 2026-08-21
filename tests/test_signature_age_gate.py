@@ -15,7 +15,7 @@ import unittest  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import config, sigage  # noqa: E402
+from crashclouseau import config, report_bug, sigage  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 from crashclouseau.agent.result import CrashTriageResult  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
@@ -25,6 +25,7 @@ from crashclouseau.agent.schema import (  # noqa: E402
     Decision,
     Dossier,
     SearchfoxCitation,
+    SecondOpinion,
     Verdict,
 )
 
@@ -241,6 +242,29 @@ class TestThroughTheGates(unittest.TestCase):
         self.assertTrue(r.dossier.corroborations["fault_address_offset_match"])
         self.assertTrue(r.dossier.corroborations["stale_signature_clamped"])
         self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
+
+    def test_the_clamp_and_the_restore_both_reach_the_reader(self):
+        # bug 2062219's shape, end to end: 202.5 days stale, clamped probable -> medium, then an
+        # independent blind review agrees and puts it back. Both halves used to be invisible —
+        # the dossier ships p_worth 0.9714, byte-identical to a clean rung-70 lead, and neither
+        # the filed bug nor the chip said the timing evidence had run against the changeset. The
+        # clamp is DELIBERATELY re-inflatable (`_SO_BOOST_POLICY`: it rules on origin, the second
+        # opinion on mechanism); this pins the other obligation, that we say so.
+        r = self._result(_lead(Confidence.probable))
+        orch.apply_deterministic_gates(
+            r, _seed(202.5),
+            second_opinion=SecondOpinion(mode="verify", corroborates=True, confidence="high",
+                                         mechanism="the patch drops the last ref"),
+            second_opinion_status="ok")
+        corr = r.dossier.corroborations
+        self.assertTrue(corr["stale_signature_clamped"])
+        self.assertTrue(corr["second_opinion_boosted"])
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.probable)
+        self.assertAlmostEqual(r.dossier.verdict.p_worth_investigating, 0.9714, places=4)
+        note = report_bug.build_stale_signature_note(corr)
+        self.assertIn("202 days before the changeset", note)
+        self.assertIn("independent blind re-analysis", note)
+        self.assertIn("may still be relevant", note)          # never "not the cause"
 
 
 class TestSigageLookup(unittest.TestCase):

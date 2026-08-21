@@ -730,5 +730,83 @@ class TestSecondOpinionStatusPersisted(unittest.TestCase):
         self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
 
 
+class TestSoBoostPolicyTable(unittest.TestCase):
+    """The fold used to ask "is `downgraded_from_strong` set?", which is a flag name and not a
+    reason. `_SO_BOOST_POLICY` asks the question that actually decides it: did the gate that
+    suppressed this lead rule on the axis the second opinion reviews? These pin the table, the
+    forcing function, and — mostly — that today's behaviour did not move."""
+
+    def test_the_table_states_an_axis_for_both_pre_fold_suppressions(self):
+        self.assertEqual(orch._SO_BOOST_POLICY, {
+            "downgraded_from_strong": "block",      # ruled on relatedness, as the SO does
+            "stale_signature_clamped": "allow",     # ruled on origin; the SO reviews mechanism
+        })
+
+    def test_a_suppression_that_declares_no_axis_cannot_be_recorded(self):
+        # The forcing function. Without it a new gate inherits "boostable" in silence, which is
+        # exactly how the stale clamp became re-inflatable three days after ce6b8fc.
+        d = _lead(Confidence.medium)
+        with self.assertRaises(KeyError) as cm:
+            orch._record_suppression(d, "absent_thread_clamped")
+        self.assertIn("_SO_BOOST_POLICY", str(cm.exception))
+        self.assertNotIn("absent_thread_clamped", d.corroborations or {})
+
+    def test_the_post_fold_suppressions_are_deliberately_absent(self):
+        # They run AFTER the fold, so no boost of theirs is reachable; declaring them would read
+        # as an argument nobody made. A gate MOVED above the fold has to add its entry.
+        for flag in ("candidate_backedout_suppressed", "candidate_backout_suppressed",
+                     "candidate_backout_capped", "possible_bit_flip_suppressed",
+                     "broken_cpu_suppressed", "hardware_noise_signature_suppressed",
+                     "bad_machine_suppressed", "absent_thread_clamped",
+                     "compiled_out_suppressed"):
+            self.assertNotIn(flag, orch._SO_BOOST_POLICY)
+
+    def test_blocked_by_names_the_suppression_that_blocked(self):
+        self.assertIsNone(orch._so_boost_blocked_by(None))
+        self.assertIsNone(orch._so_boost_blocked_by({}))
+        self.assertIsNone(orch._so_boost_blocked_by({"stale_signature_clamped": True}))
+        self.assertEqual(orch._so_boost_blocked_by({"downgraded_from_strong": True}),
+                         "downgraded_from_strong")
+        self.assertEqual(
+            orch._so_boost_blocked_by({"stale_signature_clamped": True,
+                                       "downgraded_from_strong": True}),
+            "downgraded_from_strong")
+
+    def test_the_table_is_behaviour_identical_to_the_flag_name_it_replaced(self):
+        # The guard it replaces was `bool(corroborations["downgraded_from_strong"])`, and it
+        # blocked a boost on 0 of 1996 persisted prod dossiers (2026-07-06 -> 2026-08-05). Over
+        # every combination of the two flags a PRE-FOLD gate can write, the new predicate has to
+        # agree with the old one — any difference is a bug in the refactor, not a fix.
+        for dfs in (False, True):
+            for ssc in (False, True):
+                corr = {}
+                if dfs:
+                    corr["downgraded_from_strong"] = True
+                if ssc:
+                    corr["stale_signature_clamped"] = True
+                d = _lead(Confidence.medium)
+                d.corroborations = dict(corr)
+                orch._fold_second_opinion(d, _so(corroborates=True, confidence="high"), _SEED)
+                legacy_blocked = bool(corr.get("downgraded_from_strong"))
+                self.assertEqual(
+                    d.verdict.confidence,
+                    Confidence.medium if legacy_blocked else Confidence.probable, corr)
+                self.assertEqual("second_opinion_boosted" in d.corroborations,
+                                 not legacy_blocked, corr)
+
+    def test_a_stale_clamp_is_re_inflatable_on_purpose(self):
+        # Widening the block to "any deliberate suppression" is REFUTED with the cost measured on
+        # the 11 stale filings of 2026-08: it loses 3 FIXED bugs (2 topcrash, all three with a
+        # human-set `regressed_by` naming our changeset — 2062219 / 2061960 / 2063809) and 1
+        # ASSIGNED, and gains 6 low-value filings avoided; the stale cohort is acted on more
+        # often (36%) than the fresh one (23%). If this ever "fails safe", read the table first.
+        d = _lead(Confidence.medium)
+        d.corroborations = {"stale_signature": True, "stale_signature_clamped": True,
+                            "candidate_landed_after_first_seen_days": 202.5}
+        orch._fold_second_opinion(d, _so(corroborates=True, confidence="high"), _SEED)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+        self.assertTrue(d.corroborations["second_opinion_boosted"])
+
+
 if __name__ == "__main__":
     unittest.main()
