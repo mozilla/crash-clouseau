@@ -486,6 +486,67 @@ def fetch_signature_stats(uuid, info):
 _HARDWARE_NOTE_LIFT = 2.0
 
 
+def build_signature_age_note(corroborations, buildid=None):
+    """One sentence saying when this signature first appeared, or ``""``.
+
+    ONSET ANCHORING, which is what the bugs a human files have and ours did not. Of the archive's
+    `Core :: JavaScript*` FIXED crash bugs that named a regressor, 12 of 12 also said which build
+    the signature started in; and when the signature was old, 7 of 7 stopped naming a regressor and
+    got actionable another way. Nine of our ten filings into that component accused a changeset
+    that landed 283 to 3205 days after the signature was already crashing, and all four owner
+    refutations attacked the analysis rather than the report. This is the line that lets the
+    recipient make that call in one glance — or say "that is just a signature change", the way
+    peterv did on bug 1898399.
+
+    FROM THE UNBOUNDED CLOCK (``sigage.first_seen_ever``), never the windowed one. On the first
+    prod day after `86f6799`, five of the seven dossiers whose windowed clock said "0 days old"
+    sat on signatures 1098 to 2255 days old; printing that number would be printing the error.
+    The disagreement is stated too, briefly, because a reader who checks crash-stats will see the
+    truncated date and conclude WE are wrong.
+
+    ``buildid`` is the crash's own build, used only so that "the build above" is said when the
+    signature really did start in THIS build and not merely within a day of it.
+
+    Costs nothing: ``_record_signature_age_facts`` already put all of this in ``corroborations``."""
+    from crashclouseau import sigage
+
+    c = corroborations or {}
+    ever = c.get("signature_first_seen_ever")
+    age_ever = c.get("signature_age_days_ever")
+    windowed = c.get("signature_first_seen_windowed")
+    age_win = c.get("signature_age_days_windowed")
+    drift = c.get("signature_clock_drift_days")
+
+    if c.get("signature_rename_suspected") and ever and drift is not None:
+        # Never a novelty claim, only ever the withdrawal of one -- see `sigage.age_facts`.
+        return ("Socorro first recorded this signature in build {} ({}), but crash-stats holds "
+                "reports of it on builds up to {:.0f} days older than that, which means older "
+                "crashes were re-signatured onto this name. The name is new; the crash may not "
+                "be.".format(ever, sigage.buildid_day(ever), abs(drift)))
+    if ever and age_ever is not None:
+        note = ("This signature is {}: its first report anywhere is in build {} ({}), {}."
+                .format("new" if age_ever <= sigage.NEW_SIGNATURE_DAYS else "not new",
+                        ever, sigage.buildid_day(ever),
+                        "the build above" if str(ever) == str(buildid)
+                        else "less than a day before the build above" if age_ever < 1
+                        else "{:.0f} days before the build above".format(age_ever)))
+        disagree = drift is not None and drift >= sigage.CLOCK_DISAGREEMENT_DAYS
+        if windowed and age_win is not None and disagree:
+            note += (" (A 364-day crash-stats search only reaches {}, because Socorro's search "
+                     "index keeps about six months — which is why the signature looks much newer "
+                     "there.)".format(sigage.buildid_day(windowed)))
+        return note
+    if windowed and age_win is not None and str(windowed) == str(buildid):
+        # No row in `SignatureFirstDate`. Two plain facts and a hedge, rather than an inference:
+        # the table has no row mainly when a signature is newer than the daily cron that fills it
+        # (measured: 7.6% of dossiers analyse a crash within an hour of its signature's first
+        # report ever) or when the signature has only ever produced one report.
+        return ("Crash-stats has no report of this signature on any earlier build, and Socorro's "
+                "all-time signature index has no entry for it yet — as far as we can tell it is "
+                "new with this build.")
+    return ""
+
+
 def build_hardware_note(corroborations):
     """One paragraph on how much of this signature is hardware error, or ``""``.
 
@@ -556,6 +617,8 @@ def build_bug_comment(
     2. the crash reason (``MOZ_CRASH Reason:`` for a panic, else the OS reason + address);
     3. the top ``max_frames`` frames, fenced, with the module column;
     4. one sentence on how much this signature is crashing;
+    4a. when the signature first appeared, which is the onset anchor every hand-filed crash
+        bug that names a regressor carries and ours did not;
     4b. how much of the signature is hardware error, when that is above background;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
@@ -574,6 +637,7 @@ def build_bug_comment(
         build_reason_block(details),
         build_frames_block(stack, max_frames=max_frames, details=details),
         build_stats_sentence(first, stats, info),
+        build_signature_age_note((dossier or {}).get("corroborations"), info.get("buildid")),
         build_hardware_note((dossier or {}).get("corroborations")),
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,

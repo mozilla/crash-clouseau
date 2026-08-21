@@ -1481,7 +1481,12 @@ class TestBugPreview(unittest.TestCase):
         dossier = {
             "candidate": {"node": "abc123", "bug": 7, "author": "Dev",
                           "git_commit": "g1t"},
-            "corroborations": {"candidate_in_pushlog_window": True},
+            "corroborations": {"candidate_in_pushlog_window": True,
+                               # Onset, which belongs with the volume sentence and ahead of the
+                               # analysis: a reader decides what a regressor claim is worth by
+                               # knowing whether the crash is older than the changeset.
+                               "signature_first_seen_ever": "20171028220326",
+                               "signature_age_days_ever": 3207.4},
             "skeptic": [{"status": "pass", "claim_ref": "line_match", "note": "exact."}],
             "verdict": {"confidence": "probable", "p_worth_investigating": 0.8,
                         "mechanism": {"statement": "null deref of mFoo", "citations": [
@@ -1499,6 +1504,7 @@ class TestBugPreview(unittest.TestCase):
             "Crash Reason:",
             "Top 3 frames:",
             "There are 2 crashes",
+            "This signature is not new",
             "Clouseau analysis (automated, 80% worth investigating",
             "null deref of mFoo",
             "Suspected regressor: [abc123](", "([gh](", ") (bug 7) by Dev.",

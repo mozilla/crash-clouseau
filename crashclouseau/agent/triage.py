@@ -297,6 +297,139 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     ]
 
 
+def _days_phrase(days):
+    """``"less than a day"`` / ``"1 day"`` / ``"3207 days"``. A crash brief that says "1 days"
+    reads as a template, and the point of this block is to be read."""
+    if days < 1:
+        return "less than a day"
+    if days < 2:
+        return "1 day"
+    return "{:.0f} days".format(days)
+
+
+def _before_this_build(days, first_seen, buildid):
+    """How far back a first-seen sits from the build being triaged. Says "this crash's own build"
+    only when it IS that build -- an age under a day does not mean the same build."""
+    if str(first_seen) == str(buildid):
+        return "which is this crash's own build"
+    return "{} before the build that produced this crash".format(_days_phrase(days))
+
+
+def _signature_age_lines(crash: dict) -> list[str]:
+    """How old this signature already was when the build crashed, as prompt lines, or ``[]``.
+
+    THE FACT WE FETCH EVERY RUN AND TELL NOBODY. Until this block the signature's age reached no
+    prompt, no bug comment and no human — while nine of the ten `Core :: JavaScript*` filings a
+    module owner rejected accused a changeset that landed 283 to 3205 days AFTER the signature was
+    already crashing. In the archive the reverse holds: 12 of 12 bugs that named a regressor also
+    said which build the signature started in.
+
+    STATED FROM THE UNBOUNDED CLOCK, which is the whole point. ``signature_first_seen_windowed``
+    comes from a 364-day SuperSearch that Socorro's ~178-day retention truncates further, and
+    truncation only ever moves first-seen FORWARD — so it reads an ancient signature as a recent
+    one, never the reverse. Measured on the first prod day after ``86f6799``: of the seven dossiers
+    the windowed clock called 0 days old, five sat on signatures 1098, 1413, 1631, 2255 and 2255
+    days old. Printing the windowed figure would have printed that error to a developer.
+
+    IT GOES IN ``_crash_facts``, so the blind second opinion gets it too, and that is the
+    bit-flip precedent rather than the archetype one: an age is a FACT both models are blind to,
+    not a suggested direction. It is also the specific blindness measured on this population —
+    the SO corroborated 11 of 11 JS filings because "is this mechanism plausible?" is a question
+    a nine-year-old signature does not change the answer to, while "did this patch create this
+    crash?" is a question it settles.
+
+    AND IT IS NOT A GATE. The guidance says in terms that an old signature does not clear a
+    candidate, because that is measured: on FIXED bug 2061960 the signature was 326 days stale, we
+    named Jan-Niklas Jaeschke, and jjaschke pushed the fix. ``sigage.first_seen_ever`` records the
+    eight FIXED/DUPLICATE filings that would be lost if this number were wired to a rung."""
+    windowed_seed = crash.get("signature_first_seen_buildid")
+    facts = sigage.age_facts(
+        crash.get("buildid"),
+        windowed_seed,
+        crash.get("signature_first_seen_ever"),
+        observed=crash.get("signature_first_seen_any") or windowed_seed,
+    )
+    if not facts:
+        return []
+    ever = facts.get("signature_first_seen_ever")
+    age_ever = facts.get("signature_age_days_ever")
+    windowed = facts.get("signature_first_seen_windowed")
+    age_win = facts.get("signature_age_days_windowed")
+    drift = facts.get("signature_clock_drift_days")
+
+    said, guidance = [], _OLD_SIGNATURE_GUIDANCE
+    if facts.get("signature_rename_suspected"):
+        # One-directional by construction (see `sigage.age_facts`): this may only ever take
+        # novelty AWAY. The name is new; the crash under it is not.
+        said = ["SIGNATURE AGE: this NAME is new — Socorro first recorded it in build {} ({}) —"
+                " but crash-stats holds reports of it on builds up to {} OLDER than that, which"
+                " is only possible if crashes that already existed were re-signatured onto this"
+                " name. The signature changed; the crash did not necessarily start.".format(
+                    ever, sigage.buildid_day(ever), _days_phrase(abs(drift)))]
+    elif age_ever is not None:
+        said = ["SIGNATURE AGE: this signature was first seen anywhere in build {} ({}), {}."
+                .format(ever, sigage.buildid_day(ever),
+                        _before_this_build(age_ever, ever, crash.get("buildid")))]
+        if age_win is not None and drift is not None and drift >= sigage.CLOCK_DISAGREEMENT_DAYS:
+            said.append(
+                "Do not be misled by crash-stats itself here: a 364-day search only reaches build"
+                " {} ({}) and would call this signature {} old. Socorro's search index keeps"
+                " roughly six months, so it can only ever make a signature look NEWER than it is;"
+                " the older figure is the true one.".format(
+                    windowed, sigage.buildid_day(windowed), _days_phrase(age_win)))
+        if age_ever <= sigage.NEW_SIGNATURE_DAYS:
+            guidance = _NEW_SIGNATURE_GUIDANCE
+    elif age_win is not None:
+        # No row in `SignatureFirstDate`. Measured over 14 days of prod: 7.6% of dossiers analyse
+        # a crash within an hour of its signature's first report EVER, and the table's cron has
+        # not minted a row by then — every post-deploy dossier whose signature was over a day old
+        # got an answer (36/36) and the two that did not were 2.5 and 14 minutes behind the first
+        # report ever. The other reason is rarity: all four signatures still without a row after
+        # 14 days had exactly one report ever. Both readings point new, neither is proof.
+        said = ["SIGNATURE AGE: not established. Socorro's all-time first-appearance table has no"
+                " row for this signature, which happens when a signature is newer than the daily"
+                " job that maintains that table or when it has only ever produced one report. All"
+                " a 364-day crash-stats search can say is that it was already crashing in build {}"
+                " ({}){}. Both of those point NEW and neither is proof, so weigh it as 'probably"
+                " recent, not established' — 'we could not date it' is not 'it is new'.".format(
+                    windowed, sigage.buildid_day(windowed),
+                    " — this crash's own build" if str(windowed) == str(crash.get("buildid"))
+                    else ", {} before this one".format(_days_phrase(age_win)))]
+        guidance = _UNDATED_SIGNATURE_GUIDANCE
+    else:
+        return []
+    return ["", *said, guidance]
+
+
+# The three closers. Split because the first sentence is the one that gets read, and leading a
+# one-day-old signature with "a changeset that landed long after" is noise on the case where the
+# pushlog window is actually trustworthy.
+_OLD_SIGNATURE_GUIDANCE = (
+    "What to do with that: a changeset that landed long after the signature was already crashing"
+    " cannot be what CREATED this crash, and saying it did is the error a module owner rejected"
+    " ten of our filings for. It does NOT clear the changeset — a new patch can perfectly well"
+    " start crashing code that has crashed under this name for years, and we have been right about"
+    " exactly that (bug 2061960: the signature was 326 days old, and the developer we named pushed"
+    " the fix). So the claim worth making here is what a change did to a crash that was ALREADY"
+    " HAPPENING — a new caller, a newly reachable path, a higher rate — and not that it introduced"
+    " it. If you cannot say which, say so."
+)
+
+_NEW_SIGNATURE_GUIDANCE = (
+    "What to do with that: this is the case where the pushlog window below is genuinely"
+    " trustworthy. The crash did not exist under this name before roughly this build, so whatever"
+    " caused it is very likely to be in that window, and 'this changeset introduced this crash' is"
+    " a claim the dates actually support. The one thing that would undo it is a renaming — an old"
+    " crash re-signatured onto a new name — and where we can detect that, it is said above."
+)
+
+_UNDATED_SIGNATURE_GUIDANCE = (
+    "What to do with that: work the pushlog window below as usual, but do not lean on the"
+    " signature's age in either direction — neither 'brand new, so the window must contain it' nor"
+    " 'long-standing, so no changeset created it' is supported here."
+)
+
+
 def _archetype_lines(crash: dict) -> list[str]:
     """Learned archetypes matching this crash (``models.Archetype``), as prompt lines, or ``[]``.
 
@@ -513,6 +646,7 @@ def _crash_facts(crash: dict) -> list[str]:
     lines += _thread_inventory(raw)
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
+    lines += _signature_age_lines(crash)
     lines += _hardware_noise_lines(crash)
     return lines
 

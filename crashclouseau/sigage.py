@@ -52,6 +52,13 @@ def _buildid_to_dt(buildid):
         return None
 
 
+def buildid_day(buildid):
+    """``YYYY-MM-DD`` from a buildid, or ``""``. Shared so the crash brief and the filed bug
+    render the same first-seen date; a buildid alone is unreadable to a human."""
+    dt_ = _buildid_to_dt(buildid)
+    return dt_.strftime("%Y-%m-%d") if dt_ else ""
+
+
 def _channel_total(result, channel):
     """How many reports *channel* has, off the response's ``release_channel`` facet.
 
@@ -719,3 +726,56 @@ def signature_age_days(first_seen, buildid):
     if seen_dt is None or build_dt is None:
         return None
     return round((build_dt - seen_dt).total_seconds() / 86400.0, 1)
+
+
+# How far the two clocks must disagree, in days, before an inversion is called a re-signaturing
+# rather than cron lag. `SignatureFirstDate` is refreshed by a cron walking a rolling window of
+# `date_processed`, so it trails the search index by up to a day in the ordinary course of events.
+# The gap is wide: measured over 450 non-novel control signatures the only one to invert at all did
+# so by 1 day, and the real inversions in our own corpus sit at 40.5 and 45.6 days.
+RENAME_DRIFT_DAYS = 30
+
+# How far apart the two clocks must be before a human-facing surface bothers to explain the
+# disagreement. Below this they tell the same story and a second date is only noise.
+CLOCK_DISAGREEMENT_DAYS = 30
+
+# Where "new" stops, for WORDING ONLY -- it selects which true thing is worth saying first in the
+# crash brief and whether the filed bug says "new" or "not new", and moves no rung, score or
+# decision. Deliberately not the stale-signature gate's threshold, so nobody later reads it as one.
+NEW_SIGNATURE_DAYS = 7
+
+
+def age_facts(buildid, windowed, ever, observed=None):
+    """Both first-seen clocks, the age each implies, and whether they invert. ``{}`` if neither
+    answered.
+
+    ONE function because three places need the same arithmetic and must not be allowed to
+    disagree about it: the recorder that writes these into ``corroborations``
+    (``orchestrator._record_signature_age_facts``), the crash brief that now tells the agent how
+    old the signature is (``triage._signature_age_lines``), and the filed bug that now tells the
+    reader (``report_bug.build_signature_age_note``). Prose differs between the three; the numbers
+    behind it cannot.
+
+    ``windowed`` is the 364-day SuperSearch answer and ``ever`` Socorro's ``SignatureFirstDate``
+    table; see ``first_seen_ever`` for why the second is the true one and why substituting it into
+    ``_apply_signature_age_gate`` would be a regression. ``observed`` is the UNFLOORED all-channel
+    first-seen used for the inversion only, defaulting to ``windowed``.
+
+    Keys are omitted rather than zeroed whenever a lookup did not answer: a signature whose age we
+    could not establish must never read as a new one."""
+    facts = {}
+    for key, first_seen in (("windowed", windowed), ("ever", ever)):
+        if not first_seen:
+            continue
+        facts["signature_first_seen_" + key] = first_seen
+        age = signature_age_days(first_seen, buildid)
+        if age is not None:
+            facts["signature_age_days_" + key] = age
+    observed = observed or windowed
+    if observed and ever:
+        drift = signature_age_days(ever, observed)
+        if drift is not None:
+            facts["signature_clock_drift_days"] = drift
+            if drift <= -RENAME_DRIFT_DAYS:
+                facts["signature_rename_suspected"] = True
+    return facts

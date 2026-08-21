@@ -25,7 +25,8 @@ import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 from urllib.parse import urlencode  # noqa: E402
 
-from crashclouseau import sigage  # noqa: E402
+from crashclouseau import report_bug, sigage  # noqa: E402
+from crashclouseau.agent import triage  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
     Candidate,
@@ -281,7 +282,7 @@ class TestRenameSuspected(unittest.TestCase):
 
 
 def _thirty():
-    return orch._RENAME_DRIFT_DAYS - 0.5
+    return sigage.RENAME_DRIFT_DAYS - 0.5
 
 
 class TestGateClockIsUnchanged(unittest.TestCase):
@@ -310,6 +311,218 @@ class TestGateClockIsUnchanged(unittest.TestCase):
             orch._apply_signature_age_gate(d, seed)
         self.assertEqual(d.verdict.confidence, Confidence.probable)
         self.assertNotIn("stale_signature", d.corroborations)
+
+
+# ---------------------------------------------------------------------------------------------
+# Saying it out loud. Until this, the age reached no prompt, no bug comment and no human -- we
+# fetched it every run and told nobody, while nine of the ten `Core :: JavaScript*` filings a
+# module owner rejected accused a changeset landing 283 to 3205 days after the signature was
+# already crashing. This repo has shipped three recovery paths that never fired in prod, so the
+# tests below pin REACHABILITY (does it get into the prompt / the comment at all?) as hard as
+# they pin the wording.
+
+# bug 2062173, the canonical case: the windowed clock said 2025-12-27 and the truth is 2017-10-28.
+_BUG_2062173 = {
+    "buildid": "20260810000000",
+    "signature_first_seen_buildid": "20251227210510",
+    "signature_first_seen_ever": "20171028220326",
+}
+
+
+def _brief(**seed):
+    return "\n".join(triage._signature_age_lines(seed))
+
+
+def _note(buildid=None, **seed):
+    facts = sigage.age_facts(
+        buildid or seed.get("buildid"),
+        seed.get("signature_first_seen_buildid"),
+        seed.get("signature_first_seen_ever"),
+        observed=seed.get("signature_first_seen_any") or seed.get("signature_first_seen_buildid"),
+    )
+    return report_bug.build_signature_age_note(facts, buildid or seed.get("buildid"))
+
+
+class TestAgeFactsIsOneComputation(unittest.TestCase):
+    """The recorder, the crash brief and the filed bug all state the same numbers to a model, to
+    a reviewer and to the archive. Three copies of this arithmetic would eventually disagree, and
+    the disagreement would be invisible -- so there is one function and the recorder uses it."""
+
+    def test_the_recorder_writes_exactly_age_facts(self):
+        d = _dossier()
+        orch._record_signature_age_facts(d, _BUG_2062173)
+        self.assertEqual(d.corroborations, sigage.age_facts(
+            _BUG_2062173["buildid"],
+            _BUG_2062173["signature_first_seen_buildid"],
+            _BUG_2062173["signature_first_seen_ever"]))
+
+    def test_neither_clock_answering_is_an_empty_record(self):
+        self.assertEqual(sigage.age_facts("20260810000000", None, None), {})
+
+    def test_buildid_day_is_readable_or_empty(self):
+        self.assertEqual(sigage.buildid_day("20171028220326"), "2017-10-28")
+        for junk in (None, "", "tip", 12):
+            self.assertEqual(sigage.buildid_day(junk), "")
+
+
+class TestTheCrashBriefStatesTheAge(unittest.TestCase):
+    def test_it_states_the_unbounded_clock_as_the_answer(self):
+        # The windowed date may appear, but only as the error being corrected -- never as the age.
+        text = _brief(**_BUG_2062173)
+        self.assertIn("20171028220326", text)
+        self.assertIn("2017-10-28", text)
+        self.assertIn("3207 days before the build", text)
+        self.assertNotIn("225 days before the build", text)
+
+    def test_it_explains_the_disagreement_so_crash_stats_does_not_contradict_us(self):
+        text = _brief(**_BUG_2062173)
+        self.assertIn("would call this signature 225 days old", text)
+        self.assertIn("the older figure is the true one", text)
+
+    def test_agreeing_clocks_get_no_second_date(self):
+        text = _brief(buildid="20260810000000",
+                      signature_first_seen_buildid="20250810000000",
+                      signature_first_seen_ever="20250810000000")
+        self.assertIn("365 days before the build", text)
+        self.assertNotIn("Do not be misled", text)
+
+    def test_a_new_signature_is_told_the_window_is_trustworthy(self):
+        text = _brief(buildid="20260820120000",
+                      signature_first_seen_buildid="20260819210808",
+                      signature_first_seen_ever="20260819210808")
+        self.assertIn("pushlog window below is genuinely trustworthy", text)
+        self.assertNotIn("landed long after", text)
+
+    def test_an_old_signature_does_not_clear_the_candidate(self):
+        # The `nightly_vs_beta` lesson and FIXED 2061960: a 326-day-old signature whose named
+        # developer pushed the fix. This block must never read as "stale signature, no regressor".
+        text = _brief(**_BUG_2062173)
+        self.assertIn("does NOT clear the changeset", text)
+        self.assertIn("2061960", text)
+
+    def test_an_undatable_signature_is_never_called_new(self):
+        text = _brief(buildid="20260820000000",
+                      signature_first_seen_buildid="20260819210808")
+        self.assertIn("not established", text)
+        self.assertIn("is not 'it is new'", text)
+        self.assertNotIn("genuinely trustworthy", text)
+
+    def test_a_rename_withdraws_novelty_and_never_asserts_it(self):
+        text = _brief(buildid="20260810000000",
+                      signature_first_seen_any="20251106194447",
+                      signature_first_seen_ever="20260609153453")
+        self.assertIn("re-signatured onto this name", text)
+        self.assertIn("the crash did not necessarily start", text)
+        self.assertNotIn("genuinely trustworthy", text)
+
+    def test_same_build_is_only_claimed_when_it_is_the_same_build(self):
+        same = _brief(buildid="20260819210808",
+                      signature_first_seen_buildid="20260819210808",
+                      signature_first_seen_ever="20260819210808")
+        self.assertIn("which is this crash's own build", same)
+        near = _brief(buildid="20260820120000",
+                      signature_first_seen_buildid="20260819210808",
+                      signature_first_seen_ever="20260819210808")
+        self.assertIn("less than a day before the build", near)
+        self.assertNotIn("own build", near)
+
+    def test_it_never_says_1_days(self):
+        # A crash brief that says "1 days" reads as a template, and the point of the block is to
+        # be read. `_days_phrase` is the one place that decides, so test it directly.
+        self.assertEqual(triage._days_phrase(0.0), "less than a day")
+        self.assertEqual(triage._days_phrase(0.4), "less than a day")
+        self.assertEqual(triage._days_phrase(1.0), "1 day")
+        self.assertEqual(triage._days_phrase(1.9), "1 day")
+        self.assertEqual(triage._days_phrase(2.0), "2 days")
+        text = _brief(buildid="20260820210808", signature_first_seen_buildid="20260819210808",
+                      signature_first_seen_ever="20260819210808")
+        self.assertIn("1 day before the build", text)
+
+    def test_nothing_known_says_nothing(self):
+        self.assertEqual(triage._signature_age_lines({"buildid": "20260810000000"}), [])
+        self.assertEqual(triage._signature_age_lines({}), [])
+
+
+class TestTheAgeReachesBothModels(unittest.TestCase):
+    """`_crash_facts` is shared with the blind second opinion, and that is the point rather than
+    an accident. It is the bit-flip precedent, not the archetype one: an age is a FACT both models
+    are blind to, not a suggested direction, and the blindness is measured -- the SO corroborated
+    11 of 11 JS filings, because a nine-year-old signature does not change the answer to "is this
+    mechanism plausible?" while it settles "did this patch create this crash?"."""
+
+    def _seed(self):
+        return {"uuid": "u", "signature": "sig", "channel": "nightly", "stack": "#0 f", **_BUG_2062173}
+
+    def test_the_triage_prompt_carries_it(self):
+        self.assertIn("SIGNATURE AGE:", triage._user_prompt(self._seed()))
+
+    def test_the_blind_second_opinion_carries_it_too(self):
+        from crashclouseau.agent import second_opinion
+
+        self.assertIn("SIGNATURE AGE:", second_opinion._user_prompt(self._seed(), None))
+
+
+class TestTheFiledBugStatesTheAge(unittest.TestCase):
+    """Onset anchoring: 12 of 12 archive bugs that named a regressor said which build the
+    signature started in, and when it was old, 7 of 7 stopped naming a regressor at all."""
+
+    def test_it_states_the_unbounded_clock(self):
+        note = _note(**_BUG_2062173)
+        self.assertIn("This signature is not new", note)
+        self.assertIn("20171028220326 (2017-10-28)", note)
+        self.assertIn("3207 days before the build above", note)
+
+    def test_it_pre_empts_the_reader_checking_crash_stats(self):
+        self.assertIn("only reaches 2025-12-27", _note(**_BUG_2062173))
+
+    def test_agreeing_clocks_get_no_parenthetical(self):
+        note = _note(buildid="20260810000000",
+                     signature_first_seen_buildid="20250810000000",
+                     signature_first_seen_ever="20250810000000")
+        self.assertNotIn("364-day", note)
+
+    def test_new_is_said_only_when_the_dates_say_so(self):
+        self.assertIn("This signature is new", _note(
+            buildid="20260819210808", signature_first_seen_buildid="20260819210808",
+            signature_first_seen_ever="20260819210808"))
+
+    def test_an_undatable_signature_makes_no_claim_it_cannot_support(self):
+        # No `SignatureFirstDate` row AND the windowed first-seen is an earlier build: we do not
+        # know, so the bug says nothing rather than guessing at the reader's expense.
+        self.assertEqual(_note(buildid="20260820120000",
+                               signature_first_seen_buildid="20260819210808"), "")
+
+    def test_an_undatable_signature_first_seen_in_this_build_says_what_is_checkable(self):
+        note = _note(buildid="20260819210808", signature_first_seen_buildid="20260819210808")
+        self.assertIn("no report of this signature on any earlier build", note)
+        self.assertIn("as far as we can tell", note)
+
+    def test_a_rename_is_stated_as_a_withdrawal(self):
+        note = _note(buildid="20260810000000",
+                     signature_first_seen_any="20251106194447",
+                     signature_first_seen_ever="20260609153453")
+        self.assertIn("re-signatured onto this name", note)
+        self.assertIn("The name is new; the crash may not be.", note)
+        self.assertNotIn("This signature is new", note)
+
+    def test_nothing_known_emits_no_section(self):
+        for corr in (None, {}, {"candidate_in_pushlog_window": True}):
+            self.assertEqual(report_bug.build_signature_age_note(corr, "20260810000000"), "")
+
+    def test_the_note_is_in_the_filed_comment_after_the_volume_sentence(self):
+        dossier = {"candidate": {"node": "abc123"}, "verdict": {},
+                   "corroborations": sigage.age_facts(
+                       _BUG_2062173["buildid"],
+                       _BUG_2062173["signature_first_seen_buildid"],
+                       _BUG_2062173["signature_first_seen_ever"])}
+        stack = {"frames": [{"stackpos": 0, "function": "Foo::bar", "filename": "dom/Foo.cpp",
+                             "line": 51, "module": "xul.dll"}]}
+        comment = report_bug.build_bug_comment(
+            {"uuid": "u-1", "channel": "nightly", "buildid": "20260810000000"},
+            stack, dossier, stats={"count": 2, "installs": 2}, first=True, version="155.0a1")
+        self.assertIn("This signature is not new", comment)
+        self.assertLess(comment.find("There are 2 crashes"),
+                        comment.find("This signature is not new"))
 
 
 if __name__ == "__main__":

@@ -1787,12 +1787,6 @@ def _record_window_membership(dossier, seed):
     }
 
 
-# How far the two signature-age clocks must disagree before it means a re-signaturing rather than
-# Socorro's cron lag. Measured: the only one of 450 non-novel control signatures to invert at all
-# did so by 1 day, and the three real inversions in our own corpus sit at 40.5 and 45.6 days.
-_RENAME_DRIFT_DAYS = 30
-
-
 def _record_signature_age_facts(dossier, seed):
     """Record how old this signature really was, on BOTH clocks. Moves no rung.
 
@@ -1816,21 +1810,7 @@ def _record_signature_age_facts(dossier, seed):
         return
     from crashclouseau import sigage
 
-    buildid = seed.get("buildid")
     windowed = seed.get("signature_first_seen_buildid")
-    ever = seed.get("signature_first_seen_ever")
-    # The inversion reads the UNFLOORED all-channel value, not the gate's floored `first_seen`.
-    # A rename shows up as a handful of off-channel reports on old builds, and the floor
-    # (`other_channel_floor`, 20) is designed to ignore exactly that many.
-    observed = seed.get("signature_first_seen_any") or windowed
-    facts = {}
-    for key, first_seen in (("windowed", windowed), ("ever", ever)):
-        if not first_seen:
-            continue
-        facts["signature_first_seen_" + key] = first_seen
-        age = sigage.signature_age_days(first_seen, buildid)
-        if age is not None:
-            facts["signature_age_days_" + key] = age
     # THE INVERSION, and it is a proof rather than a heuristic. `SignatureFirstDate` claims to be
     # an all-time minimum, and Elasticsearch behind SuperSearch only reaches back ~178 days, so ES
     # holding an OLDER build than the all-time minimum is arithmetically impossible — unless those
@@ -1854,12 +1834,18 @@ def _record_signature_age_facts(dossier, seed):
     # The drift is recorded whenever both clocks answered, fired or not, so "how far apart are the
     # two clocks across the whole population?" stays answerable from prod — the flag alone would
     # only ever show the tail it already decided to call a rename.
-    if observed and ever:
-        drift = sigage.signature_age_days(ever, observed)
-        if drift is not None:
-            facts["signature_clock_drift_days"] = drift
-            if drift <= -_RENAME_DRIFT_DAYS:
-                facts["signature_rename_suspected"] = True
+    #
+    # The arithmetic itself lives in `sigage.age_facts`, because the crash brief and the filed bug
+    # now state the same numbers to a model and to a human and the three must not drift apart.
+    facts = sigage.age_facts(
+        seed.get("buildid"),
+        windowed,
+        seed.get("signature_first_seen_ever"),
+        # The inversion reads the UNFLOORED all-channel value, not the gate's floored `first_seen`.
+        # A rename shows up as a handful of off-channel reports on old builds, and the floor
+        # (`other_channel_floor`, 20) is designed to ignore exactly that many.
+        observed=seed.get("signature_first_seen_any") or windowed,
+    )
     if facts:
         dossier.corroborations = {**(dossier.corroborations or {}), **facts}
 
