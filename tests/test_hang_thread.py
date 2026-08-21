@@ -49,6 +49,33 @@ _WATCHDOG = {
 }
 _OTHER = {"thread_name": "AudioIPC Server RPC", "frames": [{"frame": 0, "function": "recv"}]}
 
+# Crash ec1ff67a-a835-4740-be14-572e50260818 (bug 2064436) in shape: 46 threads, 32 distinct
+# names, 14 UNNAMED, and its absence claim was CORRECT. THE counter-example for every proposed
+# tightening of the completeness predicate -- `unnamed == 0` would withdraw the claim here, and
+# the family ceiling must not truncate this list. The 14 unnamed are Win32 thread-pool /
+# NtWaitForMultipleObjects / win32u!ZwUserGetMessage threads with zero Gecko frames between them.
+_2064436_NAMES = [
+    "MainThread", "AudioIPC Server RPC", "AudioIPC Server Callback", "DeviceCollection RPC",
+    "Shutdown Hang Terminator", "IPC I/O Parent", "Socket Thread", "Timer", "HTML5 Parser",
+    "Compositor", "Renderer", "IPDL Background", "BgIOThreadPool #1", "BgIOThreadPool #2",
+    "StyleThread#0", "StyleThread#1", "StyleThread#2", "StyleThread#3", "TaskCon~ller #0",
+    "TaskCon~ller #1", "TaskCon~ller #2", "TaskCon~ller #3", "DNS Resolver #1", "DNS Resolver #2",
+    "Cache2 I/O", "QuotaManager IO", "mozStorage #1", "mozStorage #2", "JS Watchdog", "GMPThread",
+    "Netlink Monitor", "URL Classifier",
+]
+
+
+def _bug_2064436():
+    threads = [{"thread_name": n, "frames": []} for n in _2064436_NAMES]
+    threads += [{"frames": [{"function": "ntdll!ZwWaitForWorkViaWorkerFactory"}]}
+                for _ in range(14)]
+    # `process_type` is set on 840 of 840 sampled nightly crashes and this one is a PARENT crash,
+    # which is the whole point: `MediaTrackGrph` is a CONTENT-process thread (p=0.00 parent /
+    # 0.05 content), so its absence here is exactly the cross-process shape the licence now
+    # conditions on. A fixture without the field would not exercise the thing it exists for.
+    return _hang(process_type="parent",
+                 json_dump={"crash_info": {"crashing_thread": 0}, "threads": threads})
+
 
 def _hang(**over):
     """A shutdownhang processed crash: watchdog at index 2, hung main thread at 0."""
@@ -167,6 +194,95 @@ class TestHangFacts(unittest.TestCase):
         self.assertIn("This list is COMPLETE", facts)
         self.assertIn("REFUTED, not merely unproven", facts)
 
+    def test_the_absence_licence_is_scoped_to_this_process(self):
+        # Andreas Pehrson's caveat, generalised. 113 of the 159 thread families seen >=10x over
+        # 840 nightly crashes (71%) are >=95% confined to ONE process type, so on a PARENT crash
+        # the absence of a media-graph thread (p=0.00 parent / 0.05 content) is the base rate and
+        # not evidence. The CODE always kept the caveat (a clamp, never an abstain); this text
+        # said "REFUTED ... look elsewhere" flat, and via `_crash_facts` that absolute reached the
+        # blind second opinion -- the specificity-1.00 instrument used to SUPPRESS leads.
+        facts = self._facts()
+        self.assertIn("COMPLETE for the NAMED threads of THIS process", facts)
+        self.assertIn("BUT THE LICENCE IS ABOUT THIS PROCESS ONLY", facts)
+        self.assertIn("BASE RATE, not evidence", facts)
+        self.assertIn("cross the process boundary", facts)
+        # The conclusion is still available -- gated on the second step, not withdrawn.
+        self.assertIn("REFUTED, not merely unproven", facts)
+
+    def test_the_process_type_is_named_beside_the_list(self):
+        # The denominator belongs next to the list it qualifies; absent from the payload it is
+        # simply not asserted.
+        self.assertIn("THREADS IN THIS PROCESS (content process, 3 threads",
+                      self._facts(_hang(process_type="content")))
+        self.assertIn("THREADS IN THIS PROCESS (3 threads", self._facts())
+
+    def test_the_unnamed_count_is_in_the_rule_not_just_the_header(self):
+        # 347 of the 810 sampled inventories (42.8%; 44.1% of the 786 the old ceiling called
+        # complete) contain unnamed threads, median 14.5% of the process, p90 57.7%. The header
+        # said ", 14 unnamed" and the rule then said COMPLETE with no qualifier. NOT
+        # `unnamed == 0`, which is refuted: -44% of the rule's reach for 0.2% leakage, and it
+        # would withdraw the claim on bug 2064436 itself.
+        facts = self._facts(_bug_2064436())
+        self.assertIn("(parent process, 46 threads, 32 distinct names in 23 families, "
+                      "14 unnamed)", facts)
+        self.assertIn("This list is COMPLETE", facts)
+        self.assertIn("14 of these 46 threads carry no name", facts)
+        self.assertIn("only 13 of 5,982 of them (0.2%) held any Gecko frame", facts)
+        # ...and it stays quiet when there is nothing to qualify.
+        self.assertNotIn("carry no name", self._facts())
+
+    def test_an_unnamed_analysed_thread_says_so(self):
+        # 47 of 821 sampled crashes (5.7%): "Analysed thread: 12" above a list advertised as
+        # COMPLETE that has no thread 12 in it reads as a contradiction unless we say which it is.
+        data = _hang()
+        data["json_dump"]["threads"][0] = {"frames": []}
+        self.assertIn("Analysed thread (the stack below is THIS thread): 0 (unnamed)",
+                      self._facts(data))
+        # An index with no thread object behind it is not known to be unnamed, so it stays bare.
+        self.assertIn(
+            "Analysed thread (the stack below is THIS thread): 7",
+            self._facts({"json_dump": {"crash_info": {"crashing_thread": 7}, "threads": []}}))
+
+    def test_instance_numbering_does_not_cost_the_absence_claim(self):
+        # The ceiling was `<= 120 distinct NAMES`, an n=1 number off one hang report, and what
+        # pushed a crash past it was instance numbering rather than subsystems: `FSBroker<pid>`
+        # alone contributes 582 names across the 24 of 840 nightly crashes it clipped (all 24
+        # parent-process = 11.8% of parent crashes; 0 of 116 hang reports). 130 brokers are ONE
+        # family, and past the rendering cap they print as one line instead of 130 pids.
+        data = _hang()
+        data["json_dump"]["threads"] += [
+            {"thread_name": "FSBroker%d" % (4000 + i), "frames": []} for i in range(130)]
+        # ...plus one name carried by SEVEN threads, because the fold label counts THREADS and not
+        # distinct names. `Renderer` (1 name, 7 threads) and `firefo:traceq` (1 name, 18) are real
+        # shapes: in 24 of the 24 sampled crashes that fold, at least one family had more threads
+        # than names, and a distinct-name count would have printed them as a bare single entry.
+        data["json_dump"]["threads"] += [
+            {"thread_name": "Renderer", "frames": []} for _ in range(7)]
+        facts = self._facts(data)
+        self.assertIn("This list is COMPLETE", facts)
+        self.assertIn("(140 threads, 134 distinct names in 5 families)", facts)
+        self.assertIn("FSBroker x130", facts)
+        self.assertIn("Renderer x7", facts)
+        self.assertNotIn("FSBroker4000,", facts)
+        # ...and the header says what the folding means, so "FSBroker4123" is still findable.
+        self.assertIn("Numbered instances are folded into their family", facts)
+        self.assertNotIn("Numbered instances are folded", self._facts())
+
+    def test_a_short_stem_is_not_a_family(self):
+        # The other direction. "T0".."T124" must NOT collapse to the single family "T": a
+        # one-character stem is a parse failure, not a subsystem, and treating it as one would let
+        # a 125-name list claim completeness.
+        data = _hang()
+        data["json_dump"]["threads"] = [
+            {"thread_name": "T%d" % i, "frames": []} for i in range(125)]
+        self.assertIn("This list is TRUNCATED", self._facts(data))
+        self.assertEqual(triage._thread_family("T7"), "T7")
+        self.assertEqual(triage._thread_family("FSBroker4242"), "FSBroker")
+        self.assertEqual(triage._thread_family("TaskCon~ller #7"), "TaskCon~ller")
+        self.assertEqual(triage._thread_family("StyleThread#5"), "StyleThread")
+        self.assertEqual(triage._thread_family("DNS Resolver #4"), "DNS Resolver")
+        self.assertEqual(triage._thread_family("Cache2 I/O"), "Cache2 I/O")
+
     def test_unnamed_threads_are_counted_not_listed(self):
         data = _hang()
         data["json_dump"]["threads"] += [{"frames": []}, {"thread_name": None, "frames": []}]
@@ -182,11 +298,13 @@ class TestHangFacts(unittest.TestCase):
     def test_a_truncated_inventory_withdraws_the_absence_claim(self):
         # The absence is the load-bearing half, and it is only sound over a complete list. An
         # agent reasoning from a silently clipped list would make bug 2064436's mistake again,
-        # with our encouragement.
+        # with our encouragement. The ceiling counts FAMILIES now, so the case that must still
+        # truncate is a process with that many genuinely DIFFERENT subsystems -- the collapse must
+        # not buy completeness for one of those.
         data = _hang()
         data["json_dump"]["threads"] = [
-            {"thread_name": "T%d" % i, "frames": []}
-            for i in range(triage._MAX_THREAD_NAMES + 5)]
+            {"thread_name": "Subsystem%dWorker" % i, "frames": []}
+            for i in range(triage._MAX_THREAD_FAMILIES + 5)]
         facts = self._facts(data)
         self.assertIn("This list is TRUNCATED", facts)
         self.assertIn("CANNOT be used to argue that a thread is absent", facts)
@@ -208,6 +326,9 @@ class TestHangFacts(unittest.TestCase):
         self.assertIn("THREADS IN THIS PROCESS", prompt)
         self.assertIn("BLOCKED SPIN-EVENT-LOOP STACK", prompt)
         self.assertNotIn("KNOWN ARCHETYPES", prompt)
+        # And the CONDITION on the absence licence, not just the licence: this prompt is the
+        # instrument that suppresses leads, so an absolute here suppresses on a base rate.
+        self.assertIn("BUT THE LICENCE IS ABOUT THIS PROCESS ONLY", prompt)
 
 
 _CITE = [RefCitation(filename="dom/media/MediaTrackGraph.cpp", line=2042)]
@@ -293,8 +414,29 @@ class TestAbsentThreadGate(unittest.TestCase):
             self.assertEqual(dossier.verdict.confidence, Confidence.probable, statement)
             self.assertEqual(dossier.corroborations, {}, statement)
 
+    def test_the_2064436_crash_still_fires_over_its_14_unnamed_threads(self):
+        # THE counter-example. 46 threads, 32 distinct names, 14 unnamed, 23 families -- complete,
+        # and the absence claim on it was CORRECT. Any tightening that stops this firing is wrong,
+        # and any ceiling that truncates 23 families is wrong.
+        dossier = _dossier(_FILED_MECHANISM)
+        orchestrator._apply_absent_thread_gate(
+            dossier, {"uuid": "ec1ff67a-a835-4740-be14-572e50260818",
+                      "raw_crash": _bug_2064436()})
+        self.assertEqual(dossier.verdict.confidence, Confidence.medium)
+        self.assertEqual(dossier.corroborations["absent_named_threads"], ["MediaTrackGrph"])
+
+    def test_a_collapsed_family_still_satisfies_the_gate(self):
+        # Past the rendering cap the agent is shown "FSBroker x300", not 300 pids. The gate still
+        # matches against every raw name, so a mechanism naming the family is not called absent.
+        raw = {"json_dump": {"threads": [{"thread_name": "FSBroker%d" % i} for i in range(300)]}}
+        dossier = _dossier('the `"FSBroker"` thread holds the lock')
+        orchestrator._apply_absent_thread_gate(dossier, {"uuid": "u-1", "raw_crash": raw})
+        self.assertEqual(dossier.corroborations, {})
+        self.assertEqual(dossier.verdict.confidence, Confidence.probable)
+
     def test_a_truncated_inventory_cannot_prove_absence(self):
-        names = [{"thread_name": "T%d" % i} for i in range(triage._MAX_THREAD_NAMES + 5)]
+        names = [{"thread_name": "Subsystem%dWorker" % i}
+                 for i in range(triage._MAX_THREAD_FAMILIES + 5)]
         raw = {"json_dump": {"threads": names}}
         dossier = _dossier(_FILED_MECHANISM)
         orchestrator._apply_absent_thread_gate(dossier, {"uuid": "u-1", "raw_crash": raw})
@@ -342,6 +484,42 @@ class TestAbsentThreadGate(unittest.TestCase):
 
         src = inspect.getsource(orchestrator.apply_deterministic_gates)
         self.assertIn("_apply_absent_thread_gate(result.dossier, seed)", src)
+
+
+class TestTheGateAndThePromptAgree(unittest.TestCase):
+    """`orchestrator._process_thread_names` used to RE-IMPLEMENT the completeness ceiling over
+    SQUASHED names while `triage._thread_inventory` applied it to RAW distinct names, under a
+    comment claiming they used "the SAME ceiling ... so the gate and the agent cannot disagree".
+    Above the ceiling that was false, and the direction of the disagreement is the harmful one:
+    the agent is told the list is TRUNCATED and the gate clamps its verdict for an absence from
+    that same list anyway. Both sides now call `triage._inventory_complete`."""
+
+    def _both(self, threads):
+        raw = {"json_dump": {"threads": threads}}
+        said = "This list is COMPLETE" in "\n".join(triage._thread_inventory(raw))
+        _, gated = orchestrator._process_thread_names({"raw_crash": raw})
+        return said, gated
+
+    def test_they_agree_on_every_shape(self):
+        cases = {
+            "small": [{"thread_name": "MainThread"}, {"thread_name": "Timer"}],
+            # 121 raw names that squash to 119. Under the old code the prompt said TRUNCATED
+            # (121 > 120) and the gate said complete (119 <= 120).
+            "squash collision": [{"thread_name": "Worker %d" % i} for i in range(119)] + [
+                {"thread_name": "Worker-0"}, {"thread_name": "Worker-1"}],
+            "one family, many instances": [
+                {"thread_name": "FSBroker%d" % i} for i in range(300)],
+            "genuinely wide": [
+                {"thread_name": "Subsystem%dWorker" % i}
+                for i in range(triage._MAX_THREAD_FAMILIES + 5)],
+            "bug 2064436": _bug_2064436()["json_dump"]["threads"],
+        }
+        for label, threads in cases.items():
+            said, gated = self._both(threads)
+            self.assertEqual(said, gated, label)
+        self.assertTrue(self._both(cases["one family, many instances"])[0])
+        self.assertFalse(self._both(cases["genuinely wide"])[0])
+        self.assertTrue(self._both(cases["bug 2064436"])[0])
 
 
 class TestShutdownHangArchetype(unittest.TestCase):

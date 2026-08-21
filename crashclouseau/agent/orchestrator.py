@@ -1676,21 +1676,20 @@ def _thread_name_matches(claimed, known):
 def _process_thread_names(seed):
     """``(set of squashed thread names, complete)`` for the crashing process.
 
-    ``complete`` mirrors ``triage._thread_inventory``: the absence half of this check is only
-    sound over a full list, and the two must not disagree about what the agent was shown."""
-    threads = (((seed or {}).get("raw_crash") or {}).get("json_dump") or {}).get("threads") or []
-    names = set()
-    for thread in threads:
-        name = (thread or {}).get("thread_name") if isinstance(thread, dict) else None
-        if name:
-            squashed = _squash(name)
-            if squashed:
-                names.add(squashed)
-    # The SAME ceiling the prompt block uses, so the gate and the agent cannot disagree about
-    # whether the list the agent saw was complete enough to argue an absence from.
+    ``complete`` is ``triage._inventory_complete`` — literally the call the prompt block makes,
+    over the same name list, not a re-implementation of it. It used to be a re-implementation and
+    the two disagreed: the prompt applied the ceiling to RAW distinct names while this applied it
+    to SQUASHED ones, so a process whose names collide under ``_squash`` (``DNS Resolver #1`` and
+    ``dnsresolver1``) could be shown a list labelled TRUNCATED and still have its verdict clamped
+    for an absence from it. The old comment here — "the SAME ceiling ... so the gate and the agent
+    cannot disagree" — was false above the ceiling. Squashing survives for MATCHING, which is what
+    it is for."""
     from crashclouseau.agent import triage
 
-    return names, len(names) <= triage._MAX_THREAD_NAMES
+    raw = (seed or {}).get("raw_crash") or {}
+    names, _unnamed = triage._thread_names(raw)
+    squashed = {s for s in (_squash(name) for name in names) if s}
+    return squashed, triage._inventory_complete(raw)
 
 
 def _absent_named_threads(dossier, seed):
@@ -1741,7 +1740,12 @@ def _apply_absent_thread_gate(dossier, seed):
     MediaTrackGraph in a content process but then the shutdown blocker would live there too" — so
     the possibility is real even though it did not save this verdict. Bounding the action to one
     rung means a false fire costs an automatic FILING (rung 70) and not the lead itself, while the
-    2064436 case, which shipped at the top of the scale, is still caught.
+    2064436 case, which shipped at the top of the scale, is still caught. That caveat is MEASURED,
+    not merely plausible: 113 of the 159 thread families seen >=10x over 840 nightly crashes (71%)
+    are >=95% confined to one process type, and p(MediaTrackGrph) is 0.00 in a parent process
+    against 0.05 in a content one — so a cross-process claim is the common shape, not the exotic
+    one, which is why ``triage._thread_inventory`` now asks the agent for Pehrson's second
+    argument in the prompt rather than handing it the refutation outright.
 
     Only QUOTED names are considered (see ``_QUOTED_THREAD_RE``) and only against a COMPLETE
     inventory, so this is a no-op on the offline eval, on Java crashes and on any payload without

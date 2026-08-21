@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import time
 from collections import defaultdict
 
@@ -477,7 +478,14 @@ def _analysed_thread(raw: dict) -> str:
     Was ``crash_info.crashing_thread``, which on a hang is the watchdog and NOT the thread the
     stack comes from (see ``inspector.thread_for_analysis``). Printing the un-analysed index next
     to another thread's frames is worse than printing nothing: on bug 2064436 the same report
-    would have said "Crashing thread: 45" above thread 0's stack."""
+    would have said "Crashing thread: 45" above thread 0's stack.
+
+    ``"12 (unnamed)"`` WHEN THE ANALYSED THREAD ITSELF HAS NO NAME, which is not an edge case: in
+    47 of 821 sampled nightly crashes (5.7%) it has none while ``_thread_inventory`` below still,
+    correctly, calls its list COMPLETE. A bare "12" over a list advertised as complete that has no
+    thread 12 in it reads as a contradiction and invites the model to explain one; one word says
+    which of the two it actually is. An index with no thread OBJECT behind it stays bare — we do
+    not know that one is unnamed, only that we cannot see it."""
     threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
     try:
         from crashclouseau import inspector
@@ -487,15 +495,103 @@ def _analysed_thread(raw: dict) -> str:
         idx = ((raw or {}).get("json_dump") or {}).get("crash_info", {}).get("crashing_thread")
     if not isinstance(idx, int):
         return ""
-    name = threads[idx].get("thread_name") if 0 <= idx < len(threads) else None
-    return "{} ({})".format(idx, name) if name else str(idx)
+    if not 0 <= idx < len(threads):
+        return str(idx)
+    thread = threads[idx] if isinstance(threads[idx], dict) else {}
+    name = str(thread.get("thread_name") or "").strip()
+    return "{} ({})".format(idx, name or "unnamed")
 
 
-# Prompt budget for the thread inventory. Generous on purpose: the widest hang report sampled ran
-# 113 threads, so this lists every real process in full, and ~120 short names cost well under a
-# kilobyte beside a 50-frame stack and a pushlog window. Past it the list is truncated and the
-# block DROPS its absence claim — see `_thread_inventory`.
+# RENDERING budget only — NOT the soundness ceiling, which is `_MAX_THREAD_FAMILIES` below. Past
+# this many distinct names the block prints FAMILIES with instance counts ("FSBroker x24") instead
+# of every name, because what makes a list long is instance numbering and no reader gains anything
+# from 24 pids. Budget was never the constraint here: over 840 Firefox-nightly crashes the widest
+# name list is 3,683 bytes (1,090 folded into 75 families) and the median is 489.
 _MAX_THREAD_NAMES = 120
+
+# THE CEILING THAT DECIDES WHETHER THE ABSENCE CLAIM SURVIVES, and it counts FAMILIES.
+#
+# It used to be `len(distinct names) <= 120`: an n=1 number read off one report ("the widest hang
+# report sampled ran 113 threads") that counted the wrong thing. Measured over 840 Firefox-nightly
+# crashes (60/day x 14 days, 2026-08-07..08-20): it fired on 24 of 840 (2.9%), ALL parent-process
+# — 11.8% of parent crashes silently lost the absence claim — and 0 of 116 hang/shutdownhang
+# reports were ever clipped, so it never once protected the case it was written for. What pushed
+# those 24 over was INSTANCE NUMBERING, not subsystems: `FSBroker<pid>` alone contributes 582 of
+# their names, plus WRWorkerLP#N / TaskCon~ller #N / StyleThread#N / DNS Resolver #N. Collapse the
+# instance suffix and the widest crash in the 840 has 79 FAMILIES, p99 = 75, and zero exceed 96.
+# 96 is that distribution plus ~20% headroom, so this stays a real guard against a pathological
+# process instead of eating a sound claim for a cosmetic reason.
+#
+# WHAT IT MUST NOT EAT, the other direction: a process with 200 genuinely different subsystem
+# threads must still be TRUNCATED. That is what `_MIN_FAMILY_STEM` protects — "T0".."T124"
+# collapses to the stem "T", which is a parse failure and not a subsystem, and treating it as one
+# family would let a 125-name list claim completeness. That guard is a NULL RESULT on the panel
+# and is recorded as one: no name in the 840 has a stripped stem shorter than 3 characters, and
+# sweeping `_MIN_FAMILY_STEM` over 0..5 leaves max families at 79 and over-96 at 0 either way. It
+# exists for a parse-failure shape the sample does not contain, so read it as a guard, not as a
+# fitted threshold.
+_MAX_THREAD_FAMILIES = 96
+_MIN_FAMILY_STEM = 3
+_INSTANCE_SUFFIX_RE = re.compile(r"[\s#]*\d+$")
+
+
+def _thread_family(name: str) -> str:
+    """``"FSBroker4242"``/``"TaskCon~ller #7"``/``"StyleThread#5"`` -> the subsystem they instance.
+
+    Used ONLY for the COMPLETE/TRUNCATED ceiling and for the collapsed rendering. The absence
+    check itself (``orchestrator._absent_named_threads``) still matches against every raw name, so
+    collapsing here can never make the gate miss a name the agent could have read."""
+    stem = _INSTANCE_SUFFIX_RE.sub("", str(name)).strip()
+    return stem if len(stem) >= _MIN_FAMILY_STEM else str(name).strip()
+
+
+def _thread_name_of(thread) -> str:
+    """A thread's name, stripped, or ``""`` when it has none. The ONE place a thread dict is read
+    for a name, so "unnamed" means the same thing to the prompt, the ceiling and the gate."""
+    if not isinstance(thread, dict):
+        return ""
+    return str(thread.get("thread_name") or "").strip()
+
+
+def _thread_families(names) -> dict:
+    """``{family: how many of the names fed in collapsed into it}``, in first-seen order.
+
+    Feed it DISTINCT names for the ceiling (how many subsystems) and every thread's name for the
+    rendering label (how many threads)."""
+    families: dict = {}
+    for name in names:
+        family = _thread_family(name)
+        families[family] = families.get(family, 0) + 1
+    return families
+
+
+def _thread_names(raw: dict) -> tuple[list[str], int]:
+    """``(ordered distinct thread names, count of unnamed threads)`` for the crashing process.
+
+    THE single reader of ``json_dump.threads``: ``_thread_inventory`` below and
+    ``orchestrator._process_thread_names`` both come through here, so the prompt and the gate
+    cannot disagree about what the agent was shown. They used to compute completeness over
+    DIFFERENT inputs — the prompt over raw distinct names, the gate over SQUASHED ones — under a
+    comment in the gate claiming they used "the SAME ceiling", which was false for any process
+    whose names collide under squashing (``DNS Resolver #1`` and ``dnsresolver1``): the agent
+    could be told the list was TRUNCATED and have its verdict clamped for an absence from it
+    anyway."""
+    threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
+    names, unnamed = [], 0
+    for thread in threads:
+        name = _thread_name_of(thread)
+        if not name:
+            unnamed += 1
+        elif name not in names:
+            names.append(name)
+    return names, unnamed
+
+
+def _inventory_complete(raw: dict) -> bool:
+    """Is this thread list short enough that an ABSENCE from it is sound? See
+    ``_MAX_THREAD_FAMILIES``."""
+    names, _ = _thread_names(raw)
+    return len(_thread_families(names)) <= _MAX_THREAD_FAMILIES
 
 
 def _thread_inventory(raw: dict) -> list[str]:
@@ -522,47 +618,112 @@ def _thread_inventory(raw: dict) -> list[str]:
     stop is a confident statement about a runtime entity nobody looked for, and an agent
     reasoning from a silently clipped list would make it again with our encouragement.
 
+    TWO CONDITIONS ON THAT LICENCE, both measured on 840 Firefox-nightly crashes (60/day x 14
+    days, 2026-08-07..08-20) and both stated in the prompt text rather than only here, because
+    this block also reaches the blind second opinion (``second_opinion._user_prompt`` ->
+    ``_crash_facts``) and the second opinion is the specificity-1.00 instrument we use to SUPPRESS
+    a lead. An absolute in here is an absolute in the refuter.
+
+    * PROCESS TYPE IS THE DENOMINATOR, the same lesson as the bug-2064600 hardware block. This
+      list speaks about ONE process, and 113 of the 159 thread families seen >=10x (71%) are >=95%
+      confined to a single process type. p(thread present | process type), measured: MediaTrackGrph
+      parent 0.00 / content 0.05; GraphRunner 0.00 / 0.07; MediaDecoderStateMachine 0.00 / 0.21;
+      AudioIPC Client RPC 0.01 / 0.27; and the other way round, AudioIPC Server RPC 0.51 / 0.00,
+      IPDL Background 0.83 / 0.00. So on a PARENT crash the absence of a media-graph thread is the
+      BASE RATE, not evidence — which is exactly why Andreas Pehrson did not stop at "no
+      MediaTrackGrph thread" and added the second argument: "There may be a MediaTrackGraph in a
+      content process but then the shutdown blocker would live there too." The gate has always
+      kept that caveat (a clamp, never an abstain — ``orchestrator._apply_absent_thread_gate``);
+      this text used to drop it and say "REFUTED ... look elsewhere" flat, so it now asks for the
+      cross-process step instead of granting the conclusion, and names the process type in the
+      header so the reader has the denominator in front of them.
+    * "COMPLETE" MEANS COMPLETE FOR NAMED THREADS. 347 of the 810 inventories in the sample
+      (42.8%; 44.1% of the 786 the old ceiling called complete) hold unnamed threads — median
+      14.5% of the process, p90 57.5%, max 83.5% — so the rule says the count out loud instead of
+      letting "COMPLETE" imply every thread is accounted for. It still licenses the inference,
+      because an unnamed thread is not a hiding place for a Gecko subsystem: of 5,982 unnamed
+      threads, 13 (0.22%) have any xul.dll/libxul/``mozilla::``/nsThread frame in their top 12,
+      and every one is DLL-init (``_cairo_mutex_initialize`` under LdrpCallTlsInitializers), an
+      AV injection (aswJsFlt.dll), a ``_C_specific_handler`` unwind or ``AnimateSkeletonUI`` —
+      not one pool or subsystem thread. Control, same detector and window: 29,747 of 32,840 NAMED
+      threads (90.6%) are detected. NOT ``unnamed == 0``, which is REFUTED: it drops COMPLETE from
+      786 to 439 of 810 (-44% of the rule's reach) to buy that 0.2%, and it would withdraw the
+      absence claim on crash ec1ff67a-a835-4740-be14-572e50260818 (bug 2064436) — 46 threads, 14
+      unnamed, zero Gecko frames among the 14 — the one crash in the corpus whose absence claim
+      was CORRECT.
+
     Names come from the OS, so they are subject to its limits: Linux caps a pthread name at 15
     bytes and Socorro elides the middle ("Shutdow~minator" for "Shutdown Hang Terminator"), which
     is why the text asks for a substring rather than an exact match."""
     threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
     if not threads:
         return []
-    names, unnamed = [], 0
-    for thread in threads:
-        name = (thread or {}).get("thread_name") if isinstance(thread, dict) else None
-        name = str(name).strip() if name else ""
-        if not name:
-            unnamed += 1
-        elif name not in names:
-            names.append(name)
+    names, unnamed = _thread_names(raw)
     if not names:
         return []
-    complete = len(names) <= _MAX_THREAD_NAMES
-    shown = names if complete else names[:_MAX_THREAD_NAMES]
+    families = _thread_families(names)
+    complete = len(families) <= _MAX_THREAD_FAMILIES
+    # The ceiling counts distinct NAMES per family; the rendered label counts THREADS, because
+    # that is what the header promises and the two differ in 24 of the 24 sampled crashes that
+    # fold: `Renderer` is one name on 7 threads and `firefo:traceq` one name on 18, both of which
+    # would otherwise print as a bare entry claiming a single thread.
+    per_thread = _thread_families(_thread_name_of(t) for t in threads if _thread_name_of(t))
+    if not complete:
+        rendered = list(families)[:_MAX_THREAD_FAMILIES]
+    elif len(names) <= _MAX_THREAD_NAMES:
+        rendered = None
+    else:
+        rendered = list(families)
+    if rendered is None:
+        shown, is_folded = names, False
+    else:
+        shown = ["{} x{}".format(f, per_thread[f]) if per_thread[f] > 1 else f for f in rendered]
+        is_folded = any(per_thread[f] > 1 for f in rendered)
+    process = str((raw or {}).get("process_type") or "").strip()
     header = (
-        "THREADS IN THIS PROCESS ({} threads, {} distinct names{}). Names are truncated by the "
-        "OS on Linux (15 bytes, middle elided as \"Shutdow~minator\"), so match on a substring, "
-        "not exactly.".format(
+        "THREADS IN THIS PROCESS ({}{} threads, {} distinct names{}{}). Names are truncated by "
+        "the OS on Linux (15 bytes, middle elided as \"Shutdow~minator\"), so match on a "
+        "substring, not exactly.{}".format(
+            "{} process, ".format(process) if process else "",
             len(threads), len(names),
-            ", {} unnamed".format(unnamed) if unnamed else "")
+            " in {} families".format(len(families)) if len(families) != len(names) else "",
+            ", {} unnamed".format(unnamed) if unnamed else "",
+            " Numbered instances are folded into their family: \"FSBroker x24\" means 24 "
+            "threads of that family, individually numbered." if is_folded else "")
     )
     if complete:
-        rule = (
-            "This list is COMPLETE. Use it as a hard check on any mechanism you are considering: "
-            "a subsystem whose thread is NOT here was not running in this process, so a mechanism "
-            "that needs it is REFUTED, not merely unproven — say so and look elsewhere rather "
-            "than reporting it. The converse is weaker: a thread being present means the "
-            "subsystem exists, not that it is involved. Before you name any thread, pool or "
-            "runtime object in a mechanism, find it here; if it is absent, that IS your finding. "
-            "Asymmetries are evidence too — a server-side thread with no client-side counterpart "
-            "means this process was serving that subsystem, not using it."
-        )
+        parts = [
+            "This list is COMPLETE for the NAMED threads of THIS process. Use it as a hard check "
+            "on any mechanism you are considering: before you name any thread, pool or runtime "
+            "object, find it here; if it is absent, that IS your finding.",
+            "BUT THE LICENCE IS ABOUT THIS PROCESS ONLY. 71% of thread families are at least "
+            "95% confined to a single process type, so a content-process thread is absent from "
+            "essentially every parent crash and vice versa — that absence is the BASE RATE, not "
+            "evidence. If the "
+            "subsystem you need normally runs in a different process type from this one, its "
+            "absence here refutes nothing by itself: you must also show why the effect could not "
+            "cross the process boundary (its shutdown blocker would have hung THAT process, not "
+            "this one). With that second step the mechanism is REFUTED, not merely unproven — "
+            "say so and look elsewhere; without it, do not claim either way.",
+        ]
+        if unnamed:
+            parts.append(
+                "{} of these {} threads carry no name; that does not weaken the check. Unnamed "
+                "threads are OS/driver pool threads: over 840 nightly crashes only 13 of 5,982 "
+                "of them (0.2%) held any Gecko frame and none was a pool or subsystem thread, so "
+                "an unnamed thread is not a hiding place for a Gecko subsystem.".format(
+                    unnamed, len(threads)))
+        parts.append(
+            "The converse is weaker: a thread being present means the subsystem exists, not that "
+            "it is involved. Asymmetries are evidence too — a server-side thread with no "
+            "client-side counterpart means this process was serving that subsystem, not using it.")
+        rule = " ".join(parts)
     else:
         rule = (
-            "This list is TRUNCATED at {} of {} names, so it CANNOT be used to argue that a "
-            "thread is absent — a name you do not see here may simply have been cut. Use it only "
-            "to confirm a thread that IS listed.".format(_MAX_THREAD_NAMES, len(names))
+            "This list is TRUNCATED at {} of {} thread families, so it CANNOT be used to argue "
+            "that a thread is absent — a name you do not see here may simply have been cut. Use "
+            "it only to confirm a thread that IS listed.".format(
+                _MAX_THREAD_FAMILIES, len(families))
         )
     return ["", header, rule, ", ".join(shown)]
 
