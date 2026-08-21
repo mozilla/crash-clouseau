@@ -765,3 +765,211 @@ class TestHangCommentLabelsTheThread(unittest.TestCase):
         from crashclouseau import report_bug
 
         self.assertIn("report_type", report_bug._REASON_COLUMNS)
+
+
+# The two crash facts the 300-char cap actually damages, and the panel that says so:
+# `spike/CRASH_FACT_RENDERERS_PANEL.json` (9,251 spin values / 4,880 async_shutdown_timeout
+# values, Firefox nightly 2026-06-12..2026-08-21) rebuilt by
+# `spike/crash_fact_renderers_panel.py`. The cap is a no-op on the other 19 fields (0 of 2,800
+# control reports over 300 chars for any of them), so these two renderers are the whole change.
+
+# uuid defd3256-091a-4e73-b575-c57f80260614 in shape (10,018 chars here; the real one is
+# 10,000, Socorro's annotation cap, which severed its last entry mid-name): 323 entries, 3
+# distinct -- the reason tail-preserving truncation LOSES. The innermost slot carries a real
+# name from the panel, `nsThread::Shutdown: GraphRunner`, which head-300 ate on e3a7c479.
+_SPIN_ENTRIES = ["tab: nsThread::Shutdown: DOM Worker"]
+_SPIN_ENTRIES += ["nsThread::Shutdown: DOM Worker"] * 321
+_SPIN_ENTRIES += ["nsThread::Shutdown: GraphRunner"]
+_SPIN_REPEATED = "|".join(_SPIN_ENTRIES)
+# uuid fcb7058e-210c-47a9-954a-219bc0260807 in shape (875 chars here, 876 there): 22 entries,
+# ALL DISTINCT -- THE counter-example collapse cannot shrink. Its three subsystems survive only
+# because the cap is 400 and not 300.
+_DISTINCT_ENTRIES = ["default: nsThread::Shutdown: sqldb:Login Data #18"]
+_DISTINCT_ENTRIES += ["nsThread::Shutdown: sqldb:%s #%d" % (db, n) for n, db
+                      in enumerate(["History", "Web Data", "Login Data"] * 7, start=19)]
+_SPIN_DISTINCT = "|".join(_DISTINCT_ENTRIES)
+# uuid 89910485-48e7-4fa2-ab18-23b050260812, VERBATIM: 163 chars, so today's head-300 leaves it
+# untouched -- and its innermost entry (`GraphRunner`) also appears three times earlier, which is
+# what makes a first-occurrence collapse re-order it. 4 of the 9,251 panel values are like this.
+_SPIN_INNERMOST_RECURS = (
+    "tab: nsThread::Shutdown: GraphRunner|nsThread::Shutdown: GraphRunner|"
+    "nsThread::Shutdown: GraphRunner|nsThread::Shutdown: DOM Worker|"
+    "nsThread::Shutdown: GraphRunner")
+# uuid d29ac23d-eb9c-45f0-bf2c-8129b0260809 (bug 2062062, REOPENED), verbatim: 356 chars, and
+# today's head-300 cuts the second frame off the end.
+_AST_BUG_2062062 = (
+    '{"phase":"profile-change-teardown","conditions":[{"name":"LoginManagerRustStorage: '
+    'Interrupt IO operations on login store","state":"(none)","filename":'
+    '"resource://gre/modules/storage-rust.sys.mjs","lineNumber":413,"stack":'
+    '["resource://gre/modules/storage-rust.sys.mjs:_registerShutdownBlocker:413",'
+    '"resource://gre/modules/storage-rust.sys.mjs:null:375"]}]}')
+# uuid 69f5115c-83a8-4524-99aa-4588e0260612, byte-for-byte: 693 chars, a DICT `state` whose
+# `shutdownStates` repeats one phrase 12 times, and a `stack` that is a bare string.
+_AST_DICT_STATE = (
+    '{"phase":"profile-change-teardown","conditions":[{"name":"ServiceWorkerShutdownBlocker: '
+    'shutting down Service Workers","state":{"shutdownStates":"%s","pendingPromises":12,'
+    '"acceptingPromises":false},"filename":'
+    '"./../../../../checkouts/gecko/dom/serviceworkers/ServiceWorkerShutdownBlocker.cpp",'
+    '"lineNumber":107,"stack":"Service Workers shutdown"}]}'
+) % ("content process main thread, " * 12)
+# uuid b43e9c0d-7465-4acd-bfe8-2546d0260708, byte-for-byte: 422 chars, and its `state` is a bare
+# STRING, not a dict. Today's head-300 keeps it (it sits before the 300th char); a renderer that
+# tests `isinstance(state, dict)` drops it, and the dict-only state metric cannot see that.
+_AST_STRING_STATE = (
+    '{"phase":"Sqlite.sys.mjs: wait until all clients have completed their task",'
+    '"conditions":[{"name":"PlacesUtils wrapped connection must be closed before '
+    'Sqlite.sys.mjs","state":"1. Service has initiated shutdown","filename":'
+    '"resource://gre/modules/PlacesUtils.sys.mjs","lineNumber":3102,"stack":'
+    '["resource://gre/modules/PlacesUtils.sys.mjs:setupDbForShutdown:3102",'
+    '"resource://gre/modules/PlacesUtils.sys.mjs:null:3131"]}]}')
+
+
+class TestSpinStackRenderer(unittest.TestCase):
+    """`xpcom_spin_event_loop_stack` reached the prompt with bug 2064436 and the 300-char head
+    then ate the end of it -- on a field whose own label says "innermost last"."""
+
+    def _fact(self, value):
+        facts = "\n".join(triage._crash_facts(
+            {"raw_crash": _hang(xpcom_spin_event_loop_stack=value)}))
+        return [ln for ln in facts.split("\n") if ln.startswith("BLOCKED SPIN")][0]
+
+    def test_a_short_stack_is_byte_identical_to_today(self):
+        # p50 is 58 chars and 98.55% of the 9,251 never truncate, so the renderer has to be
+        # near-invisible on them or it is buying its 6 rescues with 9,117 regressions. Measured:
+        # it changes 58 of those 9,117, every one of them a repeat collapsed to `(xN)` -- which
+        # is lossless and shorter. A value with no repeat at all comes through byte-for-byte.
+        for value in ("default: nsThreadPool::ShutdownWithTimeout BgIOThreadPool",
+                      "default: QuotaManager::Observer::Observe profile-before-change-qm",
+                      "a|b|c"):
+            self.assertEqual(triage._render_spin_stack(value), value)
+        self.assertEqual(triage._render_spin_stack(""), "")
+        self.assertEqual(triage._render_spin_stack(None), "")
+
+    def test_repetition_collapses_and_the_count_survives(self):
+        # "322 workers were stuck" is information, so the repeat is not deduped away: it costs
+        # 6 bytes as `(x321)` instead of the 9,900 Socorro spent on it.
+        rendered = triage._render_spin_stack(_SPIN_REPEATED)
+        self.assertIn("nsThread::Shutdown: DOM Worker (x321)", rendered)
+        self.assertLess(len(rendered), 150)
+
+    def test_the_innermost_subsystem_survives_the_cap(self):
+        # What head-300 lost on 4 of the 134 over-300 values, and the whole point of the field.
+        self.assertIn("nsThread::Shutdown: GraphRunner",
+                      triage._render_spin_stack(_SPIN_REPEATED))
+        self.assertNotIn("GraphRunner", triage._short_value(_SPIN_REPEATED))
+
+    def test_a_value_with_no_repeats_keeps_every_subsystem(self):
+        # THE COUNTER-EXAMPLE collapse cannot help: 22 distinct entries. Only the per-thread
+        # `#N` suffixes fall off the 400-char cap, and those name nothing.
+        rendered = self._fact(_SPIN_DISTINCT)
+        for db in ("sqldb:Login Data", "sqldb:History", "sqldb:Web Data"):
+            self.assertIn(db, rendered)
+
+    def test_the_innermost_entry_still_ends_the_line(self):
+        # "Innermost last" is the field's own prompt label, so ending on the wrong entry is a
+        # WRONG FACT, not a cosmetic one. Collapsing by first occurrence does exactly that when
+        # the innermost entry recurs earlier: on this real 163-char value -- which today's
+        # head-300 does not touch at all -- it would end on `DOM Worker` instead of
+        # `GraphRunner`. The panel's `innermost_lost` counter is a containment test and scores 0
+        # either way, which is why the panel also reports `mis_ordered_innermost` (0 shipped,
+        # 4 for a plain first-occurrence collapse).
+        rendered = triage._render_spin_stack(_SPIN_INNERMOST_RECURS)
+        self.assertTrue(rendered.endswith("nsThread::Shutdown: GraphRunner (x3)"), rendered)
+        self.assertIn("nsThread::Shutdown: DOM Worker", rendered)
+        self.assertLess(len(rendered), len(_SPIN_INNERMOST_RECURS))
+        # ... and a value whose innermost does NOT recur keeps plain first-occurrence order.
+        self.assertEqual(triage._render_spin_stack("a|a|b"), "a (x2)|b")
+
+    def test_the_cap_is_400_and_the_budget_is_why(self):
+        # 500/600/800 recover no further subsystem name on the panel, so the extra bytes would
+        # be spent for nothing against an 8,994-13,136-char prompt.
+        self.assertEqual(triage._SPIN_STACK_LIMIT, 400)
+        self.assertGreater(len(_SPIN_DISTINCT), 400)
+        self.assertEqual(len(triage._render_spin_stack(_SPIN_DISTINCT)), 400)
+
+
+class TestAsyncShutdownRenderer(unittest.TestCase):
+    """`async_shutdown_timeout` is the ONE field the 300-char cap destroys: 98.8% of 4,880
+    values are over it, and the head keeps 9.6% of the blocker source files."""
+
+    def test_the_blocker_file_and_the_cut_frame_both_survive(self):
+        # Bug 2062062's own crash: `storage-rust.sys.mjs:null:375` fell off the head-300.
+        rendered = triage._render_async_shutdown(_AST_BUG_2062062)
+        self.assertIn("phase=profile-change-teardown", rendered)
+        self.assertIn('blocker "LoginManagerRustStorage: Interrupt IO operations on login '
+                      'store" @ resource://gre/modules/storage-rust.sys.mjs:413', rendered)
+        self.assertIn("storage-rust.sys.mjs:null:375", rendered)
+        self.assertNotIn("null:375", triage._short_value(_AST_BUG_2062062))
+        # And it is SHORTER than what it replaces, which is why the budget survives it.
+        self.assertLess(len(rendered), len(triage._short_value(_AST_BUG_2062062)))
+
+    def test_state_is_kept_because_the_head_300_already_kept_it(self):
+        # THE COUNTER-EXAMPLE. `state` sits right after the blocker name, so today's head keeps
+        # 3,272 of 4,118 state objects (79.5%). The first extractor dropped it -- source files
+        # 97.6%, state 0.0% -- and that is why this renderer carries a state budget at all.
+        rendered = triage._render_async_shutdown(_AST_DICT_STATE)
+        self.assertIn('state={"shutdownStates":"content process main thread', rendered)
+        self.assertIn('ServiceWorkerShutdownBlocker.cpp:107', rendered)
+
+    def test_a_state_that_is_not_a_dict_is_kept_too(self):
+        # THE SECOND WAY TO EAT THE SAME COUNTER-EXAMPLE. `state` is a dict on 4,118 of the
+        # panel's conditions, a bare string on 925 and a list on 158; an `isinstance(state,
+        # dict)` test drops 1,083 of 5,201 states, and the dict-only metric that scored the
+        # renderer 79.5% -> 80.0% cannot see it (on all 5,201 it reads 79.7% -> 63.4%). Here
+        # today's head-300 keeps the string and the renderer has to as well.
+        rendered = triage._render_async_shutdown(_AST_STRING_STATE)
+        self.assertIn("state=1. Service has initiated shutdown", rendered)
+        self.assertIn("1. Service has initiated shutdown",
+                      triage._short_value(_AST_STRING_STATE))
+        self.assertIn("PlacesUtils.sys.mjs:null:3131", rendered)
+
+    def test_state_is_capped_at_160_the_floor_that_clears_today(self):
+        # 100 -> 73.7%, 120 -> 73.9%, 140 -> 78.7% state coverage, all BELOW today's 79.5%;
+        # 160 -> 80.0%. The number is a floor read off the sweep, not a round guess.
+        self.assertEqual(triage._ASYNC_SHUTDOWN_STATE_LIMIT, 160)
+        rendered = triage._render_async_shutdown(_AST_DICT_STATE)
+        state = rendered.split("state=", 1)[1]
+        self.assertLessEqual(len(state), 160)
+        self.assertTrue(state.endswith("..."), state)
+
+    def test_the_frame_list_is_deduped_and_bounded(self):
+        # The repetition is in the frames too, and a blocker list is unbounded in the payload.
+        value = json.dumps({"phase": "p", "conditions": [
+            {"name": "n%d" % i, "filename": "f%d.mjs" % i, "lineNumber": i,
+             "stack": ["a.mjs:x:1"] * 3 + ["b%d.mjs:y:%d" % (j, j) for j in range(9)]}
+            for i in range(5)]})
+        rendered = triage._render_async_shutdown(value)
+        # 3 copies inside one blocker collapse to 1; the 3 rendered blockers each keep theirs.
+        self.assertEqual(rendered.split('blocker "n1"')[0].count("a.mjs:x:1"), 1)
+        self.assertEqual(rendered.count("a.mjs:x:1"), 3)
+        self.assertIn("(+2 more blockers)", rendered)
+        self.assertNotIn("f3.mjs", rendered)
+        self.assertIn("b4.mjs:y:4", rendered)      # 6 frames per blocker = a.mjs + b0..b4
+        self.assertNotIn("b5.mjs", rendered)
+
+    def test_a_severed_value_falls_back_to_the_old_truncation(self):
+        # 1 of the 4,880 (uuid d44e2101-...) is not JSON: Socorro's own 32,766-char annotation
+        # cap cut it mid-string. The fallback keeps that case exactly as it is today.
+        severed = _AST_BUG_2062062[:200]
+        self.assertEqual(triage._render_async_shutdown(severed),
+                         triage._short_value(severed))
+        for junk in ("[]", "null", '"a string"', "not json at all"):
+            self.assertEqual(triage._render_async_shutdown(junk),
+                             triage._short_value(junk))
+
+    def test_it_is_wired_to_the_field_and_reaches_the_second_opinion(self):
+        # Keyed on the FIELD, not on the string's shape -- and `_crash_facts` is shared verbatim
+        # with the blind reviewer, which is correct for a fact Socorro sent us.
+        from crashclouseau.agent import second_opinion
+
+        crash = {"uuid": "u-1", "signature": "AsyncShutdownTimeout | x",
+                 "raw_crash": _hang(async_shutdown_timeout=_AST_BUG_2062062)}
+        self.assertIn("Async shutdown timeout: phase=profile-change-teardown",
+                      "\n".join(triage._crash_facts(crash)))
+        self.assertIn("storage-rust.sys.mjs:null:375", second_opinion._user_prompt(crash, None))
+
+    def test_the_other_facts_still_go_through_short_value(self):
+        # The 2-tuple path has to keep working: 21 of the 23 facts have no renderer.
+        facts = "\n".join(triage._crash_facts(
+            {"raw_crash": _hang(moz_crash_reason="x" * 400)}))
+        self.assertIn("MOZ_CRASH_REASON: " + "x" * 297 + "...", facts)

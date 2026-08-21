@@ -18,6 +18,7 @@ test without spawning the bundled CLI."""
 from __future__ import annotations
 
 import functools
+import json
 import os
 import re
 import time
@@ -117,12 +118,246 @@ def _system_prompt() -> str:
 
 
 def _short_value(value, limit=300):
+    """One crash fact, newline-flattened and head-truncated at ``limit`` chars.
+
+    THE 300-CHAR CAP BITES ON EXACTLY TWO OF THE 23 FACTS ``_crash_facts`` WRAPS, so it is not
+    the blunt instrument it looks like and the two renderers below must NOT be generalised to
+    the rest -- on everything that was measured there is nothing there to recover. Measured on a
+    2,800-report nightly control (200/day x 14d, 2026-08-07..2026-08-21, public SuperSearch):
+    zero values over 300 chars for ``moz_crash_reason`` (n=1,469, longest 211), ``reason``
+    (2,761, 72), ``cpu_info`` (2,676, 43), ``address`` (2,761, 18), ``adapter_driver_version``
+    (2,559, 17), ``platform_pretty_version`` (2,800, 55), ``shutdown_progress`` (274, 31) and
+    ``shutdown_reason`` (289, 10). It bites on ``xpcom_spin_event_loop_stack`` (1 of 334) and
+    ``async_shutdown_timeout`` (141 of 143 = 98.6%), and those two get ``_render_spin_stack``
+    and ``_render_async_shutdown``. (The control also measured ``ipc_shutdown_state`` (13, max
+    237) and ``last_error_value`` (1,823, 27), both clean -- but NEITHER reaches ``_crash_facts``
+    at all, so they are neighbours, not fields this function wraps.)
+
+    THE NULL RESULT DOES NOT COVER ALL 23, so do not read it as one. Of the 23 fact lines: 2
+    have the renderers below, 3 are PHC (unmeasurable, next paragraph), 7 are backed 1:1 by a
+    clean column above (MOZ_CRASH_REASON, Crash reason, Crash type, Fault address, OS, Shutdown
+    phase reached, Why shutdown started), 2 are DERIVED from a clean column, and the remaining 9
+    -- Product, Version, Build ID, Process type, Report type, Assertion, Faulting instruction,
+    the bit-flip line and the analysed-thread label -- were NOT MEASURED; they are short by
+    construction, not by measurement. Derived is the part worth watching, because a summary can
+    be longer than any column it reads: ``_cpu_summary`` renders 245 chars once the Raptor-Lake
+    warning fires (measured, on a 29-char ``cpu_info``), i.e. 55 chars of headroom rather than a
+    structural no-op. If that warning text grows, this cap is what will eat it.
+
+    The three PHC lines are UNMEASURED rather than measured-clean: Socorro marks ``phc_kind`` /
+    ``phc_alloc_stack`` / ``phc_free_stack`` ``view_pii``, so SuperSearch silently drops both
+    the column and the filter (a ``phc_kind=!__null__`` query returns the whole nightly
+    population) and ``/api/ProcessedCrash/`` omits them. Whether those lines render at all is
+    an open prod question; Socorro documents the two stacks as comma-separated decimal
+    addresses, which no truncation policy can make useful.
+
+    Panel and sweeps: ``spike/CRASH_FACT_RENDERERS_PANEL.json``, rebuilt by
+    ``spike/crash_fact_renderers_panel.py``.
+    """
     if value is None or value == "":
         return ""
     text = str(value).replace("\n", " ").strip()
     if len(text) > limit:
         return text[:limit - 3] + "..."
     return text
+
+
+# Where the collapse+cap sweep flattens: 400 is the first cap that loses no subsystem name at
+# all, and 500/600/800 buy nothing more. See `_render_spin_stack`.
+_SPIN_STACK_LIMIT = 400
+# `async_shutdown_timeout`, after parsing. `state` is the counter-example rather than a nicety
+# -- today's head-300 already keeps 79.5% of the state dicts and 79.7% of ALL states -- and 160
+# is the smallest cap that clears that bar (80.0% / 80.1%); 0 drops `state` entirely, which is
+# the variant the sweep KILLED (0.0%). The other three are budget choices and NOT optima: the
+# sweeps in the artifact show 4+ blockers and 8 frames both score better on source files. See
+# `_render_async_shutdown`.
+_ASYNC_SHUTDOWN_BLOCKERS = 3
+_ASYNC_SHUTDOWN_FRAMES = 6
+_ASYNC_SHUTDOWN_STATE_LIMIT = 160
+_ASYNC_SHUTDOWN_LIMIT = 900
+
+
+def _render_spin_stack(value):
+    """``xpcom_spin_event_loop_stack``, run-length collapsed and then capped at 400.
+
+    The field is a ``|``-separated list of nested spin-loop entries and its own prompt label
+    says "innermost last", so a head truncation drops the answer. PANEL: every Firefox-nightly
+    report carrying the field over 10 weeks, 2026-06-12..2026-08-21 -- n=9,251 reports, 278
+    distinct values. It is short almost always (p50=58, p90=71) and over 300 chars on 134 of
+    9,251 = 1.45% of reports, 44 of the 278 distinct values.
+
+    (a) THE OBVIOUS FIX, TAIL-PRESERVING TRUNCATION (head 150 + "..." + tail 147), IS MEASURED
+    WORSE AND IS NOT SHIPPED. On those 134 values it does fix the innermost entry (lost 4 -> 0)
+    but it raises the count of values losing SOME distinct subsystem name from 18 to 22, because
+    an over-length value here is REPETITION and not deep nesting: all 103 values that hit
+    Socorro's own 10,000-char annotation cap carry a median of 3 distinct entries in ~323 (e.g.
+    uuid defd3256-091a-4e73-b575-c57f80260614 is ``nsThread::Shutdown: DOM Worker`` x321), so
+    cutting the middle out drops entries the head was keeping. It is not a strict improvement
+    over the status quo, which is the only bar a replacement has to clear.
+
+    (b) SHIPPED INSTEAD: collapse repeats in place (a repeat rendered ``entry (xN)``) and then
+    cap. FIRST-OCCURRENCE ORDER, EXCEPT THAT THE INNERMOST ENTRY IS FORCED BACK TO THE END:
+    collapsing purely by first occurrence silently re-orders the line whenever the innermost
+    entry also occurred earlier, and on this field that is not cosmetic -- the label says
+    "innermost last" and calls it the primary lead. 20 of the 9,251 carry a non-adjacent repeat
+    and 4 end on the wrong entry without the fix (see the code comment; one of them, 89910485,
+    is 163 chars and is never truncated today). The trade is explicit: a repeat that was BOTH
+    outermost and innermost now shows only at the innermost end, which is the end the label
+    makes load-bearing. The panel counts this as ``mis_ordered_innermost``, because
+    ``innermost_lost`` is a containment test and scores 0 either way. Cap swept 300/400/500/600/800 over the same 9,251: at 300 one
+    value still loses its innermost entry and two lose a subsystem, at 400 both are zero, and
+    500-800 change nothing. Today's head-300 loses the innermost subsystem on 4 of the 134 and
+    some distinct subsystem on 18, of which 6 are a genuinely new name rather than a ``,SHDRCV``
+    variant of one already in the head -- 6 of 9,251 = 0.065%, named:
+    0631fbb4/22f3462b ``AsyncShutdown Spinner for quit-application``, e3a7c479
+    ``nsThread::Shutdown: GraphRunner``, 0b80e246 ``nsThread::Shutdown:
+    sqldb:formhistory.sqlite``, 7ca1cf8f ``nsThread::Shutdown: ProcessHangMon``, cef25046
+    ``AudioCallbackDriver::Shutdown``.
+
+    (c) THE COUNTER-EXAMPLE IS THE PROMPT BUDGET -- the reason the cap exists. ``_user_prompt``
+    on three real filed hang crashes with a 40-frame seed and 20 candidates runs 8,994-13,136
+    chars; this renderer adds p50 +0, p90 +0, absolute worst +100 and mean **-3.24** bytes, so
+    it is a net saving. Second counter-example, a long value collapse CANNOT shrink: uuid
+    fcb7058e-210c-47a9-954a-219bc0260807, 876 chars, 22 entries all distinct. At 400 its three
+    subsystems (``sqldb:Login Data`` / ``sqldb:History`` / ``sqldb:Web Data``) all survive and
+    only the per-thread ``#N`` suffixes are cut, which name nothing. Third: the repeat COUNT is
+    itself information -- 321 stuck DOM workers -- and ``(x321)`` keeps it in 6 bytes rather
+    than 9,900.
+
+    NOT justified by the motivating case, which does not exist: the ``INNERMOST:`` marker in the
+    worklist item appears in 0 of the 9,251 real values, and the crash it was drawn from (bug
+    2063892, uuid 80e01888-f10a-4a4b-9120-b2aac0260816) carries a 65-char spin stack that is
+    never truncated.
+    """
+    if value is None or value == "":
+        return ""
+    text = str(value).replace("\n", " ").strip()
+    entries = [part.strip() for part in text.split("|")]
+    counts, order = {}, []
+    for entry in entries:
+        if entry in counts:
+            counts[entry] += 1
+        else:
+            counts[entry] = 1
+            order.append(entry)
+    # "Innermost last" is the field's own label, so the collapse must not change WHICH entry
+    # ENDS the line -- and collapsing by FIRST occurrence does exactly that whenever the
+    # innermost entry also appeared earlier. 20 of the 9,251 panel reports carry a non-adjacent
+    # repeat and on 4 the collapsed line then ends on the wrong entry: 89910485 (163 chars,
+    # never truncated today, innermost `GraphRunner` demoted to `DOM Worker`), cef25046 (one of
+    # the six rescues below, innermost `DOM Worker` demoted to `AudioCallbackDriver::Shutdown`),
+    # ab99e45d and e3a7c479 (a `,SHDRCV` variant of the same subsystem). The panel's
+    # `innermost_lost` counter is a CONTAINMENT test -- it asks whether the name appears
+    # ANYWHERE -- so it scores 0 either way and is blind to this by construction;
+    # `mis_ordered_innermost` is the counter that sees it. Every other measured figure
+    # (innermost/any-subsystem/new-subsystem loss, p50/p90/max/mean bytes) is identical with
+    # this move in place, so it is free.
+    if entries[-1] and order[-1] != entries[-1]:
+        order.remove(entries[-1])
+        order.append(entries[-1])
+    collapsed = "|".join(
+        entry + (" (x{})".format(counts[entry]) if counts[entry] > 1 else "")
+        for entry in order
+    )
+    return _short_value(collapsed, limit=_SPIN_STACK_LIMIT)
+
+
+def _render_async_shutdown(value):
+    """``async_shutdown_timeout`` parsed and re-emitted as
+    ``phase=<phase>; blocker "<name>" @ <file>:<line> <- <frames> state=<compact>``.
+
+    THIS IS THE ONE FIELD THE 300-CHAR CAP ACTUALLY DESTROYS. PANEL: 4,880 Firefox-nightly
+    values over 10 weeks, 2026-06-12..2026-08-21 -- raw p50=379, p90=1,061, p99=1,770,
+    max=32,766, and 4,820 of 4,880 = 98.8% are over 300. The field is present on 5.1% of all
+    nightly reports and truncated on 5.0% of them. What the head keeps is the part that was
+    never at risk: 4,941 of 5,141 condition NAMES (96.1%), and 5,118 of those 5,141 (99.6%) are
+    verbatim in the crash SIGNATURE anyway, so that channel is lossless with or without this
+    renderer. What the head DESTROYS is the only source locations the field carries -- 939 of
+    9,753 blocker source files survive (9.6%), 3,889 of the 4,820 truncated reports (81%) keep
+    ZERO of them, and frames survive 662 of 11,673 (5.7%). Concretely, on the live filing bug
+    2062062 (REOPENED, AsyncShutdownTimeout, uuid d29ac23d-eb9c-45f0-bf2c-8129b0260809) the
+    head-300 cut the frame ``storage-rust.sys.mjs:null:375``.
+
+    (a) THE OBVIOUS FIX, A RAISED GLOBAL CAP, IS MEASURED AND NOT SHIPPED: at 1,000 it recovers
+    only 75.6% of the source files for mean +215 / p90 +700 bytes, at 2,000 79.2% for mean +259
+    / worst +1,700, and most of those bytes go on re-printing one blocker's ``state`` string.
+    Parsing buys 97.5% for mean +90.
+
+    (b) THE COUNTER-EXAMPLE IS ``state``, WHICH TODAY'S HEAD-300 ALREADY KEEPS, because ``state``
+    sits immediately after the blocker name: 3,272 of 4,118 state DICTS (79.5%) survive today.
+    The first extractor dropped it -- files 97.6%, state **0.0%** -- and so ate the
+    counter-example while scoring well on the metric it was built for. Sweeping the state cap at
+    outer cap 900: 100 -> 73.7%, 120 -> 73.9%, 140 -> 78.7%, all BELOW today, and 160 -> 80.0%
+    is the floor that clears it. Hence 160 rather than a rounder number.
+
+    AND ``state`` IS NOT ALWAYS A DICT, which is the second way to eat the same counter-example:
+    of the 5,201 non-empty states in the panel, 4,118 are dicts, 925 are bare strings and 158 are
+    lists. Scored on DICTS ONLY the numbers above say 79.5% -> 80.0%; scored on ALL 5,201 states
+    an ``isinstance(state, dict)`` renderer says 79.7% -> **63.4%**, i.e. a 16-point REGRESSION
+    hidden by a denominator that excluded exactly what it dropped. Rendering every state instead
+    costs mean +7.6 bytes and reads 79.7% -> 80.1%, above today on both denominators; the panel
+    reports both as ``state_keys_pct`` and ``all_state_keys_pct``.
+
+    THE OUTER CAP IS 900 BECAUSE OF ``state``, NOT BECAUSE OF THE FILES: 850 already holds source
+    files at the same 97.5% (9,505 vs 9,506 of 9,753), so "smallest cap that keeps the files" is
+    not what picks it -- 900 is the smallest that also holds ``state`` at 80.0% (850 -> 79.6%).
+    Swept 500/600/700/800/850/900/1,000/1,200/uncapped in the artifact.
+
+    THE OTHER TWO CONSTANTS ARE BUDGET CHOICES AND THE SWEEP SAYS SO, so do not read them as
+    optima: ``_ASYNC_SHUTDOWN_BLOCKERS=3`` buys NOTHING against no cap at all -- same +600 worst
+    case (the outer 900 already bounds it) and 3 FEWER files (9,506 vs 9,509) -- it is there to
+    bound the work on the 47-condition tail and to make the drop explicit with
+    ``(+N more blockers)``. ``_ASYNC_SHUTDOWN_FRAMES=6`` is not a flattening point either: 8
+    frames would take source files 97.5% -> 98.8% for mean +3.7 bytes at an identical p90 and
+    worst case. 6 is the conservative end of that trade, not the measured knee.
+
+    (c) THE OTHER COUNTER-EXAMPLE IS THE PROMPT BUDGET: p50 +19, p90 +343, absolute worst +600,
+    mean +90 bytes against an 8,994-13,136-char ``_user_prompt`` -- +0.8% on the mean, +7% on
+    the smallest prompt in the worst case. Run in situ at HEAD, bug 2062062's prompt came out 1
+    char SHORTER (13,136 -> 13,135) while gaining the frame it had been losing, and the three
+    other filed hang crashes (9,949 / 8,994 / 9,705) were byte-identical.
+
+    ON A PARSE FAILURE IT FALLS BACK TO ``_short_value`` and behaviour is exactly today's. That
+    is not defensive habit: 1 of the 4,880 values (uuid d44e2101-80b8-4a5e-8d05-608070260616,
+    32,766 chars) is not JSON, because Socorro's own annotation cap severed it mid-string.
+    """
+    if value is None or value == "":
+        return ""
+    text = str(value)
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return _short_value(text)
+    if not isinstance(payload, dict):
+        return _short_value(text)
+    conditions = [c for c in (payload.get("conditions") or []) if isinstance(c, dict)]
+    parts = ["phase={}".format(payload.get("phase", ""))]
+    for cond in conditions[:_ASYNC_SHUTDOWN_BLOCKERS]:
+        part = 'blocker "{}"'.format(cond.get("name", ""))
+        if cond.get("filename"):
+            part += " @ {}:{}".format(cond["filename"], cond.get("lineNumber", ""))
+        stack = cond.get("stack") or []
+        if isinstance(stack, str):
+            stack = [stack]
+        frames = list(dict.fromkeys(str(f) for f in stack))[:_ASYNC_SHUTDOWN_FRAMES]
+        if frames:
+            part += " <- " + " <- ".join(frames)
+        state = cond.get("state")
+        # EVERY state, not just the dict ones. `state` is a dict on 4,118 of the panel's
+        # conditions but a bare string on 925 and a list on 158, and an `isinstance(state, dict)`
+        # test would have dropped all 1,083 -- which is the counter-example this renderer exists
+        # to keep, scored on a denominator that had silently excluded the cases it loses. Real
+        # example: uuid b43e9c0d-7465-4acd-bfe8-2546d0260708, whose 422-char value today's
+        # head-300 truncates AFTER `"state":"1. Service has initiated shutdown"`.
+        if _ASYNC_SHUTDOWN_STATE_LIMIT and state not in (None, "", [], {}):
+            flat = (state if isinstance(state, str)
+                    else json.dumps(state, separators=(",", ":")))
+            part += " state=" + _short_value(flat, _ASYNC_SHUTDOWN_STATE_LIMIT)
+        parts.append(part)
+    dropped = len(conditions) - _ASYNC_SHUTDOWN_BLOCKERS
+    if dropped > 0:
+        parts.append("(+{} more blockers)".format(dropped))
+    return _short_value("; ".join(parts), limit=_ASYNC_SHUTDOWN_LIMIT)
 
 
 def _first_present(*values):
@@ -850,7 +1085,8 @@ def _crash_facts(crash: dict) -> list[str]:
         ("PHC free stack", _first_present(
             raw.get("phc_free_stack"), info.get("phc_free_stack")
         )),
-        ("Async shutdown timeout", raw.get("async_shutdown_timeout")),
+        ("Async shutdown timeout", raw.get("async_shutdown_timeout"),
+         _render_async_shutdown),
         # THE three shutdown-hang fields, none of which had ever reached a prompt. On bug
         # 2064436's crash the spin-loop stack read `default: nsThreadPool::ShutdownWithTimeout
         # BgIOThreadPool` — Socorro naming the exact pool the main thread was blocked on, while
@@ -862,10 +1098,19 @@ def _crash_facts(crash: dict) -> list[str]:
         ("Why shutdown started", raw.get("shutdown_reason")),
         ("BLOCKED SPIN-EVENT-LOOP STACK (what the main thread is waiting for, innermost last "
          "— this NAMES the stuck subsystem; treat it as the primary lead for a shutdown hang)",
-         raw.get("xpcom_spin_event_loop_stack")),
+         raw.get("xpcom_spin_event_loop_stack"), _render_spin_stack),
     ]
-    for label, value in facts:
-        value = _short_value(value)
+    # A 3-tuple names a per-field renderer that runs INSTEAD of `_short_value`, keyed on the
+    # FIELD rather than on the string's shape. Of the 23 facts below the 300-char cap is a
+    # measured no-op on 10, unmeasurable on the 3 PHC lines, unmeasured on the rest and a
+    # destructor on exactly two, so only those two have one. Both therefore also
+    # reach the blind second opinion through the shared `_crash_facts`, which is right here:
+    # they restore FACTS Socorro already sent us (the stuck subsystem, the blocker's source
+    # file), never guidance.
+    for fact in facts:
+        label, value = fact[0], fact[1]
+        render = fact[2] if len(fact) > 2 else _short_value
+        value = render(value)
         if value:
             lines.append(f"{label}: {value}")
     # Before the signature-level block below, because it is still a fact about THIS report.
