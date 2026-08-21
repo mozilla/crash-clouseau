@@ -734,6 +734,62 @@ def _cpu_spread_sentence(corroborations):
                 100 * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN))
 
 
+def build_exposer_note(corroborations):
+    """One paragraph saying the fault address is freed/poisoned memory and the changeset below
+    may only have EXPOSED an older defect, or ``""``.
+
+    ``_classify_exposer`` has written ``exposer_suspected`` / ``exposer_signals`` /
+    ``exposer_strong`` onto every dossier since 2026-07-22 and NOTHING has ever read them: not a
+    prompt, not a bug comment, and not the UI either — ``crashstack.html`` renders 16 named
+    corroboration keys and ``exposer_*`` is not among them, so they only ever rode the persisted
+    JSONB. This is the first thing the recipient of a poison-fault filing needs, and it costs
+    nothing: the classifier already measured it.
+
+    IT IS THE HALF THAT SURVIVES THE RUNG CHANGE. ``_classify_exposer`` used to answer a poison
+    fault by clamping the verdict to ``medium`` (50), under ``autofile.min_confidence`` (70) —
+    a silent suppression. It now lands ON that floor, so these crashes become ELIGIBLE to be
+    filed (the stale-signature, absent-thread, backout and hardware gates below it can each
+    still take the rung away), and the honesty that used to live in the clamp has to live in
+    the text instead.
+    spike/STRATEGY_REPORT.md:146 asked for exactly that pairing: "never auto-upgrade a
+    proximity hit to 'culprit' when exposer corroborators fire — emit `lead` + needinfo the
+    owner".
+
+    GATED ON ``exposer_strong``, NOT ON ``exposer_suspected``, and that is the whole scope of
+    it. The strong signal is the poison fault address: it has in-tree provenance
+    (``orchestrator._POISON_BYTES``) and a measured base rate — 2,971 of 158,285 nightly
+    reports with a parseable address over 89 days, 1.88%. The WEAK signals that also set
+    ``exposer_suspected`` — ``failure_class=uaf``, a PHC free stack, a ``data_flow.operation``
+    of free/uaf — are true of essentially every lifetime crash we file on, so keying the note
+    on them would print a hedge paragraph onto filings where nothing specific was measured.
+
+    WHAT IT MUST NOT SAY, and does not: that the changeset is innocent. Of the 289-bug study's
+    86 exposers, 84 (98%) carry an accepted ``regressed_by``, against 196/203 (97%) for its
+    non-exposers, so nominating an exposer is the accepted answer — and four of the five study
+    bugs whose evidence quotes a poison literal (2000421, 1991950, 1980730, 2000425) are not
+    exposers at all, but genuine regressors that happen to crash on freed memory. Hence a
+    paragraph that asks the reader to PLACE the changeset, never one that apologises for it."""
+    c = corroborations or {}
+    if not c.get("exposer_strong"):
+        return ""
+    addr = ""
+    for signal in c.get("exposer_signals") or []:
+        for token in str(signal).split():
+            if token.startswith("0x"):
+                addr = token
+                break
+        if addr:
+            break
+    return (
+        "The fault address{} is a run of one poison byte — the fill a freed or "
+        "never-initialised allocation is stamped with — so this is a use-after-free or an "
+        "uninitialised read, and the lifetime bug behind it may be older than the changeset "
+        "below. Worth deciding which: did that changeset INTRODUCE the defect, or only EXPOSE "
+        "it by changing timing, ordering or allocation? Both are useful answers, and an "
+        "exposer is still recorded as `regressed_by`.".format(" " + addr if addr else "")
+    )
+
+
 def build_bug_comment(
     uuid_info,
     stack,
@@ -761,6 +817,8 @@ def build_bug_comment(
     4b. whether that onset runs AGAINST the changeset in 5 — and, when it does, whether the
         blind second opinion is what put the stated confidence back;
     4c. how much of the signature is hardware error, when that is above background;
+    4d. whether the fault address says this is freed/poisoned memory, in which case the
+        changeset in 5 may only have EXPOSED a lifetime bug that is older than it;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
     7. why this is a new bug rather than a comment on ``related_bugs`` / ``other_app_bugs`` /
@@ -781,6 +839,7 @@ def build_bug_comment(
         build_signature_age_note((dossier or {}).get("corroborations"), info.get("buildid")),
         build_stale_signature_note((dossier or {}).get("corroborations")),
         build_hardware_note((dossier or {}).get("corroborations")),
+        build_exposer_note((dossier or {}).get("corroborations")),
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,
             corroborations=(dossier or {}).get("corroborations"),

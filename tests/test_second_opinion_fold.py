@@ -274,19 +274,58 @@ class TestApplyGatesFold(unittest.TestCase):
         self.assertIsNone(r.dossier.second_opinion)
 
     def test_exposer_downgraded_lead_not_reinflated_end_to_end(self):
-        # Finding #1, end to end: a strong-evidence verdict + a poison fault -> the exposer
-        # classifier downgrades it to a medium lead (downgraded_from_strong); a corroborating
-        # SO must NOT re-inflate it to probable through the full gate pipeline.
+        # End to end: a strong-evidence verdict + a poison fault -> the exposer classifier
+        # re-rates it as a `probable` lead (downgraded_from_strong), and a corroborating SO
+        # must not move it at all. The band is capped by `_is_promotable_bare_lead` (a lead
+        # already at `probable` is not promotable) BEFORE `_so_boost_blocked_by` is consulted,
+        # which is why the exposer's `block` entry in `_SO_BOOST_POLICY` is now inert -- it
+        # stays declared for SF-3 / absent-thread / SO-refutation, which keep the medium rung
+        # (`test_suppressed_boost_is_not_credited` covers that path).
         r = self._result(_strong(candidate=True))
         seed = {**_SEED, "is_offstack": False,
                 "raw_crash": {"json_dump": {"crash_info": {"address": "0xe5e5e5e5"}}}}
         orch.apply_deterministic_gates(
             r, seed, second_opinion=_so(corroborates=True, confidence="high"))
         self.assertEqual(r.dossier.verdict.decision, Decision.lead)      # exposer downgrade
-        self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)  # NOT re-inflated
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.probable)
+        self.assertNotIn("second_opinion_boosted", r.dossier.corroborations)
         self.assertTrue(r.dossier.corroborations["downgraded_from_strong"])
         self.assertTrue(r.dossier.corroborations["exposer_strong"])
         self.assertTrue(r.dossier.corroborations["second_opinion_corroborated"])
+
+    def test_a_confident_refutation_still_clamps_the_exposer_lead_under_the_floor(self):
+        # The other direction is what keeps this safe: the exposer lead now sits ON the filing
+        # floor, and a medium/high blind refutation clamps any lead above `medium` back to
+        # `medium` -- i.e. back under it. The rung change does not disarm the second opinion.
+        r = self._result(_strong(candidate=True))
+        seed = {**_SEED, "is_offstack": False,
+                "raw_crash": {"json_dump": {"crash_info": {"address": "0xe5e5e5e5"}}}}
+        orch.apply_deterministic_gates(
+            r, seed, second_opinion=_so(corroborates=False, confidence="medium"))
+        self.assertEqual(r.dossier.verdict.decision, Decision.lead)
+        self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
+        self.assertTrue(r.dossier.corroborations["second_opinion_clamped"])
+
+    def test_the_exposer_block_is_live_again_after_the_stale_clamp(self):
+        # The exposer's `_SO_BOOST_POLICY` entry is NOT dead code after the rung move, and this
+        # is the path that proves it: `_apply_signature_age_gate` runs between the exposer and
+        # the fold and clamps `probable` -> `medium`, which makes the lead bare again. It is
+        # `downgraded_from_strong` (block), not `stale_signature_clamped` (allow), that then
+        # refuses the boost, because `_so_boost_blocked_by` returns the first `block` present.
+        # Delete the entry and a corroborating SO re-inflates a poison exposer to `probable`,
+        # i.e. back onto the filing floor.
+        d = _strong(candidate=True)
+        seed = {**_SEED, "raw_crash": {"json_dump": {"crash_info": {"address": "0xe5e5e5e5"}}}}
+        orch._classify_exposer(d, seed)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+        d.verdict = d.verdict.model_copy(
+            update={"confidence": orch._STALE_SIGNATURE_CLAMP[d.verdict.confidence]})
+        orch._record_suppression(d, "stale_signature_clamped")
+        self.assertEqual(orch._so_boost_blocked_by(d.corroborations),
+                         "downgraded_from_strong")
+        orch._fold_second_opinion(d, _so(corroborates=True, confidence="high"), seed)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)     # NOT re-inflated
+        self.assertNotIn("second_opinion_boosted", d.corroborations)
 
 
 class TestMaybeRunSecondOpinion(unittest.TestCase):

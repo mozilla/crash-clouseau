@@ -1214,7 +1214,13 @@ def _user_prompt(crash: dict) -> str:
                 "priority queue, not as a closed world: use it first, but if the "
                 "call-graph neighborhood points at off-stack files/functions not covered "
                 "by these seeds, say so and treat that as a cited lead rather than "
-                "pretending the seed list is complete):",
+                "pretending the seed list is complete). PROXIMITY IS NOT CAUSATION: about 1 "
+                "in 6 on-stack line hits is an 'exposer' — a correct changeset that only "
+                "made a pre-existing latent bug reachable, whose fix lands outside its own "
+                "diff. A poison-looking fault address (a run of one byte, e.g. "
+                "0xe5e5e5e5e5e5e5e5 or 0x4b4b4b4b4b4b4b4b) or a candidate that merely "
+                "perturbs timing/allocation/ordering is the classic shape: prefer a lead + "
+                "soft needinfo over accusing it, and say which of the two you think it is:",
             ]
         # Off-stack: the list is already capped to max_candidates in build_seed, so show
         # it all (dropping any would risk hiding the regressor). On-stack: top 20.

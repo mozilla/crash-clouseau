@@ -1069,7 +1069,15 @@ def _has_verified_callpath(dossier) -> bool:
 #   cause this crash", i.e. relatedness — the one thing already granted — so it carries no
 #   information on the axis the gate ruled on. That is what `ce6b8fc` blocked, and an exposer is
 #   the case in point: reverting it DOES stop the crash, and it must still stay a medium lead
-#   rather than become a probable cause.
+#   rather than become a probable cause. SINCE 2026-08-21 THE EXPOSER LANDS ON ``probable``
+#   ITSELF (`_downgrade_to_lead_or_abstain`'s `rung`), so on the DIRECT path this entry has
+#   nothing to block: the fold's `is_bare_lead` test is False at `probable` and never consults
+#   the table. DO NOT READ THAT AS DEAD. `_apply_signature_age_gate` runs between the exposer
+#   and the fold and clamps `probable` -> `medium`; on that path the lead is bare again and
+#   THIS entry — not `stale_signature_clamped`, which is `allow` — is what refuses the boost,
+#   because `_so_boost_blocked_by` returns the first `block` flag present. It is also written
+#   by SF-3, by the absent-thread gate and by the SO's own refutation, all three of which
+#   still land on `medium`.
 # * ``allow`` — the gate ruled on a DIFFERENT axis from the one the SO reviews, so a blind
 #   agreement is genuinely new evidence. `_apply_signature_age_gate` rules on ORIGIN ("landing
 #   late disproves ORIGIN, not relevance", its own docstring); the SO reviews the MECHANISM. And
@@ -1137,16 +1145,49 @@ def _so_boost_blocked_by(corroborations):
     return next((f for f, p in _SO_BOOST_POLICY.items() if p == "block" and c.get(f)), None)
 
 
-def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason):
-    """Shared downgrade used by the off-stack precision gates: turn a
-    ``strong-evidence`` verdict into a soft ``lead`` when a cited anchor
-    (candidate/hunk/edge) still stands, else ``abstain``. Mirrors ``_skeptic_veto``'s
-    reconstruction (soft, non-accusatory draft). Mutates ``dossier`` in place."""
+def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason,
+                                  rung=Confidence.medium):
+    """Shared downgrade used by the precision gates: turn a ``strong-evidence`` verdict into
+    a soft ``lead`` when a cited anchor (candidate/hunk/edge) still stands, else ``abstain``.
+    Mirrors ``_skeptic_veto``'s reconstruction (soft, non-accusatory draft). Mutates
+    ``dossier`` in place.
+
+    ``rung`` IS HOW FAR DOWN, WHICH IS A DIFFERENT QUESTION FROM WHETHER. The default
+    ``medium`` (50) is what SF-3, a confident second-opinion refutation and the absent-thread
+    gate have always done, and it sits BELOW ``autofile.min_confidence`` (70, shipped in
+    config/global.json) -- so for those three "downgrade to a soft lead" also means "file
+    nothing", which is intended: each of them found the MECHANISM broken. The exposer
+    classifier passes ``probable`` (70) because it found the opposite, and its docstring
+    carries the evidence. Neither number is fitted here: they are the two rungs the rest of
+    the pipeline already uses -- ``_apply_corroboration_gate`` promotes a bare lead to exactly
+    ``probable``, and 70 is the shipped filing floor.
+
+    THE RUNG SAYS NOTHING ABOUT ``_SO_BOOST_POLICY``. That table answers "may an independent
+    corroboration UNDO this suppression?" and stays ``block`` for ``downgraded_from_strong``
+    on every caller, this one included -- an SO ``corroborates`` grants relatedness, which is
+    the one thing an exposer already has. At ``probable`` the block has nothing left to block
+    ON THE DIRECT PATH: ``_fold_second_opinion``'s own ``is_bare_lead`` test (confidence
+    strictly below ``probable``) is already False, so the branch that consults
+    ``_so_boost_blocked_by`` is never taken. It is NOT inert in general, and that is worth
+    knowing before anyone deletes the entry: ``_apply_signature_age_gate`` runs between this
+    call and the fold and clamps ``probable`` -> ``medium``, and on THAT path the lead is bare
+    again and this entry is what refuses the boost (verified end to end; see
+    ``test_the_exposer_block_is_live_again_after_the_stale_clamp``).
+
+    THE REFUTE DIRECTION CHANGES SHAPE, WHICH THE RUNG MOVE DOES NOT ADVERTISE. A medium/high
+    blind refutation clamps a lead ABOVE ``medium`` back to ``medium`` -- so at ``probable`` an
+    exposer lead survives as an unfiled lead@50. At ``medium`` there is no lower band and the
+    fold ABSTAINS the lead instead, which is what a poison exposer used to get. So the
+    refutation still bites (both outcomes are under ``autofile.min_confidence``, i.e. nothing
+    is filed either way) but it bites one notch less hard: the crash is now still REPORTED
+    with a soft lead where it used to vanish. That is the pivot's own preference (system.md:
+    "prefer a cited ``lead`` over an ``abstain`` whenever something would genuinely help"),
+    stated here rather than discovered later."""
     v = dossier.verdict
     if dossier._has_lead_anchor():
         dossier.verdict = Verdict(
             decision=Decision.lead,
-            confidence=Confidence.medium,
+            confidence=rung,
             needinfo_draft=dossier._soft_lead_draft(),
             mechanism=v.mechanism,
             consistency=v.consistency,
@@ -1155,12 +1196,17 @@ def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason):
         # exposer / a confident second-opinion refutation) and, through `_SO_BOOST_POLICY`,
         # declare that a corroborating second opinion may NOT undo it: this gate ruled on
         # RELATEDNESS, which is the one thing an SO `corroborates` already grants — an exposer IS
-        # "related" (reverting it stops the crash) and must still stay a medium lead rather than
-        # become a probable cause. The fold used to test this flag BY NAME, which is why the
+        # "related" (reverting it stops the crash), and relatedness is not causation. WHAT THAT
+        # BUYS NOW DIFFERS BY CALLER: at the default `medium` rung the flag keeps a suppressed
+        # lead suppressed, while the exposer lands on `probable` (see `rung` above) and so is
+        # not a bare lead for the fold to boost at all — until `_apply_signature_age_gate`
+        # clamps it back to `medium`, at which point this flag is what refuses the boost.
+        # The fold used to test this flag BY NAME, which is why the
         # stale-signature clamp escaped it; it now reads the table, so a gate that ruled on
         # another axis is no longer forced into this gate's answer.
         _record_suppression(dossier, "downgraded_from_strong")
-        logger.info("agent: %s -> lead for %s", reason, (seed or {}).get("uuid"))
+        logger.info("agent: %s -> lead/%s for %s", reason, rung.value,
+                    (seed or {}).get("uuid"))
     else:
         dossier.verdict = Verdict(
             decision=Decision.abstain,
@@ -1196,19 +1242,83 @@ def _apply_callpath_gate(dossier, seed):
     )
 
 
-# Freed / poisoned / uninitialized memory sentinel BYTES: jemalloc junk-on-free 0xe5 and
-# junk-on-alloc 0xe4/0x5a, MOZ/frame poison 0xdd, MSVC debug fills 0xcd/0xcc/0xfd/0xab,
-# ASan 0xbe/0xfb. A fault address that is (almost) a run of one of these is a
-# use-after-free / uninitialized read — a latent-bug pattern an off-stack candidate often
-# merely EXPOSES rather than introduces.
-_POISON_BYTES = frozenset({0xE5, 0xE4, 0x5A, 0xDD, 0xCD, 0xCC, 0xFD, 0xAB, 0xBE, 0xFB, 0xA5, 0x2B})
+# Freed / poisoned / uninitialized memory sentinel BYTES. A fault address that is (almost) a
+# run of one of these is a use-after-free / uninitialized read — a latent-bug pattern a
+# candidate often merely EXPOSES rather than introduces.
+#
+# THE PANEL is tests/poison/poison_fault_panel.json: a CENSUS, not a sample, of every
+# Firefox-nightly crash report of 2026-05-24..2026-08-20 — 162,485 reports over 5,234
+# signatures, 158,285 of them with a parseable fault address — reduced to the 150 distinct
+# addresses that pass `_looks_poison`'s own dominance test. No other address in the census can
+# fire for ANY byte set, so the per-byte counts are exact. tests/test_exposer_poison.py
+# recomputes every number in this comment from that file.
+#
+# THE SET, WITH ITS FIREFOX PROVENANCE and its 89-day fire count (js/src/util/Poison.h and
+# memory/build/mozjemalloc.h on firefox-main, read 2026-08-21):
+#   0xe5  mozjemalloc `kAllocPoison`, mozjemalloc.h:143       2,913 reports / 99 signatures
+#   0xcc  JS_SCOPE_DATA_TRAILING_NAMES_PATTERN, Poison.h:76      58 reports / 6 signatures
+#   0x4b  JS_SWEPT_TENURED_PATTERN, Poison.h:60                  35 reports / 13 signatures
+#         over 22 build days, 24 of them `0x4b4b4b4b4b4b4b4b`, mostly `JS::Value::isGCThing`
+#   0x2b  JS_SWEPT_NURSERY_PATTERN, Poison.h:56                   0
+#   0xab  JS_FREED_BUFFER_PATTERN, Poison.h:66                    0
+#   0xcd  JS_LIFO_UNDEFINED_PATTERN, Poison.h:71                  0
+#   0xe4  mozjemalloc `kAllocJunk`, mozjemalloc.h:146             0
+#   0xdd  MOZ frame poison — no in-tree literal to cite: `mozPoisonValue()` is computed at
+#         runtime (mfbt/Poison.h), so 0xdd is the conventional value, not a constant   0
+#   0x5a  upstream jemalloc junk-on-FREE, and a common uninitialized fill elsewhere     0
+#   0xfd  MSVC debug heap fill                                                          0
+#   0xbe 0xfb  ASan redzone / freed                                                     0
+#
+# THE NULL RESULT, recorded so the next session does not re-derive it: TEN of the twelve bytes
+# this set shipped with fire ZERO times over 162,485 reports. That is NOT a reason to delete
+# them — a byte that never fires costs no precision — so the set is cut on PROVENANCE instead,
+# and exactly one byte fails that test. 0xA5 is gone: it is upstream jemalloc's alloc-junk
+# byte, Firefox ships mozjemalloc whose constants are 0xe5/0xe4, and it appears in no Firefox
+# poison header (the only in-tree hit is a `fillValue` in mfbt/tests/TestEndian.cpp). Its own
+# 95% rule-of-three upper bound was 1 fire in 52,761 reports. The comment this replaces called
+# 0x5a "jemalloc junk-on-alloc", which was wrong twice over, and never mentioned 0xA5 or 0x2B
+# at all — both had been in the frozenset with no stated reason since `c89dc9b`.
+#
+# WHY THE SET IS NOT IMPORTED FROM js/src/util/Poison.h — the obvious fix, REFUTED by the same
+# panel. That header also defines `JS_OOB_PARSE_NODE_PATTERN = 0xFF` (Poison.h:70), and 0xFF is
+# the second most common dominant byte in the census: 1,001 reports, essentially all of them
+# small negatives (`vk_common_DeviceWaitIdle` @0xffffffffffffffcc 350, `ff_decode_frame_props`
+# @0xffffffffffffffff 181, `Pickle::BeginWrite` 49, `EnterJit` 45) — -1 and friends, not
+# poison. Importing the header mechanically would re-rate 1,001 reports' worth of crashes on a
+# sentinel meaning "no value"; 0x00 (219 reports) is the same trap from the other end. "Add
+# every byte that dominates" dies on those two as well.
+#
+# WHAT ADDING 0x4B MUST NOT EAT, and why the rung change above had to land FIRST: at the old
+# rung a poison hit was a suppression, so adding a byte SUBTRACTED filings. On the 52 bugs
+# filed since 2026-08-05, 0 addresses fire under the old set and 0 under this one — the
+# widening costs that panel nothing — while `0x4b4b4b4b4b4b4b4b`, which files as `culprit@85`
+# today, becomes a filed `lead@70` carrying the exposer note instead of the silence it would
+# have become in the other order. Study bug 1980730 is that case with a known answer: 0x4b4b,
+# `exposer_not_cause=False`, VERIFIED FIXED, regressed_by 1960461 accepted. The byte is also
+# the one spike/STRATEGY_REPORT.md:450 names outright ("0x4b4b4b4b swept-tenured GC-UAF")
+# while the set omitted it. 0x49 / 0xED / 0xDB are its Poison.h siblings and are deliberately
+# NOT added, and the reason is asymmetric rather than principled: the census counts them
+# EXACTLY (3, 3 and 1 over 89 days — this is a census, so those are not estimates), and adding
+# a byte that fires re-rates real verdicts while adding one that never fires costs nothing. So
+# the actual rule is "in-tree provenance, and either zero measured fires or a standing pattern
+# worth the re-rating (0x4B: 35 reports / 13 signatures / 22 build days)"; these three sit in
+# the gap and are left out until something asks for them. Said plainly because "the set is cut
+# on provenance" alone would not predict their exclusion.
+_POISON_BYTES = frozenset({0xE5, 0xE4, 0x5A, 0xDD, 0xCD, 0xCC, 0xFD, 0xAB, 0xBE, 0xFB, 0x2B, 0x4B})
 
 
 def _looks_poison(fault) -> bool:
     """True when the fault address looks like freed/poisoned/uninitialized memory: its
     bytes are dominated by one known-poison byte (allowing one off-byte for an offset into
     the poisoned object). Small addresses are handled by the field-offset corroboration,
-    so require > one page here."""
+    so require > one page here.
+
+    Fires on 2,971 of the 158,285 nightly reports with a parseable address over the 89 days
+    of tests/poison/poison_fault_panel.json (1.88%), all of them 0xE5 (2,913) or 0xCC (58);
+    with 0x4B it is 3,006. The two-byte guard below is why a 0x1001..0xffff fault almost
+    never qualifies: over those 89 days exactly ONE two-byte address in the whole census has
+    the 0xXYXY shape the guard would accept, and it is 0xA4A4 (one report,
+    `CContext::UMQueryPS_Shader_`) — a byte in no version of the set."""
     if fault is None or fault <= _MAX_FIELD_FAULT:
         return False
     parts = []
@@ -1226,15 +1336,87 @@ def _looks_poison(fault) -> bool:
 
 
 def _classify_exposer(dossier, seed):
-    """Flag — and, on a STRONG signal, softly downgrade — an 'exposer, not cause' verdict:
-    a changeset that EXPOSED a pre-existing latent bug (~30% of off-stack cases, the
-    systematic false-positive source) rather than introducing it. Only LIVE-computable
-    signals are used; the study's strongest discriminator ('fix diff disjoint from the
-    regressor diff') needs the LANDED FIX, which does not exist at triage time, so it is
-    deliberately kept OUT of here (offline eval only). Sets ``corroborations['exposer_*']``
-    for the UI on ANY verdict; downgrades ``strong-evidence`` -> ``lead`` ONLY on a strong
-    signal (a freed/poisoned fault address = a UAF the candidate most likely just exposed)
-    so a weak hint never demotes a genuine culprit. Mutates in place; never raises."""
+    """Flag — and, on a STRONG signal, re-rate as a ``lead`` — an 'exposer, not cause'
+    verdict: a changeset that EXPOSED a pre-existing latent bug (86 of the 289-bug study's
+    fixed regressions, 30%) rather than introducing it. Only LIVE-computable signals are
+    used; the study's strongest discriminator ('fix diff disjoint from the regressor diff')
+    needs the LANDED FIX, which does not exist at triage time, so it is deliberately kept OUT
+    of here (offline eval only). Sets ``corroborations['exposer_*']`` on ANY verdict -- until
+    2026-08-21 that was WRITE-ONLY (this docstring used to say "for the UI"; crashstack.html
+    names 16 corroboration keys explicitly and none of them is ``exposer_*``), so the flags
+    reached nothing but the persisted JSONB. ``report_bug.build_exposer_note`` is now their
+    first reader; on a strong signal (a freed/poisoned
+    fault address = a UAF the candidate most likely just exposed) it turns ``strong-evidence``
+    into a ``lead`` at ``probable``, so a weak hint never demotes a genuine culprit. Mutates
+    in place; never raises.
+
+    IT LANDS ON ``probable`` (70), NOT ``medium`` (50), AND THAT IS THE FIX. Until 2026-08-21
+    this gate hard-set ``medium``, which is under ``autofile.min_confidence`` (70) — so "soft
+    downgrade" was in fact a silent SUPPRESSION: no bug, no needinfo, no ``Feedback`` row,
+    nothing anyone could disagree with. Both re-inflation paths were closed by construction
+    (``_apply_corroboration_gate`` needs ``0 < fault <= _MAX_FIELD_FAULT``, which a poison
+    address never is; the SO boost is blocked by the very ``downgraded_from_strong`` this call
+    writes), so 85 -> 50 was terminal. Reproduced end to end: ``strong-evidence/high`` + fault
+    ``0xe5e5e5e5e5e5e5ed`` -> ``lead/medium`` -> row ``lead@50`` -> below the filing floor.
+
+    WHAT THE SUPPRESSION RESTED ON, AND WHY IT NO LONGER HOLDS. spike/STRATEGY_REPORT.md
+    splits its own finding BY GOAL at :143-144 — "Goal = nominate ``regressed_by`` / needinfo
+    the author -> the exposer IS the right answer" vs "Goal = localize the defect/fix -> the
+    exposer is *wrong* ~30% of the time". This gate shipped 2026-07-22 13:02 under the second
+    goal; the project pivoted to the first NINE hours later (``b9485c3``, 22:12 the same day;
+    system.md:1-11 now
+    reads "The real deliverable is a USEFUL LEAD") and the filer WRITES ``regressed_by``
+    (``bugzilla_apply._link_regressed_by``). Checked against BMO rather than inferred: of the
+    study's 86 exposers, 84 (98%) carry an accepted ``regressed_by``, statistically identical
+    to 196/203 (97%) of its non-exposers. And :146 prescribes this exact rung — "never
+    auto-upgrade a proximity hit to 'culprit' when exposer corroborators fire — emit ``lead``
+    + needinfo the owner". ``Decision.lead`` is preserved, so ``_verdict_row`` can never
+    publish ``culprit``; only the rung moves.
+
+    THE DISCRIMINATOR HAS NO MEASURED VALIDITY, which is why the answer is "file it as a
+    lead", not "believe it". In the study a poison-byte literal appears in 1/86 exposers vs
+    4/203 non-exposers (Fisher p=1.00). Over the 104 signatures that produced a poison fault
+    in the 89-day nightly census vs 104 volume-matched non-poison controls from the same
+    census (median volume 4 vs 4), an accepted ``regressed_by`` lands on 16 vs 13 (p=0.69) and
+    FIXED on 25 vs 18 (p=0.30) — a poison fault predicts a filing's outcome no better than the
+    matched control does. Panel: tests/poison/poison_fault_panel.json.
+
+    WHAT IT MUST NOT EAT — the four study bugs whose evidence quotes a poison literal and
+    whose named regressor was ACCEPTED as the cause: 2000421 (0xe5e5e5, the study's own note
+    is "the regressor touched the exact crashing function, nsWindow::Destroy, frame 1", FIXED,
+    regressed_by 1998657), 1991950 (0xe5e5, VERIFIED FIXED, 1979546), 1980730 (0x4b4b,
+    VERIFIED FIXED, 1960461) and 2000425 (0xe5e5, FIXED, 1998657). All four are
+    ``exposer_not_cause=False`` in the study's labels; all four are what a 50-rung clamp files
+    nothing about. The fifth, 2041907, IS an exposer and is FIXED with regressed_by 2011326
+    accepted anyway — 5/5 wanted the nomination.
+
+    WHAT IT COSTS, said honestly. On the only outcome panel that exists — the 52 bugs filed
+    since 2026-08-05 — 0 of the 52 analysed reports carried a poison fault and 0 of the 8 bad
+    outcomes (7 INVALID + 1 WORKSFORME) did either, so this gate has ZERO measured saves. The
+    suppressed channel is invisible (a suppression reaches no ``Feedback`` row), so that is
+    "no evidence of a save", not "no save". Against it, the census rate puts the change at AT
+    MOST about one extra filing per 16 days (the length of that panel) — and ~90% of that
+    expectation is ONE third-party signature, ``libvulkan_radeon.so``. The census says why:
+    1,668 of its 2,913 0xE5 reports sit on a single address, ``0xe5e5e5e5e5e5e5b1``, across
+    three AMD/Mesa Vulkan-driver signatures (``libvulkan_radeon.so`` 896, ``<name omitted> |
+    vk_common_DeviceWaitIdle`` 739, ``vk_queue_to_handle`` 33). Excluding third-party modules
+    the expectation is ~0.09 filings per 16 days — roughly one a year. Each carries
+    ``build_exposer_note``'s paragraph.
+
+    NOT GATED ON ``seed['is_offstack']``, deliberately, although the rule was born off-stack
+    (``c89dc9b`` 13:02, extended to all crashes by ``cda321e`` 15:12 the same day).
+    ``offstack.enabled`` is false in config/global.json, so ``build_seed`` returns None for
+    every off-stack crash and ``is_offstack`` is False on 100% of prod runs: gating the rung
+    on it would ship a change that reaches nothing. That is precisely the defect the softening
+    prompt had — it lived under system.md's ``## Off-stack mode`` heading and so reached 0
+    runs while this gate reached all of them — and it is unconditional now.
+
+    NOT CALIBRATED, and worth saying out loud: rung 70 maps to p_worth 0.9714, the same value
+    as 85. No committed fixture carries a fault address (0 of 1,257 ``processed_crash.json``
+    files), so this gate has never fired in any eval or calibration run and the 70 bucket was
+    fit without one exposer-downgraded verdict in it. That bucket was already unvalidated for
+    gate-promoted leads (see ``_is_promotable_bare_lead``); this adds a second such population
+    to it, and ``build_exposer_note`` is what tells the reader."""
     if dossier is None:
         return
     try:
@@ -1270,6 +1452,7 @@ def _classify_exposer(dossier, seed):
                 "exposer classifier ({})".format("; ".join(signals)),
                 "crash looks like a pre-existing latent bug the candidate only exposed "
                 "(no cited anchor to hand over as a lead)",
+                rung=Confidence.probable,
             )
     except Exception:  # pragma: no cover - defensive; never break a run
         logger.warning("agent: exposer classification failed", exc_info=True)
@@ -2882,7 +3065,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # Exposer classifier runs for ALL crashes: ~1-in-6 ON-stack line hits are exposers
         # too, and its signals (poison fault address / UAF / PHC free stack) are
         # stack-independent; it only downgrades strong-evidence->lead on a STRONG poison
-        # signal (a weak hint just sets a UI chip). Off-stack keeps its config knob.
+        # signal (a weak hint just sets a UI chip). Off-stack keeps its config knob. The
+        # downgrade lands on `probable` (70), NOT `medium` (50): at 50 it sat under
+        # `autofile.min_confidence` and the "soft lead" was a silent suppression.
         if offstack_cfg is None or offstack_cfg["exposer_classifier"]:
             _classify_exposer(result.dossier, seed)
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature

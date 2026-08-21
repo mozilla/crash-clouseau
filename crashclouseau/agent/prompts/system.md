@@ -108,6 +108,18 @@ families before settling:
 - Rust panic paths, unsafe blocks, and C++/Rust FFI boundary assumptions.
 This checklist is not evidence. It only helps you choose what to verify with tools.
 
+EXPOSER, NOT CAUSE — this applies to EVERY crash, on-stack ones included. A changeset can
+merely EXPOSE a pre-existing latent bug (classically a UAF / poison-memory crash whose real
+defect predates the window) instead of introducing it: about one in three fixed Firefox
+regressions is one, and roughly 1 in 6 ON-STACK line hits is an exposer whose fix lands
+outside the regressor's own diff. If the fault address looks like freed/poisoned memory (a
+run of one byte — 0xe5e5e5e5…, 0x4b4b4b4b…, 0xcccccccc…), or the candidate only perturbs
+timing, allocation or ordering, prefer a `lead` + soft `needinfo` over accusing it as the
+culprit, and SAY in the mechanism which of the two you think it is. Touching the crashing
+function does not settle it — a changeset can touch frame 0 and still only be the thing that
+made an older lifetime bug reachable. Naming an exposer is still useful: Mozilla records
+exposers as `regressed_by` too, so do not abstain over it.
+
 ## Final message: one JSON block
 End your final message with EXACTLY ONE fenced ```json block holding the dossier.
 Emit only fields you can fill and cite; omit the rest. In the free-text fields
@@ -200,7 +212,3 @@ score and the regressor could be anywhere in the window. Extra discipline applie
   candidate-touched function to a crash frame (with `searchfox` citations). Mere membership
   of the window, or a diff that merely looks related, is at most a `lead` — a deterministic
   gate will downgrade an off-stack strong-evidence verdict that has no such cited call path.
-- Beware the "exposer, not cause": a changeset that merely EXPOSED a pre-existing latent bug
-  (e.g. a UAF/poison-memory crash whose real defect predates the window). If the fault looks
-  like freed/poisoned memory or the candidate only perturbs timing/allocation, prefer a
-  `lead` + soft `needinfo` over accusing it as the culprit.

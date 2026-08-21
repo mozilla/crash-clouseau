@@ -119,12 +119,24 @@ class TestLooksPoison(unittest.TestCase):
         self.assertTrue(orch._looks_poison(0xE5E5E5ED))   # +offset off-byte allowed
         self.assertTrue(orch._looks_poison(0xDDDDDDDD))
         self.assertTrue(orch._looks_poison(0x5A5A5A5A5A5A5A5A))
+        # JS_SWEPT_TENURED_PATTERN (js/src/util/Poison.h:60): 35 reports over 22 build days
+        # in the 89-day census, and the byte spike/STRATEGY_REPORT.md:450 names outright.
+        self.assertTrue(orch._looks_poison(0x4B4B4B4B4B4B4B4B))
+        self.assertTrue(orch._looks_poison(0x2B2B2B2B))   # JS_SWEPT_NURSERY_PATTERN
 
     def test_non_poison(self):
         self.assertFalse(orch._looks_poison(0x8))         # small -> field-offset domain
         self.assertFalse(orch._looks_poison(0x0))
         self.assertFalse(orch._looks_poison(0xDEADBEEF))  # varied bytes
         self.assertFalse(orch._looks_poison(None))
+        # 0xA5 is upstream jemalloc's alloc-junk byte; Firefox ships mozjemalloc (0xe5/0xe4)
+        # and no Firefox poison header defines it. 0 fires in 162,485 reports.
+        self.assertFalse(orch._looks_poison(0xA5A5A5A5))
+        # -1, not poison, even though js/src/util/Poison.h:70 calls 0xFF
+        # JS_OOB_PARSE_NODE_PATTERN. 1,001 dominant fires in the census; this is why the set
+        # is not imported from that header.
+        self.assertFalse(orch._looks_poison(0xFFFFFFFFFFFFFFFF))
+        self.assertFalse(orch._looks_poison(0xFFFFFFFFFFFFFFCC))
 
     def test_two_byte_needs_both_poison(self):
         # A 2-byte address must not qualify on a SINGLE poison byte (would spuriously
@@ -401,8 +413,34 @@ class TestExposerClassifier(unittest.TestCase):
         d = _strong(callpath_edges=[_SF_EDGE])
         orch._classify_exposer(d, self._seed("0xe5e5e5e5"))
         self.assertEqual(d.verdict.decision, Decision.lead)      # strong signal -> downgrade
+        # ...at `probable`, NOT `medium`. STRATEGY_REPORT.md:146 asks for "lead + needinfo the
+        # owner"; `medium` (50) is under `autofile.min_confidence` (70), so it emitted nothing
+        # at all -- no bug, no needinfo, no Feedback row.
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
         self.assertTrue(d.corroborations["exposer_suspected"])
         self.assertTrue(d.corroborations["exposer_strong"])
+        self.assertTrue(d.corroborations["downgraded_from_strong"])
+
+    def test_the_other_callers_keep_the_medium_rung(self):
+        # The rung is a per-caller argument, not a global move: SF-3 found the MECHANISM
+        # unproven, and its downgrade is still meant to sit under the filing floor.
+        d = _strong()                                            # no verified call path
+        orch._apply_callpath_gate(d, {"uuid": "u"})
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+
+    def test_poison_lead_is_not_promoted_past_probable(self):
+        # `Decision.lead` is preserved, so `_verdict_row` can never publish `culprit`
+        # (STRATEGY_REPORT.md:146, "never auto-upgrade a proximity hit to culprit"), and the
+        # corroboration gate cannot lift it further -- a lead already at `probable` is not a
+        # promotable bare lead.
+        d = _strong(callpath_edges=[_SF_EDGE])
+        seed = self._seed("0xe5e5e5e5")
+        orch._classify_exposer(d, seed)
+        self.assertFalse(orch._is_promotable_bare_lead(d.verdict))
+        orch._apply_corroboration_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
 
     def test_weak_signal_flags_only_no_downgrade(self):
         # failure_class=uaf alone is a weak hint: annotate, but do NOT demote a culprit.

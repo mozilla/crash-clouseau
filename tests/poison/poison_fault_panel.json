@@ -1,0 +1,1675 @@
+{
+ "_readme": "Panel for `orchestrator._POISON_BYTES` / `_looks_poison` / `_classify_exposer`. Rebuilt by tests/poison/rebuild_poison_panel.py. Every number in those functions' docstrings is recomputable from this file by tests/test_exposer_poison.py.",
+ "census": {
+  "source": "Socorro SuperSearch, product=Firefox, release_channel=nightly, 2026-05-24..2026-08-20 (89 days), day-by-day paging, _columns=uuid,signature,address,date,build_id",
+  "rebuild": "1) for each of the 89 days D: GET https://crash-stats.mozilla.org/api/SuperSearch/?product=Firefox&release_channel=nightly&date=%3E%3DD&date=%3CD+1&_results_number=1000&_results_offset=N&_facets=_none&_columns=uuid&_columns=signature&_columns=address&_columns=date&_columns=build_id (unauthenticated, User-Agent: crash-clouseau, <=6 in flight), paging until exhausted; 2) keep every row whose address passes orchestrator._fault_address, is > _MAX_FIELD_FAULT and has >= 2 bytes whose most common byte occurs >= max(2, len(parts)-1) times; 3) group by address -> reports / distinct signatures / distinct build days / most common signature. Steps 2-3 are `_looks_poison`'s own shape test with the byte-set membership check removed, so the result is byte-set independent.",
+  "reports": 162485,
+  "distinct_signatures": 5234,
+  "parseable_addresses": 158285,
+  "dominant_reports": 4239,
+  "by_dominant_byte": {
+   "0xE5": {
+    "reports": 2913,
+    "signatures": 99,
+    "build_days": 104,
+    "addresses": 20
+   },
+   "0xFF": {
+    "reports": 1001,
+    "signatures": 119,
+    "build_days": 96,
+    "addresses": 34
+   },
+   "0x00": {
+    "reports": 219,
+    "signatures": 63,
+    "build_days": 79,
+    "addresses": 76
+   },
+   "0xCC": {
+    "reports": 58,
+    "signatures": 6,
+    "build_days": 40,
+    "addresses": 4
+   },
+   "0x4B": {
+    "reports": 35,
+    "signatures": 13,
+    "build_days": 22,
+    "addresses": 6
+   },
+   "0x49": {
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "addresses": 2
+   },
+   "0xED": {
+    "reports": 3,
+    "signatures": 2,
+    "build_days": 3,
+    "addresses": 1
+   },
+   "0x11": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   },
+   "0x2A": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   },
+   "0xA4": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   },
+   "0xDB": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   },
+   "0x02": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   },
+   "0x3C": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   },
+   "0x41": {
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "addresses": 1
+   }
+  },
+  "note": "`addresses` is EVERY distinct fault address in the census that passes `_looks_poison`'s own dominance rule (> 0x1000, >= 2 bytes, count(top) >= max(2, len(parts)-1)) -- i.e. every address the predicate could fire on for ANY byte set. Whatever is not here cannot fire, so the per-byte census is exact rather than sampled.",
+  "addresses": [
+   {
+    "address": "0xe5e5e5e5e5e5e5b1",
+    "reports": 1668,
+    "signatures": 3,
+    "build_days": 21,
+    "top_signature": "libvulkan_radeon.so"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5e5",
+    "reports": 1102,
+    "signatures": 40,
+    "build_days": 70,
+    "top_signature": "ns_if_addref"
+   },
+   {
+    "address": "0xffffffffffffffff",
+    "reports": 472,
+    "signatures": 89,
+    "build_days": 79,
+    "top_signature": "ff_decode_frame_props"
+   },
+   {
+    "address": "0xffffffffffffffcc",
+    "reports": 395,
+    "signatures": 5,
+    "build_days": 20,
+    "top_signature": "<name omitted> | vk_common_DeviceWaitIdle"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5ed",
+    "reports": 83,
+    "signatures": 20,
+    "build_days": 43,
+    "top_signature": "pulse::threaded_mainloop::ThreadedMainloop::raw_mut"
+   },
+   {
+    "address": "0xcccccccccccccccc",
+    "reports": 48,
+    "signatures": 2,
+    "build_days": 37,
+    "top_signature": "js::gc::UnmarkGrayTracer<T>::unmark"
+   },
+   {
+    "address": "0x100000000",
+    "reports": 34,
+    "signatures": 11,
+    "build_days": 25,
+    "top_signature": "js::gc::HeaderWord::get"
+   },
+   {
+    "address": "0xffffffffffffff40",
+    "reports": 28,
+    "signatures": 2,
+    "build_days": 25,
+    "top_signature": "js::gc::ChunkMarkBitmap::markIfUnmarkedThreadSafe"
+   },
+   {
+    "address": "0x4b4b4b4b4b4b4b4b",
+    "reports": 24,
+    "signatures": 7,
+    "build_days": 17,
+    "top_signature": "JS::Value::isGCThing"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5f5",
+    "reports": 24,
+    "signatures": 13,
+    "build_days": 22,
+    "top_signature": "servo_arc::impl$11::deref"
+   },
+   {
+    "address": "0x1ffffffffffff",
+    "reports": 20,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::HeaderWord::get"
+   },
+   {
+    "address": "0xffffffffffffffe0",
+    "reports": 18,
+    "signatures": 2,
+    "build_days": 13,
+    "top_signature": "memmove | std::_Copy_memmove<T>"
+   },
+   {
+    "address": "0x20000000",
+    "reports": 16,
+    "signatures": 4,
+    "build_days": 5,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0xffffffffffffff86",
+    "reports": 12,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsCSSBorderRenderer::DrawBorderSides"
+   },
+   {
+    "address": "0x8000000",
+    "reports": 11,
+    "signatures": 6,
+    "build_days": 6,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0x10000000",
+    "reports": 10,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "JS::NewFunctionFromSpec"
+   },
+   {
+    "address": "0x10000000000",
+    "reports": 10,
+    "signatures": 6,
+    "build_days": 8,
+    "top_signature": "AllocInfo::Get"
+   },
+   {
+    "address": "0xffffffffffffff85",
+    "reports": 10,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsCSSBorderRenderer::DrawBorderSides"
+   },
+   {
+    "address": "0x1000000",
+    "reports": 7,
+    "signatures": 5,
+    "build_days": 6,
+    "top_signature": "nsMainThreadPtrHolder<T>::Release"
+   },
+   {
+    "address": "0x2000000000",
+    "reports": 7,
+    "signatures": 4,
+    "build_days": 6,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x80000000",
+    "reports": 7,
+    "signatures": 5,
+    "build_days": 6,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0xcccccccccccccce4",
+    "reports": 7,
+    "signatures": 2,
+    "build_days": 4,
+    "top_signature": "<unknown in nvwgf2umx.dll> | BaseThreadInitThunk"
+   },
+   {
+    "address": "0xe5000000",
+    "reports": 7,
+    "signatures": 1,
+    "build_days": 6,
+    "top_signature": "JS::PropertyKey::operator!="
+   },
+   {
+    "address": "0xffffffffffffff93",
+    "reports": 7,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::Vector<T>::length | JS::GCVector<T>::length"
+   },
+   {
+    "address": "0xffffffffffffffc8",
+    "reports": 7,
+    "signatures": 1,
+    "build_days": 7,
+    "top_signature": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread"
+   },
+   {
+    "address": "0x500000000",
+    "reports": 6,
+    "signatures": 3,
+    "build_days": 6,
+    "top_signature": "js::gc::HeaderWord::get"
+   },
+   {
+    "address": "0x80000000000000",
+    "reports": 5,
+    "signatures": 3,
+    "build_days": 4,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e500",
+    "reports": 5,
+    "signatures": 5,
+    "build_days": 5,
+    "top_signature": "mozilla::nsDisplayListBuilder::AutoPreserves3DContext::~AutoPreserves3DContext"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e530",
+    "reports": 5,
+    "signatures": 2,
+    "build_days": 4,
+    "top_signature": "mozilla::ActiveScrolledRoot::Depth"
+   },
+   {
+    "address": "0x1000000000000",
+    "reports": 4,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal"
+   },
+   {
+    "address": "0x200000000",
+    "reports": 4,
+    "signatures": 4,
+    "build_days": 4,
+    "top_signature": "RtlWakeConditionVariable | mozilla::OffTheBooksCondVar::Notify"
+   },
+   {
+    "address": "0x200000000000000",
+    "reports": 4,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0x4b4b4b4b4b4b4b7b",
+    "reports": 4,
+    "signatures": 1,
+    "build_days": 4,
+    "top_signature": "JS::Value::isGCThing"
+   },
+   {
+    "address": "0x800000000000",
+    "reports": 4,
+    "signatures": 4,
+    "build_days": 3,
+    "top_signature": "McGenEventWrite_EtwEventWriteTransfer"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5f9",
+    "reports": 4,
+    "signatures": 4,
+    "build_days": 4,
+    "top_signature": "SkAAClip::Builder::flushRow"
+   },
+   {
+    "address": "0x1000000000",
+    "reports": 3,
+    "signatures": 1,
+    "build_days": 3,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x200000000000",
+    "reports": 3,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x2000000000000000",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "mozilla::net::nsHttpChannel::CallOnStartRequest"
+   },
+   {
+    "address": "0x300000000",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0x40000000",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "CProgram::ReadWriteInfo_ReadInfo"
+   },
+   {
+    "address": "0x400000000000000",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "CanonicalizeXPCOMParticipant"
+   },
+   {
+    "address": "0x4b4b4b4b4b4b4b53",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "js::BaseShape::realm"
+   },
+   {
+    "address": "0x800000000000000",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "servo_arc::Arc<T>::is_static"
+   },
+   {
+    "address": "0xe5e5e5e5",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "EnterBaseline"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5e8",
+    "reports": 3,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "nsAtom::Release"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5ec",
+    "reports": 3,
+    "signatures": 2,
+    "build_days": 3,
+    "top_signature": "mozilla::dom::NodeInfo::CanSkip"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5fd",
+    "reports": 3,
+    "signatures": 3,
+    "build_days": 3,
+    "top_signature": "js::BaseScript::sourceObject"
+   },
+   {
+    "address": "0xedededededededed",
+    "reports": 3,
+    "signatures": 2,
+    "build_days": 3,
+    "top_signature": "EnterJit"
+   },
+   {
+    "address": "0xffffff40",
+    "reports": 3,
+    "signatures": 1,
+    "build_days": 3,
+    "top_signature": "js::gc::ChunkMarkBitmap::markIfUnmarkedThreadSafe"
+   },
+   {
+    "address": "0xfffffffffffffff8",
+    "reports": 3,
+    "signatures": 2,
+    "build_days": 3,
+    "top_signature": "fsdomsrv.dll"
+   },
+   {
+    "address": "0x1300000000",
+    "reports": 2,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x1500000000",
+    "reports": 2,
+    "signatures": 1,
+    "build_days": 2,
+    "top_signature": "igd11dxva64.dll | CVideoProcessorInputView::CLS::FinalConstruct"
+   },
+   {
+    "address": "0x400000",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x40000000000",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0x4000000000000",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0x4949494949494949",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "js::gc::HeaderWord::get"
+   },
+   {
+    "address": "0x4b4b4b4b4b4b4b73",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 1,
+    "top_signature": "js::WeakMapBase::traceAllMappings::<T>::operator()"
+   },
+   {
+    "address": "0x700000000",
+    "reports": 2,
+    "signatures": 1,
+    "build_days": 2,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x80000",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "std::vector<T>::empty"
+   },
+   {
+    "address": "0x8000000000000",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0xccccccccccccccd4",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "mozilla::MediaData::Release"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5dd",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "js::jit::JitCode::FromExecutable"
+   },
+   {
+    "address": "0xfffffff8",
+    "reports": 2,
+    "signatures": 2,
+    "build_days": 2,
+    "top_signature": "js::ObjectSlots::isSharedEmptySlots"
+   },
+   {
+    "address": "0xffffffffffffffa8",
+    "reports": 2,
+    "signatures": 1,
+    "build_days": 2,
+    "top_signature": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread"
+   },
+   {
+    "address": "0xffffffffffffffc0",
+    "reports": 2,
+    "signatures": 1,
+    "build_days": 2,
+    "top_signature": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread"
+   },
+   {
+    "address": "0x10000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0x10000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x100000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "CanonicalizeXPCOMParticipant"
+   },
+   {
+    "address": "0x1111111111111121",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::jit::MUse::setProducerUnchecked"
+   },
+   {
+    "address": "0x1200000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0x13c3c",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "igd10iumd64.dll | CContext::UMQueryOM_DepthState_"
+   },
+   {
+    "address": "0x1c00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0x1d00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x1e00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x2000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "CanonicalizeXPCOMParticipant"
+   },
+   {
+    "address": "0x20000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::frontend::ParseNode::getKind"
+   },
+   {
+    "address": "0x2a002",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsHtml5HtmlAttributes::end"
+   },
+   {
+    "address": "0x2a2a2a2a2a2a2a32",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "VAD3ConfigurationInterface_DecodeFull"
+   },
+   {
+    "address": "0x38000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "style::values::specified::svg_path::impl$0::normalize::closure$0"
+   },
+   {
+    "address": "0x390000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "RtlImageNtHeaderEx | RtlImageNtHeader | LdrpCalloutExceptionFilter"
+   },
+   {
+    "address": "0x3a000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::nsDisplayList::AppendToTop"
+   },
+   {
+    "address": "0x3c00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "firefox-nightly-bin"
+   },
+   {
+    "address": "0x40000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "servo_arc::Arc<T>::is_static"
+   },
+   {
+    "address": "0x4000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x4000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "std::vector<T>::empty"
+   },
+   {
+    "address": "0x400000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::nsDisplayList::RemoveBottom"
+   },
+   {
+    "address": "0x40000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "CanonicalizeXPCOMParticipant"
+   },
+   {
+    "address": "0x4000000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "webrender::spatial_tree::SpatialTree::visit_node_impl<T>"
+   },
+   {
+    "address": "0x414141414141",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsBlockFrame::DoRemoveFrame"
+   },
+   {
+    "address": "0x4500000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0x494949494949493d",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::jit::GetLineInfoFromJitCodeRecord::$::operator()"
+   },
+   {
+    "address": "0x4a00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0x4b4b4b4b",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::HeaderWord::get"
+   },
+   {
+    "address": "0x4b4b4b4b4b4b4b52",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::SlimLinkedListElement<T>::LinkElements"
+   },
+   {
+    "address": "0x5100000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::net::CacheFileMetadata::~CacheFileMetadata"
+   },
+   {
+    "address": "0x600000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x600000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsThreadPool::Run"
+   },
+   {
+    "address": "0x6300000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::LifoAllocScope::alloc"
+   },
+   {
+    "address": "0x720000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "ac_init_shared_llvm_once"
+   },
+   {
+    "address": "0x730000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "ac_init_shared_llvm_once"
+   },
+   {
+    "address": "0x760000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "pushbuf_dump"
+   },
+   {
+    "address": "0x7e0000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "ac_init_shared_llvm_once"
+   },
+   {
+    "address": "0x7f0000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::contains"
+   },
+   {
+    "address": "0x7fffffff",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_t::GetNonFullBinRun | arena_t::MallocSmall | arena_t::Malloc | BaseAllocator::malloc | MozJemalloc::mall"
+   },
+   {
+    "address": "0x7fffffffff",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "RtlpFreeNTHeapInternal | RtlFreeHeapFast | LdrpFreeTls"
+   },
+   {
+    "address": "0x7fffffffffffffff",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::profiler::detail::RacyFeatures::IsPerfettoTracing"
+   },
+   {
+    "address": "0x800000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x800000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0x8000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::detail::IntrinsicAddSub<T>::sub"
+   },
+   {
+    "address": "0x80000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "std::exchange"
+   },
+   {
+    "address": "0x8000000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "core::core_arch::x86::sse2::_mm_load_si128"
+   },
+   {
+    "address": "0x8300000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::jit::CacheIRWriter::writeOperandId"
+   },
+   {
+    "address": "0x84000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::HeaderWord::get"
+   },
+   {
+    "address": "0x9400000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0xa4a4",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "<unknown in igd10iumd64.dll> | CContext::UMQueryPS_Shader_"
+   },
+   {
+    "address": "0xb00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0xc00000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0xc400000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree"
+   },
+   {
+    "address": "0xc800000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::detail::SingleLinkedList<T>::appendAll"
+   },
+   {
+    "address": "0xcccccccccccccc08",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "TraceStackRoots"
+   },
+   {
+    "address": "0xd000000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsTArray_Impl<T>::InsertElementAtInternal | nsTArray<T>::InsertElementAt | mozilla::EventListenerManager::Even"
+   },
+   {
+    "address": "0xd400000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "AllocInfo::Get"
+   },
+   {
+    "address": "0xd800000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0xdbdbdbdbdbdbdbc9",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "alloc::vec::Vec<T>::push_mut"
+   },
+   {
+    "address": "0xe000000000000000",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "CanonicalizeXPCOMParticipant"
+   },
+   {
+    "address": "0xe5e5e519",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::StyleQuotes::operator=="
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e508",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::detail::RC<T>::operator--"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e509",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "TraceStackRoots"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e51c",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "EnterJit"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5df",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "CallQueryInterface"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5ef",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsIFrame::Destroy"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5f2",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::jit::TryFoldingStubsLocked"
+   },
+   {
+    "address": "0xe5e5e5e5e5e5e5f4",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "JS::Heap<T>::operator bool"
+   },
+   {
+    "address": "0xffffff02",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::net::nsStandardURL::nsStandardURL"
+   },
+   {
+    "address": "0xffffff48",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::ChunkMarkBitmap::markIfUnmarkedThreadSafe"
+   },
+   {
+    "address": "0xffffff7c",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::MarkingTracerT<T>::processMarkStackTop"
+   },
+   {
+    "address": "0xffffffc7",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread"
+   },
+   {
+    "address": "0xfffffff2",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "TraceStackRoots"
+   },
+   {
+    "address": "0xfffffffd",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "nsTArray_Impl<T>::AppendElementInternal | nsTArray<T>::AppendElement | mozilla::DisplayItemClip::SetTo"
+   },
+   {
+    "address": "0xffffffff",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::dom::PinnedStringId::init"
+   },
+   {
+    "address": "0xffffffff40",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::ChunkMarkBitmap::markIfUnmarkedThreadSafe"
+   },
+   {
+    "address": "0xffffffffffff",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "webrender::quad::add_render_task_with_mask::closure$0"
+   },
+   {
+    "address": "0xffffffffffffff73",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::ipc::PBackgroundParent::OnMessageReceived"
+   },
+   {
+    "address": "0xffffffffffffff8b",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "js::gc::detail::ChunkPtrHasStoreBuffer"
+   },
+   {
+    "address": "0xffffffffffffff99",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "gfxSkipChars::SkippedRange::SkippedOffset"
+   },
+   {
+    "address": "0xffffffffffffffa0",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | DoMozStackWalkThread"
+   },
+   {
+    "address": "0xffffffffffffffab",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "EnterJit"
+   },
+   {
+    "address": "0xffffffffffffffce",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "EMPTY: no frame data available; OK"
+   },
+   {
+    "address": "0xffffffffffffffd1",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "unlink_block | ralloc_free | ralloc_free | _mesa_set_destroy"
+   },
+   {
+    "address": "0xffffffffffffffe7",
+    "reports": 1,
+    "signatures": 1,
+    "build_days": 1,
+    "top_signature": "mozilla::EnumSet<T>::operator-="
+   }
+  ]
+ },
+ "in_tree_poison_constants": [
+  {
+   "byte": "0x2b",
+   "name": "JS_SWEPT_NURSERY_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 56
+  },
+  {
+   "byte": "0x49",
+   "name": "JS_MOVED_TENURED_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 59
+  },
+  {
+   "byte": "0x4b",
+   "name": "JS_SWEPT_TENURED_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 60
+  },
+  {
+   "byte": "0xab",
+   "name": "JS_FREED_BUFFER_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 66
+  },
+  {
+   "byte": "0xdb",
+   "name": "JS_POISONED_JSSCRIPT_DATA_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 69
+  },
+  {
+   "byte": "0xff",
+   "name": "JS_OOB_PARSE_NODE_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 70
+  },
+  {
+   "byte": "0xcd",
+   "name": "JS_LIFO_UNDEFINED_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 71
+  },
+  {
+   "byte": "0xcc",
+   "name": "JS_SCOPE_DATA_TRAILING_NAMES_PATTERN",
+   "file": "js/src/util/Poison.h",
+   "line": 76
+  },
+  {
+   "byte": "0xed",
+   "name": "JS_SWEPT_CODE_PATTERN (x86/x86_64)",
+   "file": "js/src/util/Poison.h",
+   "line": 85
+  },
+  {
+   "byte": "0xe5",
+   "name": "kAllocPoison",
+   "file": "memory/build/mozjemalloc.h",
+   "line": 143
+  },
+  {
+   "byte": "0xe4",
+   "name": "kAllocJunk",
+   "file": "memory/build/mozjemalloc.h",
+   "line": 146
+  }
+ ],
+ "in_tree_constants_read": "firefox-main via searchfox, 2026-08-21",
+ "filings": [
+  {
+   "bug": 2060920,
+   "uuid": "46607417-af82-40db-b97d-a31e40260801",
+   "signature": "OOM | unknown | memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::RTCEncodedFrameBase",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2060922,
+   "uuid": "b66819b5-785e-4e44-b586-4126d0260802",
+   "signature": "mozilla::MediaDecoder::SetCDMProxy",
+   "address": "0x00007ffa0a40c13f",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2060924,
+   "uuid": "0d4a0bee-d3cb-498a-844c-c84ff0260728",
+   "signature": "mozilla::ipc::IProtocol::Id",
+   "address": "0x0000000000000008",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2061124,
+   "uuid": "71875125-4c28-4f9d-ada7-283980260805",
+   "signature": "huge_dalloc | js_free | js_delete",
+   "address": "0x00007ff91439df1c",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2061127,
+   "uuid": "f6fe186b-1014-4144-9d2d-ea29d0260806",
+   "signature": "mozilla::dom::SessionHistoryEntry::GetParent",
+   "address": "0x000003e800004199",
+   "resolution": "ASSIGNED"
+  },
+  {
+   "bug": 2061180,
+   "uuid": "1fe779a3-14a1-415d-a806-2afff0260806",
+   "signature": "libvulkan_radeon.so",
+   "address": "0x0000000000000010",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2061691,
+   "uuid": "77de32e5-aaf7-4500-9e68-615580260807",
+   "signature": "mozilla::a11y::TextRange::Crop",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2061726,
+   "uuid": "592ff73c-019d-4ea0-9dec-612410260807",
+   "signature": "OffthreadGCPtr<T>::operator JSScript*",
+   "address": "0x000001d6b76c0e80",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2061960,
+   "uuid": "bce6c191-c569-4cfc-8fe5-b7aa50260807",
+   "signature": "nsFind::FindFromRangeBoundaries",
+   "address": "0x00007ffba1e02557",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2061961,
+   "uuid": "ff888d42-ce3e-4308-8c2f-b3f060260807",
+   "signature": "geckoservo::glue::Servo_Element_ReferencesAttribute::{{closure}}",
+   "address": "0x00000001000000d0",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2061962,
+   "uuid": "f558e4f2-6e3f-4a81-84b2-fba8d0260807",
+   "signature": "xul.dll | _PR_MD_UNLOCK | PR_Unlock | xul.dll",
+   "address": "0x00007ffba1e02557",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2061969,
+   "uuid": "424b0ab0-af81-4b33-b045-83c5b0260808",
+   "signature": "shutdownhang | __fstatat",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2061973,
+   "uuid": "5f52ad87-cab1-47a8-bd80-64e110260807",
+   "signature": "zlib_rs::inflate::inflate_fast_help_impl",
+   "address": "0x0000000000000050",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2061975,
+   "uuid": "5f4931f6-2bc6-4f17-9245-92f4d0260807",
+   "signature": "zlib_rs::inflate::writer::Writer::copy_match_help",
+   "address": "0x00007ff863bf07e0",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2062052,
+   "uuid": "76533efa-290a-450f-843d-cc0e50260809",
+   "signature": "mozilla::dom::ScreenOrientation::Create",
+   "address": "0x00007ffc7bd543aa",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2062062,
+   "uuid": "d29ac23d-eb9c-45f0-bf2c-8129b0260809",
+   "signature": "AsyncShutdownTimeout | profile-change-teardown | LoginManagerRustStorage: Interrupt IO operations on login sto",
+   "address": "0x0000000000000000",
+   "resolution": "REOPENED"
+  },
+  {
+   "bug": 2062114,
+   "uuid": "91710ff6-daae-4752-acb3-560710260810",
+   "signature": "js::gc::ChunkBase::isNurseryChunk",
+   "address": "0x000031b78e200010",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2062119,
+   "uuid": "64d69b23-39c9-4e8f-81c4-48bb20260810",
+   "signature": "nsJARProtocolHandler::MimeService",
+   "address": "0x0000000000000028",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2062168,
+   "uuid": "176be3dc-a1cf-4cba-844a-bbcc20260810",
+   "signature": "PerformPromiseThenWithoutSettleHandlers",
+   "address": "0x0d4e8454",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2062173,
+   "uuid": "8c0d2569-dcd3-465e-89b9-25bfd0260810",
+   "signature": "js::detail::BumpChunk::assertInvariants",
+   "address": "0x00000002",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2062219,
+   "uuid": "ddeac1a4-64d1-4413-b03b-f79540260809",
+   "signature": "nsAtom::IsStatic",
+   "address": "0xffffffffffffffff",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2062286,
+   "uuid": "8e0a65cc-9166-4d7b-9aa2-e2ed40260810",
+   "signature": "FindSafeLength",
+   "address": "0xffffffffffffffff",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2062335,
+   "uuid": "a803cd9b-a991-47f8-9754-de73b0260810",
+   "signature": "OOM | large | NS_ABORT_OOM | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement<T> | mozi",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2062495,
+   "uuid": "50b9a33c-4a11-4499-8700-c9c660260811",
+   "signature": "mozilla::net::CacheStorageService::NoteNoVarySearchEntry",
+   "address": "0x0000000000000014",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2062806,
+   "uuid": "4ba6dd3f-b0aa-4dcd-ac21-6a8180260811",
+   "signature": "callback_interface_ads_client_moz_ads_context_id_provider_context_id",
+   "address": "0x0000000000000000",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2062915,
+   "uuid": "a3c64061-aead-476d-a2cb-eacb10260812",
+   "signature": "js::AvlTreeImpl<T>::leftshrunk",
+   "address": "0x00007ffbd55c0bf7",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2062934,
+   "uuid": "41ec4f9e-27c2-4fe6-8dcd-9ecc50260812",
+   "signature": "nsStyleContent::NonAltContentItems",
+   "address": "0x5d70a780",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2063002,
+   "uuid": "bfcf3016-b44a-4c44-8209-ae4030260812",
+   "signature": "_ZNSt3__119__str_find_first_ofB9sqn210106IDsmNS_11char_traitsIDsEETnT0_Lm18446744073709551615EEES3_PKT_S3_S6_S",
+   "address": "0x0000000000000008",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2063003,
+   "uuid": "56e7a6b2-776d-4e66-9419-388b60260812",
+   "signature": "nsCharTraits<T>::copy",
+   "address": "0x000000016d07c000",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2063234,
+   "uuid": "081481b1-5dc3-4334-836a-084690260813",
+   "signature": "nsWrapperCache::GetWrapperMaybeDead",
+   "address": "0x0000000000000010",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2063364,
+   "uuid": "845d4cf8-1354-4722-ad72-63a820260813",
+   "signature": "js::jit::CompilerFrameInfo::sync",
+   "address": "0x00007ff835a68cdd",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2063678,
+   "uuid": "46544ed7-05f1-4923-baf1-1bb620260814",
+   "signature": "libc.so.6 | cuEGLApiInit",
+   "address": "0x0000000000000036",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2063782,
+   "uuid": "f95b9636-e153-471c-9c15-759c80260815",
+   "signature": "js::jit::CacheIRStubInfo::fieldType",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2063809,
+   "uuid": "2cd465d2-8027-4a85-b523-2baec0260815",
+   "signature": "ff_vk_exec_add_dep_frame",
+   "address": "0x0000000000000000",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2063826,
+   "uuid": "e9a47522-f096-4f2c-a639-9b3b10260815",
+   "signature": "DMABufSurfaceRGBA::ReleaseTextures",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2063862,
+   "uuid": "49d9c596-2f36-43a6-ab97-a5ebc0260816",
+   "signature": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+   "address": "0x00007ffbb5fb13f9",
+   "resolution": "FIXED"
+  },
+  {
+   "bug": 2063864,
+   "uuid": "1e18d8d6-d188-424b-ba8a-9c31f0260816",
+   "signature": "setsockopt_syscall",
+   "address": "0x0000000000000036",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2063892,
+   "uuid": "80e01888-f10a-4a4b-9120-b2aac0260816",
+   "signature": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | kernelbase.dll | Dispatch",
+   "address": "0x00007ffc8e2297c0",
+   "resolution": "ASSIGNED"
+  },
+  {
+   "bug": 2063898,
+   "uuid": "3a3ded5f-4629-4354-8a08-e6eb60260816",
+   "signature": "webrender::device::gl::Device::update_vbo_data_unsynchronized",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2063902,
+   "uuid": "e14a7eb4-2a99-4ee6-b014-e7fe20260816",
+   "signature": "js::jit::ICScript::icEntry",
+   "address": "0xffffffffffffffff",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2064066,
+   "uuid": "05381864-aa6e-402f-a1fd-56a3e0260816",
+   "signature": "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError | nsDocShellLoadState::nsDocShellLoadStat",
+   "address": "0x0000000000000000",
+   "resolution": "WORKSFORME"
+  },
+  {
+   "bug": 2064137,
+   "uuid": "3c261523-734b-4aa5-8d70-0fbaf0260817",
+   "signature": "mozilla::Vector<T>::operator[] | js::jit::MPhi::getOperand",
+   "address": "0x0000000000000000",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2064274,
+   "uuid": "a56da0ba-560e-4a5e-acdc-ef1340260818",
+   "signature": "mozilla::detail::MutexImpl::mutexLock",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2064342,
+   "uuid": "23f897e0-a520-4b57-844e-016080260818",
+   "signature": "igd10iumd64.dll | CLayeredObjectWithCLS<T>::CContainedObject::AddRef",
+   "address": "0x00000000000000b0",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2064436,
+   "uuid": "ec1ff67a-a835-4740-be14-572e50260818",
+   "signature": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+   "address": "0x00007ffb6ab885c3",
+   "resolution": "INVALID"
+  },
+  {
+   "bug": 2064537,
+   "uuid": "38f1a5bc-2b3a-459c-ae37-1a99c0260818",
+   "signature": "mozilla::net::DiagnosticRWLock::CrashWithHolder",
+   "address": "0x00007ffb68a22705",
+   "resolution": "DUPLICATE"
+  },
+  {
+   "bug": 2064600,
+   "uuid": "92ce80ce-3c58-4fc3-ae1f-8ffde0260819",
+   "signature": "mozilla::ActiveScrolledRoot::GetNearestScrollASR",
+   "address": "0xffffffffffffffff",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2065072,
+   "uuid": "a4ac8c69-7b93-48e5-8e5d-9a1ae0260819",
+   "signature": "mozilla::MediaTrackGraphImpl::OnGraphThread",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2065075,
+   "uuid": "cf139d7e-2652-4eab-a88f-04ce10260820",
+   "signature": "mozilla::MediaTrackGraphImpl::TailDispatchMessage",
+   "address": "0x00007ffa0ce29af4",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2065085,
+   "uuid": "4fe3bb03-028a-4ccf-83e1-96ff50260820",
+   "signature": "std::vector<T>::_Resize_reallocate<T>",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2065156,
+   "uuid": "136fdb89-73ba-41dd-b808-7dcc60260820",
+   "signature": "stackoverflow | GL_GetGraphicsResetStatusKHR",
+   "address": "0x00007ff9525a5774",
+   "resolution": "NEW"
+  },
+  {
+   "bug": 2065373,
+   "uuid": "363ff2bf-990e-45f3-a361-b13f50260820",
+   "signature": "IPC::MessageReader::FatalError | mozilla::ipc::shared_memory::HandleBase::FromMessageReader",
+   "address": "0x0000000000000000",
+   "resolution": "NEW"
+  }
+ ],
+ "bmo_signature_panel": {
+  "source": "104 signatures that produced a poison fault in the census vs 104 volume-matched non-poison controls from the same census (median volume 4 vs 4); BMO cf_crash_signature substring search, bmo_panel.py",
+  "poison": {
+   "n": 104,
+   "any_bug": 47,
+   "fixed": 25,
+   "accepted_regressed_by": 16
+  },
+  "control": {
+   "n": 104,
+   "any_bug": 49,
+   "fixed": 18,
+   "accepted_regressed_by": 13
+  }
+ },
+ "study_poison_literal_bugs": [
+  {
+   "bug": 1980730,
+   "component": "JavaScript Engine",
+   "status": "VERIFIED",
+   "resolution": "FIXED",
+   "regressed_by": [
+    1960461
+   ],
+   "exposer_not_cause": false
+  },
+  {
+   "bug": 1991950,
+   "component": "Async Tooling",
+   "status": "VERIFIED",
+   "resolution": "FIXED",
+   "regressed_by": [
+    1979546
+   ],
+   "exposer_not_cause": false
+  },
+  {
+   "bug": 2000421,
+   "component": "Widget: Gtk",
+   "status": "RESOLVED",
+   "resolution": "FIXED",
+   "regressed_by": [
+    1998657
+   ],
+   "exposer_not_cause": false
+  },
+  {
+   "bug": 2000425,
+   "component": "Widget: Gtk",
+   "status": "RESOLVED",
+   "resolution": "FIXED",
+   "regressed_by": [
+    1998657
+   ],
+   "exposer_not_cause": false
+  },
+  {
+   "bug": 2041907,
+   "component": "Networking: IMAP",
+   "status": "RESOLVED",
+   "resolution": "FIXED",
+   "regressed_by": [
+    2011326
+   ],
+   "exposer_not_cause": true
+  }
+ ],
+ "filings_source": "every BMO bug with creator=cdenizet@mozilla.com, creation_time>=2026-08-05 and 'Crash in [@' in the summary (52 of them); the crash uuid comes out of comment 0 and the address out of the live Socorro ProcessedCrash. This is the pipeline's only outcome panel.",
+ "study_poison_literal_bugs_source": "the five bugs of spike/regressor_dataset/strategy_analysis.json whose evidence quotes a poison-byte literal, with their live BMO status/resolution/regressed_by. Four of the five are exposer_not_cause=False in the study's own labels.",
+ "study_289": {
+  "source": "spike/regressor_dataset/strategy_analysis.json (the 289-bug regressor study; the file is gitignored, hence these aggregates) crossed with live BMO `regressed_by` / resolution, 2026-08-21",
+  "exposers": 86,
+  "non_exposers": 203,
+  "exposers_with_accepted_regressed_by": 84,
+  "non_exposers_with_accepted_regressed_by": 196,
+  "exposers_with_poison_literal": 1,
+  "non_exposers_with_poison_literal": 4,
+  "poison_literal_bugs": {
+   "exposer": [
+    2041907
+   ],
+   "non_exposer": [
+    1980730,
+    1991950,
+    2000421,
+    2000425
+   ]
+  },
+  "note": "the poison-literal scan is a search for 0x(e5e5|4b4b|cccc|cdcd|dddd|abab|fdfd|bebe|fbfb|5a5a|2b2b|a5a5|e4e4) over each classification record; 1/86 vs 4/203 is Fisher p=1.00, i.e. a poison literal does not discriminate exposers"
+ }
+}
