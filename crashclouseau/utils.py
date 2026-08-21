@@ -118,7 +118,43 @@ def get_file_url(repo_url, filename, node, line, original):
 
 
 def is_interesting_file(filename):
-    """Check if the file extension is one of the extensions we have in the configuration file (global.json)"""
+    """Is this file's extension in ``config/interesting_extensions.json``?
+    (c/h/H, cpp/cc/cxx/hh/hpp/hxx, java, rs, mm/m.)
+
+    WHAT THIS GATES: ``Changeset``/``File`` ROW CREATION, and nothing else. 63.3% of
+    non-merge mozilla-central changesets in a 28-day window (3,698 of 5,839,
+    2026-07-23..08-19) touch no listed file and so get no rows at all.
+
+    WHAT IT DOES NOT GATE, despite looking like it must: the on-stack candidate set.
+    ``Changeset.find`` joins on STACK-FRAME filenames, and a Firefox crash frame's source
+    file is always C/C++/Rust/ObjC — 11,717 of 11,717 in-tree frame files over an
+    840-report nightly sample, and 1,085 of 1,085 over the 52 auto-filed bugs, ALREADY
+    have a listed extension. Replaying every filing's 3-day window with this filter
+    REMOVED gives the identical candidate set: 184 -> 184 over the 52 filings,
+    1,275 -> 1,275 over 616 control reports, 0 reports gain a candidate, and the top-20 is
+    unchanged on all 15 human-``regressed_by`` filings. Admitting a family costs rows and
+    buys nothing: pref +2.2%, build +5.9%, idl +5.3%, js +102.8%, kt +69.4% — all with +0
+    candidates.
+
+    COUNTER-EXAMPLE, the one case this list really does hide: bug 2057317 (our filing
+    2062806, RESOLVED FIXED) landed only ``AdsClient.sys.mjs`` / ``AdsFeed.sys.mjs`` plus
+    xpcshell tests. Admitting ``.mjs`` would STILL not have scored it — the crash frames
+    are ``GeneratedScaffolding.cpp`` and ``ads-client/src/ffi.rs``, which that changeset
+    never touches. The agent found it; the scorer structurally could not.
+    And the pref-flip archetype is NOT the counter-example it looks like: bug 2045970
+    (``585a77d8786a``, the confirmed regressor of three of our filings) touches
+    ``StaticPrefList.yaml`` AND five C++ files and was scored — 45.2% of pref-touching
+    window changesets are visible for that reason, and a pref-ONLY flip is 2.0% of them.
+
+    The one excluded family that CAN reach a frame is Kotlin, via
+    ``java.inspect_java_stacktrace`` (``(Foo.kt:56)``): 20 of 72 ``org.mozilla.*`` frames
+    in a Fenix nightly java-stack sample. Adding ``.kt`` here is inert on its own — the
+    blocker is ``java.get_java_files`` (scrapes the ARCHIVED mozilla/gecko-dev, filters
+    ``.java`` only, and runs from ``create.py`` rather than the schedule). See plans/16.
+
+    If you came here looking for on-stack RECALL, it is not in this list:
+    ``inspector.get_path_node`` drops 17.6% of frame file URIs, and ~9% of those are real
+    in-tree paths from Linux distro rebuilds and ``s3:gecko-generated-sources``."""
     return get_extension(filename) in config.get_extensions()
 
 

@@ -83,6 +83,8 @@ def get_ndays_of_data():
 
 
 def get_extensions():
+    """The source extensions that get ``Changeset`` rows. See ``utils.is_interesting_file``
+    for what this does and does not gate — measured, it moves no on-stack candidate."""
     return _get_exts()
 
 
