@@ -219,14 +219,25 @@ def _configure_text(path, channel, rev):
     """The text of a ``moz.configure`` AS OF the crash build, or ``""``.
 
     AN EMPTY ANSWER IS A DEAD GATE, NOT A VERDICT, so it is LOGGED. All
-    ``_option_is_default_off`` can do with it is ``continue``, which is indistinguishable
+    :func:`_default_off_switch` can do with it is ``continue``, which is indistinguishable
     from "this macro is not established off" -- i.e. the whole compiled-out suppression
     silently stops existing, with the corroborations that would make it countable never
-    written. That is one misconfiguration away: the caller passes ``pin_rev``, an empty
-    ``pin_rev`` falls back to ``tip``, and m-c ``tip`` is periodically a ``.hgtags``-only
-    commit whose manifest holds no ``js/moz.configure`` at all (hg-edge then answers 404,
-    "not found in manifest"). The gate works today only because ``2d71e11`` made the pinned
-    read resolve; nothing anywhere would have said so if it had not."""
+    written. That is one misconfiguration away, and CONFIRMED 2026-08-21 by probing the
+    endpoint rather than reasoning about it. ``raw-file`` serves a path out of the MANIFEST of
+    the rev it resolves, and m-c's tagging pushes land on a separate ``tags-unified`` head whose
+    manifest holds ``.hgtags`` and nothing else: ``raw-file/073c906f9e41/js/moz.configure``
+    answers **404 "not found in manifest"** while ``.hgtags`` at the same rev answers 200. hg
+    ``tip`` is the newest changeset in the repo whatever branch it sits on, so tip IS that commit
+    from the moment it lands until the next m-c push -- 17 of the 33 mozilla-central pushes
+    between 2026-08-18 and 2026-08-21 were ``.hgtags``-only, and tip sat on one for 113,477 of
+    that window's 298,395 seconds (38%). BEWARE THE PROBE THAT PROVES NOTHING: at a good minute
+    ``raw-file/tip/js/moz.configure`` answers 200 (40,264 bytes, measured the same day), which
+    says only that tip happened to be a normal changeset just then. The test has to be AT a
+    ``.hgtags``-only rev. The gate works today only because ``2d71e11`` made the pinned read
+    resolve; nothing anywhere would have said so if it had not, and the other ways to empty it
+    are a rev that does not resolve, a path that moved, or hg-edge 406-ing the caller.
+    The log line stays either way: the failure is silent by construction, since all
+    :func:`_default_off_switch` can do with "" is ``continue``."""
     from . import hgedge
 
     try:
@@ -271,6 +282,103 @@ def _switches_for(text, func):
     return re.findall(r'"(--(?:enable|disable)-[\w-]+)"', depends[-1])
 
 
+# WHICH ``default=`` WE ARE WILLING TO READ -- and the dated counter-example for why reading
+# one at all is the fix.
+#
+# THE SHIPPED WALK REFUSED EVERY ``default=``, INCLUDING A LITERAL ``default=False``, which is
+# the strongest evidence a switch can carry. Measured across the 26 distinct build revs of the
+# 52-filing panel: ``--enable-gc-concurrent-marking`` -- the switch behind the ONLY macro this
+# gate has ever fired on -- carried ``default=False,`` until that line was DELETED at
+# 11b07d869739 (buildid 20260811085340). So the walk answers False at the 14 older revs and True
+# at the 12 newer ones, and 27 of the 52 filings sit on the blind side. THE FEATURE DID NOT
+# CHANGE; THE SPELLING DID: with no ``default=`` at all, ``option("--enable-x")`` is off unless
+# someone asks for it, which is exactly what ``default=False`` said. At the older rev EIGHT of
+# js/moz.configure's 46 ``option()`` calls (49 distinct switch names) carried a literal falsy
+# default -- --enable-decorators, --enable-portable-baseline-interp[-force],
+# --enable-aot-ics[-force,-enforce], this one, and --wasm-no-experimental, which the walk never
+# sees because `_switches_for` only yields `--enable-`/`--disable-` names; at tip ZERO do. Count
+# the CALLS, not the string: `grep -c "option("` answers 53 because it also counts
+# `@deprecated_option`, four `imply_option`s, `system_lib_option` and one `def
+# ..._option`. The shipped answer tracked a moz.configure CODING STYLE at the build rev, with no
+# signal to anyone that it had.
+#
+# EVERY NON-LITERAL IS STILL DECLINED -- ``default=milestone.is_nightly``,
+# ``default=depends(when=moz_debug)``, ``default=jit_default``: 21 such options at tip, none of
+# them literal. Evaluating a moz.configure expression is precisely the multi-hop guess this
+# module refuses to let an LLM make in prose (:func:`is_build_flag_ground`). A literal TRUTHY
+# default is declined too, and for the opposite reason: ``default=True`` says the switch is ON.
+#
+# MEASURED EFFECT OF THE RELAXATION: the answer for ``JS_GC_CONCURRENT_MARKING`` becomes
+# clock-invariant (26 of 26 True, against 12 of 26 shipped); all 20 :data:`GUARD_DENY` macros
+# still answer False, verified 20/20 at build node 477c0df9965c -- a real pinned rev, not tip;
+# and 0 of the 52 filings change outcome, because ``gc::AutoMarkingLock`` is still the only
+# hollow symbol in the 270-symbol corpus and a new True has nothing else to fire on.
+_STRING_LITERAL = re.compile(
+    r'"""(?:.|\n)*?"""|\'\'\'(?:.|\n)*?\'\'\'|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'')
+_DEFAULT_ARG = re.compile(r"(?<![\w.])default\s*=\s*([^,)\n]*)")
+_LITERAL_OFF = frozenset({"False", "0", "None", '""', "''"})
+
+
+def _default_is_off(call):
+    """``True`` when this ``option(...)`` call has no ``default=``, or a LITERAL falsy one.
+
+    String literals are blanked before the search (an empty one stays empty, so ``default=""``
+    survives) because a ``default=`` written inside a ``help=`` text is not the keyword
+    argument, and reading it as one would be a false "off" -- the direction that costs a real
+    lead.
+
+    WHAT IT DOES NOT CLOSE, said out loud because the guard above is only one of the two routes:
+    the search is LEFTMOST, so a ``default=`` nested inside another argument's value
+    (``option("--enable-x", when=depends(y, default=False), default=jit_default)``) would win
+    over the option's own and answer a false "off". Measured 2026-08-21 over all 38 ``*.configure``
+    files at m-c tip: ZERO ``--enable-``/``--disable-`` options have two ``default=`` tokens, and
+    the only literal falsy defaults outside js/moz.configure sit on ``env=`` options and
+    ``--with-`` options, neither of which :func:`_switches_for` can yield. So the hole is real
+    and currently empty; if it ever fills, parse the call instead of scanning it."""
+    bare = _STRING_LITERAL.sub(
+        lambda m: '""' if not m.group(0).strip("\"'") else '"s"', call)
+    m = _DEFAULT_ARG.search(bare)
+    return m is None or m.group(1).strip() in _LITERAL_OFF
+
+
+def _default_off_switch(macro, client, channel="nightly", rev=""):
+    """The ``--enable-x`` switch *macro* needs when it is OFF unless asked for, else ``""``.
+
+    The walk, its three deliberate holes and the three places its oracle is measurably WRONG are
+    documented on :func:`_option_is_default_off`, which is this function's boolean face; the
+    ``default=`` rule is documented above :data:`_LITERAL_OFF`.
+
+    IT RETURNS THE SWITCH NAME, not a bare ``True``, because that name is the one thing the
+    published suppression needs and could not get: "off unless someone passes
+    `--enable-gc-concurrent-marking`" is a sentence the module owner reading the bug can check in
+    ten seconds, and "comes from a moz.configure switch that is off unless someone asks for it"
+    -- what the gate said for a month -- is not. It was in hand here the whole time."""
+    try:
+        hits = client.search('set_define("%s"' % macro, limit=4)
+    except Exception as exc:                       # pragma: no cover - network/binary
+        logger.warning("compiled_out: set_define search failed for %s: %s", macro, exc)
+        return ""
+    for hit in hits:
+        if not hit.file.endswith("moz.configure"):
+            continue
+        m = re.search(r'set_define\(\s*"%s"\s*,\s*([A-Za-z_]\w*)\s*\)' % re.escape(macro),
+                      hit.text)
+        if not m:
+            continue                               # `milestone.is_nightly` -- not a switch
+        text = _configure_text(hit.file, channel, rev)
+        if not text:
+            continue                               # unreadable (logged), NOT 'not off'
+        switches = _switches_for(text, m.group(1))
+        # A `--disable-x` switch means the feature is ON unless someone turns it off: not
+        # established off, whatever its default says.
+        if not switches or any(sw.startswith("--disable-") for sw in switches):
+            continue
+        calls = [_option_call(text, sw) for sw in switches]
+        if all(calls) and all(_default_is_off(c) for c in calls):
+            return switches[0]
+    return ""
+
+
 def _option_is_default_off(macro, client, channel="nightly", rev=""):
     """``True`` when *macro* comes from a ``moz.configure`` switch that is OFF unless asked for.
 
@@ -282,8 +390,14 @@ def _option_is_default_off(macro, client, channel="nightly", rev=""):
     ``NIGHTLY_BUILD`` and ``EARLY_BETA_OR_EARLIER`` are fed by ``milestone.*`` rather than a
     function, so step one finds no bare name; ``MOZ_DIAGNOSTIC_ASSERT_ENABLED`` DOES have a
     ``set_define`` (moz.configure:174) and is kept out by the bare-identifier regex plus
-    :data:`CHANNEL_ON_DENY`, not by its absence; and a switch carrying any ``default=`` is
-    an expression we decline to evaluate.
+    :data:`CHANNEL_ON_DENY`, not by its absence; and a switch whose ``default=`` is a
+    NON-LITERAL expression (``milestone.is_nightly``, ``depends(...)``) is one we decline to
+    evaluate. A LITERAL falsy ``default=`` IS read, and refusing to read it was a real defect:
+    it made this function's answer track a moz.configure coding style at the build rev (False at
+    14 of 26 panel build revs, True at 12, flipping on an edit that deleted ``default=False,``
+    and changed nothing about the build). The dated counter-example and the sweep are above
+    :data:`_LITERAL_OFF`; the walk itself now lives in :func:`_default_off_switch`, which also
+    hands back the switch NAME for the published reason string.
 
     AND THE ORACLE IS WRONG WHERE IT WAS MEASURED, which is why nothing may treat a ``True``
     from here as proof on its own. Walking ``js/moz.configure`` at a real build node
@@ -296,30 +410,7 @@ def _option_is_default_off(macro, client, channel="nightly", rev=""):
     with the macro off -- a far rarer shape (1 symbol in 274 across the 56-filing corpus) --
     and it is why :func:`is_build_flag_ground` refuses to let an LLM run the same walk in
     prose and bind a verdict on the answer."""
-    try:
-        hits = client.search('set_define("%s"' % macro, limit=4)
-    except Exception as exc:                       # pragma: no cover - network/binary
-        logger.warning("compiled_out: set_define search failed for %s: %s", macro, exc)
-        return False
-    for hit in hits:
-        if not hit.file.endswith("moz.configure"):
-            continue
-        m = re.search(r'set_define\(\s*"%s"\s*,\s*([A-Za-z_]\w*)\s*\)' % re.escape(macro),
-                      hit.text)
-        if not m:
-            continue                               # `milestone.is_nightly` -- not a switch
-        text = _configure_text(hit.file, channel, rev)
-        if not text:
-            continue                               # unreadable (logged), NOT 'not off'
-        switches = _switches_for(text, m.group(1))
-        # A `--disable-x` switch means the feature is ON unless someone turns it off, and any
-        # `default=` is an expression we will not guess at. Either way: not established off.
-        if not switches or any(sw.startswith("--disable-") for sw in switches):
-            continue
-        if all(_option_call(text, sw) and "default=" not in _option_call(text, sw)
-               for sw in switches):
-            return True
-    return False
+    return bool(_default_off_switch(macro, client, channel, rev))
 
 
 def mechanism_symbols(mechanism, diff_text="", limit=MAX_DIFF_SYMBOLS):
@@ -328,7 +419,24 @@ def mechanism_symbols(mechanism, diff_text="", limit=MAX_DIFF_SYMBOLS):
     Two sources, because the corpus shows one is not enough. The mechanism's own CITATIONS reach
     the hollow symbol on bug 2063902 (a `diff_line` whose ``content`` is
     ``gc::AutoMarkingLock lock(...)``) but not on 2063782, whose single citation is ordinary code.
-    The candidate's DIFF reaches both, ranked by occurrences in changed lines."""
+    The candidate's DIFF reaches both, ranked by occurrences in changed lines.
+
+    NEITHER SOURCE LICENSES THE WORD "MECHANISM", which is why :func:`statement_provenance`
+    exists and why the gate's reason string is split. Replayed over the 52-filing panel: of the
+    269 diff-derived symbol slots this function produced, only 35 (13%) are named anywhere in
+    the analysis actually published to the bug, and 45 of the 52 filings carry at least one
+    diff-derived symbol the prose never mentions. A citation is better and still not proof --
+    70 of 83 slots (84%). On the two filings that fire, bug 2063782 reaches
+    ``gc::AutoMarkingLock`` only through the diff top-8 (rank #1 of 8, 13 occurrences) and bug
+    2063902's "citation" is a ``diff_line`` whose content is a DELETED line of the candidate's
+    own patch -- so 0 of 2 reach the symbol through a citation independent of the changeset.
+
+    A THIRD SOURCE WAS TRIED AND IS DEAD, recorded so it is not tried again: feeding
+    ``Claim.statement`` in as well adds 87 distinct qualified names across the panel, costs 87
+    more searchfox definitions, finds 0 new hollow symbols, and does NOT recover bug 2062114
+    (the third owner refutation), whose statement names ``BufferAllocator::TraceEdge`` and
+    friends, none of them hollow. ``Claim.statement`` earns its keep as a PROVENANCE test
+    instead."""
     out = []
     citations = mechanism.get("citations") if isinstance(mechanism, dict) else \
         getattr(mechanism, "citations", None)
@@ -353,9 +461,75 @@ def mechanism_symbols(mechanism, diff_text="", limit=MAX_DIFF_SYMBOLS):
     return out
 
 
+def statement_provenance(symbol, mechanism):
+    """``"mechanism"`` when the published mechanism STATEMENT names *symbol*, else ``"diff"``.
+
+    THE PREDICATE THAT LICENSES THE SENTENCE, and it was free the whole time.
+    ``_apply_compiled_out_gate`` published "the mechanism rests on `{symbol}`" for whatever
+    :func:`mechanism_symbols` handed it -- half of which is the candidate's diff ranked by
+    occurrence count, a list the published prose names 13% of the time (35 of 269 slots; 45 of
+    52 filings carry at least one it never names). ``Claim.statement`` was already on the
+    dossier and nothing read it.
+
+    IT IS A SUBSET OF THE COMMENT, NOT THE WHOLE COMMENT, so read the two numbers apart.
+    ``report_bug._explanation_comment`` (report_bug.py:999-1006) renders
+    ``mechanism.statement`` AND ``consistency.statement``; this function reads only the first.
+    Over the panel that gap is large -- of the 35 diff slots the COMMENT names, only 20 are
+    named in ``mechanism.statement`` (7% of 269), and of the 70 citation slots the comment names
+    only 43 are (52% of 83). So a symbol the comment DID name can still score ``"diff"`` here,
+    42 slots' worth on the panel. That is the safe direction (the weaker sentence), and it is
+    the right field: the sentence being licensed is "the MECHANISM rests on X", which the
+    consistency paragraph does not assert. Widen it only with a measurement, not a hunch.
+
+    MEASURED ON THE 52-FILING PANEL, 2 hits and 0 false: both filings the gate fires on name
+    ``AutoMarkingLock`` verbatim in their statement (2 of 2 -- so on today's evidence the
+    corrected sentence is the one that still ships), and no other filing's statement does
+    (0 of 50). It is a per-SYMBOL test, not a per-filing one, and the diff wording is not a
+    rarity: it is what a future hollow hit gets whenever the prose never mentioned the symbol,
+    true of 234 of the 269 diff-derived slots on the panel (87%).
+
+    Matched on the last ``::`` component as well as the whole name, because a statement writes
+    ``gc::AutoMarkingLock`` on first use and ``AutoMarkingLock`` afterwards -- and on WORD
+    BOUNDARIES, because a plain substring test reads a LONGER identifier as a mention of a
+    shorter one. On the panel that is 15 slots and it inflates the diff hit rate from 13% to
+    19% with no extra truth in it: bug 2063782's own ``js::jit::AttachBaselineCacheIRStub``
+    scores only inside ``AttachBaselineCacheIRStubLocked``, ``ASRKind::Scroll`` only inside
+    ``ActiveScrolledRoot``, ``gl::GLContext`` only inside ``WebGLContext``. A boundary does NOT
+    stop the qualified case (``Zone`` still matches inside ``JS::shadow::Zone``), which is
+    right: ``::`` is not a word character and the prose did name the type."""
+    text = (mechanism.get("statement") if isinstance(mechanism, dict)
+            else getattr(mechanism, "statement", "")) or ""
+    if not isinstance(text, str) or not text:
+        return "diff"
+    for name in (symbol, (symbol or "").rsplit("::", 1)[-1]):
+        if name and re.search(r"\b%s\b" % re.escape(name), text):
+            return "mechanism"
+    return "diff"
+
+
 def hollow_symbols(symbols, client=None, channel="nightly", rev=""):
-    """``{symbol: {"macro": X, "functions": [...]}}`` for each symbol that is a no-op in a
-    default build. Never raises: a lookup we cannot make is a symbol we say nothing about."""
+    """``{symbol: {"macro": X, "functions": [...], "switch": "--enable-x"}}`` for each symbol
+    that is a no-op in a default build. Never raises: a lookup we cannot make is a symbol we say
+    nothing about.
+
+    TWO CLOCKS, ONE QUESTION, AND ONLY ONE OF THEM IS PINNED -- deliberately, and this note is
+    the whole reason the next session does not have to re-derive it. The SWITCH is read from the
+    ``moz.configure`` of *rev*, the build that crashed (:func:`_default_off_switch`). The
+    symbol's BODY comes from ``client.define`` -- searchfox, which indexes ~tip and takes no
+    revision flag at all.
+
+    HOLDING THE BODY AT *rev* TOO IS MEASURED AND NOT WORTH THE CODE TODAY. Re-extracting
+    ``js/src/gc/Cell.h`` at each of the 52-filing panel's 26 distinct build revs yields
+    ``JS_GC_CONCURRENT_MARKING`` -> ``AutoMarkingLock``/``~AutoMarkingLock`` at 26 of 26 --
+    byte-identical to the tip answer, 0 disagreements -- so a second extractor (an hg fetch plus
+    the class-body slicing searchfox is doing for us) buys nothing measurable.
+
+    WHAT IT WOULD CATCH, said out loud so the null result is not read as a proof: a guard added
+    AFTER the build, which makes a symbol that WAS live at build time look hollow now. That is a
+    FALSE SUPPRESSION, and a false suppression here is an abstain -- it files nothing, skips the
+    second opinion and never reaches ``Feedback`` -- so it is invisible to every outcome
+    measurement this repo has. 0-of-26 is how often the tip answer was wrong about ONE macro
+    over three weeks, not evidence that the failure mode does not exist."""
     found = {}
     if not symbols:
         return found
@@ -378,9 +552,10 @@ def hollow_symbols(symbols, client=None, channel="nightly", rev=""):
             if not functions:
                 continue
             if macro not in checked:
-                checked[macro] = _option_is_default_off(macro, client, channel, rev)
+                checked[macro] = _default_off_switch(macro, client, channel, rev)
             if checked[macro]:
-                found[symbol] = {"macro": macro, "functions": functions}
+                found[symbol] = {"macro": macro, "functions": functions,
+                                 "switch": checked[macro]}
                 break
     return found
 

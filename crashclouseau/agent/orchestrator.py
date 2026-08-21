@@ -2479,16 +2479,27 @@ def _resolve_compiled_out(dossier, seed):
     symbols = compiled_out.mechanism_symbols(v.mechanism, diff)
     if not symbols:
         return
+    rev = (seed or {}).get("pin_rev") or ""
     try:
-        hollow = compiled_out.hollow_symbols(
-            symbols, channel=channel, rev=(seed or {}).get("pin_rev") or "")
+        hollow = compiled_out.hollow_symbols(symbols, channel=channel, rev=rev)
     except Exception:  # pragma: no cover - defensive; never break a verdict
         logger.warning("agent: compiled-out lookup failed for %s",
                        (seed or {}).get("uuid"), exc_info=True)
         return
     if hollow:
         symbol, found = sorted(hollow.items())[0]
-        seed["compiled_out"] = {"symbol": symbol, **found}
+        # WHICH SENTENCE THE GATE MAY PUBLISH, and the clock it read the switch at. Both were
+        # free and neither was recorded: `mechanism_symbols` draws half its input from the
+        # candidate's diff ranked by occurrence count, and the published prose names 13% of
+        # those (`compiled_out.statement_provenance`). `rev` is the build node the
+        # `moz.configure` answer came from -- the same switch reads False at a rev three days
+        # older (see `compiled_out._LITERAL_OFF`), so an unstamped answer is unreproducible.
+        seed["compiled_out"] = {
+            "symbol": symbol,
+            "provenance": compiled_out.statement_provenance(symbol, v.mechanism),
+            "rev": rev,
+            **found,
+        }
 
 
 def _apply_compiled_out_gate(dossier, seed):
@@ -2509,19 +2520,74 @@ def _apply_compiled_out_gate(dossier, seed):
     Back-tested over all 56 filings: fires on exactly 2, both refuted by their module owner for
     exactly this reason, and on 0 of the 16 a human FIXED or duplicated. That is why it suppresses
     rather than merely recording — but the corroborations are written whenever a hollow symbol is
-    found, so a future false positive is countable rather than invisible."""
+    found, so a future false positive is countable rather than invisible.
+
+    THE REASON STRING IS SPLIT BY PROVENANCE, because for a month it published a sentence its
+    own predicate did not establish. ``compiled_out.mechanism_symbols`` draws half its input from
+    the top-8 identifiers by OCCURRENCE COUNT IN THE CANDIDATE'S DIFF, and on the 52-filing panel
+    the published analysis names only 35 of 269 such slots (13%); 45 of the 52 filings carry at
+    least one diff-derived symbol the prose never mentions. On the two filings that fire, NEITHER
+    reaches ``gc::AutoMarkingLock`` through a citation independent of the changeset -- 2063782
+    only through the diff top-8, 2063902 through a ``diff_line`` citation whose content is a
+    DELETED line of the candidate's own patch. So the diff-derived wording now says what the
+    predicate actually shows: the CANDIDATE is mostly about a subsystem that cannot run in this
+    build, which is a reason to doubt the candidate, not a refutation of the mechanism.
+    ``compiled_out.statement_provenance`` decides, off the text we really posted (2 of 2 hit,
+    0 of 50 false).
+
+    TWO DIFFERENT AXES, AND THEY DISAGREE ON THE MOTIVATING CASE -- say which one is which or
+    the next reader clamps the wrong branch. SYMBOL SOURCE (citation vs diff top-8) is what
+    ``mechanism_symbols`` did: by that axis 2063782 is diff-only. STATEMENT PROVENANCE is what
+    this reason string switches on, and by that axis 2063782 is ``mechanism``, because its
+    published mechanism paragraph does name ``gc::AutoMarkingLock`` ("reached from
+    `ParallelMarkTask` marking via `ICScript::trace`'s `gc::AutoMarkingLock`-guarded walk"). So
+    ON TODAY'S PANEL THE DIFF BRANCH FIRES ON 0 OF 52: both real suppressions keep the mechanism
+    wording, and the diff wording is provision for the 234-of-269 case, not a re-labelling of
+    either counter-example.
+
+    BOTH PROVENANCES STILL SUPPRESS, and clamping the diff-derived case instead is refused on
+    two grounds, neither of them a back-test (there is nothing on the panel to back-test):
+    a clamp would be untestable here, and ``autofile.min_confidence: 70`` means a clamp to
+    ``probable`` still FILES -- it would needinfo the author of a default-off subsystem about
+    his own inert code rather than stopping the bug. If the diff branch ever fires in prod,
+    ``compiled_out_provenance`` makes it countable; decide the clamp on those, not on this
+    paragraph.
+
+    The reason also names the SWITCH and the BUILD REV. Both were already in hand and both were
+    dropped: the same switch answers "not established off" at a rev three days older
+    (``compiled_out._LITERAL_OFF``), so an answer with no rev on it cannot be reproduced, and
+    "a moz.configure switch that is off unless someone asks for it" is not something a module
+    owner can check without going to find which switch."""
     v = getattr(dossier, "verdict", None)
     found = (seed or {}).get("compiled_out")
     if v is None or v.decision == Decision.abstain or not found:
         return
     symbol, macro = found.get("symbol"), found.get("macro")
-    reason = (
-        "the mechanism rests on `{}`, which is a NO-OP in this build: its {} body is entirely "
-        "inside `#ifdef {}`, and `{}` comes from a moz.configure switch that is off unless "
-        "someone asks for it. The symbol is real and compiles; it simply does nothing here, so "
-        "no story that depends on it can be what crashed. Suppressed rather than reported"
-        .format(symbol, "/".join((found.get("functions") or [])[:3]), macro, macro)
+    provenance = found.get("provenance") or "diff"
+    switch, rev = found.get("switch") or "", found.get("rev") or ""
+    dead = (
+        "`{}`, which is a NO-OP in this build: its {} body is entirely inside `#ifdef {}`, and "
+        "`{}` {}{}"
+        .format(symbol, "/".join((found.get("functions") or [])[:3]), macro, macro,
+                "is off unless someone passes `{}`".format(switch) if switch else
+                "comes from a moz.configure switch that is off unless someone asks for it",
+                " (read from the moz.configure of the build that crashed, "
+                "rev `{}`)".format(rev[:12]) if rev else "")
     )
+    if provenance == "mechanism":
+        reason = (
+            "the mechanism rests on {}. The symbol is real and compiles; it simply does nothing "
+            "here, so no story that depends on it can be what crashed. Suppressed rather than "
+            "reported".format(dead)
+        )
+    else:
+        reason = (
+            "the candidate's changeset is mostly about {}. The published mechanism never names "
+            "`{}` — it was found by ranking the changeset's own diff — so this is a reason to "
+            "doubt the CANDIDATE rather than a refutation of the mechanism; a changeset whose "
+            "subject cannot run in the build that crashed is not something to send anyone after. "
+            "Suppressed rather than reported".format(dead, symbol)
+        )
     dossier.verdict = Verdict(
         decision=Decision.abstain,
         confidence=Confidence.low,
@@ -2533,10 +2599,13 @@ def _apply_compiled_out_gate(dossier, seed):
         **(dossier.corroborations or {}),
         "compiled_out_symbol": symbol,
         "compiled_out_macro": macro,
+        "compiled_out_provenance": provenance,
+        "compiled_out_rev": rev,
         "compiled_out_suppressed": True,
     }
-    logger.info("agent: compiled_out_suppressed (%s is a no-op without %s) -> %s/%s "
-                "suppressed to abstain for %s", symbol, macro,
+    logger.info("agent: compiled_out_suppressed (%s is a no-op without %s, %s-derived, "
+                "switch %s @ rev %s) -> %s/%s suppressed to abstain for %s",
+                symbol, macro, provenance, switch or "?", rev[:12] or "?",
                 v.decision.value, v.confidence.value, (seed or {}).get("uuid"))
 
 

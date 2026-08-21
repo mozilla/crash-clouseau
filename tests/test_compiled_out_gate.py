@@ -87,6 +87,30 @@ HAS_ELSE = '''\
 '''
 
 
+class TestThePageSaysWhatHappened(unittest.TestCase):
+    """crashstack.html had abstain branches for both backout suppressions and none for this one,
+    so a suppressed run rendered "Insufficient evidence -- no culprit identified." followed by
+    the reason that says we DID find a changeset. The template's own comment calls that "reads
+    as a failure to look"."""
+
+    def _page(self):
+        import pathlib
+        here = pathlib.Path(__file__).resolve().parent.parent
+        return (here / "templates" / "crashstack.html").read_text()
+
+    def test_there_is_a_branch_for_the_compiled_out_suppression(self):
+        page = self._page()
+        self.assertIn("corrob.get('compiled_out_suppressed')", page)
+        head = page.index("Insufficient evidence")
+        self.assertLess(page.index("corrob.get('compiled_out_suppressed')"), head)
+
+    def test_the_wording_follows_the_provenance(self):
+        page = self._page()
+        self.assertIn("corrob.get('compiled_out_provenance') == 'mechanism'", page)
+        self.assertIn("the mechanism found rests on", page)
+        self.assertIn("is mostly about", page)
+
+
 class TestHollowDetection(unittest.TestCase):
     def test_the_canonical_hollow_symbol(self):
         self.assertEqual(co.guard_macros(AUTO_MARKING_LOCK), ["JS_GC_CONCURRENT_MARKING"])
@@ -369,6 +393,213 @@ class TestAnUnreadableConfigureIsNotAnAnswer(unittest.TestCase):
         with mock.patch("crashclouseau.hgedge.raw_file", return_value="option(...)"):
             self.assertEqual(co._configure_text("js/moz.configure", "nightly", "b" * 12),
                              "option(...)")
+
+
+# `js/moz.configure` at buildid 20260810154837 (rev 1e704c6738f4) and at 20260811085340 (rev
+# 11b07d869739). ABRIDGED, not verbatim: the real `gc_concurrent_marking` body also `die()`s off
+# x86_64 and there is a `set_config` beside the `set_define`, none of which the walk reads. What
+# is verbatim is every line the walk touches. The ONLY difference between the two is the deleted
+# `default=False,`
+# -- the feature is default-off on both sides, and the shipped walk answered False on the left
+# and True on the right for three weeks.
+GC_CONFIGURE_BEFORE = '''\
+option(
+    "--enable-gc-concurrent-marking",
+    default=False,
+    help="{Enable|Disable} experimental support for GC concurrent marking",
+)
+
+
+@depends("--enable-gc-concurrent-marking", target)
+def gc_concurrent_marking(value, target):
+    if not value:
+        return
+    return True
+
+
+set_define("JS_GC_CONCURRENT_MARKING", gc_concurrent_marking)
+'''
+GC_CONFIGURE_AFTER = GC_CONFIGURE_BEFORE.replace("    default=False,\n", "")
+
+
+class TestALiteralDefaultIsEvidence(unittest.TestCase):
+    """`default=False` is the strongest thing a switch can say and the walk used to refuse it.
+
+    Measured over the 52-filing panel's 26 build revs: the shipped predicate answers False at 14
+    and True at 12, flipping at 11b07d869739 where `default=False,` was DELETED. 27 of the 52
+    filings sit on the blind side of that edit, which changed a coding style and nothing else."""
+
+    def _client(self, snippet='set_define("JS_GC_CONCURRENT_MARKING", gc_concurrent_marking)'):
+        client = mock.MagicMock()
+        client.search.return_value = [mock.MagicMock(file="js/moz.configure", text=snippet)]
+        return client
+
+    def test_the_answer_is_the_same_on_both_sides_of_the_style_edit(self):
+        for label, text in (("before", GC_CONFIGURE_BEFORE), ("after", GC_CONFIGURE_AFTER)):
+            with self.subTest(rev=label), \
+                 mock.patch.object(co, "_configure_text", return_value=text):
+                self.assertEqual(co._default_off_switch("JS_GC_CONCURRENT_MARKING",
+                                                        self._client()),
+                                 "--enable-gc-concurrent-marking")
+
+    def test_the_shipped_predicate_really_did_differ(self):
+        # The counter-example, executable: `default=` used to be an unconditional refusal.
+        self.assertIn("default=False", GC_CONFIGURE_BEFORE)
+        self.assertNotIn("default=", GC_CONFIGURE_AFTER)
+
+    def test_every_non_literal_default_is_still_declined(self):
+        for value in ("milestone.is_nightly", "depends(when=moz_debug)", "jit_default",
+                      "True", "1"):
+            with self.subTest(default=value):
+                call = '("--enable-x", default=%s, help="h")' % value
+                self.assertFalse(co._default_is_off(call))
+
+    def test_the_literals_it_does_read(self):
+        for value in ("False", "0", "None", '""', "''"):
+            with self.subTest(default=value):
+                self.assertTrue(co._default_is_off('("--enable-x", default=%s)' % value))
+        self.assertTrue(co._default_is_off('("--enable-x", help="h")'))
+
+    def test_a_default_written_inside_a_help_string_is_not_the_argument(self):
+        # A false "off" costs a real lead, so the one direction that must not happen.
+        self.assertFalse(co._default_is_off(
+            '("--enable-x", default=jit_default, help="off when default=False")'))
+
+    def test_the_boolean_face_still_answers_for_the_deny_list(self):
+        # `_option_is_default_off` is what every docstring and the prompt talk about; it is now
+        # `bool(_default_off_switch(...))`. Verified 20/20 against the real GUARD_DENY list at
+        # build node 477c0df9965c; here, the shape that matters.
+        with mock.patch.object(co, "_configure_text", return_value=MOZ_CONFIGURE):
+            self.assertTrue(co._option_is_default_off(
+                "MOZ_DEBUG", self._client('set_define("MOZ_DEBUG", moz_debug)')))
+        with mock.patch.object(co, "_configure_text", return_value=""):
+            self.assertFalse(co._option_is_default_off(
+                "MOZ_DEBUG", self._client('set_define("MOZ_DEBUG", moz_debug)')))
+
+
+class TestWhichSentenceMayBePublished(unittest.TestCase):
+    """`statement_provenance` reads the text we actually posted to the bug.
+
+    Panel: 2 of 2 firing filings name `AutoMarkingLock` in their mechanism statement, 0 of the
+    other 50 do. The wrong-direction case is the common one -- 45 of 52 filings carry at least
+    one diff-derived symbol the published prose never names."""
+
+    def test_the_statement_names_it(self):
+        mech = Claim(statement="the narrowed `gc::AutoMarkingLock` scope lets the stub be freed",
+                     citations=[SearchfoxCitation(permalink="https://searchfox.org/x#1",
+                                                  symbol_id="s", repo="mozilla-central")])
+        self.assertEqual(co.statement_provenance("gc::AutoMarkingLock", mech), "mechanism")
+
+    def test_the_last_component_counts_because_prose_drops_the_namespace(self):
+        mech = Claim(statement="AutoMarkingLock is taken before the stub is attached",
+                     citations=[SearchfoxCitation(permalink="https://searchfox.org/x#1",
+                                                  symbol_id="s", repo="mozilla-central")])
+        self.assertEqual(co.statement_provenance("gc::AutoMarkingLock", mech), "mechanism")
+
+    def test_a_longer_identifier_is_not_a_mention(self):
+        # Bug 2063782's own case: a plain `in` test reads `AttachBaselineCacheIRStubLocked` as a
+        # mention of `AttachBaselineCacheIRStub`. 15 slots on the panel, 13% -> 19%, no truth.
+        mech = Claim(statement="AttachBaselineCacheIRStubLocked drops the lock too early",
+                     citations=[SearchfoxCitation(permalink="https://searchfox.org/x#1",
+                                                  symbol_id="s", repo="mozilla-central")])
+        self.assertEqual(
+            co.statement_provenance("js::jit::AttachBaselineCacheIRStub", mech), "diff")
+
+    def test_a_boundary_does_not_break_the_qualified_case(self):
+        # `::` is not a word character, so naming the type is still naming it.
+        mech = Claim(statement="JS::shadow::Zone is read after the sweep",
+                     citations=[SearchfoxCitation(permalink="https://searchfox.org/x#1",
+                                                  symbol_id="s", repo="mozilla-central")])
+        self.assertEqual(co.statement_provenance("gc::Zone", mech), "mechanism")
+
+    def test_no_statement_is_diff(self):
+        self.assertEqual(co.statement_provenance("gc::AutoMarkingLock", None), "diff")
+        self.assertEqual(co.statement_provenance("gc::AutoMarkingLock", {}), "diff")
+        self.assertEqual(co.statement_provenance("gc::AutoMarkingLock",
+                                                 {"statement": "unrelated"}), "diff")
+
+
+class TestTheTwoRefutationsAndTheSeventeenControls(unittest.TestCase):
+    """The counter-examples, case by case.
+
+    Bugs 2063782 and 2063902 (jcoppeard, "It does not" / "Concurrent marking is not compiled in
+    by default") must STILL be suppressed -- note both name the SAME candidate 3f0439a2aec8, so
+    "2 true positives" is really n=1. BOTH take the `mechanism` branch (their statements name the
+    symbol); the `diff` branch has NO instance on the panel, so its test below pins a wording,
+    not a case. The 17 filings a human FIXED or DUPLICATED must stay
+    unsuppressed; on the replay each of them resolves 1-10 symbols and 0 hollow ones, so the gate
+    never reaches the switch walk at all. Bug 2062114 is the documented miss and stays uncaught
+    (its statement names `BufferAllocator::TraceEdge`; nothing in its 5 symbols is hollow)."""
+
+    _FOUND = {"symbol": "gc::AutoMarkingLock", "macro": "JS_GC_CONCURRENT_MARKING",
+              "functions": ["AutoMarkingLock", "~AutoMarkingLock"],
+              "switch": "--enable-gc-concurrent-marking",
+              "rev": "477c0df9965c2460b1582048e8ff9cb333dd2556"}
+
+    def _suppressed(self, provenance):
+        d = _dossier()
+        seed = {"uuid": "u", "compiled_out": dict(self._FOUND, provenance=provenance)}
+        orch._apply_compiled_out_gate(d, seed)
+        return d
+
+    def test_2063902_the_statement_names_it_so_the_mechanism_wording_stands(self):
+        d = self._suppressed("mechanism")
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("the mechanism rests on `gc::AutoMarkingLock`", d.verdict.abstain_reason)
+        self.assertEqual(d.corroborations["compiled_out_provenance"], "mechanism")
+
+    def test_the_diff_derived_wording_suppresses_but_claims_less(self):
+        # NOT bug 2063782: its mechanism paragraph names `gc::AutoMarkingLock`, so
+        # `statement_provenance` puts it on the `mechanism` branch too and the diff branch fires
+        # on 0 of the 52 -- this pins the wording for the 234-of-269 case that has not happened
+        # yet. Clamping instead is refused because `min_confidence: 70` means a clamp to
+        # `probable` still files the bug.
+        d = self._suppressed("diff")
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        said = d.verdict.abstain_reason
+        self.assertIn("the candidate's changeset is mostly about", said)
+        self.assertIn("doubt the CANDIDATE", said)
+        self.assertNotIn("the mechanism rests on", said)
+        self.assertEqual(d.corroborations["compiled_out_provenance"], "diff")
+
+    def test_both_wordings_name_the_switch_and_the_build_rev(self):
+        for provenance in ("mechanism", "diff"):
+            with self.subTest(provenance=provenance):
+                said = self._suppressed(provenance).verdict.abstain_reason
+                self.assertIn("--enable-gc-concurrent-marking", said)
+                self.assertIn("477c0df9965c", said)
+
+    def test_the_rev_is_recorded_so_the_answer_can_be_reproduced(self):
+        d = self._suppressed("mechanism")
+        self.assertEqual(d.corroborations["compiled_out_rev"],
+                         "477c0df9965c2460b1582048e8ff9cb333dd2556")
+
+    def test_an_unresolved_switch_or_rev_degrades_to_the_old_wording(self):
+        d = _dossier()
+        orch._apply_compiled_out_gate(d, {"uuid": "u", "compiled_out": {
+            "symbol": "gc::AutoMarkingLock", "macro": "JS_GC_CONCURRENT_MARKING",
+            "functions": ["AutoMarkingLock"], "provenance": "mechanism"}})
+        self.assertIn("off unless someone asks for it", d.verdict.abstain_reason)
+
+    def test_the_seventeen_controls_never_reach_the_switch_walk(self):
+        # A filing with no hollow symbol leaves `seed["compiled_out"]` unset, which is the only
+        # thing the gate reads -- so the relaxation cannot touch any of the 17.
+        d = _dossier()
+        orch._apply_compiled_out_gate(d, {"uuid": "u"})
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertNotIn("compiled_out_suppressed", d.corroborations or {})
+
+    def test_the_resolver_stamps_provenance_and_rev_onto_the_seed(self):
+        d, seed = _dossier(), {"uuid": "u", "channel": "nightly", "pin_rev": "c" * 12}
+        hollow = {"gc::AutoMarkingLock": {"macro": "JS_GC_CONCURRENT_MARKING",
+                                          "functions": ["AutoMarkingLock"],
+                                          "switch": "--enable-gc-concurrent-marking"}}
+        with mock.patch.object(co, "hollow_symbols", return_value=hollow), \
+             mock.patch("crashclouseau.agent.patch_extract.fetch_raw_diff", return_value=""):
+            orch._resolve_compiled_out(d, seed)
+        self.assertEqual(seed["compiled_out"]["rev"], "c" * 12)
+        # `_dossier()`'s mechanism has no `statement`, which is the diff-derived case.
+        self.assertEqual(seed["compiled_out"]["provenance"], "diff")
 
 
 class TestWhatGroundsAFail(unittest.TestCase):
