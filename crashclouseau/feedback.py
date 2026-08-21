@@ -36,7 +36,36 @@ _HTTP_TIMEOUT = 60
 # BMO takes many `id=` params happily, but a URL has limits and a partial failure should cost
 # one batch rather than the sweep.
 _BATCH = 50
-_FIELDS = "id,status,resolution,dupe_of,regressed_by"
+# ``comment_count`` is the whole cost control for the comment sweep: there is NO bulk comment
+# endpoint (``/rest/bug/comment?ids=...`` answers error 100, "Sorry, I can't find COMMENT",
+# and libmozdata does one GET per bug), so an ungated pass is 52-and-growing serial GETs every
+# tick. Gated on a changed count it is ~2.2 bugs a tick (measured: distinct panel bugs
+# receiving a non-ours comment per 6h bucket over the last 7 days, max 9).
+# ``creator`` is free in the same call and is who "us" is for the needinfo read: on a
+# ``new_bug`` row the creator IS the filing account, so nothing has to be configured.
+_FIELDS = "id,status,resolution,dupe_of,regressed_by,comment_count,creator"
+
+# How we recognise OUR OWN comment. Not the author email: the filer posts as cdenizet, who is
+# also a real reviewer on these bugs -- 8 cdenizet comments sit past comment 0 across 7 of the
+# 52 filings and 6 of them are the filer again. The body marker is exact on the panel: 58
+# marker-bearing comments, every one written by the filer, none by anybody else.
+# (``bugzilla_apply._post_comment`` already RETURNS the new comment id and the caller discards
+# it; persisting it would make this a lookup instead of a match, but only for filings made
+# after that change -- the marker is what covers the 52 already on file.)
+_COMMENT_MARK = "Crash report: https://crash-stats.mozilla.org/report/index/"
+
+# Filing modes whose bug is OURS. An allowlist, not a denylist: ``mode ==
+# "comment_on_existing"`` also records ``filed: True`` (``bugzilla_apply.py:693``) on a bug
+# somebody else created, where every human comment is ordinary discussion of their own bug.
+# The one such bug in the public record, 2057980, carries 29 non-ours comments -- 24% of the
+# whole corpus -- of Thunderbird contributors talking to each other. An unrecognised mode is
+# skipped and counted rather than trusted.
+_NOTE_MODES = ("new_bug",)
+
+# Per-bug comment-count watermark, in the existing named-cursor table. ``SweepMark.set``
+# never moves backwards, which is exactly right for a count that only grows, and the table is
+# already in ``models._ADDED_TABLES`` -- so this needs no new plumbing.
+_NOTE_CURSOR = "revnote:{}"
 
 
 def _filed_bugs():
@@ -64,6 +93,9 @@ def _filed_bugs():
             "archetypes": corrob.get("archetypes") or [],
             "claimed": info.get("regressed_by") or [],
             "filed_at": info.get("at"),
+            # "new_bug" | "comment_on_existing" | absent on a pre-``mode`` filing. Only the
+            # first is a bug whose comments are reactions to us; see ``_NOTE_MODES``.
+            "mode": info.get("mode"),
         })
     return out
 
@@ -96,6 +128,108 @@ def _as_datetime(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _fetch_comments(bug_id):
+    """``[comment dict]`` for one bug, or ``None`` if the read failed.
+
+    One GET per bug, and there is no way around it: ``/rest/bug/comment?ids=...`` answers
+    error 100 and libmozdata's own client loops one bug at a time. That is why the caller
+    must gate on a CHANGED ``comment_count`` — see ``_NOTE_MODES``' neighbour ``_FIELDS``."""
+    try:
+        r = net.get("{}/{}/comment".format(_BZ_REST, bug_id), timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or {}
+        return (bugs.get(str(bug_id)) or {}).get("comments") or []
+    except Exception as exc:                                # pragma: no cover - network
+        logger.warning("feedback: comments failed for %s: %s", bug_id, exc)
+        return None
+
+
+def _needinfo_setters(bug_id, account):
+    """Who has ever put a ``needinfo?`` on *account* on this bug. ``set()`` on failure.
+
+    Read from ``/history``'s ``flagtypes.name`` ADDITIONS rather than the live ``flags``
+    field, because the addition is durable: a needinfo that has since been answered and
+    cleared is invisible in ``flags`` and permanent in the history. On the panel the live
+    field would have found 1 of the 18."""
+    if not account:
+        return set()
+    try:
+        r = net.get("{}/{}/history".format(_BZ_REST, bug_id), timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+        events = (bugs[0].get("history") if bugs else []) or []
+    except Exception as exc:                                # pragma: no cover - network
+        logger.warning("feedback: history failed for %s: %s", bug_id, exc)
+        return set()
+    want = "needinfo?({})".format(account)
+    return {(e.get("who") or "").strip().lower()
+            for e in events
+            for ch in (e.get("changes") or [])
+            if ch.get("field_name") == "flagtypes.name" and want in (ch.get("added") or "")}
+
+
+def _ingest_notes(filed, fetched):
+    """Store every comment on OUR bugs that we did not write. Returns a counts dict.
+
+    Deliberately separate from the outcome refresh above and deliberately failure-isolated:
+    ``Feedback.record`` commits per row before this runs, so a bad comment, a truncation or a
+    BMO hiccup can cost this pass and never the verdicts."""
+    out = {"eligible": 0, "skipped_mode": 0, "unchanged": 0, "scanned": 0,
+           "ours": 0, "automation": 0, "seen": 0, "new": 0, "failed": 0}
+    for entry in filed:
+        bug = fetched.get(entry["bug_id"])
+        if bug is None:
+            continue
+        if entry.get("mode") not in _NOTE_MODES:
+            out["skipped_mode"] += 1
+            continue
+        out["eligible"] += 1
+        bug_id = entry["bug_id"]
+        count = int(bug.get("comment_count") or 0)
+        try:
+            cursor = models.SweepMark.get(_NOTE_CURSOR.format(bug_id))
+        except Exception:                                   # pragma: no cover - defensive
+            cursor = 0
+        if count and count <= cursor:
+            out["unchanged"] += 1
+            continue
+        out["scanned"] += 1
+        try:
+            comments = _fetch_comments(bug_id)
+            if comments is None:
+                out["failed"] += 1
+                continue
+            theirs = [c for c in comments if _COMMENT_MARK not in (c.get("text") or "")]
+            out["ours"] += len(comments) - len(theirs)
+            setters = (_needinfo_setters(bug_id, (bug.get("creator") or "").strip().lower())
+                       if theirs else set())
+            for c in theirs:
+                author = (c.get("creator") or c.get("author") or "").strip().lower()
+                kind = models.ReviewNote.classify_author(author, c.get("text") or "")
+                if kind == "automation":
+                    out["automation"] += 1
+                _, created = models.ReviewNote.record(
+                    bug_id, c.get("id"),
+                    comment_no=int(c.get("count") or 0),
+                    author=author,
+                    author_kind=kind,
+                    needinfo=author in setters,
+                    created_at=_as_datetime(c.get("creation_time")),
+                    body=c.get("text") or "",
+                )
+                out["seen"] += 1
+                out["new"] += int(created)
+            # Last, and only on success: the mark never moves backwards, so a pass that dies
+            # half way simply re-reads the bug next tick (``ReviewNote.record`` is a no-op on
+            # an id already stored, so re-reading costs one GET and writes nothing).
+            models.SweepMark.set(_NOTE_CURSOR.format(bug_id), count)
+        except Exception as exc:                            # pragma: no cover - defensive
+            out["failed"] += 1
+            models.db.session.rollback()
+            logger.warning("feedback: notes failed for %s: %s", bug_id, exc)
+    return out
+
+
 def refresh():
     """Pull the current state of every filed bug into ``models.Feedback``. Returns a summary.
 
@@ -124,8 +258,17 @@ def refresh():
             regressed_by=bug.get("regressed_by") or [],
         )
         updated += 1
+    # AFTER the verdicts, and it can never take them with it: `Feedback.record` has already
+    # committed each row, and this whole pass is wrapped because it runs on a schedule now —
+    # an exception here would otherwise cost the tick, and the next one is six hours away.
+    try:
+        notes = _ingest_notes(filed, fetched)
+    except Exception as exc:                                # pragma: no cover - defensive
+        models.db.session.rollback()
+        logger.warning("feedback: note ingestion failed wholesale: %s", exc)
+        notes = {"failed": len(filed)}
     summary = {"filed": len(filed), "fetched": len(fetched), "updated": updated,
-               **models.Feedback.scoreboard()}
+               "notes": notes, **models.Feedback.scoreboard()}
     logger.info("feedback: refreshed %s of %s filed bugs -> %s",
                 updated, len(filed), summary["by_attribution"])
     return summary

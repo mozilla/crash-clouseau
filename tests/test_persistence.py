@@ -45,7 +45,7 @@ class TestSchemaDefinition(unittest.TestCase):
         # `_ADDED_TABLES`, then add it here.
         known = {
             "archetypes", "builds", "changesets", "crashstack", "dossiers", "feedback",
-            "files", "hgauthors", "lastdate", "nodes", "scores", "selection",
+            "files", "hgauthors", "lastdate", "nodes", "reviewnote", "scores", "selection",
             "signatures", "stats", "sweepmarks", "uuids", "verdicts",
         }
         self.assertEqual(

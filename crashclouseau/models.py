@@ -2957,6 +2957,254 @@ class Feedback(db.Model):
         return out
 
 
+# The hand-set vocabulary for ``ReviewNote.error_class``. Every value fits
+# ``ReviewNote.error_class``'s declared width; ``tests/test_reviewnote.py`` pins that, which
+# is the only way to catch it — CI runs on sqlite, which does not enforce VARCHAR length at
+# all, so a too-long value is a Postgres-only ``StringDataRightTruncation`` inside a commit.
+# The trap is not hypothetical: the first sketch of this feature wanted a state called
+# ``needinfo_returned`` (17 chars) in ``Feedback.attribution``, a ``db.String(16)``.
+ERROR_CLASSES = (
+    "wrong_regressor",     # real crash, wrong changeset named (bug 2062119)
+    "wrong_mechanism",     # right area, wrong causal story (bug 2065373, bug 2061691)
+    "wrong_component",     # routed to a team that has no idea why they got it (bug 2061973)
+    "not_a_regression",    # pre-existing defect, not caused by the candidate (bug 2062335)
+    "duplicate",           # already tracked elsewhere (bug 2060922)
+    "unchecked_claim",     # checkable against a source the run already held, not checked
+    "not_a_defect",        # hardware, corrupt report, invalid
+    "endorsed",            # they agreed. NOT a correction, and the common case
+    "off_topic",           # not a reaction to our filing at all
+)
+
+# ``author_kind``: who wrote it, as a TOTAL function of (author, text) — see
+# ``ReviewNote.classify_author``.
+AUTHOR_KINDS = ("human", "agent", "automation")
+
+# Accounts whose comments on our filings are machinery: BugBot's "could you fill the
+# regressed_by field", pulsebot's "Pushed by", phabricator's uplift forms, the github
+# mirror. 96 of the 186 non-ours comments on the 52 filings are automation and BugBot alone
+# wrote 57 of them, so this is not a tidiness rule — unfiltered, two thirds of the corpus is
+# noise nobody will ever read.
+_AUTOMATION_ACCOUNTS = frozenset({
+    "release-mgmt-account-bot@mozilla.tld",
+    "pulsebot@bmo.tld",
+    "phab-bot@bmo.tld",
+    "github-automation@bmo.tld",
+    "bugzilla@mozilla.org",
+})
+
+# ...and the counter-example that stops the obvious generalisation. "Filter to human
+# authors" is right for the NEEDINFO channel (17 of 18 needinfos aimed at us were mass
+# sweeps by release-mgmt-account-bot) and WRONG here: two of the accounts reacting to our
+# filings are themselves agents, and 3 of their 4 comments flatly refute us — bug 2062335
+# ("the attribution to bug 2011452 is not [right] -- this is a pre-existing defect"), bug
+# 2061973 ("that routing looks incorrect"), bug 2060922 ("the same defect already tracked in
+# bug 1990812"). A human-only filter would eat the sharpest corrections in the panel.
+_AGENT_ACCOUNTS = frozenset({
+    "hackbot@mozilla.tld",
+    "firefoxmanagerdev@gmail.com",
+})
+
+# Machine-generated prose posted under a HUMAN account — 33 of the 186, so the account list
+# above is not enough on its own. BMO writes the duplicate notice and the attachment header;
+# release engineers post a bare landing URL and nothing else.
+#
+# The attachment rule is deliberately narrow, and this is the measured part: dropping every
+# "Created attachment" comment eats 12 of the 18 in the panel, whose bodies are the patch's
+# commit message — including jstutte's on bug 2062119, which explains the true mechanism the
+# pipeline had missed. So only the BARE two-line form (header + title, nothing else) counts
+# as boilerplate.
+_BOILERPLATE = (
+    re.compile(r"^\s*\*\*\*\s+(?:Bug \d+ has been marked as a duplicate of this bug"
+               r"|This bug has been marked as a duplicate of bug \d+)\.?\s+\*\*\*\s*$"),
+    re.compile(r"^\s*https?://hg\.mozilla\.org/\S+\s*$"),
+    re.compile(r"^\s*Created attachment \d+\s*\n[^\n]*\s*$"),
+)
+
+
+def _fit_column(model, column, value):
+    """Clamp *value* to the width its own column declares, reading the width off the column.
+
+    The general form of a specific trap. A Python string longer than a ``db.String(n)`` is a
+    ``StringDataRightTruncation`` on Postgres inside an unguarded ``db.session.commit()`` —
+    which, in a scheduled job, kills the tick — and CI cannot see it because sqlite ignores
+    VARCHAR lengths entirely. Checking each literal by hand is the version of this fix that
+    rots; asking the column is the version that does not. A clamped value is still a usable
+    label, and it can never abort the sweep."""
+    if value is None:
+        return None
+    value = str(value)
+    length = getattr(model.__table__.c[column].type, "length", None)
+    return value if not length or len(value) <= length else value[:length]
+
+
+class ReviewNote(db.Model):
+    """What a reviewer SAID about a bug we filed. One row per comment, hand-labelled.
+
+    ``Feedback`` reads the structured half of a review — ``resolution`` and ``regressed_by``,
+    a field a reviewer either sets or does not. This is the other half, and it is where every
+    real correction has actually lived: nothing in this repo could read a rebuttal comment, so
+    every improvement in the 2026-08-21 overfitting audit came from a human reading Bugzilla by
+    hand. Bug 2065373 is the case in point — jstutte corrected three separate claims in prose,
+    set no field at all, and the pipeline's own record of that bug is still "NEW, no
+    regressed_by, nothing happened".
+
+    Four rules, each of which cost a measurement:
+
+    * **It is a corpus, not a verdict.** Nothing here is written to ``Feedback.attribution``.
+      That column is the causal verdict and feeds ``scoreboard()["by_archetype"]``; two of the
+      filings that get notes already carry a reviewer-set ``regressed_by`` (2061975 ``[2023197]``
+      set by dtownsend, 2063892 ``[2058982]`` set by dmeehan) and a second state written over
+      them would destroy the only verdicts the table has. Two values in one column cannot both
+      be set. ``human_replied`` is therefore DERIVED (``ReviewNote.replied``), never stored --
+      which is also forced: ``_ensure_tables`` creates missing TABLES, never missing COLUMNS, so
+      a new column on ``feedback`` would silently not exist in prod.
+
+    * **A reply is not a correction.** The predicate "somebody who is not us commented" fires
+      on 43 of the 52 filings (18 of the 27 still open), and among them are outright
+      endorsements: bug 2060920 (docfaraday, "Seems like an easy enough fix... I'll probably do
+      it all in one go") and bug 2063892 (abienner, "I have a fix almost ready"). Only the
+      hand-set ``error_class`` asserts that we were wrong.
+
+    * **Our own comments are identified by their BODY, not their author.** The filer posts as
+      cdenizet, who is also a real reviewer on these bugs. Measured on the panel: 8 cdenizet
+      comments sit past comment 0 across 7 filings, and 6 of them are the filer commenting
+      again — an author-email rule mislabels all 8. The body marker
+      ``Crash report: https://crash-stats.mozilla.org/report/index/`` splits them exactly:
+      58 marker comments, all cdenizet's, none by anyone else. The residual two are honest --
+      one BMO duplicate notice (caught by ``_BOILERPLATE``) and one genuine human note the
+      operator wrote on bug 2063003, which is a human reply and is kept as one.
+
+    * **Only bugs we CREATED.** ``bugzilla_apply`` sets ``filed: True`` for
+      ``mode == "comment_on_existing"`` too, so the filed set includes bugs that are not ours.
+      The one such bug in the public record, 2057980, would inject 29 rows -- 24% of the
+      corpus -- of Thunderbird contributors discussing their own bug. The gate is an allowlist
+      (``feedback._NOTE_MODES``), so an unrecognised future mode is skipped and COUNTED rather
+      than silently trusted.
+
+    ``comment_id`` is BMO's own id and is unique, so the sweep is idempotent for free and a
+    re-fetch can never duplicate a row or overwrite a hand label."""
+
+    __tablename__ = "reviewnote"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    bug_id = db.Column(db.Integer, nullable=False, index=True)
+    comment_id = db.Column(db.Integer, unique=True, nullable=False, index=True)
+    comment_no = db.Column(db.Integer, nullable=False, default=0)
+    author = db.Column(db.String(128), nullable=False, default="")
+    # human | agent | automation
+    author_kind = db.Column(db.String(12), nullable=False, default="human")
+    # This comment's author also put a needinfo on the account that FILED the bug. High
+    # precision and very low recall by construction: 18 of the 52 filings ever carried a
+    # needinfo aimed at us and 17 were mass sweeps by release-mgmt-account-bot (4 on
+    # 2026-08-06, 13 on 2026-08-10), leaving exactly one human -- jstutte on bug 2065373, the
+    # review that started the audit. Kept as a PRIORITY hint on a note, never as a channel of
+    # its own: all 18 arrived with a comment from the same author within ten minutes (0
+    # orphans), so the comment sweep already sees every one of them.
+    needinfo = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    body = db.Column(db.Text, nullable=False, default="")
+    # HAND-SET (`bin/feedback.py --label`). The only field that may assert a correction.
+    error_class = db.Column(db.String(32), nullable=True, index=True)
+    label_note = db.Column(db.Text, nullable=True)
+    labelled_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    seen_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now())
+
+    @staticmethod
+    def classify_author(author, text):
+        """``human`` | ``agent`` | ``automation`` — a TOTAL function, defaulting to ``human``.
+
+        Defaults to ``human`` deliberately: an unknown account is a person until proven
+        otherwise, so a new bot costs noise (visible, fixable by adding it to the list) while
+        the opposite default would silently swallow a new reviewer."""
+        author = (author or "").strip().lower()
+        text = text or ""
+        if author in _AGENT_ACCOUNTS:
+            return "agent"
+        if author in _AUTOMATION_ACCOUNTS:
+            return "automation"
+        for pattern in _BOILERPLATE:
+            try:
+                if pattern.match(text):
+                    return "automation"
+            except Exception:                               # pragma: no cover - defensive
+                continue
+        return "human"
+
+    @staticmethod
+    def record(bug_id, comment_id, commit=True, **fields):
+        """Insert one note. Returns ``(row, created)``; an id already stored is UNTOUCHED.
+
+        Never re-writes: ``error_class`` and ``label_note`` are hand-set, and a six-hourly job
+        that re-reads the same comment must not be able to erase a label somebody spent
+        judgement on. A comment edited on BMO therefore keeps its original text here, which is
+        the right trade — the label was made against the text we hold."""
+        row = (db.session.query(ReviewNote)
+               .filter(ReviewNote.comment_id == int(comment_id)).one_or_none())
+        if row is not None:
+            return row, False
+        row = ReviewNote(bug_id=int(bug_id), comment_id=int(comment_id))
+        for key, value in fields.items():
+            if not hasattr(row, key):
+                continue
+            setattr(row, key, _fit_column(ReviewNote, key, value)
+                    if isinstance(value, str) else value)
+        db.session.add(row)
+        if commit:
+            db.session.commit()
+        return row, True
+
+    @staticmethod
+    def label(comment_id, error_class, note=None):
+        """Hand-set the verdict on one note. Refuses a value outside ``ERROR_CLASSES``.
+
+        A vocabulary check rather than a free-text column: the point of the corpus is to be
+        counted, and a typo'd class is a row that silently never appears in any tally."""
+        if error_class is not None and error_class not in ERROR_CLASSES:
+            raise ValueError("error_class must be one of {}, got {!r}".format(
+                ", ".join(ERROR_CLASSES), error_class))
+        row = (db.session.query(ReviewNote)
+               .filter(ReviewNote.comment_id == int(comment_id)).one_or_none())
+        if row is None:
+            return None
+        row.error_class = _fit_column(ReviewNote, "error_class", error_class)
+        row.label_note = note if note is not None else row.label_note
+        row.labelled_at = datetime.now(timezone.utc)
+        db.session.commit()
+        return row
+
+    @staticmethod
+    def replied():
+        """``{bug_id: {notes, authors, needinfo, labels}}`` — the DERIVED ``human_replied``.
+
+        A bug is in this dict iff somebody who is not the filer wrote something that is not
+        machinery on it. That is all it claims. Whether they were CORRECTING us is
+        ``labels``, and only a human puts a value there."""
+        out = {}
+        rows = (db.session.query(ReviewNote)
+                .filter(ReviewNote.author_kind != "automation")
+                .order_by(ReviewNote.bug_id, ReviewNote.comment_no).all())
+        for row in rows:
+            e = out.setdefault(row.bug_id, {"notes": 0, "authors": [], "needinfo": False,
+                                            "labels": {}})
+            e["notes"] += 1
+            if row.author not in e["authors"]:
+                e["authors"].append(row.author)
+            e["needinfo"] = e["needinfo"] or bool(row.needinfo)
+            if row.error_class:
+                e["labels"][row.error_class] = e["labels"].get(row.error_class, 0) + 1
+        return out
+
+    @staticmethod
+    def corpus(unlabelled_only=False, limit=None):
+        """The rows a human should read next, needinfo'd ones first."""
+        q = db.session.query(ReviewNote).filter(ReviewNote.author_kind != "automation")
+        if unlabelled_only:
+            q = q.filter(ReviewNote.error_class.is_(None))
+        q = q.order_by(ReviewNote.needinfo.desc(), ReviewNote.bug_id, ReviewNote.comment_no)
+        return q.limit(limit).all() if limit else q.all()
+
+
 def commit():
     db.session.commit()
 
@@ -3023,7 +3271,7 @@ def create():
 # Tables added after the initial deploy. `create()` only calls `create_all()` on a FRESH
 # database, so a long-lived one would never grow a new table and every read of it would fail at
 # runtime — the same gap `_ensure_enum_values` exists to close for enum values.
-_ADDED_TABLES = ("archetypes", "feedback", "selection", "sweepmarks")
+_ADDED_TABLES = ("archetypes", "feedback", "reviewnote", "selection", "sweepmarks")
 
 
 def _ensure_tables():
