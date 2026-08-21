@@ -557,7 +557,7 @@ def build_stale_signature_note(corroborations):
     ``stale_signature_clamped`` reached no prompt, no chip and no bug comment.
 
     THE PAIR IS THE POINT. A lead clamped for 202 days of staleness and then re-inflated by the
-    blind second opinion ships at p_worth 0.9714, byte-identical to a clean rung-70 lead, and the
+    blind second opinion ships at p_worth 0.7234, byte-identical to a clean rung-70 lead, and the
     recipient is told neither half — not that the timing evidence ran against the changeset, nor
     that the confidence they are reading rests on an independent blind agreement rather than on
     the first analysis. That is the bug-2065373 lesson (:jstutte, 2026-08-21): every claim he
@@ -943,7 +943,22 @@ def is_suspected_regression(corroborations):
     phrase: it sets the ``regression`` keyword that release management triages on, links the bug
     into a stranger's blocks list, and points a needinfo at the person named. On bug 2062119 all
     three fired for a changeset from 2022 while the run's own skeptic pass was recording "a
-    pre-existing latent race, not a new regression"."""
+    pre-existing latent race, not a new regression".
+
+    WHAT THE FLAG GATES, exactly, because the paragraph above is now one release out of date:
+    this prose, the ``regression`` KEYWORD, and the ``regressed_by`` field
+    (``build_bug_preview``'s ``keywords`` and ``link_regressor``). It does NOT gate the needinfo
+    or the ``blocked`` list — both are unconditional now, and the regressor's own bug was removed
+    from ``blocked`` when ``regressed_by`` replaced it. And it deliberately does NOT gate the
+    calibrated "N% worth investigating" number, which is a measured decision rather than an
+    omission. Keying the number on it too — so the caveat and the number in the same comment
+    could not disagree — was tried on 2026-08-21 and refuted: on
+    corpus_ship the out-of-window arm is 8/21 = 0.381, but 12 of those 21 are culprit-DELETED
+    negatives that cannot score ``worth`` at all, the informative rows read 8/9 = 0.889 against
+    26/26 (Fisher p = 0.257), and all 12 reported rung-70+ negatives are out-of-window, so the
+    flag is a proxy for the corpus's own ``is_negative`` label. Bug 2062806 is the wrong-direction
+    case: out-of-window, this caveat printed, and hzhao confirmed the mechanism and backed the
+    named changeset out. See ``config.get_agent_calibration``."""
     return (corroborations or {}).get("candidate_in_pushlog_window")
 
 

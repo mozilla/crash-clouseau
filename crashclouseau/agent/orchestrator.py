@@ -870,7 +870,7 @@ def _is_promotable_bare_lead(verdict):
     A ``lead`` below ``probable`` AND at/above the second opinion's ``min_boost_confidence``
     (50). THE FLOOR IS NOT NEW — it is the one ``_fold_second_opinion`` has always applied,
     whose written justification describes THIS gate word for word: "a boost would jump two
-    rungs (low -> probable, p_worth 0.50 -> 0.97) ... the corroborate side was never part of
+    rungs (low -> probable, p_worth 0.50 -> 0.72) ... the corroborate side was never part of
     the calibration fit". The corroboration gate is the pipeline's only PROMOTING gate and it
     lands a bare lead on exactly ``autofile.min_confidence`` (70, shipped in
     config/global.json), so before this a lead/low went 25 -> 70 deterministically, straight
@@ -1420,7 +1420,7 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
         blocked_by = _so_boost_blocked_by(dossier.corroborations)
         is_bare_lead = v.decision == Decision.lead and CONFIDENCE_SCORE.get(v.confidence, 0.0) < CONFIDENCE_SCORE[Confidence.probable]
         # Measuring a lead does NOT license re-ranking it: below `min_boost_confidence` a boost
-        # would jump two rungs (low -> probable, p_worth 0.50 -> 0.97) on the weaker of the SO's
+        # would jump two rungs (low -> probable, p_worth 0.50 -> 0.72) on the weaker of the SO's
         # two signals — the corroborate side was never part of the calibration fit, while a
         # refutation is measured at specificity 1.00. Record the agreement, leave the band alone.
         # (This floor is NOT what keeps the bottom rung symmetric any more: a refutation there
@@ -1992,19 +1992,32 @@ def _record_window_membership(dossier, seed):
     new regression"). Jens Stutte's first reply was "I do not think bug 1768581 is the
     regressor", and the feedback that followed was to be more speculative on the unsure parts.
 
-    So this only labels; it moves no rung. ``seed["candidate_pushdates"]`` holds exactly the
-    seeded window candidates (``build_seed`` builds it from the pushlog), so membership is a dict
-    lookup — no network, offline-safe, and unrecorded (rather than ``False``) when there is no
-    map to consult, because the bug comment must not claim a window it never had."""
+    So this only labels; it moves no rung. ``seed["candidates"]`` IS the pushlog window
+    (``build_seed`` builds it from the pushlog), so membership is a set lookup — no network,
+    offline-safe, and unrecorded (rather than ``False``) when there is nothing to consult,
+    because the bug comment must not claim a window it never had.
+
+    KEYED ON THE CANDIDATE SET, NOT ON ``candidate_pushdates``, which is the same window minus
+    every candidate whose landing date is unknown (``build_seed`` drops ``pushdate is None``).
+    Two reasons, and the second is the load-bearing one. A candidate with no pushdate WAS in the
+    window, so scoring it ``False`` under-claims — and this flag decides whether the filed bug
+    may say "regression" at all. And ``eval/study_corpus.py`` writes ``"pushdate": None`` for
+    every candidate it freezes (0 of corpus_ship's 6873 have one), so under the map this flag
+    could NEVER be recorded offline: it is absent from all 90 rows of corpus_ship/results.jsonl,
+    which is precisely why the two-arm calibration split had to be backfilled by hand rather than
+    read off the corpus (``config.get_agent_calibration``, ``spike/window_arm_null.py``). A fact
+    the eval harness cannot record is a fact no fit can ever be validated against."""
     cand = dossier.candidate if dossier is not None else None
     if cand is None or not cand.node:
         return
-    pushdates = (seed or {}).get("candidate_pushdates")
-    if not pushdates:
+    window = {c.get("node") for c in ((seed or {}).get("candidates") or [])
+              if isinstance(c, dict) and c.get("node")}
+    window |= {node for node in ((seed or {}).get("candidate_pushdates") or {}) if node}
+    if not window:
         return
     dossier.corroborations = {
         **(dossier.corroborations or {}),
-        "candidate_in_pushlog_window": cand.node in pushdates,
+        "candidate_in_pushlog_window": cand.node in window,
     }
 
 

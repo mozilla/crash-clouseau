@@ -20,6 +20,14 @@ Since the filer began setting ``regressed_by`` itself, that comparison needs one
 WE wrote there. A field that agrees with us because we wrote it is not a reviewer agreeing with
 us, so it scores ``unconfirmed`` rather than ``correct`` — see ``models.Feedback.classify``.
 
+And a second input, because the field can also be copied out of our comment by somebody who never
+read the analysis: 10 of the 15 non-filer ``regressed_by`` settings across the 52 filings were
+made by one release-management account answering a BugBot nag, and on two of those bugs (2061969,
+2061691) no human other than the filer has ever written a word. ``_independent_reviewers`` asks
+the ``ReviewNote`` corpus this module already collects whether anybody but us and the machinery
+commented at all. That is the difference between a reviewer endorsing us and the loop reading its
+own prose back.
+
 Read-only and unauthenticated: everything needed is public on a bug we filed publicly.
 
 The reason this module exists at all is ``models.Archetype``. A learned rule is a guess until
@@ -168,6 +176,53 @@ def _needinfo_setters(bug_id, account):
             if ch.get("field_name") == "flagtypes.name" and want in (ch.get("added") or "")}
 
 
+def _independent_reviewers(filers):
+    """``{bug_id: bool}`` for the bugs asked about — has a HUMAN who is not the filer written on
+    it? ``filers`` is ``{bug_id: the filing account}``. A bug MISSING from the answer means
+    "not checked", and ``models.Feedback.classify`` scores that exactly as it did before.
+
+    Reads the ``ReviewNote`` rows ``_ingest_notes`` below already stores, so it costs no request
+    — and, more importantly, it reuses the classifier that was measured on the panel.
+    ``ReviewNote.classify_author`` knows the five automation accounts, the boilerplate posted
+    under human accounts, AND the two AGENT accounts. ``experts._is_bot``, the obvious thing to
+    reach for here, scores ``firefoxmanagerdev@gmail.com`` as a human; that account is an LLM and
+    all THREE of its appearances in the panel (bugs 2060922, 2061973 and 2062335) are REFUTATIONS
+    of our attribution. Reading a refutation as an independent endorsement is the exact failure
+    this check exists to stop, so the weaker test is not an acceptable substitute for the
+    stronger one.
+
+    A bug is answered only once its comments have actually been SWEPT (``_NOTE_CURSOR``). Two
+    consequences, both deliberate: on a database with no note corpus yet nothing is relabelled,
+    and because ``_ingest_notes`` runs AFTER the verdicts in ``refresh`` below, a bug's first scan
+    and its first independence answer are one tick (6h) apart. The lag can only delay a
+    correction, never invent one.
+
+    The filer is excluded by EMAIL on top of the body-marker filter ``_ingest_notes`` applies:
+    one operator note on bug 2063003 is a genuine human comment written by the filing account,
+    and counting our own note as an independent reviewer is the shape being removed."""
+    if not filers:
+        return {}
+    try:
+        names = {_NOTE_CURSOR.format(b): b for b in filers}
+        marks = (models.db.session.query(models.SweepMark.name)
+                 .filter(models.SweepMark.name.in_(sorted(names)),
+                         models.SweepMark.position > 0).all())
+        scanned = {names[row[0]] for row in marks}
+        rows = ((models.db.session.query(models.ReviewNote.bug_id, models.ReviewNote.author)
+                 .filter(models.ReviewNote.bug_id.in_(sorted(scanned)),
+                         models.ReviewNote.author_kind == "human").all())
+                if scanned else [])
+    except Exception as exc:                                # pragma: no cover - defensive
+        models.db.session.rollback()
+        logger.warning("feedback: independence lookup failed: %s", exc)
+        return {}
+    out = {bug_id: False for bug_id in scanned}
+    for bug_id, author in rows:
+        if (author or "").strip().lower() != (filers.get(bug_id) or "").strip().lower():
+            out[bug_id] = True
+    return out
+
+
 def _ingest_notes(filed, fetched):
     """Store every comment on OUR bugs that we did not write. Returns a counts dict.
 
@@ -239,6 +294,19 @@ def refresh():
     recorded about it."""
     filed = _filed_bugs()
     fetched = _fetch([f["bug_id"] for f in filed])
+    # `correct` is the ONLY verdict the independence check can move, so ask the scorer itself
+    # which rows are even eligible rather than re-implementing its `correct` branch here, which
+    # would drift. 14 of the 52 filings on the 2026-08-21 panel are eligible and 2 move.
+    eligible = {}
+    for entry in filed:
+        bug = fetched.get(entry["bug_id"])
+        if bug is None:
+            continue
+        if models.Feedback.classify(bug.get("resolution") or None, entry["named_bug"],
+                                    bug.get("regressed_by") or [],
+                                    entry["claimed"]) == "correct":
+            eligible[entry["bug_id"]] = (bug.get("creator") or "").strip().lower()
+    independent = _independent_reviewers(eligible)
     updated = 0
     for entry in filed:
         bug = fetched.get(entry["bug_id"])
@@ -247,6 +315,7 @@ def refresh():
         models.Feedback.record(
             entry["bug_id"],
             claimed_regressed_by=entry["claimed"],
+            independent_comment=independent.get(entry["bug_id"]),
             uuid=entry["uuid"],
             named_bug=entry["named_bug"],
             named_node=entry["named_node"],

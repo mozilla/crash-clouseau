@@ -2929,7 +2929,7 @@ class Feedback(db.Model):
     )
 
     @staticmethod
-    def classify(resolution, named_bug, regressed_by, claimed=None):
+    def classify(resolution, named_bug, regressed_by, claimed=None, independent_comment=None):
         """The verdict on OUR verdict.
 
         Five states, and the middle ones are the ones worth separating: a bug can be a real crash
@@ -2948,7 +2948,36 @@ class Feedback(db.Model):
         table exists to prevent. ``claimed`` is what we set at filing time; only a value somebody
         else put there counts. A reviewer who REPLACES ours still lands in ``wrong``, which is the
         half of the loop that improves anything: writing the field invites that correction, where
-        prose in a comment could be ignored silently."""
+        prose in a comment could be ignored silently.
+
+        THE SECOND ROUTE INTO THE SAME TRAP DOES NOT GO THROUGH ``claimed`` AT ALL: somebody else
+        can copy the field out of our own comment. Measured over the 52 filings on 2026-08-21, 15
+        carry a ``regressed_by`` we did not set, and 10 of the 15 were set by ONE release-
+        management account (dmeehan@mozilla.com, seven of them inside 2h06 on 08-17) answering
+        BugBot's ":calixte, since this bug is a regression, could you fill (if possible) the
+        regressed_by field?". On bugs 2061969 and 2061691 that is the whole story: no human other
+        than the filer has ever written on either — 2061691's only non-filer analysis is 2560
+        characters posted by ``hackbot@mozilla.tld``, which is us. Scoring those ``correct`` reads
+        our own prose back as an endorsement.
+
+        ``independent_comment`` is the third input and it is deliberately a question about the
+        BUG, not about the setter: ``True``/``False`` = ``feedback._independent_reviewers`` looked
+        and somebody who is neither the filer nor machinery did / did not write on it; ``None`` =
+        nobody looked, which leaves every historical row and every caller that does not pay for
+        the lookup scored exactly as before. Unlike ``candidate_in_pushlog_window``'s tri-state,
+        silence here means "unchecked", not "no".
+
+        WHY THE BUG AND NOT THE SETTER — the counter-example that kills the tighter predicate: on
+        bug 2062806 ryanvm set ``regressed_by`` and never commented, but hzhao had already written
+        "Confirming the mechanism — this is correct" and landed the backout. "The setter did not
+        comment" eats the single cleanest confirmed fix of the 52. There is no length floor on
+        "substantive" either: bug 2063862's only independent comment is 42 characters ("This will
+        be fixed by backout bug 2059597."), and a threshold tuned to exclude it would be fit on
+        the one case it was invented for. Of the 14 rows that score ``correct`` today this moves
+        exactly two — 2061969 and 2061691 — and leaves all five genuine adjudications alone
+        (2062219 dveditz, 2062806 ryanvm/hzhao, 2063892 abienner, 2062052 aborovova, 2061975
+        dtownsend) along with both contradictions, 2062119 (jstutte replaced ours -> ``wrong``)
+        and 2064137 (jdemooij removed ours -> ``crash_invalid``)."""
         if (resolution or "").upper() in ("INVALID", "WORKSFORME", "INCOMPLETE"):
             return "crash_invalid"
         known = [int(b) for b in (regressed_by or []) if str(b).isdigit()]
@@ -2956,18 +2985,25 @@ class Feedback(db.Model):
             return "unknown"
         ours = [int(b) for b in (claimed or []) if str(b).isdigit()]
         if named_bug is not None and int(named_bug) in known:
-            return "unconfirmed" if int(named_bug) in ours else "correct"
+            if int(named_bug) in ours or independent_comment is False:
+                return "unconfirmed"
+            return "correct"
         return "wrong"
 
     @staticmethod
-    def record(bug_id, claimed_regressed_by=None, **fields):
+    def record(bug_id, claimed_regressed_by=None, independent_comment=None, **fields):
         """Create or refresh one row by bug id; recomputes ``attribution``.
 
         ``claimed_regressed_by`` (what the filer itself set on the bug, from
         ``Dossier.payload['filed_bug']``) is an input to the verdict and is deliberately NOT
         stored: it is a fact about our filing, which the dossier already holds, and a new column
         on a long-lived table would need a migration this project has no framework for. Every
-        caller reads the dossier anyway, so it is always available where it is needed."""
+        caller reads the dossier anyway, so it is always available where it is needed. The same
+        goes for ``independent_comment`` (did anybody but us and the machinery write on the bug —
+        ``feedback._independent_reviewers``): it is re-derived on every refresh, because a bug
+        nobody had commented on last week may have been adjudicated since, and ``_ensure_tables``
+        creates missing TABLES and never missing COLUMNS, so a new column here would silently not
+        exist in prod."""
         row = db.session.query(Feedback).filter(Feedback.bug_id == bug_id).one_or_none()
         if row is None:
             row = Feedback(bug_id=bug_id)
@@ -2976,7 +3012,8 @@ class Feedback(db.Model):
             if hasattr(row, key):
                 setattr(row, key, value)
         row.attribution = Feedback.classify(
-            row.resolution, row.named_bug, row.regressed_by, claimed_regressed_by)
+            row.resolution, row.named_bug, row.regressed_by, claimed_regressed_by,
+            independent_comment)
         row.checked_at = datetime.now(timezone.utc)
         db.session.commit()
         return row

@@ -266,6 +266,24 @@ class TestWindowMembership(unittest.TestCase):
                 orch._record_window_membership(d, seed)
                 self.assertEqual(d.corroborations or {}, {})
 
+    def test_a_candidate_with_no_pushdate_is_still_in_the_window(self):
+        # `candidate_pushdates` is the window MINUS every candidate whose landing date is
+        # unknown, so keying on it scored a seeded candidate as out-of-window. It also made the
+        # flag unrecordable offline: `eval/study_corpus.py` writes "pushdate": None for all of
+        # them (0 of corpus_ship's 6873 have one), which is why the two-arm calibration split had
+        # to be backfilled by hand instead of read off the corpus.
+        d = _lead()
+        orch._record_window_membership(
+            d, {"candidates": [{"node": "c998e317e0cc", "pushdate": None},
+                               {"node": "other", "pushdate": None}]})
+        self.assertIs(d.corroborations["candidate_in_pushlog_window"], True)
+
+    def test_a_candidate_outside_the_seeded_set_is_still_false(self):
+        d = _lead()
+        orch._record_window_membership(
+            d, {"candidates": [{"node": "someothernode"}], "candidate_pushdates": {}})
+        self.assertIs(d.corroborations["candidate_in_pushlog_window"], False)
+
     def test_it_moves_no_rung(self):
         d = _lead()
         orch._record_window_membership(d, {"candidate_pushdates": {"nope": 1}})

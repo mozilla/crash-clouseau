@@ -211,7 +211,7 @@ class TestThroughTheGates(unittest.TestCase):
         self.assertEqual(r.dossier.verdict.confidence, Confidence.medium)
         # The calibrated badge must follow the clamped rung, not the raw one.
         self.assertEqual(r.dossier.raw_verdict.confidence, Confidence.probable)
-        self.assertLess(r.dossier.verdict.p_worth_investigating, 0.97)
+        self.assertLess(r.dossier.verdict.p_worth_investigating, 0.7234)
 
     def test_eval_seeds_without_the_key_are_unaffected(self):
         # The offline eval runner passes a seed with no signature_age_days: calibration must keep
@@ -252,7 +252,7 @@ class TestThroughTheGates(unittest.TestCase):
     def test_the_clamp_and_the_restore_both_reach_the_reader(self):
         # bug 2062219's shape, end to end: 202.5 days stale, clamped probable -> medium, then an
         # independent blind review agrees and puts it back. Both halves used to be invisible —
-        # the dossier ships p_worth 0.9714, byte-identical to a clean rung-70 lead, and neither
+        # the dossier ships p_worth 0.7234, byte-identical to a clean rung-70 lead, and neither
         # the filed bug nor the chip said the timing evidence had run against the changeset. The
         # clamp is DELIBERATELY re-inflatable (`_SO_BOOST_POLICY`: it rules on origin, the second
         # opinion on mechanism); this pins the other obligation, that we say so.
@@ -266,7 +266,7 @@ class TestThroughTheGates(unittest.TestCase):
         self.assertTrue(corr["stale_signature_clamped"])
         self.assertTrue(corr["second_opinion_boosted"])
         self.assertEqual(r.dossier.verdict.confidence, Confidence.probable)
-        self.assertAlmostEqual(r.dossier.verdict.p_worth_investigating, 0.9714, places=4)
+        self.assertAlmostEqual(r.dossier.verdict.p_worth_investigating, 0.7234, places=4)
         note = report_bug.build_stale_signature_note(corr)
         self.assertIn("202 days before the changeset", note)
         self.assertIn("independent blind re-analysis", note)

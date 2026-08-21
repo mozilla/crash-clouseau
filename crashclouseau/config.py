@@ -528,7 +528,7 @@ def get_agent_second_opinion():
         "min_confidence": o.get("min_confidence", 25),
         # Separate, HIGHER bar for letting a corroboration MOVE the band (vs merely measuring).
         # Measuring every reported lead is not a licence to re-rank the weakest ones: at `low` a
-        # boost would jump TWO rungs (low -> probable, p_worth 0.50 -> 0.97).
+        # boost would jump TWO rungs (low -> probable, p_worth 0.50 -> 0.72).
         #
         # NOTE this floor originally existed to stop the fold being one-directional at the bottom
         # rung, back when a refutation there was a no-op. That is no longer why it is here: a
@@ -711,11 +711,104 @@ def get_agent_calibration():
     calibration run has been fit + wired, so ``Verdict.p_worth_investigating`` stays ``None`` in
     prod until then. A path is re-read only when its mtime changes.
 
-    The shipped table gives rungs 70 and 85 the SAME value (0.9714) on purpose: it is the pooled
-    70+85 bin (34/35), because rung 85 measured worse than rung 70 on the study corpus. It is a
-    result, not an unfinished fit — do not "separate" them, and expect no badge movement from any
-    gate that drops a verdict from 85 to 70. Full numbers in ``eval.calibrate``'s module
-    docstring."""
+    SHIPPED 2026-08-21: ``{25: 0.5, 50: 0.5714, 70: 0.7234, 85: 0.7234}``, the fit over ALL 90
+    rows of ``corpus_ship`` (``eval.calibrate --corpus-dir corpus_ship --holdout-folds 0``).
+    n per rung, reported rows only: 25 -> 1/2, 50 -> 4/7, 70 -> 21/27 = 0.778, 85 -> 13/20 =
+    0.650, isotonic-pooled at the top into 34/47 = 0.7234 (Wilson95 0.5824-0.8306). Read rung 50
+    with care: 0.8 -> 0.5714 is a 23-point move off a SEVEN-row bin whose only change is its two
+    culprit-absent rows (4/5 -> 4/7). It is below ``autofile.min_confidence`` so nothing is filed
+    on it and it reaches only the crashstack badge, but it is the one value here that a handful
+    of new rows could move again.
+
+    IT REPLACES ``{25: 0.5, 50: 0.8, 70: 0.9714, 85: 0.9714}``, WHICH WAS A POSITIVES-ONLY FIT.
+    ``corpus_ship/calibration_table_positives.json`` is byte-identical to that table and records
+    ``n_negative`` 0 and ``n_test`` 0: no negative arm and no held-out split at all. The 26
+    culprit-absent rows it drops are not noise — 14 of them were REPORTED, 12 at rung 70+, and
+    every one of the 12 was a miss. 0.9714 = 34/35 is therefore the precision left after deleting
+    only losses, and its own Wilson95 lower bound (0.8547) sits ABOVE the upper bound of the
+    corpus fit (0.8306) and above every production reading below except the loosest one, which
+    counts self-duplicates (22/30, upper 0.8582). A number a Bugzilla reviewer reads cannot be
+    fit that way.
+
+    HELD OUT, NOT MERELY FIT. With ``--holdout-folds 3`` (the stable uuid-hash split, 62 cal /
+    28 test) the calibration split fits rung 70+ at 26/34 = 0.7647 and the 28 rows it never saw
+    read 8/13 = 0.615 (Wilson95 0.3552-0.8229) — an interval that covers the shipped 0.7234. The
+    all-rows fit is what ships because it uses every labelled row; the split is what says the fit
+    is not an artefact of the rows it was fit on. The retired table has no such evidence:
+    refit that arm with ``--positives-only --holdout-folds 3`` and every rung is a zero-failure
+    bin (1.000 across the board, floored to 0.8865 by ``eval.calibrate._deceil``) — deleting the
+    losses is what the arm IS, so a split has nothing left to disagree with.
+
+    AND IT AGREES WITH PRODUCTION, which is the real argument for the number. Over the 52 bugs
+    filed since 2026-08-05 (BMO ``creator=cdenizet@mozilla.com``, ``short_desc`` "Crash in [@"),
+    the adjudicated ones are 10 FIXED + 2 ASSIGNED + 3 still open with a ``regressed_by`` the
+    filer did not set (2061691, 2061969, 2061975) + 2 duplicates of a pre-existing bug, against
+    8 closed INVALID/WORKSFORME: 17/25 = 0.680 (Wilson95 0.4841-0.8280), or 22/30 = 0.733
+    (0.5555-0.8582) counting the 5 self-duplicates of our own filings as positive.
+
+    That numerator is deliberately the LOOSEST honest one, and this patch itself argues against
+    two of its rows: 2061691 and 2061969 are the two ``Feedback.classify`` now scores
+    ``unconfirmed`` (dmeehan set the field answering a BugBot nag; nobody but us ever wrote on
+    either bug). Drop them and production reads 15/23 = 0.652 (0.4489-0.8119), or 20/28 = 0.714
+    (0.5294-0.8475). So the real production statement is a RANGE, 0.65-0.73 across every way of
+    counting an endorsement, and every one of those intervals contains the shipped 0.7234 while
+    none of them contains 0.9714. That, not an exact coincidence of two decimals, is why this
+    number is publishable and the old one was not.
+
+    WHAT THE SHIPPED FIT ITSELF RESTS ON, said out loud because the null result below refuses
+    to read the same rows as informative: 12 of the 47 reported rung-70+ rows are the corpus's
+    culprit-DELETED negatives, whose ``worth`` is False BY CONSTRUCTION. Pooling them in is
+    defensible — a lead named in a window with no culprit IS a false investigate, which is the
+    quantity the badge claims — but it is not free. On the 3 of those 12 whose positive twin is
+    still in corpus_ship, TWO cited the exact changeset the negative build had deleted
+    (5a444e22.../``c11e7594c36d``, d069e9f8.../``13d65a94e4cf``): the agent found the real
+    regressor off-window and was scored 0 for it. Relabelling only those two gives 36/47 = 0.766.
+    0.7234 is therefore a LOWER bound on the full arm, and the production readings above are what
+    keep it honest — the corpus alone cannot settle its own label.
+    ``spike/window_arm_null.py`` prints this check.
+
+    A TWO-ARM TABLE WAS TRIED AND MEASURED DEAD (2026-08-21) — recorded so the next session does
+    not rebuild it. The idea was to key the table on ``corroborations.candidate_in_pushlog_window``
+    (the observable fact ``report_bug.is_suspected_regression`` already reads) and publish a high
+    number in-window, a low one outside. Backfilling that flag onto corpus_ship from each case's
+    frozen candidate set (``spike/window_arm_null.py``) gives reported rung 70+ = 26/26 in-window
+    against 8/21 = 0.381 out of it, which looks decisive and is not:
+
+    * 12 of those 21 out-of-window rows are the corpus's culprit-DELETED negatives, and a
+      negative row has no ``regressor_nodes``, so ``worth`` is False whatever the agent said
+      (0 of 26 negatives score ``worth`` at ANY rung). 0.381 is 57% unconditional zeros.
+    * On the rows whose label can carry information, out-of-window reads 8/9 = 0.889 against
+      in-window's 26/26. Fisher exact p = 0.257 — THE PREDICATE DOES NOT SEPARATE.
+    * All 12 reported rung-70+ negatives are out-of-window (12/12), so the "observable" predicate
+      is a strict SUPERSET of the unobservable ``is_negative`` label it claimed to replace, not
+      an independent axis — which makes the in-window arm the positives-only fit under a new
+      name, i.e. exactly the defect being removed.
+    * And the corpus structurally CANNOT contain a bug-2062806 shape: an out-of-window candidate
+      that was the true cause. Publishing 0.381 for that population puts the cleanest confirmed
+      fix of all 52 filings in the lowest bin.
+
+    Settling it needs the 16 out-of-window filings labelled one by one, not a refit. The flag is
+    still recorded on every dossier and ``eval.calibrate --arm`` still fits either side of it.
+
+    WHAT THIS MUST NOT BE READ AS: a reason to file less. Nothing gates on this number —
+    ``autofile.min_confidence`` and every other threshold key on the 0-100 RUNG; ``p_worth``
+    reaches only the bug comment (``report_bug._worth_phrase``) and the crashstack badge. The two
+    highest-value outputs of the 52 filings are both cases a lower number would have discouraged.
+    Bug 2062806: the filed comment itself said the changeset "did not land in this build's
+    pushlog window ... named only as the closest thing found on the crash path", and hzhao
+    confirmed the mechanism, backed that exact changeset out, RESOLVED FIXED. Bug 2062119: filed
+    at rung 85 with a flatly wrong attribution (jstutte, "I do not think bug 1768581 is the
+    regressor"), and it produced two patches uplifted to beta AND esr153 while scoring
+    hit=0/worth=0 in the corpus vocabulary. 0.72 is what those look like from outside, and 0.72
+    is worth someone's time.
+
+    THE TOP TWO RUNGS SHARE ONE VALUE, unchanged and still on purpose: rung 85 measures WORSE
+    than rung 70 on every cut (full arm 13/20 = 0.650 vs 21/27 = 0.778; positives-only 13/14 vs
+    21/21), so isotonic pools them. A result, not an unfinished fit — do not "separate" them, and
+    expect no badge movement from any gate that drops a verdict from 85 to 70. The fit LABEL is
+    also not changeset-exactness: ``eval.metrics`` scores ``worth`` = hit OR person_hit, which is
+    what the badge claims. The defect was the ARM, not the label and not the pooling. Full
+    numbers in ``eval.calibrate``'s module docstring."""
     cal = get_agent().get("calibration", {})
     if cal.get("table") is not None:
         return _normalize_calibration_table(cal["table"])

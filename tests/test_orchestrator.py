@@ -381,7 +381,7 @@ class TestCorroborationGate(unittest.TestCase):
 
     def test_no_promotion_below_the_second_opinion_boost_floor(self):
         """`_fold_second_opinion` refuses to boost a lead/low ("a boost would jump two rungs,
-        p_worth 0.50 -> 0.97 ... the corroborate side was never part of the calibration
+        p_worth 0.50 -> 0.72 ... the corroborate side was never part of the calibration
         fit"). The corroboration gate is the OTHER promoter and lands on exactly
         `autofile.min_confidence`, so it takes the same floor. Ship-corpus cost: 2 of 90."""
         d = _lead_with_struct(offset=8)

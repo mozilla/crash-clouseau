@@ -16,14 +16,41 @@ prints a text reliability diagram.
 Deterministic + offline: the cal/test split keys on a stable hash of the uuid (no RNG), and
 refitting reads only ``results.jsonl`` — it never re-runs the agent.
 
+THE SHIPPED TABLE IS THE FULL ARM (2026-08-21). ``--corpus-dir corpus_ship --holdout-folds 0``
+fits ``{25: 0.5, 50: 0.5714, 70: 0.7234, 85: 0.7234}``, which is what config/global.json now
+carries. It replaces ``{25: 0.5, 50: 0.8, 70: 0.9714, 85: 0.9714}`` — the output of
+``--positives-only --holdout-folds 0``: the same fit with the 26 culprit-absent rows deleted
+(12 of them scored rung 70+ and all 12 were misses) and no held-out split at all
+(``corpus_ship/calibration_table_positives.json``: ``n_negative`` 0, ``n_test`` 0).
+
+    all 90 rows      rung 70  21/27 = 0.778   rung 85  13/20 = 0.650  -> pooled 34/47 = 0.7234
+    cal split (62)   rung 70  17/21 = 0.810   rung 85   9/13 = 0.692  -> pooled 26/34 = 0.7647
+    TEST split (28)  rung 70   4/6  = 0.667   rung 85   4/7  = 0.571  -> pooled  8/13 = 0.615
+    positives-only   rung 70  21/21 = 1.000   rung 85  13/14 = 0.929  -> pooled 34/35 = 0.9714
+
+The held-out 8/13 carries Wilson95 0.3552-0.8229, which covers the shipped 0.7234 — as does the
+filer's own adjudicated outcome rate over 52 real filings, which reads 0.65-0.73 across every
+way of counting an endorsement: 17/25 = 0.680 (0.4841-0.8280) at its loosest, 15/23 = 0.652
+(0.4489-0.8119) once the two rows this patch reclassifies as ``unconfirmed`` are dropped, and
+22/30 = 0.733 / 20/28 = 0.714 counting self-duplicates. Every one of those intervals contains
+0.7234 and none contains 0.9714, whose Wilson95 LOWER bound is 0.8547. Two independent readings
+at ~0.7 is the argument for the shipped number.
+
+``--arm`` FITS EITHER SIDE OF ``corroborations.candidate_in_pushlog_window``, and the two-table
+calibration it was written for is a MEASURED NULL RESULT — kept re-runnable, not shipped.
+Reported rung 70+ reads 26/26 in-window against 8/21 = 0.381 outside, which looks decisive and is
+not: 12 of those 21 are the corpus's culprit-DELETED negatives, whose ``worth`` is False by
+construction (0 of 26 negatives score ``worth`` at any rung); the informative rows read
+8/9 = 0.889, Fisher exact p = 0.257; and all 12 reported rung-70+ negatives are out-of-window, so
+the predicate CONTAINS ``is_negative`` rather than replacing it. corpus_ship predates the flag
+(ef0ccd8, 2026-08-10) and could not have recorded it anyway until ``_record_window_membership``
+stopped keying on the all-None ``candidate_pushdates`` map, so ``spike/window_arm_null.py``
+backfills it from each case's frozen candidate set. ``config.get_agent_calibration`` carries the
+production denominators and the two counter-examples (bugs 2062806 and 2062119).
+
 THE TOP TWO RUNGS SHARE ONE VALUE, AND THAT IS THE ANSWER, NOT A BUG (measured 2026-08-04).
-``corpus_ship`` fits ``{25: 0.5, 50: 0.8, 70: 0.9714, 85: 0.9714}`` and the 0.9714 is exactly
-34/35 — the POOLED 70+85 bin. ``isotonic`` pools them because rung 85 scores WORSE than rung 70:
-
-    positives-only    rung 70  21/21 = 1.000     rung 85  13/14 = 0.929
-    with negatives    rung 70  17/21 = 0.810     rung 85   9/13 = 0.692
-
-Non-monotonic in the same direction on every cut, so a ``strong-evidence``/85 verdict is not
+``isotonic`` pools them because rung 85 scores WORSE than rung 70 on every cut in the table
+above. Non-monotonic in the same direction each time, so a ``strong-evidence``/85 verdict is not
 empirically more likely to be worth investigating than a ``probable``/70 lead. Refitting the same
 rows will pool them again; the ladder above 70 carries no signal. Two consequences worth knowing
 before touching this:
@@ -103,10 +130,44 @@ def isotonic(bins):
     return fitted
 
 
+def _deceil(bins, fitted):
+    """Replace a fitted ``1.0`` with the Wilson95 LOWER bound of the block that produced it.
+
+    A bin with no observed failure fits to exactly 1.0, and 1.0 is not a probability anybody can
+    publish to a Bugzilla reviewer: the in-window arm of ``corpus_ship`` is 26/26 at rung 70+,
+    which is 26 clean rows, not certainty. That block publishes 0.8713 instead. Adjacent bins
+    isotonic already gave the same value are bounded as ONE block (rung 70's 16/16 with rung 85's
+    10/10), because bounding them separately gives 0.8064 then 0.7225 — a DECREASING table out of
+    a monotonic fit. For the same reason the bound can never fall below the block beneath it.
+
+    A FLOOR ON THE CLAIM, NOT A REFIT: it fires only on a 1.0, so the shipped full arm
+    (34/47 = 0.7234) and even the retired positives arm (34/35 = 0.9714) come out untouched —
+    ``--positives-only --holdout-folds 0`` still reproduces the old table byte for byte, which is
+    the honest behaviour for a guard. What it stops is the NEXT overclaim: with a held-out split
+    that same arm fits 1.000 at EVERY rung off 30 clean reported rows, and this turns that into
+    0.8865 rather than "100% worth investigating"."""
+    out = list(fitted)
+    i = 0
+    while i < len(out):
+        j = i
+        while j + 1 < len(out) and abs(out[j + 1] - out[i]) < 1e-12:
+            j += 1
+        if out[i] >= 1.0 - 1e-12:
+            n = sum(b["n"] for b in bins[i:j + 1])
+            hits = sum(b["n_hit"] for b in bins[i:j + 1])
+            low = M.wilson_ci(hits, n)[0] if n else 0.0
+            if i > 0:
+                low = max(low, out[i - 1])
+            for k in range(i, j + 1):
+                out[k] = low
+        i = j + 1
+    return out
+
+
 def calibration_table(cal_rows):
     """{rung_score(str) -> calibrated P(worth-investigating)} from the calibration split."""
     bins = M.reliability_bins(cal_rows)
-    fitted = isotonic(bins)
+    fitted = _deceil(bins, isotonic(bins))
     return {str(b["score"]): round(p, 4) for b, p in zip(bins, fitted)}, bins
 
 
@@ -148,15 +209,38 @@ def _reliability_diagram(bins, title):
 
 
 def calibrate(corpus_dir, out=None, target_precision=0.9, holdout_folds=3,
-              positives_only=False):
+              positives_only=False, arm="all"):
     rows = load_rows(os.path.join(corpus_dir, "results.jsonl"))
     if positives_only:
-        # Fit only on the CULPRIT-PRESENT arm (the production condition: build_seed feeds the
-        # first-bad window, which contains the regressor ~100% of the time). The synthetic
-        # culprit-absent negatives are rare in prod AND their reported-rate over-counts the
-        # agent correctly REDISCOVERING the removed regressor via searchfox/history (uncreditable
-        # here), so mixing them deflates the table. See [[clouseau-phase2-calibration]].
+        # DIAGNOSTIC ONLY -- this has not been the shipped fit since 2026-08-21, and half the
+        # justification that used to sit here was measured BACKWARDS. It said the culprit-absent
+        # negatives are "rare in prod": 16 of the 31 filings since ef0ccd8 (51.6%, Wilson95
+        # 0.348-0.680) print the out-of-window caveat, against 26/90 = 28.9% in this corpus, so
+        # production is MORE culprit-absent than the arm that was dropped for being rare.
+        # Dropping it is what produced 0.9714 = 34/35, the precision left after deleting 12
+        # rung-70+ rows that were misses to a row.
+        #
+        # THE OTHER HALF STILL STANDS and is why `--arm out-of-window` is not a clean read
+        # either: a negative case has no `regressor_nodes`, so its `worth` is False whatever the
+        # agent said (0 of 26, at every rung) -- including when it correctly rediscovers the
+        # removed regressor from searchfox/history. Those rows measure the false-investigate
+        # RATE, which this function already reports separately; they are not zero-labelled
+        # observations about the leads they are pooled with.
         rows = [r for r in rows if not r.get("is_negative")]
+    if arm in ("in-window", "out-of-window"):
+        # `corroborations.candidate_in_pushlog_window`, tri-state, with None ("nobody recorded
+        # it") on the out-of-window side exactly as `report_bug.is_suspected_regression` and
+        # `config.get_agent_calibration` read it. Keying the SHIPPED table on this was measured
+        # and refuted (see the module docstring); the flag is kept fittable so the null result
+        # can be re-run on a corpus that carries it -- corpus_ship does not, hence the count
+        # printed below, and `spike/window_arm_null.py`, which backfills it.
+        def _in_window(row):
+            return (row.get("corroborations") or {}).get("candidate_in_pushlog_window") is True
+        known = sum(1 for r in rows
+                    if "candidate_in_pushlog_window" in (r.get("corroborations") or {}))
+        print("arm={}: {} of {} rows carry candidate_in_pushlog_window".format(
+            arm, known, len(rows)))
+        rows = [r for r in rows if _in_window(r) == (arm == "in-window")]
     cal, test = split(rows, holdout_folds=holdout_folds)
     table, cal_bins = calibration_table(cal)
     test_bins = M.reliability_bins(test)
@@ -167,6 +251,10 @@ def calibrate(corpus_dir, out=None, target_precision=0.9, holdout_folds=3,
     ci = M.wilson_ci(fi, n_neg)
 
     result = {
+        # What this fit IS, in the file itself. `corpus_ship/calibration_table_positives.json`
+        # was byte-identical to the shipped table and recorded nothing about having deleted the
+        # negative arm, so nothing ever flagged that the published 0.9714 was positives-only.
+        "arm": arm, "positives_only": bool(positives_only),
         "n_rows": len(rows), "n_cal": len(cal), "n_test": len(test),
         "n_negative": n_neg, "n_false_investigate": fi,
         "false_investigate_rate": (fi / n_neg) if n_neg else 0.0,
@@ -206,12 +294,16 @@ def main(argv=None):
                         help="test = this many of 10 stable uuid-hash folds (0 = fit on all rows, "
                              "for the shipped table)")
     parser.add_argument("--positives-only", action="store_true",
-                        help="fit only the culprit-present arm (the prod condition); drop the "
-                             "synthetic culprit-absent negatives")
+                        help="DIAGNOSTIC: fit only the culprit-present arm, dropping the "
+                             "culprit-absent negatives. This is how the RETIRED table was fit")
+    parser.add_argument("--arm", choices=("all", "in-window", "out-of-window"), default="all",
+                        help="fit one side of corroborations.candidate_in_pushlog_window "
+                             "(None counts as out-of-window). Kept so the two-arm null result "
+                             "stays re-measurable; the shipped table is --arm all")
     args = parser.parse_args(argv)
     calibrate(args.corpus_dir, out=args.out,
               target_precision=args.target_precision, holdout_folds=args.holdout_folds,
-              positives_only=args.positives_only)
+              positives_only=args.positives_only, arm=args.arm)
 
 
 if __name__ == "__main__":

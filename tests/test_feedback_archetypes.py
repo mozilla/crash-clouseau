@@ -390,6 +390,75 @@ class TestAttributionClassifier(unittest.TestCase):
             models.Feedback.classify(None, named_bug=7, regressed_by=[7, 9], claimed=[7]),
             "unconfirmed")
 
+    def test_a_field_nobody_wrote_a_word_about_is_not_an_endorsement(self):
+        # Bugs 2061969 and 2061691. dmeehan (release management) set `regressed_by` in a batch on
+        # 2026-08-17, answering BugBot's "could you fill (if possible) the regressed_by field?" by
+        # copying the value out of OUR comment. No human but the filer has ever written on either
+        # bug. 10 of the 15 non-filer settings across the 52 filings are that one account, so the
+        # loop was reading most of its wins off its own prose.
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=1998600, regressed_by=[1998600],
+                                     claimed=[], independent_comment=False),
+            "unconfirmed")
+
+    def test_an_adjudicated_bug_still_scores_correct(self):
+        # Bug 2062806, the wrong-direction case: ryanvm set the field and never commented, while
+        # hzhao ("Confirming the mechanism - this is correct") had already landed the backout. The
+        # question is about the BUG, not about who touched the field.
+        self.assertEqual(
+            models.Feedback.classify("FIXED", named_bug=2057317, regressed_by=[2057317],
+                                     claimed=[], independent_comment=True),
+            "correct")
+        # ...and an UNCHECKED row (None) is scored exactly as it was before this existed, so no
+        # historical row is relabelled by a caller that never looked.
+        self.assertEqual(
+            models.Feedback.classify("FIXED", named_bug=2057317, regressed_by=[2057317],
+                                     claimed=[], independent_comment=None),
+            "correct")
+
+    def test_there_is_no_length_floor_on_an_adjudication(self):
+        # Bug 2063862's only independent comment is 42 characters -- "This will be fixed by
+        # backout bug 2059597." -- and a threshold tuned to exclude it would be fit on the single
+        # case it was invented for. The predicate is "somebody wrote", not "somebody wrote a lot".
+        self.assertEqual(
+            models.Feedback.classify("FIXED", named_bug=2059597, regressed_by=[2059597],
+                                     claimed=[], independent_comment=True),
+            "correct")
+
+    def test_the_check_cannot_rescue_a_wrong_attribution_or_soften_our_own_write(self):
+        # 2062119 (jstutte replaced ours) stays `wrong` however lively the bug is, and a field we
+        # set ourselves stays `unconfirmed` however lively it is.
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=1768581, regressed_by=[1412726],
+                                     claimed=[1768581], independent_comment=True),
+            "wrong")
+        self.assertEqual(
+            models.Feedback.classify(None, named_bug=7, regressed_by=[7], claimed=[7],
+                                     independent_comment=True),
+            "unconfirmed")
+
+    def test_an_llm_agent_is_not_an_independent_reviewer(self):
+        # Why `feedback._independent_reviewers` reuses `ReviewNote.classify_author` rather than
+        # `experts._is_bot`: the bot-marker list scores firefoxmanagerdev@gmail.com HUMAN, and
+        # that account is an LLM whose three appearances in the panel (bugs 2060922, 2061973,
+        # 2062335) all REFUTE our attribution. Counting a refutation as an endorsement is the failure the
+        # check exists to stop. `hackbot@mozilla.tld` -- 2560 characters of our own analysis on
+        # bug 2061691 -- is the same shape, and happens to be caught by both.
+        from crashclouseau.agent.experts import _is_bot
+
+        self.assertEqual(
+            models.ReviewNote.classify_author("firefoxmanagerdev@gmail.com", "not right"),
+            "agent")
+        self.assertFalse(_is_bot("firefoxmanagerdev@gmail.com", "", ""))
+        self.assertEqual(
+            models.ReviewNote.classify_author("hackbot@mozilla.tld", "Confirmed"), "agent")
+        # ...and a real reviewer stays a real reviewer, including the @gmail.com ones.
+        for email in ("hzhao@mozilla.com", "kershaw@mozilla.com", "ryanvm@gmail.com"):
+            with self.subTest(email=email):
+                self.assertEqual(
+                    models.ReviewNote.classify_author(email, "Confirming the mechanism"),
+                    "human")
+
 
 class TestSeeding(unittest.TestCase):
     def test_the_shipped_archetype_names_the_bug_that_taught_it(self):
@@ -617,6 +686,46 @@ class TestRefresh(unittest.TestCase):
              mock.patch.object(models.Feedback, "scoreboard", return_value=_EMPTY_BOARD):
             fb.refresh()
         self.assertEqual(record.call_args.kwargs["claimed_regressed_by"], [42])
+
+    def test_the_independence_question_is_asked_only_where_it_can_change_the_answer(self):
+        # `correct` is the only verdict it can move, so bug 2 (a value WE set -> `unconfirmed`)
+        # and bug 3 (nobody set anything -> `unknown`) are never asked about. 14 of the 52
+        # filings on the panel are eligible; 2 move.
+        from crashclouseau import feedback as fb
+
+        filed = [{"bug_id": 1, "uuid": "u1", "named_bug": 7, "named_node": "n",
+                  "archetypes": [], "claimed": [], "filed_at": None},
+                 {"bug_id": 2, "uuid": "u2", "named_bug": 7, "named_node": "n",
+                  "archetypes": [], "claimed": [7], "filed_at": None},
+                 {"bug_id": 3, "uuid": "u3", "named_bug": 7, "named_node": "n",
+                  "archetypes": [], "claimed": [], "filed_at": None}]
+        fetched = {1: {"id": 1, "status": "NEW", "regressed_by": [7],
+                       "creator": "cdenizet@mozilla.com"},
+                   2: {"id": 2, "status": "NEW", "regressed_by": [7],
+                       "creator": "cdenizet@mozilla.com"},
+                   3: {"id": 3, "status": "NEW", "regressed_by": []}}
+        with mock.patch.object(fb, "_filed_bugs", return_value=filed), \
+             mock.patch.object(fb, "_fetch", return_value=fetched), \
+             mock.patch.object(fb, "_independent_reviewers",
+                               return_value={1: False}) as indep, \
+             mock.patch.object(models.Feedback, "record") as record, \
+             mock.patch.object(models.Feedback, "scoreboard", return_value=_EMPTY_BOARD):
+            fb.refresh()
+        indep.assert_called_once_with({1: "cdenizet@mozilla.com"})
+        self.assertEqual([c.kwargs["independent_comment"] for c in record.call_args_list],
+                         [False, None, None])
+
+    def test_an_unswept_bug_is_unchecked_rather_than_unendorsed(self):
+        # `_ingest_notes` runs AFTER the verdicts, so a bug's first scan and its first
+        # independence answer are one tick apart -- and on a database with no note corpus the
+        # answer is absent for everything. Absent must read as "nobody looked", never as "nobody
+        # wrote", or the first run after deploy relabels every win as unconfirmed.
+        from crashclouseau import feedback as fb
+
+        self.assertEqual(fb._independent_reviewers({}), {})
+        with mock.patch.object(models, "db") as db:
+            db.session.query.side_effect = RuntimeError("no such table")
+            self.assertEqual(fb._independent_reviewers({1: "cdenizet@mozilla.com"}), {})
 
     def test_the_claim_is_read_off_the_filing_record(self):
         # `filed_bug["regressed_by"]` is what `bugzilla_apply` recorded as actually linked.

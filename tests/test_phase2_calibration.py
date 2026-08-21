@@ -438,6 +438,81 @@ class TestCalibrationConfig(unittest.TestCase):
                                return_value={"calibration": {"path": "/no/such/file.json"}}):
             self.assertEqual(config.get_agent_calibration(), {})
 
+    def test_the_shipped_table_is_the_full_arm(self):
+        # config/global.json is what runs, so pin it here and not the code default. The values
+        # are `eval.calibrate --corpus-dir corpus_ship --holdout-folds 0`: rung 70+ is
+        # 34/47 = 0.7234 over ALL 90 rows. The retired {70: 0.9714, 85: 0.9714} was the same fit
+        # with the 26 culprit-absent rows deleted -- 12 of them at rung 70+, all 12 misses -- and
+        # `n_test` 0, i.e. no held-out split at all. Held out 3 of 10 folds the corpus reads
+        # 8/13 = 0.615 (Wilson95 0.3552-0.8229) and the filer's own 52 filings read 0.65-0.73
+        # (17/25 loosest, 15/23 once this patch's own `unconfirmed` reclassification is applied);
+        # 0.9714's Wilson95 lower bound, 0.8547, is above every one of those upper bounds bar
+        # the self-duplicate-counting 22/30.
+        table = config.get_agent_calibration()
+        self.assertEqual(table, {25: 0.5, 50: 0.5714, 70: 0.7234, 85: 0.7234})
+        # The top two rungs still share one value: rung 85 measures WORSE than rung 70 on every
+        # cut (13/20 vs 21/27), so isotonic pools them. A result, not an unfinished fit.
+        self.assertEqual(table[70], table[85])
+        # ...and no rung publishes certainty (`eval.calibrate._deceil`).
+        self.assertTrue(all(0.0 < p < 1.0 for p in table.values()))
+
+
+class TestZeroFailureBin(unittest.TestCase):
+    """``eval.calibrate._deceil`` -- 26 clean rows are not certainty.
+
+    A bin with no observed failure fits to exactly 1.0, and 1.0 is not publishable to a Bugzilla
+    reviewer. This is the guard against re-deriving the next 0.9714: the retired table came out
+    of a fit whose every remaining row was a hit."""
+
+    def test_a_perfect_bin_publishes_its_wilson_lower_bound(self):
+        bins = [{"score": 70, "n": 16, "n_hit": 16, "p_hit": 1.0},
+                {"score": 85, "n": 10, "n_hit": 10, "p_hit": 1.0}]
+        fitted = CAL._deceil(bins, CAL.isotonic(bins))
+        # Pooled as ONE block (26/26 -> 0.8713), not bounded bin by bin: separately they would
+        # be 0.8064 then 0.7225, a DECREASING table out of a monotonic fit.
+        self.assertEqual([round(f, 4) for f in fitted], [0.8713, 0.8713])
+
+    def test_it_never_inverts_the_ladder(self):
+        # A lone 1/1 at the top bounds to 0.2065, below the rung beneath it. The floor is a floor
+        # on the CLAIM, not a licence to unsort the table.
+        bins = [{"score": 50, "n": 10, "n_hit": 8, "p_hit": 0.8},
+                {"score": 70, "n": 1, "n_hit": 1, "p_hit": 1.0}]
+        fitted = CAL._deceil(bins, CAL.isotonic(bins))
+        self.assertEqual([round(f, 4) for f in fitted], [0.8, 0.8])
+
+    def test_it_leaves_every_honest_fit_alone(self):
+        # It fires ONLY on a 1.0, so the shipped full arm (34/47) and even the retired positives
+        # arm (34/35) come out untouched -- `--positives-only --holdout-folds 0` still reproduces
+        # the old table byte for byte, which is the honest behaviour for a guard.
+        for n, hit in ((47, 34), (35, 34)):
+            with self.subTest(n=n):
+                bins = [{"score": 70, "n": n, "n_hit": hit, "p_hit": hit / n}]
+                self.assertAlmostEqual(CAL._deceil(bins, CAL.isotonic(bins))[0], hit / n,
+                                       places=6)
+
+    def test_the_arm_filter_splits_on_the_window_flag(self):
+        # `--arm` is kept so the two-arm NULL RESULT stays re-measurable (in-window 26/26 vs
+        # out-of-window 8/21, but 12 of those 21 are culprit-deleted negatives; the informative
+        # rows read 8/9, Fisher p = 0.257). An unrecorded flag lands OUT of the window, matching
+        # how `report_bug.is_suspected_regression` and the shipped table read it.
+        rows = [{"uuid": "a", "reported": True, "score": 70, "hit": True, "is_negative": False,
+                 "corroborations": {"candidate_in_pushlog_window": True}},
+                {"uuid": "b", "reported": True, "score": 70, "hit": False, "is_negative": False,
+                 "corroborations": {"candidate_in_pushlog_window": False}},
+                {"uuid": "c", "reported": True, "score": 70, "hit": False, "is_negative": False,
+                 "corroborations": {}}]
+        tmp = tempfile.mkdtemp()
+        with open(os.path.join(tmp, "results.jsonl"), "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        self.assertEqual(CAL.calibrate(tmp, holdout_folds=0, arm="in-window")["n_rows"], 1)
+        self.assertEqual(CAL.calibrate(tmp, holdout_folds=0, arm="out-of-window")["n_rows"], 2)
+        result = CAL.calibrate(tmp, holdout_folds=0)
+        self.assertEqual(result["n_rows"], 3)
+        # The written file says what it was fit on. `calibration_table_positives.json` did not,
+        # which is why nothing flagged that the shipped 0.9714 was a positives-only number.
+        self.assertEqual((result["arm"], result["positives_only"]), ("all", False))
+
 
 class TestWorthInvestigating(unittest.TestCase):
     """``orchestrator._apply_worth_investigating`` — populate p_worth from the FINAL rung."""

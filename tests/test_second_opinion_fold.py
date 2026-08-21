@@ -335,7 +335,7 @@ class TestMaybeRunSecondOpinion(unittest.TestCase):
 
     def test_boost_floor_holds_at_the_bottom_rung(self):
         # Lowering min_confidence to 25 bought MEASUREMENT coverage of the weakest reported
-        # leads; it must not also let them be re-ranked UP two rungs (0.50 -> 0.97 p_worth) on
+        # leads; it must not also let them be re-ranked UP two rungs (0.50 -> 0.72 p_worth) on
         # the corroborate signal, which was never part of the calibration fit. The bottom rung is
         # deliberately NOT symmetric: a refutation there abstains the lead outright, because SO
         # specificity is measured at 1.00. Promote conservatively, suppress readily.
