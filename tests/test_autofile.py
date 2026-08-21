@@ -96,6 +96,9 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply.models.Dossier, "record_filed_bug",
                               side_effect=lambda u, i: self.filed.append((u, i)) or True),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
+            # Asked only on the file-a-new-bug branch, and it is a Bugzilla request: nothing on
+            # this signature is already fixed unless a test says so.
+            mock.patch.object(bugzilla_apply, "_fixed_after_build_bug", return_value=None),
             # RESOLVED by default (it would otherwise ask hg over the network), because that is
             # what production does: the shipped resolver answered 52/52 of the filed candidate
             # nodes. An unresolved date is no longer a neutral default — it now refuses every
@@ -816,6 +819,232 @@ class TestBugForThisRegression(unittest.TestCase):
         got = bugzilla_apply._bug_for_this_regression(
             [_bug(1, "2022-10-31T19:44:56")], _LANDED, 30)
         self.assertEqual(got, (None, [1]))
+
+
+# The crash whose build POSTDATES nothing: our bug 2064537 (build 20260816083833) against bug
+# 2063862, RESOLVED FIXED 2026-08-17T08:07:20 — the single firing case among the 52 filings, and
+# the only one of the 33 FIXED bugs on that panel with a positive margin (+1.0 d; the next
+# closest is -22.4 d).
+_BUILT = dict(_INFO, buildid=datetime(2026, 8, 16, 8, 38, 33, tzinfo=timezone.utc))
+_REAL_FIXED_LOOKUP = bugzilla_apply._fixed_after_build_bug
+
+
+class _FakeBMO:
+    """One canned BMO search response that also records the params it was asked with."""
+
+    status_code = 200
+
+    def __init__(self, *bugs):
+        self.bugs = list(bugs)
+        self.params = []
+
+    def get(self, url, **kw):
+        self.params.append(kw.get("params"))
+        return self
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"bugs": self.bugs}
+
+
+_SIG_DEFAULT = "mozilla::net::DiagnosticRWLock::CrashWithHolder"
+_IPC_SIG = "mozilla::ipc::FatalError | mozilla::ipc::IProtocol::HandleFatalError"
+
+
+def _closed(bid, resolution, resolved, product="Core", signature=None):
+    """One CLOSED bug as BMO returns it to the resolution-agnostic query.
+
+    Carries `cf_crash_signature`, because the row goes back through `_row_is_about` — the OR
+    query can match on either clause and the response does not say which, so a fixture without
+    it is not a row BMO would ever send for this signature."""
+    return {"id": bid, "product": product, "status": "RESOLVED",
+            "resolution": resolution, "cf_last_resolved": resolved,
+            "summary": "Crash in [@ {}]".format(signature or _SIG_DEFAULT),
+            "cf_crash_signature": "[@ {}]".format(signature or _SIG_DEFAULT)}
+
+
+class TestAFixThatPostdatesTheBuild(unittest.TestCase):
+    """`_fixed_after_build_bug`: the crash is a pre-fix report of an already-fixed defect.
+    Every number below is from the 52-filing panel in the function's own docstring."""
+
+    SIG = "mozilla::net::DiagnosticRWLock::CrashWithHolder"
+    BUILD = datetime(2026, 8, 16, 8, 38, 33, tzinfo=timezone.utc)
+
+    def _ask(self, *bugs, **kw):
+        bmo = _FakeBMO(*bugs)
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=bmo.get):
+            got = bugzilla_apply._fixed_after_build_bug(
+                kw.get("signature", self.SIG), kw.get("buildid", self.BUILD),
+                kw.get("product", "Firefox"))
+        return got, bmo
+
+    def test_a_fix_after_the_build_is_this_crashs_fix(self):
+        got, _ = self._ask(_closed(2063862, "FIXED", "2026-08-17T08:07:20Z"))
+        self.assertEqual(got, 2063862)
+
+    def test_a_fix_that_predates_the_build_is_a_reused_signature(self):
+        # THE COUNTER-EXAMPLE. Our 2064066, build 20260812202037: bug 2054485 was RESOLVED FIXED
+        # 22.4 days BEFORE that build, 2048851 43.9 days before, 1823765 and 1809003 years
+        # before. A post-fix crash on a reused signature MUST still file.
+        got, _ = self._ask(
+            _closed(2054485, "FIXED", "2026-07-21T10:20:37Z", signature=_IPC_SIG),
+            _closed(2048851, "FIXED", "2026-06-29T21:53:17Z", signature=_IPC_SIG),
+            _closed(1823765, "FIXED", "2023-03-23T17:09:43Z", signature=_IPC_SIG),
+            _closed(1809003, "FIXED", "2023-01-10T16:33:10Z", signature=_IPC_SIG),
+            signature=_IPC_SIG,
+            buildid=datetime(2026, 8, 12, 20, 20, 37, tzinfo=timezone.utc))
+        self.assertIsNone(got)
+
+    def test_only_FIXED_counts(self):
+        # 16 of the 49 closed bugs the agnostic query adds are INCOMPLETE (9), DUPLICATE (4) or
+        # WORKSFORME (3). Bug 1861423 is the WORKSFORME the naive repair would have commented
+        # into: "nobody could reproduce it" is not "it is fixed".
+        for resolution in ("WORKSFORME", "INCOMPLETE", "DUPLICATE", "INVALID", "WONTFIX", ""):
+            got, _ = self._ask(_closed(1861423, resolution, "2026-08-17T08:07:20Z"))
+            self.assertIsNone(got, resolution)
+
+    def test_another_applications_fix_never_suppresses_a_firefox_filing(self):
+        # 3 of the 49 are Thunderbird bugs (2011814, 2001729, 1954381). Gecko's signatures are
+        # shared; the crash is not.
+        got, _ = self._ask(_closed(2011814, "FIXED", "2026-08-17T08:07:20Z",
+                                   product="Thunderbird"))
+        self.assertIsNone(got)
+
+    def test_but_a_thunderbird_crash_is_deduped_against_a_thunderbird_fix(self):
+        got, _ = self._ask(_closed(2011814, "FIXED", "2026-08-17T08:07:20Z",
+                                   product="Thunderbird"), product="Thunderbird")
+        self.assertEqual(got, 2011814)
+
+    def test_a_fix_with_no_usable_date_decides_nothing(self):
+        got, _ = self._ask(_closed(2063862, "FIXED", None),
+                           _closed(2063863, "FIXED", "not-a-date"))
+        self.assertIsNone(got)
+
+    def test_an_over_matched_row_does_not_suppress_a_filing(self):
+        # The query is one OR over `cf_crash_signature` (bare substring) and `short_desc`
+        # (`[@ sig` prefix), and the response does not say which clause matched — so a bug about
+        # a LONGER signature that merely starts with ours comes back too. `_row_is_about` is what
+        # rejects it; without that re-check this row would silently stop a real filing, which is
+        # the expensive direction (a missed filing is recoverable, a wrong suppression is
+        # invisible). Same shape `_open_bugs_for_signature` guards against on the venue side.
+        row = _closed(1996736, "FIXED", "2026-08-17T08:07:20Z")
+        row["cf_crash_signature"] = ""
+        row["summary"] = "Crash in [@ {}_UnknownObject]".format(self.SIG)
+        got, _ = self._ask(row)
+        self.assertIsNone(got)
+
+    def test_a_longer_signature_with_a_cf_field_is_still_kept(self):
+        # And the limit of the re-check, stated so nobody reads more into it than it does: the
+        # cf side is a BARE substring, so `[@ Foo_UnknownObject]` contains `Foo` and the row
+        # survives. Measured on the top 200 nightly signatures, all three prefix over-matches
+        # are cf-reachable like this, so the form test changes the keep-set for 0 of 200 — it
+        # is insurance for the empty-cf shape above, not a save the panel witnessed.
+        got, _ = self._ask(_closed(1996736, "FIXED", "2026-08-17T08:07:20Z",
+                                   signature=self.SIG + "_UnknownObject"))
+        self.assertEqual(got, 1996736)
+
+    def test_the_lowest_bug_id_wins_when_several_qualify(self):
+        # A tie-break only: 0 of the 52 filings surfaced more than one.
+        got, _ = self._ask(_closed(2063999, "FIXED", "2026-08-17T08:07:20Z"),
+                           _closed(2063862, "FIXED", "2026-08-19T21:27:05Z"))
+        self.assertEqual(got, 2063862)
+
+    def test_the_query_drops_the_resolution_filter_and_asks_for_the_clock(self):
+        _, bmo = self._ask(_closed(2063862, "FIXED", "2026-08-17T08:07:20Z"))
+        params = bmo.params[0]
+        self.assertNotIn("resolution", params)
+        self.assertIn("cf_last_resolved", params["include_fields"])
+        # Without the product the split is blind, and a Thunderbird fix would suppress us.
+        self.assertIn("product", params["include_fields"])
+        self.assertEqual((params["f1"], params["v1"]), ("cf_crash_signature", self.SIG))
+        # A specific signature searches summaries too, exactly like the sibling — same
+        # reason, see `_open_bugs_for_signature` (bug 1990812's trailing space).
+        self.assertEqual((params["j_top"], params["f2"]), ("OR", "short_desc"))
+
+    def test_the_venue_query_still_only_sees_open_bugs(self):
+        # The two queries stay separate. Removing the filter from `_open_bugs_for_signature`
+        # moves 4 of the 52 venues and 3 are WRONG: 2062119 -> 1861423 (filed 2023, closed
+        # WORKSFORME 2025), 2063234 -> 1816975 (FIXED in 2023), 2064066 -> 2054485.
+        bmo = _FakeBMO()
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=bmo.get):
+            bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual(bmo.params[0]["resolution"], "---")
+
+    def test_a_build_it_cannot_read_asks_bugzilla_nothing(self):
+        for buildid in (None, "", "not-a-build"):
+            bmo = _FakeBMO(_closed(2063862, "FIXED", "2026-08-17T08:07:20Z"))
+            with mock.patch.object(bugzilla_apply.net, "get", side_effect=bmo.get):
+                got = bugzilla_apply._fixed_after_build_bug(self.SIG, buildid, "Firefox")
+            self.assertIsNone(got, repr(buildid))
+            self.assertEqual(bmo.params, [], repr(buildid))
+
+    def test_a_buildid_string_is_read_as_utc(self):
+        # `uuid_info["buildid"]` is a tz-aware datetime in prod (UUID.get_bid_chan_by_uuid) and
+        # a YYYYMMDDHHMMSS string everywhere a crash is described by hand.
+        got, _ = self._ask(_closed(2063862, "FIXED", "2026-08-17T08:07:20Z"),
+                           buildid="20260816083833")
+        self.assertEqual(got, 2063862)
+        got, _ = self._ask(_closed(2063862, "FIXED", "2026-08-15T08:07:20Z"),
+                           buildid="20260816083833")
+        self.assertIsNone(got)
+
+    def test_a_bugzilla_failure_returns_nothing_rather_than_suppressing(self):
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=RuntimeError("BMO 503")):
+            got = bugzilla_apply._fixed_after_build_bug(self.SIG, self.BUILD, "Firefox")
+        self.assertIsNone(got)
+
+
+class TestAlreadyFixedIsNotFiledAgain(_Base):
+    """The gate inside `autofile_bug`. It is the file-a-NEW-bug branch only."""
+
+    def _file_built(self, **cfg_over):
+        if cfg_over:
+            bugzilla_apply.config.get_agent_autofile.return_value = _cfg(**cfg_over)
+        return bugzilla_apply.autofile_bug("u-1", _BUILT, {}, {"candidate": {"node": "n"}},
+                                           "lead", 70)
+
+    def test_it_stops_the_filing_and_names_the_bug(self):
+        bugzilla_apply._fixed_after_build_bug.return_value = 2063862
+        res = self._file_built()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["bug"], 2063862)
+        self.assertIn("already fixed by bug 2063862", res["skipped"])
+        # The buildid rides along, because the whole claim is about that date.
+        self.assertIn("20260816083833", res["skipped"])
+        self.assertEqual(self.created, [])
+        # Nothing was written, so nothing is recorded: the next crash on this signature asks
+        # BMO again rather than inheriting a stale verdict.
+        self.assertEqual(self.filed, [])
+
+    def test_it_is_asked_with_this_crashs_signature_build_and_product(self):
+        self._file_built()
+        bugzilla_apply._fixed_after_build_bug.assert_called_once_with(
+            "Foo::Bar", _BUILT["buildid"], "Firefox")
+
+    def test_an_open_venue_is_never_second_guessed(self):
+        # A bug somebody is working on still wants to hear the crash is still arriving, and
+        # `_bug_for_this_regression` has already decided this one can be about this cause.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2063862)]
+        res = self._file_built()
+        self.assertEqual((res["filed"], res["mode"]), (True, "comment_on_existing"))
+        self.assertFalse(bugzilla_apply._fixed_after_build_bug.called)
+
+    def test_nothing_fixed_files_exactly_as_before(self):
+        res = self._file_built()
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual(len(self.created), 1)
+
+    def test_a_bugzilla_outage_must_not_stop_every_filing(self):
+        # THE REASON THIS ONE GATE FAILS OPEN. The venue lookup at the top of `autofile_bug`
+        # already fails CLOSED for the whole path; a second fail-closed request would let one
+        # flaky BMO call become a silent global filing stop, for a rule that fires on 1 filing
+        # in 52 — and an ingestion stall in this product has no alarm.
+        with mock.patch.object(bugzilla_apply, "_fixed_after_build_bug", _REAL_FIXED_LOOKUP), \
+             mock.patch.object(bugzilla_apply.net, "get", side_effect=RuntimeError("BMO 503")):
+            res = self._file_built()
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
 
 
 class TestPayload(_Base):

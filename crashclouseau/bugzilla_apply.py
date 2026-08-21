@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import net
 
-from crashclouseau import config, models
+from crashclouseau import config, models, utils
 from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
@@ -654,6 +654,146 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
     return None, predating
 
 
+def _fixed_after_build_bug(signature, buildid, product):
+    """The id of a bug on *signature* that was RESOLVED FIXED **after** *buildid* was produced,
+    or ``None``. In one line: is this crash a pre-fix report of a defect somebody has already
+    fixed?
+
+    Asked only when we are about to file a NEW bug. ``_open_bugs_for_signature`` filters
+    ``resolution="---"`` and must keep doing so — a closed bug is not a comment venue — so this
+    is a SIBLING asking the other question, not a widening of that one, and the two param dicts
+    are deliberately duplicated (30+ tests mock that function by name and one pins the exact
+    three-key row it returns). Keep them in step by hand.
+
+    (a) THE OBVIOUS PREDICATE is "a closed bug on this signature means the crash was already
+    reported", i.e. just drop the filter. (b) IT IS DEAD, measured over the 52 bugs the canary
+    has filed (BMO ``creator=cdenizet@mozilla.com``, ``creation_time>=2026-08-05``, summary
+    ``Crash in [@``), each one rewound through ``/rest/bug/<id>/history`` to its own filing
+    instant. Dropping the filter moves 4 of the 52 VENUES and 3 of the 4 are wrong: filing
+    2062119 would have commented into bug 1861423, open since 2023-10-26 and closed WORKSFORME
+    on 2025-03-24, instead of filing the bug a human then FIXED; 2063234 (still open today) into
+    1816975, FIXED in 2023; 2064066 into 2054485. Only 2064537 -> 2063862 is right. Using the
+    closed bugs to SUPPRESS rather than to comment is no better while it is ungated: "any closed
+    bug on the signature" suppresses 17 of the 52 and destroys 13 good filings (8 still open, 5
+    FIXED) to catch 3 duplicates, and "any FIXED bug" suppresses 14 and destroys 10.
+
+    (c) THE BUILD DATE IS THE WHOLE RULE, the same shape as the bad-machine denominator. A fix
+    that landed before this build existed is not this crash's fix, whatever the signature says.
+    Requiring ``cf_last_resolved`` to POSTDATE the build suppresses 1 of the 52, and that one is
+    bug 2064537, which a human closed as a duplicate of 2063862 — RESOLVED FIXED
+    2026-08-17T08:07:20, crash build 20260816083833, filed 2026-08-18T21:15. No threshold was
+    fitted: across the 33 FIXED bugs the unfiltered query surfaces over those 52 filings the one
+    firing margin is +1.0 d and the closest non-firing one is -22.4 d, so the test is the SIGN of
+    a 23-day gap, not a number read off the motivating case.
+
+    ``cf_last_resolved`` is the bug's RESOLUTION clock, not its patch's LANDING clock. They
+    agree to the second on the one firing case (2063862) and no plausible clock error is 22
+    days wide, which is the gap to the nearest competing margin — but a bug resolved long after
+    its patch merged reads as a fix postdating a build that already contains it, and that is
+    the one way this can eat a good filing with no signature reuse involved.
+
+    (d) WHAT IT MUST NOT EAT is a post-fix crash on a REUSED signature. Our 2064066 (build
+    20260812202037) carries bug 2054485 RESOLVED FIXED 22.4 days BEFORE that build, plus 2048851
+    at -43.9 d, 1823765 at -1238 d and 1809003 at -1310 d; 2063234, still open today, carries
+    1897201 at -808 d; 2060924 (FIXED) carries 1983101 at -334.7 d. An old signature acquiring a
+    new cause is the normal case — it is why ``_bug_for_this_regression`` exists — and all three
+    of those filings survive because the margin is negative.
+
+    ONLY ``FIXED`` COUNTS. 16 of the 49 closed bugs the unfiltered query adds across those 52
+    filings are INCOMPLETE (9), DUPLICATE (4) or WORKSFORME (3). "Nobody could reproduce it" and
+    "it was filed twice" say nothing about whether this crash still happens, and WORKSFORME is
+    exactly what bug 1861423 above is.
+
+    ``_split_by_application`` FIRST, and it is not ceremonial. 3 of those 49 are Thunderbird
+    bugs — 2011814 on our 2061960's signature, 2001729 and 1954381 on our 2063003's — and none
+    of the three fires the gate; but on the control sample below the split removes a firing
+    outright. ``shutdownhang | mozilla::SpinEventLoopUntil | nsThread::WaitForAll…`` on build
+    20260408160318 is suppressed by exactly one bug — 1524247, product ``MailNews Core``.
+    Gecko's signatures are shared; the crash is not.
+
+    FAILS OPEN, deliberately unlike its sibling: a lookup failure logs and files. The venue
+    lookup in ``autofile_bug`` already fails closed for the whole path, so a second fail-closed
+    network dependency would let one flaky BMO request become a silent global filing stop — for
+    a rule that fires on 1 filing in 52 — and a stalled pipeline in this product has no alarm.
+
+    DOMAIN: builds no more than about two weeks old. All 52 filings sit on builds 0.2-9.3 days
+    old (median 1.7) and ``config._SWEEP_DEFAULTS["max_age_s"]`` is 14 days. On a 14-day nightly
+    control sample (60 reports/day from 2026-08-07; 599 distinct (signature, build) pairs over
+    287 signatures) the rule fires on 47/599 = 7.8% overall — 48 before the application split
+    above — but that rate is a pure function of build age (measured as of 2026-08-21): 6.0%
+    for the 414 pairs at most 14 days old (25 fires, unchanged by the split) against 25.9% for
+    the 54 pairs older than 90 days — 27.8% before the split, whose single removal lands in
+    that bucket — where signature reuse dominates. Re-measure before the sweep window grows or
+    beta/Fenix is enabled. 21 of the 25 in-domain firings are suppressed by a bug Clouseau
+    itself filed and a human then fixed (8 of the 11 distinct suppressing bugs; the other 3 are
+    aryx's), which is exactly the shape this is for.
+
+    KILLED ALTERNATIVE, recorded so nobody rebuilds it: keying the dedup on the SUSPECTED
+    REGRESSOR NODE instead of the signature. It looks strictly better — it would catch 4 of the
+    panel's 7 duplicates against the signature key's ceiling of 2, and costs no BMO request at
+    all — and it is dead. 13 pairs among the 52 filings share a candidate node and only 4 of
+    those pairs are a true duplicate relation. The killer is 2061973 vs 2061975: same node
+    ``dfbb73240fbf``, same build 20260806095421, two different zlib-rs signatures
+    (``zlib_rs::inflate::inflate_fast_help_impl`` and
+    ``zlib_rs::inflate::writer::Writer::copy_match_help``), both still open and both worked by
+    humans (gsvelto on 2061973; ryanvm and glob on 2061975). Adding the build to the key does not
+    rescue it — 2064436 and 2065075 also share node ``e7ad1bf72931`` and build 20260818092026 and
+    are two different bugs.
+
+    CEILING, so the next reader expects the right amount: a signature-keyed dedup can see at most
+    2 of the panel's 7 duplicates at filing time, and this gate catches 1. 5 of the 7 are
+    cross-signature and 5 of the 7 targets are our OWN earlier filings — plan 17's defect A, not
+    this one. The headline case is NOT caught: bug 2063003 was filed 2026-08-12T15:19 against bug
+    2062219, whose ``cf_crash_signature`` carried only ``[@ nsAtom::IsStatic]`` until a human
+    added the variants 2h25m later. What this does buy is that human triage hygiene starts
+    paying: replaying those 7 with the target's signature present, the gate fires on 3 at the
+    real filing instant and on 6 of 7 against BMO as of today, and the resolution filter was the
+    only thing standing in the way.
+
+    Public, unauthenticated, read-only — like the venue lookup, and for the same reason: we must
+    not reason about a security bug only the filing account can see. Lowest bug id wins when
+    several qualify, a tie-break only (0 of the 52 filings had more than one)."""
+    sig = (signature or "").strip()
+    if not sig or buildid is None or buildid == "":
+        return None
+    from crashclouseau import sigage
+
+    # ``uuid_info["buildid"]`` is a tz-aware datetime in prod (``UUID.get_bid_chan_by_uuid``
+    # converts the column), a ``YYYYMMDDHHMMSS`` string everywhere a crash is described by hand.
+    build_dt = sigage.to_datetime(buildid if isinstance(buildid, datetime) else str(buildid))
+    if build_dt is None:
+        return None
+    # The SAME query shape and the SAME re-check as `_open_bugs_for_signature`, minus the
+    # `resolution` filter — that one difference is the whole point of this function, and
+    # sharing everything else is what keeps the two questions answerable about one bug set.
+    # (It used to run its own `_is_specific_signature` gate on the summary clause; that length
+    # test was retired for `_summary_is_about`, which decides the same 200-signature panel on
+    # FORM instead of on a 16-character threshold read off two points.)
+    params = {
+        "include_fields": "id,summary,status,resolution,product,cf_crash_signature,"
+                          "cf_last_resolved",
+        "j_top": "OR",
+        "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
+        "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
+    }
+    try:
+        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: fixed-bug lookup failed for %r: %s — filing anyway",
+                       signature, exc)
+        return None
+    ours, _theirs = _split_by_application(bugs, product)
+    for bug in sorted((b for b in ours if b.get("id")), key=lambda b: b["id"]):
+        if (bug.get("resolution") or "").upper() != "FIXED" or not _row_is_about(bug, sig):
+            continue
+        resolved = sigage.to_datetime(bug.get("cf_last_resolved"))
+        if resolved is not None and resolved > build_dt:
+            return bug["id"]
+    return None
+
+
 def _execute(action, token):
     atype = action.get("type")
     params = action.get("params") or {}
@@ -692,7 +832,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     raises — a filing failure must not lose an analysis that is already persisted.
 
     This is the only write to Bugzilla with no human in the loop, so every gate is here
-    rather than at the call site, and each one fails CLOSED:
+    rather than at the call site, and each one fails CLOSED except where marked otherwise:
 
     * disabled unless ``AUTOFILE_BUGS`` is on (a real kill-switch: it writes to production
       BMO on a schedule, so it has to be stoppable without a deploy);
@@ -707,6 +847,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       (``_bug_for_this_regression``, which needs the candidate's landing date and refuses the
       venue without one), comment there instead of filing a duplicate — and if that
       lookup FAILS we skip entirely rather than risk the duplicate;
+    * if we are about to file a NEW bug and a bug on this signature was RESOLVED FIXED AFTER
+      this crash's build was produced, the crash is a pre-fix report of a defect somebody has
+      already fixed: skip (``_fixed_after_build_bug``). That lookup is the one gate here that
+      fails OPEN — a second fail-closed BMO request would turn one flaky call into a silent
+      global filing stop, for a rule measured to fire on 1 filing in 52;
     * never twice on one BUG for one signature (``Dossier.already_commented``), which is a
       different question from "never twice for one crash": several proto-signature clusters of
       the same signature are analysed independently and all land on the same bug.
@@ -814,6 +959,22 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         else:
             logger.info("autofile: open bug(s) %s all predate the suspected regressor — filing "
                         "a new bug for %s rather than commenting there", predating, uuid)
+
+    # ALREADY FIXED, AFTER THIS BUILD WAS PRODUCED. Only on the file-a-NEW-bug branch: an open
+    # venue still gets its comment, because a bug someone is working on wants to know the crash
+    # is still arriving. Our 2064537 was the textbook case — bug 2063862 was
+    # RESOLVED FIXED 2026-08-17T08:07:20, the crash's build was 20260816083833, and we filed a
+    # duplicate on 2026-08-18. Invisible for exactly one reason: ``resolution="---"``.
+    if bug_id is None:
+        fixed_by = _fixed_after_build_bug(
+            signature, uuid_info.get("buildid"), uuid_info.get("product"))
+        if fixed_by:
+            bid = utils.get_buildid(uuid_info.get("buildid"))
+            logger.info("autofile: bug %s was FIXED after build %s, so %s is a pre-fix report "
+                        "of an already-fixed defect — not filing", fixed_by, bid, uuid)
+            return {"filed": False, "bug": fixed_by,
+                    "skipped": "already fixed by bug {} (the fix postdates build {})".format(
+                        fixed_by, bid)}
 
     # Said it once already. `already_filed` above is keyed on the UUID, which is the wrong
     # grain: one (signature, build) splits into one cluster per distinct stack, each analysed
