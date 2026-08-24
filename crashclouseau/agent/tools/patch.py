@@ -28,6 +28,7 @@ from crashclouseau.agent import patch_extract
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
 _MAX_LINES = 400  # cap the rendered diff so a large patch can't flood the context
+_MAX_TRUNC_FILES = 40  # when the cap hits, how many of the unrendered filenames to still name
 
 
 @dataclass
@@ -60,20 +61,41 @@ def _fmt_patch(ext, node: str) -> str:
                    "crash proves a real behavior change here (an extract CAN shift lifetime/"
                    "ordering).")
     n = 0
-    for f in ext.files:
+    for i, f in enumerate(ext.files):
         out.append("file {} ({})".format(f.filename, f.status))
         for h in f.hunks:
             where = " in {}".format(h.enclosing_function) if h.enclosing_function else ""
             out.append("  @@ -{} +{}{}".format(h.old_start, h.new_start, where))
-            for ln, text in h.deleted_lines:
-                out.append("    - {}: {}".format(ln, text))
-                n += 1
-            for ln, text in h.added_lines:
-                out.append("    + {}: {}".format(ln, text))
-                n += 1
-            if n >= _MAX_LINES:
-                out.append("  ... (diff truncated at {} lines)".format(_MAX_LINES))
-                return "\n".join(out)
+            for side, lines in (("-", h.deleted_lines), ("+", h.added_lines)):
+                for ln, text in lines:
+                    if n >= _MAX_LINES:
+                        return _truncate(out, ext.files, i)
+                    out.append("    {} {}: {}".format(side, ln, text))
+                    n += 1
+    return "\n".join(out)
+
+
+def _truncate(out, files, i):
+    """Stop at the cap, and say what is NOT being shown.
+
+    The cap used to be tested once per HUNK, after the whole hunk had been appended, so a single
+    large hunk sailed past it: one changeset in the prod-cited panel rendered 334,723 bytes, and a
+    six-figure tool result competes with the standing prompt for the same context window. Testing
+    per LINE bounds it for real.
+
+    Naming the unrendered files matters independently. The old code `return`ed, so every LATER
+    file vanished silently -- the model saw a patch that looked complete and was not, which is
+    the worst shape for a provenance question ("this changeset does not touch X" is unanswerable
+    from a truncated diff). 39% of one proposed per-file annotation's firings were being dropped
+    this way."""
+    out.append("  ... (diff truncated at {} lines -- this patch is LARGER than what is "
+               "rendered above)".format(_MAX_LINES))
+    rest = [f.filename for f in files[i + 1:]]
+    if rest:
+        out.append("  NOT SHOWN, {} further changed file{}: {}".format(
+            len(rest), "" if len(rest) == 1 else "s", ", ".join(rest[:_MAX_TRUNC_FILES])))
+        if len(rest) > _MAX_TRUNC_FILES:
+            out.append("    ... (+{} more)".format(len(rest) - _MAX_TRUNC_FILES))
     return "\n".join(out)
 
 

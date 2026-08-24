@@ -220,6 +220,36 @@ class TestDerivedSignals(unittest.TestCase):
         self.assertIn("code MOTION", out)          # refactor NOTE fires
         self.assertNotIn("cosmetic-only", out)     # not mislabeled as cosmetic
 
+    def test_the_cap_bounds_a_single_huge_hunk_and_names_what_is_hidden(self):
+        """The cap used to be tested once per HUNK, after the whole hunk was already appended, so
+        ONE large hunk sailed past it -- a changeset in the prod-cited panel rendered 334,723
+        bytes, and a six-figure tool result competes with the standing prompt for the same context
+        window. And the old code `return`ed, so every LATER file vanished with no trace: the model
+        saw a patch that looked complete and was not, which is the worst possible shape for a
+        provenance question."""
+        from crashclouseau.agent.tools.patch import _fmt_patch, _MAX_LINES
+        big = "@@ -1,0 +1,900 @@\n" + "".join("+line{}\n".format(i) for i in range(900))
+        later = ("diff --git a/later.cpp b/later.cpp\n--- a/later.cpp\n+++ b/later.cpp\n"
+                 "@@ -1,0 +1,1 @@\n+one\n")
+        diff = "diff --git a/big.cpp b/big.cpp\n--- a/big.cpp\n+++ b/big.cpp\n" + big + later
+        ex = pe.PatchExtraction(node="n", channel="nightly", raw_diff=diff,
+                                files=pe.parse_hunks(diff))
+        out = _fmt_patch(ex, "n")
+        rendered = [ln for ln in out.split("\n") if ln.startswith("    + ")]
+        self.assertEqual(len(rendered), _MAX_LINES)     # bounded INSIDE the hunk
+        self.assertIn("diff truncated", out)
+        # ... and the file it never got to is still named.
+        self.assertIn("NOT SHOWN, 1 further changed file", out)
+        self.assertIn("later.cpp", out)
+
+    def test_an_untruncated_patch_says_nothing_about_truncation(self):
+        from crashclouseau.agent.tools.patch import _fmt_patch
+        ex = pe.PatchExtraction(node="n", channel="nightly", raw_diff=_NULLCHECK,
+                                files=pe.parse_hunks(_NULLCHECK))
+        out = _fmt_patch(ex, "n")
+        self.assertNotIn("truncated", out)
+        self.assertNotIn("NOT SHOWN", out)
+
     def test_logic_change_not_cosmetic_and_null_check_tag(self):
         files = pe.parse_hunks(_NULLCHECK)
         self.assertFalse(pe.file_is_cosmetic(files[0]))
