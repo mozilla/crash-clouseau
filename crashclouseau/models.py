@@ -1950,12 +1950,12 @@ class Dossier(db.Model):
     ):
         """Create or update a dossier in one atomic statement.
 
-        WARNING: ``payload`` REPLACES the stored JSONB wholesale — it is not merged. Any key
-        a previous write put there (``reap_attempts``, ``job_id``, ``error``) is gone unless
-        the caller carries it forward. This is what made the reaper's recovery rate
-        unmeasurable: a recovered run's finished payload dropped ``reap_attempts``, so the
-        counter only ever survived on runs that FAILED, and "0 of 28 reaped dossiers reached
-        done" was a tautology rather than a measurement."""
+        WARNING: ``payload`` REPLACES the stored JSONB wholesale — it is not merged, EXCEPT for
+        the keys in ``_STICKY_PAYLOAD_KEYS``. Any other key a previous write put there
+        (``reap_attempts``, ``job_id``, ``error``) is gone unless the caller carries it forward.
+        This is what made the reaper's recovery rate unmeasurable: a recovered run's finished
+        payload dropped ``reap_attempts``, so the counter only ever survived on runs that FAILED,
+        and "0 of 28 reaped dossiers reached done" was a tautology rather than a measurement."""
         uuidid = UUID.get_id(uuid)
         provided = {
             k: v
@@ -1974,12 +1974,56 @@ class Dossier(db.Model):
         ins = pg.insert(Dossier).values(
             uuidid=uuidid, schema_version=DOSSIER_SCHEMA_VERSION, **provided
         )
-        upd = ins.on_conflict_do_update(
-            index_elements=["uuidid"], set_={**provided, "updated": db.func.now()}
-        )
+        set_ = {**provided, "updated": db.func.now()}
+        if payload is not None:
+            set_["payload"] = Dossier._carry_sticky(ins)
+        upd = ins.on_conflict_do_update(index_elements=["uuidid"], set_=set_)
         db.session.execute(upd)
         if commit:
             db.session.commit()
+
+    # Payload keys that OUTLIVE a re-run of the same crash. Exactly one, and the argument for it
+    # is a bug on file.
+    #
+    # `filed_bug` is the pair of idempotence keys that stop us posting to Bugzilla twice
+    # (`already_filed`, per uuid; `already_commented`, per bug+signature). Both read it out of
+    # THIS column. A successful re-run replaced the payload and took the record with it, so a
+    # retriggered run could not see its own filing: on 2026-08-24 a retrigger of
+    # `a4ac8c69-7b93-48e5-8e5d-9a1ae0260819` posted a second copy of its analysis onto bug
+    # 2065072, which we had filed from that same crash four days earlier, and the component owner
+    # replied "No need for it to post again."
+    #
+    # The asymmetry that hid it for so long: the REAPER path was always safe, because a crashed
+    # run never reaches this write, so `filed_bug` survived exactly the case the guard was built
+    # for. Only a re-run that SUCCEEDS destroyed it.
+    #
+    # And why the set is not larger: `reset_for_retrigger` deliberately POPS `reap_attempts`
+    # ("an operator retrigger earns a fresh give-up budget") and `error` and `run_started`. Making
+    # any of those sticky here would silently undo a deliberate clear. Stickiness is only correct
+    # for a fact about the OUTSIDE WORLD -- something we did to Bugzilla cannot be un-done by
+    # re-running the analysis.
+    _STICKY_PAYLOAD_KEYS = ("filed_bug",)
+
+    @staticmethod
+    def _carry_sticky(ins):
+        """The ON CONFLICT payload expression: sticky keys from the STORED row, everything else
+        from the proposed one.
+
+        ``jsonb_strip_nulls`` is what makes an absent key absent rather than an explicit
+        ``null`` -- without it a first write would store ``{"filed_bug": null}`` and
+        ``payload ? 'filed_bug'`` (``filed_bugs_since``, ``filed_bug_rows``) would start
+        matching every dossier ever written. The proposed payload is on the RIGHT of ``||`` so a
+        caller that genuinely supplies a new ``filed_bug`` still wins."""
+        # `->` explicitly, not `payload[key]`: SQLAlchemy renders the subscript form, which is
+        # jsonb subscripting and needs PG14+, and the value MUST come back as jsonb -- via
+        # `->>` it would be text and `jsonb_build_object` would store the whole record as a
+        # JSON string.
+        args = []
+        for key in Dossier._STICKY_PAYLOAD_KEYS:
+            args.append(key)
+            args.append(Dossier.payload.op("->", return_type=pg.JSONB)(key))
+        carried = db.func.jsonb_strip_nulls(db.func.jsonb_build_object(*args))
+        return carried.op("||", return_type=pg.JSONB)(ins.excluded.payload)
 
     @staticmethod
     def set_status(uuid, status, error=None, commit=True):
@@ -2387,7 +2431,19 @@ class Dossier(db.Model):
             # populated, so join on uuidid -- joining on dossierid would drop every
             # verdict. Dossier is also 1:1 per uuid, so this can't multiply rows.
             .outerjoin(Verdict, Verdict.uuidid == UUID.id)
-            .order_by(Dossier.created.desc())
+            # NEWEST ACTIVITY first, not newest crash. `created` is INSERT-only
+            # (`server_default`) and `reset_for_retrigger` leaves it alone, so a re-run keeps
+            # its original timestamp: a retrigger of a 4-day-old crash sorted 4 days down the
+            # page, and one older than `limit` rows vanished from this view entirely. That is
+            # how a duplicate comment on bug 2065072 was invisible here while a component
+            # owner was reading it on Bugzilla. `updated` carries `onupdate`, so it is the last
+            # time anything happened to this run.
+            #
+            # NOT `run_started`, which is the semantically perfect clock and the one the view
+            # already prefers for DURATION: it is text in the JSONB payload, so ordering on it
+            # needs a `::timestamptz` cast, and one malformed value would 500 the page you open
+            # during an outage. `updated` is a real column and cannot fail.
+            .order_by(Dossier.updated.desc())
             .limit(limit)
             .all()
         )

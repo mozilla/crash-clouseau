@@ -3860,7 +3860,21 @@ def retrigger_agent(uuid, channel=None):
     re-run still goes through the atomic claim (concurrent retriggers collapse to one
     run). Returns a small status dict."""
     cancelled = cancel_running_job(uuid)
+    # SAY SO when this crash has already been to Bugzilla. A retrigger of a filed run is a
+    # request to re-analyse a crash whose analysis is already public, and the re-run's filer
+    # will make its own decision about whether to post again -- so an operator doing this in
+    # bulk needs to know before, not from a component owner afterwards. On 2026-08-24 a
+    # 20-uuid retrigger experiment put a second copy of one analysis on bug 2065072 and filed
+    # a new bug 2066051, and neither was visible in advance. The `filed_bug` record itself now
+    # survives the re-run (`Dossier._STICKY_PAYLOAD_KEYS`), which is what stops the duplicate;
+    # this line is so the operator is not surprised by the filings that ARE legitimate.
+    prior = models.Dossier.already_filed(uuid)
+    if prior:
+        logger.warning(
+            "agent: retriggering %s, which ALREADY went to bugzilla (%s bug %s) -- the re-run "
+            "may comment or file again", uuid, (prior or {}).get("mode"), (prior or {}).get("bug"))
     models.Dossier.reset_for_retrigger(uuid)
     enqueue_agent(uuid, channel=channel, force=True)
     logger.info("agent: retriggered %s (cancelled_running=%s)", uuid, cancelled)
-    return {"uuid": uuid, "cancelled": cancelled}
+    return {"uuid": uuid, "cancelled": cancelled,
+            "already_filed": (prior or {}).get("bug") if prior else None}

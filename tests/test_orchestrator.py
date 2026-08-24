@@ -1232,7 +1232,36 @@ class TestRetrigger(unittest.TestCase):
         rst.assert_called_once_with("u-1")  # reset so claim_running can re-take it
         enq.assert_called_once()
         self.assertTrue(enq.call_args.kwargs.get("force"))
-        self.assertEqual(out, {"uuid": "u-1", "cancelled": True})
+        self.assertEqual(out, {"uuid": "u-1", "cancelled": True, "already_filed": None})
+
+    def test_retriggering_a_run_that_already_filed_warns_and_says_which_bug(self):
+        """A retrigger of a filed run is a request to re-analyse a crash whose analysis is
+        already public. On 2026-08-24 a 20-uuid retrigger experiment put a second copy of one
+        analysis on bug 2065072 (the component owner replied "No need for it to post again")
+        and filed a new bug 2066051, and neither was visible in advance."""
+        with mock.patch.object(orch, "cancel_running_job", return_value=False), \
+             mock.patch.object(orch.models.Dossier, "already_filed",
+                               return_value={"filed": True, "bug": 2065072,
+                                             "mode": "new_bug"}), \
+             mock.patch.object(orch.models.Dossier, "reset_for_retrigger"), \
+             mock.patch.object(orch, "enqueue_agent"), \
+             self.assertLogs(level="WARNING") as cm:
+            out = orch.retrigger_agent("u-1")
+        self.assertEqual(out["already_filed"], 2065072)
+        joined = "\n".join(cm.output)
+        self.assertIn("ALREADY went to bugzilla", joined)
+        self.assertIn("2065072", joined)
+        self.assertIn("new_bug", joined)
+
+    def test_a_retrigger_of_a_never_filed_run_is_silent_about_bugzilla(self):
+        with mock.patch.object(orch, "cancel_running_job", return_value=False), \
+             mock.patch.object(orch.models.Dossier, "already_filed", return_value=None), \
+             mock.patch.object(orch.models.Dossier, "reset_for_retrigger"), \
+             mock.patch.object(orch, "enqueue_agent"), \
+             self.assertLogs(level="INFO") as cm:
+            out = orch.retrigger_agent("u-1")
+        self.assertIsNone(out["already_filed"])
+        self.assertNotIn("ALREADY went to bugzilla", "\n".join(cm.output))
 
 
 class TestStackText(unittest.TestCase):

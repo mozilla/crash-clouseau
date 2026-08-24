@@ -1552,6 +1552,64 @@ class TestAlreadyCommentedRoundTrip(unittest.TestCase):
         self._filed("afc-0003-aaaa-bbbb-ccccddddeeee", self._info(2062934, self.SIG))
         self.assertIsNone(models.Dossier.already_commented(2063003, self.SIG))
 
+    def test_a_successful_RERUN_does_not_forget_that_it_filed(self):
+        """THE BUG THAT PUT A SECOND COMMENT ON BUG 2065072.
+
+        `Dossier.upsert` replaces the payload wholesale, so when a retriggered run FINISHED it
+        dropped `payload["filed_bug"]` -- and with it both idempotence keys, since
+        `already_filed` reads that key on this row and `already_commented` scans the same key
+        across rows. On 2026-08-24 the retrigger of `a4ac8c69-...` re-posted its analysis onto
+        the bug we had filed from that very crash four days earlier, and the component owner
+        replied "No need for it to post again".
+
+        The asymmetry that hid it: the REAPER path was always safe, because a crashed run never
+        reaches this write, so `filed_bug` survived exactly the case the guard was built for.
+        Only a re-run that SUCCEEDS destroyed it."""
+        uuid = "afc-0009-aaaa-bbbb-ccccddddeeee"
+        self._filed(uuid, self._info(2065072, self.SIG, mode="new_bug"))
+        self.assertTrue(models.Dossier.already_filed(uuid))
+
+        # The re-run completes and writes a fresh payload that knows nothing about Bugzilla.
+        models.Dossier.upsert(uuid, payload={"dossier": {"verdict": {}}}, status="done")
+        db.session.expire_all()
+
+        self.assertEqual(models.Dossier.already_filed(uuid)["bug"], 2065072)
+        self.assertEqual(models.Dossier.already_commented(2065072, self.SIG), {"uuid": uuid})
+        # The new payload still landed.
+        row = models.Dossier.get_by_uuid(uuid)
+        self.assertEqual(row.payload["dossier"], {"verdict": {}})
+
+    def test_a_caller_that_supplies_a_new_filed_bug_still_wins(self):
+        """Sticky must not mean frozen: the proposed payload is on the RIGHT of `||`."""
+        uuid = "afc-0010-aaaa-bbbb-ccccddddeeee"
+        self._filed(uuid, self._info(2065072, self.SIG, mode="new_bug"))
+        models.Dossier.upsert(uuid, payload={"filed_bug": self._info(2066051, self.SIG)},
+                              status="done")
+        db.session.expire_all()
+        self.assertEqual(models.Dossier.already_filed(uuid)["bug"], 2066051)
+
+    def test_a_run_that_never_filed_gets_no_null_filed_bug_key(self):
+        """`jsonb_strip_nulls` is load-bearing. Without it every upsert would store
+        `{"filed_bug": null}`, and `payload ? 'filed_bug'` -- the predicate behind
+        `filed_bugs_since` and `filed_bug_rows` -- would start matching every dossier ever
+        written, i.e. the autofile audit trail would report the whole table."""
+        uuid = "afc-0011-aaaa-bbbb-ccccddddeeee"
+        u = models.UUID(uuid, self.sig, uuid, self.build.id)
+        db.session.add(u)
+        db.session.commit()
+        models.Dossier.upsert(uuid, payload={"dossier": {}}, status="done")
+        models.Dossier.upsert(uuid, payload={"dossier": {"again": True}}, status="done")
+        db.session.expire_all()
+        row = models.Dossier.get_by_uuid(uuid)
+        self.assertNotIn("filed_bug", row.payload)
+        self.assertNotIn(uuid, [r["uuid"] for r in models.Dossier.filed_bug_rows()])
+
+    def test_the_sticky_set_stays_exactly_filed_bug(self):
+        """`reset_for_retrigger` deliberately POPS `reap_attempts` ("an operator retrigger earns
+        a fresh give-up budget"), `error` and `run_started`. Making any of those sticky would
+        silently undo a deliberate clear, so widening this set is a decision, not a tidy-up."""
+        self.assertEqual(models.Dossier._STICKY_PAYLOAD_KEYS, ("filed_bug",))
+
     def test_another_signature_on_the_same_bug_is_not_a_match(self):
         # One defect, several signatures: a second signature arriving on the same bug is real
         # information, and only happens once the bug already lists it.
