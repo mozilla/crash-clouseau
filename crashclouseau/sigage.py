@@ -869,14 +869,21 @@ def age_facts(buildid, windowed, ever, observed=None):
 
     Keys are omitted rather than zeroed whenever a lookup did not answer: a signature whose age we
     could not establish must never read as a new one."""
+    # Unrolled, with LITERAL keys, rather than the `"signature_first_seen_" + key` loop this used
+    # to be: a computed key is invisible to the registry scanner in
+    # tests/test_corroboration_registry.py, and all four of these were live in prod dossiers and
+    # undeclared because of it. A corroboration key has to be greppable.
     facts = {}
-    for key, first_seen in (("windowed", windowed), ("ever", ever)):
-        if not first_seen:
-            continue
-        facts["signature_first_seen_" + key] = first_seen
-        age = signature_age_days(first_seen, buildid)
+    if windowed:
+        facts["signature_first_seen_windowed"] = windowed
+        age = signature_age_days(windowed, buildid)
         if age is not None:
-            facts["signature_age_days_" + key] = age
+            facts["signature_age_days_windowed"] = age
+    if ever:
+        facts["signature_first_seen_ever"] = ever
+        age = signature_age_days(ever, buildid)
+        if age is not None:
+            facts["signature_age_days_ever"] = age
     observed = observed or windowed
     if observed and ever:
         drift = signature_age_days(ever, observed)

@@ -35,38 +35,162 @@ def _sources():
             yield path
 
 
+def _dict_keys(node):
+    """The literal string keys of a dict display, ignoring its ``**merges``."""
+    return {k.value for k in node.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+
+
+def _merged_into(node):
+    """The expression behind every ``**x`` in a dict display (``keys`` holds ``None`` there)."""
+    return [v for k, v in zip(node.keys, node.values) if k is None]
+
+
+def _is_the_dict(target):
+    """Is this target THE flag dict -- ``dossier.corroborations``, or a bare local of that name --
+    rather than one key inside it?"""
+    named = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", None)
+    return named == "corroborations" and isinstance(target, (ast.Attribute, ast.Name))
+
+
+def _literal_key(target):
+    """``d["literal"] = v`` -> ``"literal"``, for a ``d`` already known to be a carrier."""
+    if not isinstance(target, ast.Subscript) or not isinstance(target.slice, ast.Constant):
+        return None
+    return target.slice.value if isinstance(target.slice.value, str) else None
+
+
+def _subscript_of(target, name):
+    """``name["k"] = v``? (Split out of the caller only to keep the operator off a line break --
+    the project's flake8 config drops the default ignores, so W503 and W504 are both live.)"""
+    if not isinstance(target, ast.Subscript) or not isinstance(target.value, ast.Name):
+        return False
+    return target.value.id == name
+
+
+def _update_call_on(node, name):
+    """``name.update({...})``, with a dict display as the argument?"""
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    if node.func.attr != "update" or not isinstance(node.func.value, ast.Name):
+        return False
+    if node.func.value.id != name or not node.args:
+        return False
+    return isinstance(node.args[0], ast.Dict)
+
+
+def _enclosing_scope(tree):
+    """``node -> the FunctionDef it sits in`` (module if none), so a carrier local is looked up in
+    the scope that built it instead of across the whole file."""
+    parent = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[id(child)] = node
+
+    def scope_of(node):
+        cur = parent.get(id(node))
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return cur
+            cur = parent.get(id(cur))
+        return tree
+    return scope_of
+
+
 def _written_literals():
     """Every string key written into a ``corroborations`` dict, found in the AST.
 
-    Deliberately literal-only. A gate that builds its key in a variable (the bit-flip family
-    does) is invisible here, which is why `test_every_declared_flag_is_written` runs the check
-    in the other direction as well -- between them a flag has to be both written and declared."""
-    found = {}
-    for path in _sources():
-        tree = ast.parse(io.open(path, encoding="utf-8").read())
-        rel = os.path.relpath(path, _ROOT)
+    THE SCANNER FOLLOWS CARRIER DICTS, because most gates never touch the flag dict directly:
+    they build a local (``flags``, ``facts``) and merge it in with ``**``. Reading 500 prod
+    dossiers on 2026-08-24 found six flags live and undeclared for exactly that reason -- the
+    first scanner recognised ``flags["k"] = v`` but not ``flags = {"k": v}``, and knew nothing
+    about a carrier under any other name or built by a helper in another module. So:
+
+      1. seed on every ``<x>.corroborations = {...}``: take its literal keys, and treat the ``y``
+         of each ``**y`` as a carrier, resolved in the function that built it;
+      2. for a carrier, take literal keys from ``y = {...}``, ``y["k"] = v`` and ``y.update({...})``;
+      3. when a carrier is assigned from a CALL, follow that function's ``return`` -- which is how
+         ``sigage.age_facts`` (five keys, a different module) becomes visible at all;
+      4. plus ``_record_suppression(dossier, "flag")``, whose key is an argument.
+
+    STILL INVISIBLE, unavoidably: a key built from a variable -- ``facts["prefix_" + key]``, or
+    ``{**c, key: True}`` as the bit-flip family does. No literal scanner can resolve those, so the
+    standing rule is that a flag written into corroborations uses a LITERAL key;
+    ``sigage.age_facts`` was unrolled to obey it. `test_every_declared_flag_is_written` runs the
+    check in the other direction, so between them a flag must be both written and declared."""
+    trees = [(os.path.relpath(path, _ROOT), ast.parse(io.open(path, encoding="utf-8").read()))
+             for path in _sources()]
+    funcs = {}
+    for rel, tree in trees:
         for node in ast.walk(tree):
-            keys = set()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                funcs.setdefault(node.name, []).append((rel, node))
+
+    found = {}
+    work, seen = [], set()
+
+    def emit(keys, rel):
+        for key in keys:
+            found.setdefault(key, set()).add(rel)
+
+    def carrier(rel, scope, name):
+        if (rel, id(scope), name) not in seen:
+            seen.add((rel, id(scope), name))
+            work.append((rel, scope, name))
+
+    def follow(expr, rel, scope):
+        """A ``**y`` merge, or a ``y = helper(...)`` assignment: queue what it names."""
+        if isinstance(expr, ast.Name):
+            carrier(rel, scope, expr.id)
+        elif isinstance(expr, ast.Call):
+            func = expr.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            for frel, fdef in funcs.get(name, ()):
+                for node in ast.walk(fdef):
+                    if not isinstance(node, ast.Return):
+                        continue
+                    if isinstance(node.value, ast.Dict):
+                        emit(_dict_keys(node.value), frel)
+                    elif isinstance(node.value, ast.Name):
+                        carrier(frel, fdef, node.value.id)
+
+    for rel, tree in trees:
+        scope_of = _enclosing_scope(tree)
+        for node in ast.walk(tree):
             if isinstance(node, ast.Assign) and node.targets:
                 target = node.targets[0]
-                name = None
-                if isinstance(target, ast.Attribute):
-                    name = target.attr
-                elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
-                    name = target.value.id
-                    literal = isinstance(target.slice, ast.Constant) and isinstance(
-                        target.slice.value, str)
-                    if name in ("flags", "corroborations") and literal:
-                        keys.add(target.slice.value)
-                if name == "corroborations" and isinstance(node.value, ast.Dict):
-                    keys |= {k.value for k in node.value.keys
-                             if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+                if _is_the_dict(target) and isinstance(node.value, ast.Dict):
+                    emit(_dict_keys(node.value), rel)
+                    for merged in _merged_into(node.value):
+                        follow(merged, rel, scope_of(node))
+                elif isinstance(target, ast.Subscript) and _is_the_dict(target.value):
+                    key = _literal_key(target)
+                    if key:
+                        emit({key}, rel)
             is_call = isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            is_record = is_call and node.func.id == "_record_suppression"
-            if is_record and len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
-                keys.add(node.args[1].value)
-            for key in keys:
-                found.setdefault(key, set()).add(rel)
+            is_record = is_call and node.func.id == "_record_suppression" and len(node.args) > 1
+            if is_record and isinstance(node.args[1], ast.Constant):
+                emit({node.args[1].value}, rel)
+
+    while work:
+        rel, scope, name = work.pop()
+        for node in ast.walk(scope):
+            if isinstance(node, ast.Assign) and node.targets:
+                target = node.targets[0]
+                if isinstance(target, ast.Name) and target.id == name:
+                    if isinstance(node.value, ast.Dict):
+                        emit(_dict_keys(node.value), rel)
+                        for merged in _merged_into(node.value):
+                            follow(merged, rel, scope)
+                    else:
+                        follow(node.value, rel, scope)
+                elif _subscript_of(target, name):
+                    key = _literal_key(target)
+                    if key:
+                        emit({key}, rel)
+            elif _update_call_on(node, name):
+                emit(_dict_keys(node.args[0]), rel)
+
     return found
 
 
@@ -106,9 +230,28 @@ class TestRegistryCoversTheCode(unittest.TestCase):
         # The scanner is literal-only, so a refactor that moves writes behind a helper would
         # silently empty it and every check above would pass vacuously. Pin the floor.
         written = _written_literals()
-        self.assertGreaterEqual(len(written), 45, "the write scanner stopped finding writes")
+        self.assertGreaterEqual(len(written), 60, "the write scanner stopped finding writes")
         self.assertIn("stale_signature_clamped", written)
         self.assertIn("compiled_out_suppressed", written)
+
+    def test_the_scanner_still_follows_carrier_dicts(self):
+        # AND pin the WIDENING, one assertion per shape it was blind to until 2026-08-24 -- a
+        # floor of 45 passed happily while six live prod flags went undeclared, so the count
+        # alone does not defend this. Reverting the carrier-following would fail here.
+        written = _written_literals()
+        # `flags = {"machine_distinct_signatures": sigs}` -- a dict LITERAL assigned to a carrier,
+        # where the old scanner only understood `flags["k"] = v`.
+        self.assertIn("machine_distinct_signatures", written)
+        # `sigage.age_facts` builds and returns its own dict, in a module that never names
+        # `corroborations`: only following the carrier through the call reaches it.
+        self.assertIn("signature_clock_drift_days", written)
+        self.assertEqual(sorted(written["signature_clock_drift_days"]),
+                         ["crashclouseau/sigage.py"])
+        # And the keys that function used to compute -- the unroll is what makes them greppable,
+        # so a loop rebuilt with `"signature_age_days_" + key` fails here.
+        for flag in ("signature_first_seen_ever", "signature_age_days_ever",
+                     "signature_first_seen_windowed", "signature_age_days_windowed"):
+            self.assertIn(flag, written, flag)
 
 
 class TestTheTwoPolicyListsAgree(unittest.TestCase):
@@ -143,7 +286,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "absent_named_threads", "absent_thread_clamped", "call_path_verified",
         "compiled_out_macro", "compiled_out_rev", "exposer_suspected",
         "fault_offset_unverified", "hardware_noise_signature_suppressed",
-        "cpu_info", "machine_crash_count", "machine_distinct_cpus", "machine_span_seconds",
+        "cpu_info", "machine_crash_count", "machine_distinct_cpus",
+        "machine_distinct_signatures", "machine_span_seconds",
         "second_opinion_abstained", "second_opinion_clamped",
         "second_opinion_downgraded_strong", "skeptic_build_flag_unbound",
     }

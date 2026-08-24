@@ -130,6 +130,32 @@ REGISTRY = {
         "round trip was invisible until 2026-08-21."),
     "signature_report_count": ("evidence", ("agent/orchestrator.py",), ""),
 
+    # The next six come out of `sigage.age_facts`, whose keys were COMPUTED
+    # (`"signature_first_seen_" + key`) until 2026-08-24 and so were invisible to the registry
+    # scanner: five of them were live in prod dossiers, undeclared, for weeks. `agent/triage.py`
+    # prints the same numbers but re-derives them by calling `age_facts` itself, so it reads the
+    # arithmetic and not these flags.
+    "signature_first_seen_ever": (
+        "evidence", ("report_bug.py",),
+        "Socorro's all-time `SignatureFirstDate`, and NOT the stale-signature gate's clock: "
+        "`sigage.first_seen_ever` measures that substituting it there would clamp eight of the "
+        "sixteen filings a human acted on. THE TRAP: `build_seed` puts the same NAME in the seed, "
+        "and `agent/orchestrator.py` reads that one, not this flag."),
+    "signature_age_days_ever": ("evidence", ("report_bug.py",), ""),
+    "signature_first_seen_windowed": (
+        "evidence", ("report_bug.py",),
+        "The 364-day answer, carried beside the all-time one so the error between the two clocks "
+        "stays measurable in prod instead of arguable."),
+    "signature_age_days_windowed": ("evidence", ("report_bug.py",), ""),
+    "signature_clock_drift_days": (
+        "evidence", ("report_bug.py",),
+        "`ever` minus `observed`. Negative past `sigage.RENAME_DRIFT_DAYS` means the signature was "
+        "RENAMED, which is the only thing this number is used for."),
+    "signature_rename_suspected": (
+        "evidence", ("report_bug.py",),
+        "The drift verdict, not a second measurement. It had not fired once in the 500 prod "
+        "dossiers read on 2026-08-24 -- absence here is untested, not quiet."),
+
     # -- hardware: the bit-flip / broken-machine family ----------------------------------------
     "possible_bit_flip_confidence": ("evidence", ("report_bug.py",), ""),
     "possible_bit_flip_suppressed": (
@@ -163,6 +189,11 @@ REGISTRY = {
     "machine_crash_count": ("diagnostic", (), "The bad-machine gate's inputs, kept so the "
                             "thresholds can be re-fit from persisted dossiers."),
     "machine_distinct_cpus": ("diagnostic", (), ""),
+    "machine_distinct_signatures": (
+        "diagnostic", (),
+        "The fourth of the same family, and the conjunct the gate actually branches on -- off the "
+        "seed's `install_history`, though, never off this flag. The first scanner missed it "
+        "because it is a key in `flags = {...}` rather than a later `flags[...] =` line."),
     "machine_span_seconds": (
         "diagnostic", (),
         "The one bad-machine threshold with no panel behind it (worklist rank 16): 1800s was "
