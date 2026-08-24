@@ -1072,7 +1072,18 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         logger.warning("autofile: %s is a memory-safety crash; declining the PUBLIC venue "
                        "bug %s and filing restricted instead", uuid, bug_id)
         preview = dict(preview)
-        preview["see_also"] = ["https://bugzilla.mozilla.org/show_bug.cgi?id={}".format(bug_id)]
+        # NOT `see_also`, and this cost a reading of BMO's source to get right. `add_see_also`
+        # MIRRORS a local reference onto the referenced bug (Bugzilla/Bug.pm:3480-3487:
+        # `$ref_bug->add_see_also($self->id, 'skip_recursion')`), so linking the public bug from
+        # a restricted one puts a public "See Also: bug <restricted id>" on it -- advertising to
+        # everyone that a restricted bug exists for this signature. That is a disclosure of
+        # EXISTENCE we did not intend and cannot take back, on the one path built to avoid a
+        # disclosure. The bug id goes in the restricted bug's own comment instead, where it is
+        # just as useful to a triager and mirrors nowhere.
+        preview["comment"] = "{}\n\n_Probably a duplicate of bug {}, which is open on this same "\
+                             "signature. This bug was filed separately, and restricted, because "\
+                             "the crash report shows a memory-safety fault and that bug is "\
+                             "public._".format(preview["comment"], bug_id)
         public_venue_declined, bug_id = bug_id, None
 
     email = preview.get("needinfo_email") if cfg["needinfo"] else ""
@@ -1105,10 +1116,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             # and for `groups` the silent no-op publishes a use-after-free.
             payload = {k: v for k, v in preview.items()
                        if k in ("product", "component", "version", "type", "keywords",
-                                "cf_crash_signature", "groups", "cc", "see_also")}
+                                "cf_crash_signature", "groups", "cc")}
             # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
             # byte-identical to what it was before this existed.
-            for k in ("groups", "cc", "see_also"):
+            for k in ("groups", "cc"):
                 if not payload.get(k):
                     payload.pop(k, None)
             payload["summary"] = preview["title"]

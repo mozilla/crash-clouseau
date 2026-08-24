@@ -1507,10 +1507,13 @@ class TestTheSecurityVenue(_Base):
         self.assertEqual(res["mode"], "new_bug")
         self.assertEqual(res["public_venue_declined"], 2064600)
         self.assertEqual(self.created[0]["groups"], ["core-security"])
-        # ...naming the public bug, so a triager can dup it in one click. This knowingly makes
-        # something that looks like a duplicate -- the other thing mccr8 asked us to stop -- and
-        # that is the lesser of the two costs, which is why it is recorded rather than hidden.
-        self.assertIn("2064600", self.created[0]["see_also"][0])
+        # ...naming the public bug in the COMMENT, so a triager can dup it in one click. NOT in
+        # `see_also`: BMO's `add_see_also` (Bug.pm:3480-3487) mirrors a local reference onto the
+        # referenced bug, which would put a public "See Also: bug <restricted id>" on the public
+        # bug and advertise that a restricted bug exists -- a disclosure of existence, on the one
+        # path built to avoid a disclosure.
+        self.assertNotIn("see_also", self.created[0])
+        self.assertIn("Probably a duplicate of bug 2064600", self.created[0]["description"])
 
     def test_an_ordinary_crash_still_comments_on_the_public_bug(self):
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
