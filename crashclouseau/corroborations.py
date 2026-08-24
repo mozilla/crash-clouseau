@@ -101,10 +101,24 @@ REGISTRY = {
         "promotion", ("report_bug.py", "templates/crashstack.html"),
         "The boost was APPLIED. 14 of the 29 fileable verdicts in one prod month owe their rung "
         "to this, making it the pipeline's single largest promoter."),
-    "second_opinion_refuted": ("evidence", ("templates/crashstack.html",), ""),
+    "second_opinion_refuted": (
+        "evidence", ("report_bug.py", "templates/crashstack.html"),
+        "Since 2026-08-24 it also PRINTS, via `build_dissent_note`. The symmetry with "
+        "`_corroborated` is deliberately broken: on the 500-dossier snapshot 17 of 17 filed bugs "
+        "carried a corroborating SO (entropy zero, and both known-wrong filings carried one at "
+        "confidence `high`), so publishing agreement is authority inflation while publishing "
+        "disagreement is the only variance the reader can act on."),
     "second_opinion_clamped": (
         "diagnostic", (),
-        "A refutation cost the lead one rung."),
+        "A refutation cost the lead one rung. Correctly write-only: it clamps a `probable` lead "
+        "to `medium` = rung 50, below `autofile.min_confidence`, so no bug comment exists to "
+        "print it on. Contrast `_clamped_strong`, which lands ON the filing floor."),
+    "second_opinion_clamped_strong": (
+        "clamp", ("report_bug.py", "templates/crashstack.html"),
+        "A `medium` refutation costs strong-evidence one band, to a `probable` lead. Until "
+        "2026-08-24 this case set `_refuted` and moved nothing, so the top rung was the only one "
+        "a blind refutation could not touch (`ca6ebc17`, culprit/85). The clamped verdict is "
+        "still ABOVE the filing floor, which is why this one must print."),
     "second_opinion_downgraded_strong": (
         "diagnostic", (),
         "A high-confidence refutation took strong-evidence down to a lead."),
@@ -247,6 +261,30 @@ REGISTRY = {
         "diagnostic", (),
         "A skeptic `fail` that rested on a compile-flag claim and was NOT allowed to bind. Its "
         "failure mode is a false abstain, which reaches no scoreboard, so this is the count."),
+}
+
+
+# A `promotion` or a `clamp` MOVED the rung the filed bug publishes, so the bug has to say why --
+# otherwise a reader sees a number with no reason, which is the exact complaint that produced this
+# file (see the `stale_signature_clamped` story at the top). `test_a_rung_mover_reaches_the_bug`
+# requires `report_bug.py` among the readers of every such flag, and the exceptions below are
+# DECLARED rather than tolerated.
+#
+# All four fired on 0 of the 17 filed bugs in the 500-dossier prod snapshot of 2026-08-24
+# (all-500 counts in the notes), so this invariant carries no debt today. That is the point: it is
+# a guard against the NEXT rung-mover being invisible, not a repair of an existing gap.
+UNPUBLISHED = {
+    "fault_address_offset_match":
+        "7 of 500 runs, 0 of 17 filings. The offset match itself is published as prose by "
+        "`_explanation_comment` when the verdict rests on it; the FLAG is the promotion's "
+        "audit trail, not the reader's sentence.",
+    "prior_signature_match":
+        "2 of 500 runs, 0 of 17 filings.",
+    "downgraded_from_strong":
+        "0 of 500 runs. Read only through `_SO_BOOST_POLICY`; the downgrade it records is "
+        "already spoken by whichever gate called `_downgrade_to_lead_or_abstain`.",
+    "candidate_backout_capped":
+        "0 of 500 runs. Caps a backout candidate's rung; the backout itself is printed.",
 }
 
 

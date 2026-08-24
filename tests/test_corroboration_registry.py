@@ -330,3 +330,32 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
     def test_every_kind_is_one_of_the_five(self):
         for flag, (kind, _r, _n) in corroborations.REGISTRY.items():
             self.assertIn(kind, corroborations.KINDS, flag)
+
+    def test_a_rung_mover_reaches_the_bug(self):
+        """A `promotion` or a `clamp` changed the number the filed bug publishes, so the bug has
+        to say why -- or `UNPUBLISHED` has to carry the argument for why not.
+
+        This is the invariant behind the whole file's origin story: `stale_signature_clamped` had
+        one writer and no reader, so a rung moved and the filed bug said nothing. Reviewing bug
+        2065373, :jstutte corrected three claims the run could already have checked -- the class
+        of failure is "we computed it and never published it", and this is the structural half of
+        the fix."""
+        for flag, (kind, readers, _n) in sorted(corroborations.REGISTRY.items()):
+            if kind not in ("promotion", "clamp"):
+                continue
+            if flag in corroborations.UNPUBLISHED:
+                continue
+            self.assertIn(
+                "report_bug.py", readers,
+                "{} is declared `{}` -- it moved the published rung. Either give it a sentence "
+                "in report_bug.py, or add it to corroborations.UNPUBLISHED with the measured "
+                "argument for keeping it out of the bug.".format(flag, kind))
+
+    def test_every_unpublished_rung_mover_is_a_rung_mover_that_says_why(self):
+        for flag, why in sorted(corroborations.UNPUBLISHED.items()):
+            declared = corroborations.declared(flag)
+            self.assertIsNotNone(declared, flag)
+            self.assertIn(declared[0], ("promotion", "clamp"), flag)
+            self.assertNotIn("report_bug.py", declared[1],
+                             "{} DOES reach the bug -- drop the exemption".format(flag))
+            self.assertTrue(why.strip(), flag)

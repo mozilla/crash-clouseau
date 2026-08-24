@@ -201,15 +201,45 @@ class TestFoldRefute(unittest.TestCase):
         self.assertEqual(d.verdict.confidence, Confidence.probable)
         self.assertNotIn("second_opinion_refuted", d.corroborations)
 
-    def test_strong_evidence_still_needs_a_HIGH_refute_to_move(self):
-        """The biggest hammer keeps the higher bar: strong-evidence carries a fully cited,
-        skeptic-survived chain, so a merely medium refutation flags it without moving it."""
+    def test_a_medium_refute_now_costs_strong_evidence_a_band_too(self):
+        """WAS `test_strong_evidence_still_needs_a_HIGH_refute_to_move`, whose argument was
+        "the biggest hammer keeps the higher bar: strong-evidence carries a fully cited,
+        skeptic-survived chain, so a merely medium refutation flags it without moving it".
+
+        That was reasoned, not measured, and the measurement refutes it. On the 500-dossier prod
+        snapshot of 2026-08-24 the exemption fired once and it fired badly:
+        `ca6ebc17-0d23-483b-8b02-302180260822` shipped culprit/85 holding
+        `second_opinion_refuted`, 578 days of staleness, four of five skeptic entries `pass`, and
+        a blind refutation reading "an expression 9239a97af457 left byte-for-byte unchanged (it
+        only renamed the LHS) ... introduced earlier by bug 2012042, not by this changeset" --
+        which is bug 2065373's error verbatim, independently witnessed, and discarded. The "fully
+        cited, skeptic-survived chain" is exactly what the refutation was disputing, so using it
+        as the reason to ignore the refutation assumes the conclusion.
+
+        It also broke the symmetry the branch above exists to establish: a medium AGREEMENT
+        raises a lead a band, so a medium REFUTATION costs one. The top rung was the only place
+        that did not hold.
+
+        Recall cost, measured: none. `probable` is rung 70, `autofile.min_confidence` is 70, and
+        the calibration table pools 70 and 85 to the same 0.7234 -- so no filing is lost and the
+        published probability does not move. What moves is the label, the flag, and (via
+        `report_bug.build_dissent_note`) the fact that the reader is told."""
         d = _strong()
         orch._fold_second_opinion(
             d, _so(corroborates=False, confidence="medium"), _SEED)
-        self.assertEqual(d.verdict.decision, Decision.strong_evidence)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
         self.assertTrue(d.corroborations["second_opinion_refuted"])
+        self.assertTrue(d.corroborations["second_opinion_clamped_strong"])
+        # The HIGH-confidence path is a different, harsher branch and stays untouched.
         self.assertNotIn("second_opinion_downgraded_strong", d.corroborations)
+
+    def test_a_high_refute_of_strong_evidence_still_takes_the_harsher_path(self):
+        d = _strong()
+        orch._fold_second_opinion(
+            d, _so(corroborates=False, confidence="high"), _SEED)
+        self.assertTrue(d.corroborations["second_opinion_downgraded_strong"])
+        self.assertNotIn("second_opinion_clamped_strong", d.corroborations)
 
 
 class TestFoldNoOp(unittest.TestCase):

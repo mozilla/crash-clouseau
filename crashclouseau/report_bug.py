@@ -846,6 +846,7 @@ def build_bug_comment(
         ),
         build_code_references((dossier or {}).get("verdict"), channel),
         build_skeptic_block(dossier),
+        build_dissent_note(dossier),
         build_related_bugs_note(
             related_bugs, landing_unresolved=landing_unresolved,
             node=((dossier or {}).get("candidate") or {}).get("node")),
@@ -1147,6 +1148,53 @@ def is_suspected_regression(corroborations):
     case: out-of-window, this caveat printed, and hzhao confirmed the mechanism and backed the
     named changeset out. See ``config.get_agent_calibration``."""
     return (corroborations or {}).get("candidate_in_pushlog_window")
+
+
+def build_dissent_note(dossier):
+    """What THIS RUN found that points against the analysis above, or ``""``.
+
+    THE DEFECT THIS EXISTS FOR. Reviewing bug 2065373, :jstutte corrected three claims, and every
+    one of them was checkable against a fact the run already held and had not checked. The general
+    shape is measurable: on the 500-dossier prod snapshot of 2026-08-24, 27 of 496 runs carried
+    `second_opinion_refuted` and in **27 of 27** the run's own skeptic had marked at least one
+    claim `pass` -- 10 of them on a claim named `mechanism`. So "a pass sitting under a
+    contradiction the run itself produced" is a ~5% population defect, and the reader of the bug
+    could not see the contradiction at all: `second_opinion_refuted` reached crashstack.html and
+    nothing else.
+
+    WHY DISAGREEMENT AND NOT AGREEMENT. The mirror sentence -- "an independent blind review
+    agreed" -- was measured and rejected. 17 of 17 filed bugs in the snapshot carry a
+    corroborating second opinion, so the sentence is constant on the surface that would print it;
+    worse, BOTH known-wrong filings carry one at confidence `high` with an SO mechanism restating
+    the very claim a reviewer refuted (2065969, RESOLVED/INVALID, and 2065373 itself). Printing
+    agreement there inflates authority against the one thing `_PROVENANCE` is written to invite.
+    A refutation has the opposite profile: it is rare on this surface, it always points our way,
+    and it is the strongest thing we know that we are currently withholding.
+
+    Deliberately NOT listed here: `stale_signature` and `exposer_suspected`. Both already have
+    their own note in this comment (`build_stale_signature_note`, `build_exposer_note`); a second
+    copy grouped under a new heading is duplication, not disclosure. This block is for the
+    contradictions that reach no other surface, and adding a flag to it is the one-line way to
+    keep the next one from going quiet."""
+    c = (dossier or {}).get("corroborations") or {}
+    if not c.get("second_opinion_refuted"):
+        return ""
+    so = (dossier or {}).get("second_opinion") or {}
+    line = ("- A second, independent analysis of this crash \u2014 a separate agent given the "
+            "crash and the candidate changeset but **none** of the reasoning above \u2014 "
+            "concluded that the candidate cannot explain it")
+    conf = (so.get("confidence") or "").strip()
+    if conf:
+        line += " (its own confidence in that: {})".format(conf)
+    why = (so.get("refutation") or "").strip()
+    line += ". {}".format(why) if why else "."
+    lines = [line]
+    if c.get("second_opinion_clamped_strong") or c.get("second_opinion_downgraded_strong"):
+        lines.append("- The confidence above was lowered a band because of it; it is not the "
+                     "rung the primary analysis asked for.")
+    return ("**This run also produced evidence against the analysis above.** It is reported "
+            "rather than resolved, because the two passes disagree and neither was allowed to "
+            "overrule the other:\n" + "\n".join(lines))
 
 
 def build_skeptic_block(dossier, max_items=_MAX_SKEPTIC_ITEMS):

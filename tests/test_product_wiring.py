@@ -357,7 +357,11 @@ class TestCrashstackPanel(unittest.TestCase):
         hoisted = html.index("Why the review disputes it:")
         section = html.index("Independent second opinion")
         self.assertLess(hoisted, section)
-        self.assertEqual(html.count("the crash predates the change."), 2)
+        # THREE since 2026-08-24, not two: the hoisted paragraph, the full second-opinion
+        # section, and -- the new one -- the filed-bug PREVIEW, because `build_dissent_note`
+        # now publishes the refutation to Bugzilla. That third copy is the whole point: a
+        # reviewer of the bug could not previously see that an independent pass disagreed.
+        self.assertEqual(html.count("the crash predates the change."), 3)
 
     def test_no_refutation_paragraph_when_corroborated(self):
         ev = _evidence(verdict="lead", confidence=50)
@@ -2131,6 +2135,45 @@ class TestBugPreview(unittest.TestCase):
         for d in (None, {}, {"skeptic": []}, {"skeptic": ["junk"]}):
             with self.subTest(d=d):
                 self.assertEqual(report_bug.build_skeptic_block(d), "")
+
+    def test_a_blind_refutation_travels_with_the_bug(self):
+        """The run's strongest contrary finding reached crashstack.html and stopped there. On the
+        500-dossier prod snapshot, 27 of 496 runs carried `second_opinion_refuted` and in 27 of 27
+        the run's own skeptic had marked at least one claim `pass`."""
+        note = report_bug.build_dissent_note({
+            "corroborations": {"second_opinion_refuted": True,
+                               "second_opinion_clamped_strong": True},
+            "second_opinion": {"confidence": "medium",
+                               "refutation": "9239a97af457 left the expression unchanged."},
+        })
+        self.assertIn("evidence against the analysis above", note)
+        self.assertIn("none** of the reasoning above", note)
+        self.assertIn("9239a97af457 left the expression unchanged.", note)
+        self.assertIn("its own confidence in that: medium", note)
+        self.assertIn("lowered a band", note)
+
+    def test_a_refutation_with_no_stated_reason_still_says_it_happened(self):
+        note = report_bug.build_dissent_note(
+            {"corroborations": {"second_opinion_refuted": True}, "second_opinion": {}})
+        self.assertIn("cannot explain it.", note)
+        self.assertNotIn("lowered a band", note)     # nothing moved, so claim nothing moved
+
+    def test_agreement_is_never_published(self):
+        """Measured and rejected, not an omission: 17 of 17 filed bugs in the snapshot carry a
+        corroborating second opinion -- entropy zero on the surface that would print it -- and
+        BOTH known-wrong filings carry one at confidence `high` restating the very claim a
+        reviewer refuted (2065969 RESOLVED/INVALID, and 2065373 itself)."""
+        for c in ({"second_opinion_corroborated": True}, {"second_opinion_boosted": True}, {}):
+            with self.subTest(c=c):
+                self.assertEqual(report_bug.build_dissent_note(
+                    {"corroborations": c,
+                     "second_opinion": {"corroborates": True, "confidence": "high",
+                                        "mechanism": "agrees"}}), "")
+
+    def test_no_dossier_means_no_section(self):
+        for d in (None, {}, {"corroborations": None}):
+            with self.subTest(d=d):
+                self.assertEqual(report_bug.build_dissent_note(d), "")
 
 
 class TestNeedinfoAccount(unittest.TestCase):

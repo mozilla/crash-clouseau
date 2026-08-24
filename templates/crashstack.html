@@ -200,13 +200,19 @@
       </div>
       {% elif corrob.get('second_opinion_refuted') -%}
       <div class="corrob-chips">
-        <span class="corrob-chip refute" title="An independent blind re-analysis found the candidate cannot explain this crash. A strong lead is lowered a band, and a lead that was already weak is dropped entirely; a fully verified strong-evidence chain is only downgraded when the reviewer is itself highly confident, so it may be flagged here without having moved. The badge above shows where it actually landed. See the independent second opinion below.">independent review disputes this</span>
+        <span class="corrob-chip refute" title="An independent blind re-analysis found the candidate cannot explain this crash. Every band now moves: a strong lead is lowered a band, a lead that was already weak is dropped entirely, and strong-evidence becomes a probable lead (or, when the reviewer is itself highly confident, is downgraded outright). Until 2026-08-24 a medium refutation of strong-evidence was flagged here and moved nothing, which left the top rung the only one this check could not touch. The badge above shows where it actually landed. See the independent second opinion below.">independent review disputes this</span>
       </div>
       {# The chip alone says a dispute happened but not WHY, and the reasoning sits far down the
          page under the full second opinion — so hoist it here, next to the verdict it argues
          against. Same text, still shown in full below. #}
       {% if (d.get('second_opinion') or {}).get('refutation') -%}
       <p class="refute-why"><strong>Why the review disputes it:</strong> {{ d['second_opinion']['refutation']|linkify(repo_url) }}</p>
+      {% endif -%}
+      {# Say that the clamp APPLIED, for the same reason `second_opinion_clamped` says it: the
+         raw and shipped rungs both read `probable` here, so a reader cannot tell a clamp from
+         the second opinion having done nothing at all. #}
+      {% if corrob.get('second_opinion_clamped_strong') -%}
+      <p class="refute-why">Strong-evidence was lowered to a <strong>probable lead</strong> because of this &mdash; the badge above is one band below what the primary analysis asked for.</p>
       {% endif -%}
       {% endif -%}
       {% if corrob.get('candidate_backedout') -%}

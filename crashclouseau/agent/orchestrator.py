@@ -1659,6 +1659,27 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 "explain the crash, and no cited candidate/hunk/edge anchor remains",
             )
             flags["second_opinion_downgraded_strong"] = True
+        elif v.decision == Decision.strong_evidence:
+            # `conf` is `medium` here -- the outer branch admits only medium/high. This case used
+            # to set the flag and move NOTHING, so the STRONGEST verdict was the only one a blind
+            # refutation could not touch: measured on the 500-dossier snapshot of 2026-08-24,
+            # `ca6ebc17-0d23-483b-8b02-302180260822` shipped culprit/85 holding
+            # `second_opinion_refuted`, 578 days of staleness, and an SO refutation that read
+            # "an expression 9239a97af457 left byte-for-byte unchanged (it only renamed the LHS)
+            # ... introduced earlier by bug 2012042, not by this changeset" -- which is bug
+            # 2065373's error verbatim, independently witnessed, and discarded.
+            #
+            # One band down, symmetric with the lead clamp below, and recall-safe for the same
+            # reason: strong-evidence had more to begin with, so it stays reportable at
+            # `probable`. `high` is not available to a lead by construction (see
+            # CONFIDENCE_SCORE), so the demotion of the DECISION is forced, not a choice.
+            dossier.verdict = v.model_copy(update={"decision": Decision.lead,
+                                                   "confidence": Confidence.probable})
+            flags["second_opinion_clamped_strong"] = True
+            logger.info(
+                "agent: second-opinion refuted at medium -> strong-evidence clamped to a "
+                "probable lead for %s", (seed or {}).get("uuid"),
+            )
         elif v.decision == Decision.lead and (
             CONFIDENCE_SCORE.get(v.confidence, 0.0) > CONFIDENCE_SCORE[Confidence.medium]
         ):
