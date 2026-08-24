@@ -110,6 +110,41 @@ class TestChangeset(unittest.TestCase):
         self.assertIn("modified a.cpp", out)
         self.assertIn("added b.h", out)
 
+    def test_parents_are_printed_because_the_parent_settles_provenance(self):
+        """`blame` and a `+` line both prove only that a changeset TOUCHED a line -- a pure MOVE
+        re-owns it in blame exactly as a backout does. Reading the file at the PARENT is the one
+        cheap check that separates "introduced here" from "last touched here", and on bug 2065373
+        it was one GET away with a tool the agent already had. hg returns `parents` in the same
+        response and this tool used to discard it, so the check was unreachable."""
+        rev = {"node": "a" * 40, "date": [1780161713.0, 0], "user": "J <j@x>",
+               "desc": "Bug 42 - fix", "parents": ["e" * 40], "files": []}
+        with mock.patch.object(H.inspector, "git2hg", return_value=None), \
+             mock.patch.object(H.Revision, "get_revision", return_value=rev):
+            out = _run(H.changeset(CTX, "a" * 40))
+        self.assertIn("parents: eeeeeeeeeeee", out)
+        self.assertNotIn("e" * 16, out)                 # short node, not the full 40
+        self.assertIn("prove a line is NEW", out)        # says what it is FOR
+
+    def test_a_merge_joins_both_parents_rather_than_branching(self):
+        # 0 of 800 sampled candidate changesets had two parents, so this is a join, not a
+        # code path with its own behaviour.
+        rev = {"node": "a" * 40, "date": [1780161713.0, 0], "user": "J <j@x>",
+               "desc": "merge", "parents": ["e" * 40, "f" * 40], "files": []}
+        with mock.patch.object(H.inspector, "git2hg", return_value=None), \
+             mock.patch.object(H.Revision, "get_revision", return_value=rev):
+            out = _run(H.changeset(CTX, "a" * 40))
+        self.assertIn("parents: eeeeeeeeeeee, ffffffffffff", out)
+
+    def test_a_missing_parent_prints_no_line_at_all(self):
+        # An absent parent must not render an empty promise; hg omits it for rev 0 / partial
+        # responses, and "parents:" with nothing after it reads as "there is no parent".
+        rev = {"node": "a" * 40, "date": [1780161713.0, 0], "user": "J <j@x>",
+               "desc": "root", "files": []}
+        with mock.patch.object(H.inspector, "git2hg", return_value=None), \
+             mock.patch.object(H.Revision, "get_revision", return_value=rev):
+            out = _run(H.changeset(CTX, "a" * 40))
+        self.assertNotIn("parents:", out)
+
     def test_not_found(self):
         with mock.patch.object(H.inspector, "git2hg", return_value=None), \
              mock.patch.object(H.Revision, "get_revision", return_value={}):

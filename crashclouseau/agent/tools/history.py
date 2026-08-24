@@ -221,6 +221,16 @@ async def changeset(
     if rev.get("backedoutby"):
         out.append("  BACKED OUT BY: {}".format(_short(rev.get("backedoutby"))))
     out.append("  desc: {}".format(_first_line(desc)[:200]))
+    # The parent is the ONLY cheap way to settle "this changeset introduced X": read the file at
+    # the parent and look. hg returns it in the same response, and dropping it made the check
+    # unreachable -- `blame` names the last changeset to TOUCH a line, which a pure MOVE also
+    # does, so blame corroborated a false "introduced by" claim on bug 2065373. A list because a
+    # merge has two; joined rather than branched, since 0 of 800 sampled candidates had more
+    # than one.
+    parents = [_short(p) for p in (rev.get("parents") or []) if p]
+    if parents:
+        out.append("  parents: {}   (read the file at a parent to prove a line is NEW here, "
+                   "not merely last touched here)".format(", ".join(parents)))
     files = rev.get("files") or []
     out.append("  files ({}):".format(len(files)))
     for f in files[:_MAX_FILES]:
