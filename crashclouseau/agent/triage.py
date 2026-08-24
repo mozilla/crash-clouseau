@@ -1351,9 +1351,15 @@ class _RunTrace:
         model_usage = getattr(result_msg, "model_usage", None) or {}
         for model, u in model_usage.items():
             if isinstance(u, dict):
-                logger.info("agent:   model %-22s in=%s out=%s", model,
+                logger.info("agent:   model %-22s in=%s out=%s cache_write=%s", model,
                             u.get("inputTokens", u.get("input_tokens", "?")),
-                            u.get("outputTokens", u.get("output_tokens", "?")))
+                            u.get("outputTokens", u.get("output_tokens", "?")),
+                            # The one usage field that tracks PROMPT GROWTH. `input_tokens`
+                            # does not: a stable prompt is served from cache, so growth shows
+                            # up as a cache WRITE. Prod's persisted columns missed v109's
+                            # +2,552 bytes entirely (Mann-Whitney p = 0.22) for this reason.
+                            u.get("cacheCreationInputTokens",
+                                  u.get("cache_creation_input_tokens", "?")))
 
 
 def build_options(
@@ -1555,6 +1561,34 @@ def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
     )
 
 
+def _log_prompt_budget(system: str, user: str, crash: dict) -> None:
+    """One line per run saying how big the prompt we just built is.
+
+    WHY THIS EXISTS. `v109` (2026-08-21) grew the principal's first user message by a median
+    +1,914 bytes (+20.3%, positive on 198 of 198 post-deploy runs) and `system.md` by +638, and
+    prod candidate-naming stepped 41.7% -> 24.2% at that exact release. Nothing could see it. There
+    was no assertion anywhere on the size of the system prompt, the crash facts, or the user
+    prompt; no log line carried a prompt length; and the token columns we DO persist are
+    empirically blind to it -- median `input_tokens` across the deploy moved 5,528/5,766 to
+    6,199/5,883/6,402, Mann-Whitney p = 0.22, because a grown *cached* prefix lands in
+    `cacheCreationInputTokens`, which `_sum_tokens` drops.
+
+    So the growth was found weeks later by reconstructing 500 prompts offline. This makes the
+    number free and contemporaneous. It is a log line and not a column on purpose:
+    `models.create()` only runs `create_all()` on a FRESH database, `_ADDED_TABLES` handles tables
+    and not columns, and `_ensure_enum_values` can never ALTER -- so a new column would need its
+    own migration path that does not exist yet, and this does not need one.
+
+    See also `tests/test_prompt_budget.py`, which pins the same three numbers so a future prose
+    add has to change a reviewed constant instead of nothing at all."""
+    facts = "\n".join(_crash_facts(crash))
+    logger.info(
+        "agent: prompt bytes system=%d user=%d (crash facts=%d) total=%d for %s",
+        len(system), len(user), len(facts), len(system) + len(user),
+        crash.get("uuid", "?"),
+    )
+
+
 async def run_crash_triage(
     *,
     crash: dict,
@@ -1570,12 +1604,18 @@ async def run_crash_triage(
         recorder=recorder,
         searchfox_client=(extra or {}).get("searchfox_client"),
     )
+    user = _user_prompt(crash)
+    # `getattr`, because a test can hand back a stub options object and a budget log line must
+    # never be the thing that fails a run.
+    system = getattr(options, "system_prompt", "")
+    system = system if isinstance(system, str) else ""
+    _log_prompt_budget(system, user, crash)
     result_msg = None
     trace = _RunTrace()
     with Reporter(verbose=False, log_path=None) as reporter:
         reporter.header(_crash_label(crash))
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(_user_prompt(crash))
+            await client.query(user)
             async for msg in client.receive_response():
                 reporter.message(msg)
                 trace.observe(msg)
