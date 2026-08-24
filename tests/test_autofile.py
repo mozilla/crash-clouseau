@@ -1437,6 +1437,166 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         self.assertEqual(len(self.filed), 1)                  # recorded => no second comment
 
 
+_UNSAFE = {"candidate": {"node": "n"},
+           "corroborations": {"memory_unsafe": True,
+                              "memory_unsafe_signals": ["fault address 0xe5e5e5e5e5e5e5e8 is "
+                                                        "allocator poison"]}}
+
+
+class TestTheSecurityVenue(_Base):
+    """:mccr8 on bug 2065051: "Bugs on poison crashes like that should always be filed initially
+    a security issue." We filed it public, at lead/70, holding a poison fault address."""
+
+    def _restricted_preview(self, **over):
+        pv = dict(_PREVIEW, groups=["core-security"], cc=["dev@moz.example"])
+        pv.update(over)
+        return pv
+
+    def _file_unsafe(self, preview=None, dossier=None, **cfg_over):
+        if cfg_over:
+            bugzilla_apply.config.get_agent_autofile.return_value = _cfg(**cfg_over)
+        # `report_bug` is imported lazily inside `autofile_bug`, so patch the module the
+        # base class patched, not an attribute of `bugzilla_apply`.
+        report_bug.build_bug_preview.return_value = (
+            preview if preview is not None else self._restricted_preview())
+        return bugzilla_apply.autofile_bug("u-1", _INFO, {}, dossier or _UNSAFE, "lead", 70)
+
+    def test_groups_reaches_the_POSTED_BODY(self):
+        """THE test. A key the preview sets and the payload filter drops is a silent no-op --
+        that is how `blocks` and `regressed_by` were dead for weeks -- and for `groups` the
+        silent no-op publishes a use-after-free. So this asserts the POST body, not the
+        preview."""
+        res = self._file_unsafe()
+        self.assertTrue(res["filed"])
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["groups"], ["core-security"])
+
+    def test_cc_reaches_it_too_so_the_needinfo_ask_stays_reachable(self):
+        # A requestee who cannot see a restricted bug makes Bugzilla reject the whole create,
+        # and our retry strips `flags` -- so the bug would be filed restricted with no ask.
+        self._file_unsafe()
+        self.assertEqual(self.created[0]["cc"], ["dev@moz.example"])
+
+    def test_an_ordinary_filing_carries_NEITHER_KEY(self):
+        # Not `groups: []` -- absent. An ordinary payload must be byte-identical to what it was
+        # before the security venue existed.
+        self._file()
+        self.assertNotIn("groups", self.created[0])
+        self.assertNotIn("cc", self.created[0])
+
+    def test_no_resolvable_security_group_means_NO_FILING(self):
+        """The fail-safe. A lost lead is recoverable -- the next crash on this signature files
+        again -- and a public use-after-free is not. Treeherder makes the same call, answering
+        HTTP 400 rather than falling through."""
+        res = self._file_unsafe(preview=dict(_PREVIEW))       # no `groups` key at all
+        self.assertFalse(res["filed"])
+        self.assertIn("security group", res["skipped"])
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.comments, [])
+
+    def test_the_public_venue_is_declined_and_a_restricted_bug_filed_instead(self):
+        """`_open_bugs_for_signature` is unauthenticated by design, so an existing venue is
+        PUBLIC by construction and no `groups` on a create can reach that branch. Commenting
+        there would disclose exactly what the group protects."""
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[{"id": 2064600, "creation_time": _RECENT,
+                                              "product": "Core", "keywords": []}]):
+            res = self._file_unsafe()
+        self.assertEqual(self.comments, [], "must not comment on the public bug")
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "new_bug")
+        self.assertEqual(res["public_venue_declined"], 2064600)
+        self.assertEqual(self.created[0]["groups"], ["core-security"])
+        # ...naming the public bug, so a triager can dup it in one click. This knowingly makes
+        # something that looks like a duplicate -- the other thing mccr8 asked us to stop -- and
+        # that is the lesser of the two costs, which is why it is recorded rather than hidden.
+        self.assertIn("2064600", self.created[0]["see_also"][0])
+
+    def test_an_ordinary_crash_still_comments_on_the_public_bug(self):
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[{"id": 2064600, "creation_time": _RECENT,
+                                              "product": "Core", "keywords": []}]):
+            res = self._file()
+        self.assertEqual(res["mode"], "comment_on_existing")
+        self.assertEqual(len(self.comments), 1)
+
+    def test_the_decision_is_recorded_on_the_dossier(self):
+        res = self._file_unsafe()
+        self.assertEqual(res["security_groups"], ["core-security"])
+        self.assertTrue(res["memory_unsafe_signals"])
+
+    def test_the_needinfo_retry_does_not_strip_the_restriction(self):
+        """`_create_bug_keeping_the_bug` retries by stripping `flags`. If a future "retry
+        without whatever BMO objected to" generalisation ever strips `groups` too, it would
+        silently invert this feature into the worst possible bug."""
+        calls = []
+
+        def refuse_once(payload, token):
+            calls.append(payload)
+            if "flags" in payload:
+                # `status=400` because only a 4xx is retried: on a 5xx we cannot tell whether
+                # the POST landed, so re-posting could file the bug twice.
+                raise bugzilla_apply.BugzillaRejected("code 51, no user named X", status=400)
+            return 999
+
+        with mock.patch.object(bugzilla_apply, "_create_bug", side_effect=refuse_once):
+            res = self._file_unsafe()
+        self.assertTrue(res["filed"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["groups"], ["core-security"])
+        self.assertNotIn("flags", calls[1])
+
+
+class TestTheSecurityGroupIsReadFromBMO(unittest.TestCase):
+    """Production BMO's `default_security_group` is per product: Core is `core-security` while
+    Firefox, Toolkit and DevTools are `firefox-core-security` (measured 2026-08-24). A hardcoded
+    `core-security` looks right -- it is accepted in every product on the allizom clone, whose
+    group configuration is not production's -- and would make BMO refuse the create outright
+    (401, code 120, no bug) for every non-Core filing."""
+
+    def setUp(self):
+        report_bug._SEC_GROUP_CACHE.clear()
+        self.addCleanup(report_bug._SEC_GROUP_CACHE.clear)
+
+    @staticmethod
+    def _resp(payload):
+        r = mock.MagicMock()
+        r.json.return_value = payload
+        return r
+
+    def test_it_reads_the_products_own_group(self):
+        with mock.patch.object(report_bug.net, "get", return_value=self._resp(
+                {"products": [{"name": "Firefox",
+                               "default_security_group": "firefox-core-security"}]})) as g:
+            self.assertEqual(report_bug.security_group("Firefox"), "firefox-core-security")
+        self.assertIn("/product/Firefox", g.call_args[0][0])
+        # The BUG endpoint trimmed off: `_bz_rest()` is ".../rest/bug", and leaving it on gets
+        # 404 code 32614, which the except-clause would turn into "no group" and hence "no bug".
+        self.assertNotIn("/bug/product", g.call_args[0][0])
+
+    def test_a_product_with_no_group_answers_None_so_the_filer_refuses(self):
+        with mock.patch.object(report_bug.net, "get",
+                               return_value=self._resp({"products": []})):
+            self.assertIsNone(report_bug.security_group("Fenix"))
+
+    def test_a_read_failure_is_NOT_cached(self):
+        """Unlike an unreadable bug, this is stable configuration read over a flaky network.
+        Caching the failure would let one blip disable security filing for the dyno's life."""
+        with mock.patch.object(report_bug.net, "get", side_effect=RuntimeError("BMO 503")):
+            self.assertIsNone(report_bug.security_group("Core"))
+        self.assertEqual(report_bug._SEC_GROUP_CACHE, {})
+        with mock.patch.object(report_bug.net, "get", return_value=self._resp(
+                {"products": [{"name": "Core", "default_security_group": "core-security"}]})):
+            self.assertEqual(report_bug.security_group("Core"), "core-security")
+
+    def test_a_successful_read_is_cached(self):
+        with mock.patch.object(report_bug.net, "get", return_value=self._resp(
+                {"products": [{"name": "Core", "default_security_group": "core-security"}]})) as g:
+            report_bug.security_group("Core")
+            report_bug.security_group("Core")
+        self.assertEqual(g.call_count, 1)
+
+
 class TestTokenResolution(unittest.TestCase):
     """Where the write token comes from.
 

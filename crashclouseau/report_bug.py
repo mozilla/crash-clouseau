@@ -11,8 +11,8 @@ from libmozdata import socorro
 from libmozdata.bugzilla import Bugzilla, BugzillaUser
 from libmozdata.hgmozilla import Mercurial
 from . import net
-from urllib.parse import parse_qs, urlencode, urlparse
-from . import buginfo, config, models, utils
+from urllib.parse import parse_qs, quote, urlencode, urlparse
+from . import buginfo, config, models, sensitive, utils
 from .logger import logger
 
 
@@ -1057,6 +1057,56 @@ def _bugs_product_component(bugids):
     return out
 
 
+# product -> BMO's own default security group, memoised for the process. Not a hardcoded map:
+# measured on production BMO 2026-08-24, `Core` is `core-security` while `Firefox`, `Toolkit` and
+# `DevTools` are all `firefox-core-security`. A wrong or inapplicable group makes BMO refuse the
+# create outright (401, code 120, no bug), so a hardcoded `core-security` would have silently
+# stopped filing every non-Core bug -- and it looks right, because `core-security` IS accepted in
+# every product on the allizom clone, whose group configuration is not production's.
+_SEC_GROUP_CACHE = {}
+
+
+def security_group(product):
+    """BMO's ``default_security_group`` for *product*, or ``None`` if it cannot be determined.
+
+    ``None`` is a REFUSAL, not a default: ``autofile_bug`` declines to file rather than filing
+    a memory-safety analysis publicly. That matches Treeherder's own behaviour -- its filer
+    answers HTTP 400 "Cannot file security bug for product without default security group"
+    instead of falling through -- and it is the direction the asymmetry demands. Note this is
+    reachable for Fenix only if BMO returns the product anonymously; it did not on 2026-08-24,
+    so Fenix support (plans/16) must fail closed here rather than fall through."""
+    if not product:
+        return None
+    if product in _SEC_GROUP_CACHE:
+        return _SEC_GROUP_CACHE[product]
+    group = None
+    try:
+        # Same base as the writes, so the group is read from whichever Bugzilla the filing
+        # will actually go to -- reading production's group and filing to allizom (or the
+        # reverse) is the shape of mistake that files a bug into a group that does not exist.
+        from crashclouseau.bugzilla_apply import _bz_rest
+        # `_bz_rest()` is the BUG endpoint (".../rest/bug"), and `BUGZILLA_REST_URL` is set to
+        # the same shape, so trim the suffix rather than assuming a base -- otherwise this reads
+        # `/rest/bug/product/Core` and BMO answers 404 code 32614, which `security_group`'s
+        # except-clause would quietly turn into "no group" and hence "do not file".
+        base = re.sub(r"/bug/?$", "", _bz_rest())
+        url = "{}/product/{}".format(base, quote(product))
+        r = net.get(url, params={"include_fields": "name,default_security_group"}, timeout=30)
+        for p in (r.json().get("products") or []):
+            if (p.get("name") or "") == product:
+                group = p.get("default_security_group") or None
+    except Exception:                                       # noqa: BLE001
+        logger.warning("autofile: could not read the security group for %r", product,
+                       exc_info=True)
+        group = None
+    # A failure is NOT cached: unlike an unreadable bug (which stays unreadable), this is a
+    # transient read of stable configuration, and caching None would make one blip disable
+    # security filing for the life of the dyno.
+    if group:
+        _SEC_GROUP_CACHE[product] = group
+    return group
+
+
 def _first_email(author):
     """Best-effort email from an ``hg`` author display string (``Real Name <email>`` or a
     bare address)."""
@@ -1666,6 +1716,14 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # May the bug make a STRUCTURED claim about the regressor at all: a candidate from outside
     # this build's pushlog window is named in the prose and nowhere else.
     link_regressor = bool(candidate.get("bug") and suspected_regression)
+    # Does the crash report itself prove a memory-safety fault? Read from the PERSISTED flag the
+    # deterministic gate wrote (`sensitive.py`), never recomputed and never from the model's
+    # `failure_class` -- that label fires on 43 of 500 runs and on 2 of 11 new-bug filings, and
+    # every human who read those bugs left them public, including one whose real fault address is
+    # 0xffffffffffffffff (a hardware bit flip). The deterministic address fires on 1 of 57
+    # filings, which is exactly the one a human restricted.
+    withhold = sensitive.is_withheld(dossier.get("corroborations"))
+    g = security_group(product) if withhold else None
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -1715,4 +1773,23 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).
         "needinfo_email": (person or {}).get("account") or "",
+        # SECURITY VENUE. :mccr8 on bug 2065051: "Bugs on poison crashes like that should always
+        # be filed initially a security issue." `[]` on an ordinary crash, so nothing changes for
+        # the 98% -- and a group NAME rather than a boolean because BMO has no
+        # `is_security_issue` create parameter (it answers 400, code 53; Treeherder's own SERVER
+        # translates its checkbox into `groups` from a per-product table). `security_group` reads
+        # BMO's answer per product, because production's differ: Core is `core-security` while
+        # Firefox/Toolkit/DevTools are `firefox-core-security`.
+        #
+        # An empty list when the crash IS memory-unsafe means the group could not be resolved,
+        # and `autofile_bug` treats that as "do not file" -- see the check there. The distinction
+        # cannot be drawn here, because a preview has no business refusing.
+        "groups": [g] if (withhold and g) else [],
+        # A requestee who cannot see a restricted bug makes Bugzilla reject the whole create
+        # (Flag.pm's requestee-visibility rule), and our retry strips `flags` -- so the bug would
+        # then be filed restricted with NO needinfo, i.e. the ask silently disappears. `cc` IS
+        # honoured on create (unlike `blocks`), and `cclist_accessible` defaults true, so cc'ing
+        # the requestee is what keeps the ask reachable. Only when we are actually restricting.
+        "cc": ([(person or {}).get("account")]
+               if withhold and (person or {}).get("account") else []),
     }

@@ -1039,9 +1039,54 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "product/component unresolved — refusing to file into the wrong "
                            "component"}
 
+    # THE SECURITY VENUE, and both branches refuse rather than degrade.
+    public_venue_declined = None
+    withhold = sensitive.is_withheld((dossier or {}).get("corroborations"))
+    if withhold and not preview.get("groups"):
+        # `build_bug_preview` could not resolve the product's security group, so the only
+        # remaining options are "file it publicly" and "do not file". A lost lead is recoverable
+        # -- the next crash on this signature files again -- and a public use-after-free is not.
+        # Treeherder makes the same call, answering HTTP 400 "Cannot file security bug for
+        # product without default security group" rather than falling through.
+        logger.warning("autofile: %s is a memory-safety crash (%s) and no security group "
+                       "resolved for product %r -- NOT filing", uuid,
+                       "; ".join(((dossier or {}).get("corroborations") or {})
+                                 .get("memory_unsafe_signals") or []),
+                       preview.get("product"))
+        return {"filed": False,
+                "skipped": "memory-safety crash and no security group for product {!r}".format(
+                    preview.get("product"))}
+    if withhold and bug_id is not None:
+        # The venue we picked is an EXISTING bug, and `_open_bugs_for_signature` is
+        # unauthenticated by design, so that bug is public by construction -- posting the
+        # analysis into it discloses exactly what the group would have protected, and no
+        # `groups` on a create can reach this branch. So decline the venue and file a NEW
+        # restricted bug instead, naming the public one as the probable duplicate.
+        #
+        # This knowingly creates something that looks like a duplicate, which is the OTHER thing
+        # :mccr8 asked us to stop doing -- so it is recorded, and it is the lesser of the two: a
+        # restricted bug marked "probably a dup of N" costs a triager one click, and the
+        # alternative costs a disclosure. The third option, a private comment, needs insider-group
+        # membership this account has not been verified to have, and a private comment never
+        # enters sec triage or the bounty process at all.
+        logger.warning("autofile: %s is a memory-safety crash; declining the PUBLIC venue "
+                       "bug %s and filing restricted instead", uuid, bug_id)
+        preview = dict(preview)
+        preview["see_also"] = ["https://bugzilla.mozilla.org/show_bug.cgi?id={}".format(bug_id)]
+        public_venue_declined, bug_id = bug_id, None
+
     email = preview.get("needinfo_email") if cfg["needinfo"] else ""
     result = {"filed": False, "uuid": uuid, "signature": signature,
               "at": datetime.now(timezone.utc).isoformat()}
+    if withhold:
+        # Persisted so the choice is auditable from the dossier, and so that "how often does the
+        # security venue fire, and does anyone unrestrict it?" is answerable later from prod
+        # rather than from a re-derivation. Same reason `predating_bugs` is recorded below.
+        result["security_groups"] = preview.get("groups") or []
+        result["memory_unsafe_signals"] = (((dossier or {}).get("corroborations") or {})
+                                           .get("memory_unsafe_signals") or [])
+    if public_venue_declined is not None:
+        result["public_venue_declined"] = public_venue_declined
     try:
         if bug_id is not None:
             _post_comment(bug_id, preview["comment"], False, token)
@@ -1054,9 +1099,18 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             if failed:
                 result["needinfo_failed"] = email
         else:
+            # `groups` and `cc` are in this tuple, and a test asserts they reach the POSTED
+            # BODY rather than merely the preview. A key the preview sets and this filter drops
+            # is a SILENT no-op -- that is how `blocks` and `regressed_by` were dead for weeks --
+            # and for `groups` the silent no-op publishes a use-after-free.
             payload = {k: v for k, v in preview.items()
                        if k in ("product", "component", "version", "type", "keywords",
-                                "cf_crash_signature")}
+                                "cf_crash_signature", "groups", "cc", "see_also")}
+            # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
+            # byte-identical to what it was before this existed.
+            for k in ("groups", "cc", "see_also"):
+                if not payload.get(k):
+                    payload.pop(k, None)
             payload["summary"] = preview["title"]
             payload["description"] = preview["comment"]
             if email:
