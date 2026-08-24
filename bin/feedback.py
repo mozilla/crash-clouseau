@@ -113,6 +113,15 @@ def main():
     summary = feedback.refresh()
     print("refreshed {} of {} filed bugs ({} readable on BMO)".format(
         summary["updated"], summary["filed"], summary["fetched"]))
+    # Printed, not buried in the summary dict: a bug we filed PUBLIC that we can no longer read
+    # means a human restricted it, which is the ground truth for a missed security filing. Bug
+    # 2065051 was exactly that, and the only way we found out was a reviewer mentioning it.
+    if summary.get("unreadable"):
+        print("\n  NO LONGER READABLE BY THIS ACCOUNT: {}".format(
+            ", ".join(str(b) for b in summary["unreadable"])))
+        print("  Each is either a bug a human RESTRICTED after we filed it public (check whether "
+              "the\n  security gate should have caught it -- see crashclouseau/sensitive.py) or a "
+              "BMO read failure.")
     _print(summary)
     _print_notes(summary)
 

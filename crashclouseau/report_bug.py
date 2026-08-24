@@ -866,7 +866,20 @@ def build_bug_comment(
 _PROVENANCE = (
     "_Filed automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), which "
     "analyses nightly crashes with an LLM. Nothing above was written or checked by a human. "
-    "Please close it as INVALID if it is wrong — that is useful feedback, not a nuisance._"
+    "Please close it as INVALID if it is wrong — that is useful feedback, not a nuisance._\n\n"
+    # THE ATTRIBUTION SENTENCE, and it is not politeness. :mccr8 on bug 2065051: the dupe "is
+    # going to kind of cause a bit of a headache for the bug bounty process, because at a casual
+    # glance it looks like we found it internally and thus won't pay a bounty, but of course we
+    # only saw that crash because of the report." A machine filing reads as an internal discovery
+    # unless it says otherwise, and the reporter loses the bounty to that impression.
+    #
+    # The rule behind it, stated once: a machine-filed bug should always be the duplicate SOURCE,
+    # never the duplicate target. We have no claim to precedence over the human whose report is
+    # the only reason we saw the crash at all.
+    "_This is not an independent Mozilla discovery: the crash is known here only because "
+    "somebody submitted the crash report linked at the top. If this duplicates an existing "
+    "report, please resolve THIS bug as the duplicate and leave the credit with the earlier "
+    "reporter._"
 )
 
 

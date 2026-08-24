@@ -336,8 +336,24 @@ def refresh():
         models.db.session.rollback()
         logger.warning("feedback: note ingestion failed wholesale: %s", exc)
         notes = {"failed": len(filed)}
+    # A bug WE FILED that we can no longer read is the single highest-value label this pass can
+    # produce, and until 2026-08-24 it was pure silence: three `if bug is None: continue` sites
+    # dropped it without a count. It means a human took a bug we filed PUBLIC and restricted it,
+    # which is the ground truth for "we published something we should not have" -- exactly what
+    # bug 2065051 turned out to be, and the only way we learned was a reviewer mentioning it.
+    #
+    # WARNING, not info: this is the label that says the security gate missed one. It can also be
+    # an ordinary BMO read failure, which is why it names the ids instead of asserting a cause.
+    unreadable = sorted({f["bug_id"] for f in filed} - set(fetched))
+    if unreadable:
+        logger.warning(
+            "feedback: %d filed bug(s) are no longer readable by this account: %s -- a bug we "
+            "filed PUBLIC that has since been restricted is the ground truth for a missed "
+            "security filing; check each before assuming a BMO blip",
+            len(unreadable), ", ".join(str(b) for b in unreadable))
     summary = {"filed": len(filed), "fetched": len(fetched), "updated": updated,
-               "notes": notes, **models.Feedback.scoreboard()}
+               "unreadable": unreadable, "notes": notes,
+               **models.Feedback.scoreboard()}
     logger.info("feedback: refreshed %s of %s filed bugs -> %s",
                 updated, len(filed), summary["by_attribution"])
     return summary
