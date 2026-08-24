@@ -139,8 +139,20 @@ def _written_literals():
             work.append((rel, scope, name))
 
     def follow(expr, rel, scope):
-        """A ``**y`` merge, or a ``y = helper(...)`` assignment: queue what it names."""
-        if isinstance(expr, ast.Name):
+        """A ``**y`` merge, or a ``y = helper(...)`` assignment: queue or read what it names."""
+        if isinstance(expr, ast.Dict):
+            # An inline `**{"flag": v}`, including the `**({...} if cond else {})` that the
+            # backout gate uses -- a literal write that just never passes through a variable.
+            emit(_dict_keys(expr), rel)
+            for merged in _merged_into(expr):
+                follow(merged, rel, scope)
+        elif isinstance(expr, ast.IfExp):
+            follow(expr.body, rel, scope)
+            follow(expr.orelse, rel, scope)
+        elif isinstance(expr, ast.BoolOp):
+            for value in expr.values:
+                follow(value, rel, scope)
+        elif isinstance(expr, ast.Name):
             carrier(rel, scope, expr.id)
         elif isinstance(expr, ast.Call):
             func = expr.func
@@ -206,11 +218,15 @@ class TestRegistryCoversTheCode(unittest.TestCase):
             "nothing reads them")
 
     def test_every_declared_flag_is_written(self):
-        # The other direction: a declaration nothing writes is folklore, and it is how a
-        # registry rots into a list of names that used to matter.
-        blob = "".join(io.open(p, encoding="utf-8").read() for p in _sources())
-        missing = [f for f in sorted(corroborations.REGISTRY) if '"%s"' % f not in blob]
-        self.assertEqual(missing, [], "declared but never written")
+        # The other direction: a declaration nothing writes is folklore, and it is how a registry
+        # rots into a list of names that used to matter.
+        #
+        # This used to grep the tree for `"flag"` ANYWHERE, which a mention in a comment or
+        # membership in `_INSTANCE_SUPPRESSED` satisfies just as well as a write does. The scanner
+        # now sees every write shape in the tree -- 65 of 65 declared flags -- so the check can be
+        # the real claim: somebody actually assigns this key.
+        unwritten = sorted(set(corroborations.REGISTRY) - set(_written_literals()))
+        self.assertEqual(unwritten, [], "declared but never written")
 
     def test_every_declared_reader_really_reads_it(self):
         # A reader list is a claim about other files. Check it the way a grep would.
@@ -252,6 +268,13 @@ class TestRegistryCoversTheCode(unittest.TestCase):
         for flag in ("signature_first_seen_ever", "signature_age_days_ever",
                      "signature_first_seen_windowed", "signature_age_days_windowed"):
             self.assertIn(flag, written, flag)
+        # A branch that picks the flag: the hardware gate's three used to share a `key` variable,
+        # so reverting them to `key = "..."; {**c, key: True}` fails here.
+        for flag in ("possible_bit_flip_suppressed", "broken_cpu_suppressed",
+                     "hardware_noise_signature_suppressed"):
+            self.assertIn(flag, written, flag)
+        # And an inline `**({"flag": v} if v else {})`, which passes through no variable at all.
+        self.assertIn("candidate_backout_same_push", written)
 
 
 class TestTheTwoPolicyListsAgree(unittest.TestCase):

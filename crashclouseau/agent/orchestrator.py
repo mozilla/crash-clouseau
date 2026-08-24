@@ -2445,9 +2445,13 @@ def _apply_bit_flip_gate(dossier, seed):
     # "Nobody else has ever hit this", which is what makes a per-report hardware signal decisive
     # rather than incidental. `None` (the lookup failed) is NOT a singleton.
     singleton = reports is not None and reports <= cfg["max_reports"]
-    key = reason = None
+    # Each branch names its flag as a LITERAL dict key and the merge below splats it, rather than
+    # the three sharing a `key` variable: a key built in a variable is invisible to the registry
+    # scanner (tests/test_corroboration_registry.py), and all three of these were declared,
+    # written, firing in prod, and unseen by it. The name still reaches the log line, off the dict.
+    suppressed = reason = None
     if confidence is not None and confidence >= cfg["min_confidence"] and singleton:
-        key = "possible_bit_flip_suppressed"
+        suppressed = {"possible_bit_flip_suppressed": True}
         reason = (
             "Socorro rates the faulting address a possible hardware BIT FLIP (confidence {}%) "
             "and this signature has only ever been reported {} time(s) — the likeliest "
@@ -2455,7 +2459,7 @@ def _apply_bit_flip_gate(dossier, seed):
             "reported".format(confidence, reports)
         )
     elif flags.get("report_on_broken_cpu") and singleton:
-        key = "broken_cpu_suppressed"
+        suppressed = {"broken_cpu_suppressed": True}
         reason = (
             "this crash came from a {} CPU — Intel Raptor Lake, whose documented instability "
             "corrupts computation on healthy software (meta bug 1975808) — and this signature "
@@ -2463,7 +2467,7 @@ def _apply_bit_flip_gate(dossier, seed):
             "not a bug anyone can fix; suppressed rather than reported".format(cpu, reports)
         )
     elif _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
-        key = "hardware_noise_signature_suppressed"
+        suppressed = {"hardware_noise_signature_suppressed": True}
         reason = (
             "this SIGNATURE is mostly hardware error, whatever this particular report looks "
             "like: of its {} reports on this channel, {:.0f}% carry a Socorro bit-flip "
@@ -2474,8 +2478,9 @@ def _apply_bit_flip_gate(dossier, seed):
                 100 * (cpu_rate or 0), 100 * sigage.POPULATION_BROKEN_CPU_RATE,
             )
         )
-    if key is None:
+    if suppressed is None:
         return
+    key = next(iter(suppressed))
     # A NEW Verdict, not ``model_copy``: an abstain must not carry the needinfo_draft
     # (``Verdict._consistency_rule`` rejects that outright) nor inherit ``p_worth_investigating``.
     dossier.verdict = Verdict(
@@ -2485,7 +2490,7 @@ def _apply_bit_flip_gate(dossier, seed):
         mechanism=v.mechanism,
         consistency=v.consistency,
     )
-    dossier.corroborations = {**dossier.corroborations, key: True}
+    dossier.corroborations = {**dossier.corroborations, **suppressed}
     logger.info(
         "agent: %s (flip conf %s, cpu %r, %s report(s), signature %s/%s hardware) -> %s/%s "
         "suppressed to abstain for %s",
