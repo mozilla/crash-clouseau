@@ -339,6 +339,35 @@ def first_seen_ever(signatures):
 # as a stable "family F model M stepping S", so an exact comparison is the right one.
 BROKEN_CPUS = ("family 6 model 183 stepping 1",)
 
+# Socorro renders `cpu_info` in TWO formats, and comparing against only one of them made every
+# check above blind on 32-bit reports. Measured 2026-08-24 over Firefox nightly: all 12 of the top
+# `cpu_arch=x86` terms carry a VENDOR prefix -- `GenuineIntel family 6 model 183 stepping 1`,
+# `AuthenticAMD family 25 model 116 stepping 1` -- and none of the top 12 `cpu_arch=amd64` terms
+# does. emilio caught it on bug 2065969, where the comment had told him the signature carried 0%
+# Raptor Lake reports; the two crashes were Raptor Lake, on x86.
+#
+# THE BLIND ARCH WAS THE CONCENTRATED ONE: Raptor Lake is 25 of 98 x86 nightly reports (25.5%)
+# against 546 of 6,274 amd64 (8.7%), ~3x. mozilla/bugbot compares the same string the same way
+# (`bugbot/crash/analyzer.py`) and has the same blind spot.
+#
+# Normalised rather than adding the prefixed strings to `BROKEN_CPUS`: the literal patch is wrong
+# for the next vendor and the next rendering, and what every site here wants is CPU IDENTITY, which
+# the vendor id is redundant with. The lookahead means this only ever strips a token that PRECEDES
+# a `family` -- ARM's `cpu_info` ("ARMv7 ARM part(0x4100c070) features: ...") has no `family` and is
+# left exactly as it is, and arm64 carries no `cpu_info` facet at all.
+_CPU_VENDOR_PREFIX = re.compile(r"^\S+\s+(?=family\s)")
+
+
+def cpu_model(cpu_info):
+    """``cpu_info`` reduced to its vendor-independent "family F model M stepping S" identity, so
+    the same silicon compares equal whether the report came from a 32- or a 64-bit build."""
+    return _CPU_VENDOR_PREFIX.sub("", str(cpu_info or "").strip())
+
+
+# The models to distrust, keyed the way `cpu_model` returns them. Compare against THIS, never
+# against `BROKEN_CPUS` directly -- that tuple is the amd64 rendering only.
+BROKEN_CPU_MODELS = frozenset(cpu_model(c) for c in BROKEN_CPUS)
+
 # What the same two measurements read across the NIGHTLY population, so a signature's share can
 # be judged rather than merely quoted. Measured 2026-08-19 over 696,901 Firefox nightly reports
 # in a 364-day window: 2.5% carry a bit-flip annotation, 4.1% come from a `BROKEN_CPUS` machine.
@@ -539,15 +568,23 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         if not rows:
             return if_empty
         return sum(r.get("count") or 0 for r in rows
-                   if isinstance(r, dict) and (keep is None or r.get("term") in keep))
+                   if isinstance(r, dict) and (keep is None or keep(r.get("term"))))
 
     flips = _sum("possible_bit_flips_max_confidence")
-    broken = _sum("cpu_info", keep=set(BROKEN_CPUS), if_empty=None)
+    broken = _sum("cpu_info", keep=lambda t: cpu_model(t) in BROKEN_CPU_MODELS, if_empty=None)
     # The rows the Raptor Lake sum throws away. Already paid for, and they answer the question
     # `broken_cpu_rate` cannot: WHICH processor, and how many different ones.
-    cpu_rows = [r for r in (facets.get("cpu_info") or []) if isinstance(r, dict)]
-    cpu_reports = sum(r.get("count") or 0 for r in cpu_rows)
-    top = max(cpu_rows, key=lambda r: r.get("count") or 0, default=None)
+    #
+    # Grouped by `cpu_model` for the same reason the sum above is: otherwise one signature with
+    # reports from both build architectures would have `broken_cpu_rate` treating them as ONE
+    # processor while `cpu_terms` counted TWO and `top_cpu_share` split its own denominator.
+    grouped = {}
+    for row in (facets.get("cpu_info") or []):
+        if isinstance(row, dict):
+            model = cpu_model(row.get("term"))
+            grouped[model] = grouped.get(model, 0) + (row.get("count") or 0)
+    cpu_reports = sum(grouped.values())
+    top = max(grouped.items(), key=lambda kv: kv[1], default=None)
     return {
         "reports": total,
         "bit_flip_reports": flips,
@@ -555,9 +592,9 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         "bit_flip_rate": None if flips is None else flips / total,
         "broken_cpu_rate": None if broken is None else broken / total,
         "cpu_reports": cpu_reports or None,
-        "cpu_terms": len(cpu_rows) or None,
-        "top_cpu_term": None if top is None else top.get("term"),
-        "top_cpu_share": (((top.get("count") or 0) / cpu_reports)
+        "cpu_terms": len(grouped) or None,
+        "top_cpu_term": None if top is None else top[0],
+        "top_cpu_share": ((top[1] / cpu_reports)
                           if (top is not None and cpu_reports) else None),
     }
 

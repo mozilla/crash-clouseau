@@ -2420,8 +2420,12 @@ def _apply_bit_flip_gate(dossier, seed):
     if reports is not None:
         flags["signature_report_count"] = reports
     if cpu:
+        # The flag keeps what Socorro actually said, verbatim -- it is the evidence, and the
+        # renderings differ by build architecture. The COMPARISON is on the normalised identity,
+        # because `BROKEN_CPUS` holds the amd64 rendering only and this read False on every 32-bit
+        # Raptor Lake report until 2026-08-24 (bug 2065969); see `sigage.cpu_model`.
         flags["cpu_info"] = cpu
-        flags["report_on_broken_cpu"] = cpu in sigage.BROKEN_CPUS
+        flags["report_on_broken_cpu"] = sigage.cpu_model(cpu) in sigage.BROKEN_CPU_MODELS
     if sample is not None:
         flags["signature_hardware_sample"] = sample
     if flip_rate is not None:

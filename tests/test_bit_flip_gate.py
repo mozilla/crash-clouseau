@@ -1030,3 +1030,83 @@ class TestCpuConcentrationIsReportedNeverGated(unittest.TestCase):
         self.assertIn("Hardware-error share", note)
         self.assertIn("79% come from the known-buggy Intel Raptor Lake", note)
         self.assertIn("CPU-model spread", note)
+
+
+class TestTheVendorPrefixedRendering(unittest.TestCase):
+    """Socorro renders `cpu_info` WITH a vendor prefix on 32-bit builds, and every comparison in
+    the tree used to be an exact match against the amd64 rendering alone -- so the Raptor Lake
+    detector was blind on x86 in all three places at once: the suppression, the signature-level
+    rate, and the crash brief the agent reads.
+
+    emilio, closing bug 2065969 INVALID: "The two crashes are indeed raptor lake, they're just
+    x86, not amd64." The comment we filed had told him the signature carried 0% of them. Measured
+    2026-08-24 on Firefox nightly: all 12 of the top `cpu_arch=x86` terms are prefixed and none of
+    the top 12 amd64 terms is, and Raptor Lake is 25.5% of x86 reports against 8.7% of amd64."""
+
+    X86 = "GenuineIntel family 6 model 183 stepping 1"
+    AMD64 = "family 6 model 183 stepping 1"
+
+    def setUp(self):
+        p = mock.patch.object(config, "get_agent_bit_flip", return_value=_cfg())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_two_renderings_are_the_same_silicon(self):
+        self.assertEqual(sigage.cpu_model(self.X86), self.AMD64)
+        self.assertEqual(sigage.cpu_model("AuthenticAMD family 25 model 116 stepping 1"),
+                         "family 25 model 116 stepping 1")
+        self.assertIn(sigage.cpu_model(self.X86), sigage.BROKEN_CPU_MODELS)
+
+    def test_it_only_ever_strips_a_token_before_a_family(self):
+        # ARM reports carry no `family` at all, and mangling one into a bogus "model" would be a
+        # silent false negative in the other direction.
+        arm = "ARMv7 ARM part(0x4100c070) features: swp,half,thumb,fastmult"
+        self.assertEqual(sigage.cpu_model(arm), arm)
+        self.assertEqual(sigage.cpu_model("family 6 model 183 stepping 1"), self.AMD64)
+        self.assertEqual(sigage.cpu_model(""), "")
+        self.assertEqual(sigage.cpu_model(None), "")
+
+    def test_a_32_bit_raptor_lake_singleton_is_suppressed(self):
+        # THE BUG 2065969 SHAPE, at the gate. Read False before 2026-08-24.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=1, cpu=self.X86))
+        self.assertIs(d.corroborations["report_on_broken_cpu"], True)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertTrue(d.corroborations["broken_cpu_suppressed"])
+
+    def test_the_flag_still_records_what_socorro_actually_said(self):
+        # The comparison normalises; the EVIDENCE does not. A reader of the dossier has to be able
+        # to see which rendering the report carried.
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=42, cpu=self.X86))
+        self.assertEqual(d.corroborations["cpu_info"], self.X86)
+
+    def test_the_brief_warns_the_agent_on_a_prefixed_cpu(self):
+        facts = triage._crash_facts(
+            {"raw_crash": {"cpu_arch": "x86", "cpu_info": self.X86}})
+        cpu = [f for f in facts if f.startswith("CPU")][0]
+        self.assertIn("KNOWN-DEFECTIVE", cpu)
+        self.assertIn("1975808", cpu)
+
+    def test_the_signature_rate_sums_both_renderings(self):
+        with mock.patch.object(sigage.socorro, "SuperSearch") as ss:
+            payload = {"total": 100,
+                       "facets": {"cpu_info": [{"term": self.AMD64, "count": 30},
+                                               {"term": self.X86, "count": 10},
+                                               {"term": "family 6 model 60 stepping 3",
+                                                "count": 60}]}}
+
+            def ctor(params=None, handler=None, handlerdata=None, **kw):
+                handler(payload, handlerdata)
+                return mock.Mock(wait=mock.Mock())
+            ss.side_effect = ctor
+            out = sigage.hardware_noise("S")
+        # 30 + 10, not 30: the x86 rows used to be thrown away by the exact match.
+        self.assertEqual(out["broken_cpu_reports"], 40)
+        self.assertAlmostEqual(out["broken_cpu_rate"], 0.4)
+        # And the spread groups them too, or the rate would call them one processor while the
+        # spread called them two and split its own denominator.
+        self.assertEqual(out["cpu_terms"], 2)
+        self.assertEqual(out["cpu_reports"], 100)
+        self.assertEqual(out["top_cpu_term"], "family 6 model 60 stepping 3")
+        self.assertAlmostEqual(out["top_cpu_share"], 0.6)

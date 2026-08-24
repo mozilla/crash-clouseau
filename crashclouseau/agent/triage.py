@@ -465,14 +465,20 @@ def _cpu_summary(raw: dict, sysinfo: dict) -> str:
     ``_first_present`` that always short-circuited before reaching it.
 
     ``amd64`` and ``family 6 model 183 stepping 1`` answer different questions, so both are
-    shown rather than the first one found."""
+    shown rather than the first one found -- and the arch is load-bearing for more than the CPU:
+    emilio refuted bug 2065969 partly because the mechanism we filed lived behind
+    ``#[cfg(target_pointer_width = "64")]`` on a report whose arch was ``x86``.
+
+    The defective-CPU warning compares `sigage.cpu_model`, not the raw string: Socorro prefixes
+    `cpu_info` with the vendor on 32-bit builds, so until 2026-08-24 the agent was never told the
+    silicon was suspect on exactly those reports."""
     arch = _first_present(raw.get("cpu_arch"), sysinfo.get("cpu_arch"))
     info = _first_present(raw.get("cpu_info"), sysinfo.get("cpu_info"))
     parts = [str(p) for p in (arch, info) if p]
     if not parts:
         return ""
     out = ", ".join(parts)
-    if str(info or "").strip() in sigage.BROKEN_CPUS:
+    if sigage.cpu_model(info) in sigage.BROKEN_CPU_MODELS:
         # Kept short deliberately: `_short_value` truncates every fact at 300 chars, and the
         # warning is the part that must survive next to a 36-char CPU string.
         out += (" — KNOWN-DEFECTIVE CPU (Intel Raptor Lake, meta bug 1975808): its documented "
