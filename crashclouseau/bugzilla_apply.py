@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import net
 
-from crashclouseau import config, models, utils
+from crashclouseau import config, models, sensitive, utils
 from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
@@ -88,12 +88,35 @@ def _apply_eligible(verdict, confidence, ui):
     return False
 
 
-def build_evidence(uuid):
+def build_evidence(uuid, public=True):
     """Verdict/dossier/actions + UI/apply policy for one UUID, or ``None`` when no
-    verdict row exists (panel hidden). Read-only."""
+    verdict row exists (panel hidden). Read-only.
+
+    THE ONE CHOKEPOINT FOR PUBLISHING AN ANALYSIS. Three of the four surfaces that can expose a
+    dossier come through here -- ``html.crashstack``, ``html.diff`` and ``api.evidence`` -- and
+    the autofiler does NOT (it composes its own text via ``report_bug.build_bug_preview``), so
+    withholding here cannot suppress a filing. The fourth surface, ``html.bug``, renders the
+    drafted comment through ``report_bug.get_info`` and carries its own check.
+
+    ``public`` defaults to True, i.e. to withholding, so a NEW caller is safe by default and has
+    to ask for the unredacted dossier on purpose. That default is the whole guard: the failure
+    mode this is built against is a fifth surface added later by someone who has never read
+    ``sensitive.py``."""
     ev = models.Verdict.get_evidence(uuid)
     if ev is None:
         return None
+    if public and sensitive.is_withheld((ev.get("dossier") or {}).get("corroborations")):
+        # Everything the analysis produced goes, not selected fields. The mechanism sentence IS
+        # the disclosure -- "releases a stale, already-freed RefPtr" names the defect outright --
+        # and `diff.html` would still highlight exactly the lines the analysis flagged. `status`
+        # stays so the tasks view can still say the run finished.
+        return {"uuid": ev.get("uuid") or uuid,
+                "status": ev.get("status"),
+                "verdict": None,
+                "withheld": True,
+                "withheld_reasons": ((ev.get("dossier") or {})
+                                     .get("corroborations") or {}).get(
+                                         "memory_unsafe_signals") or []}
     # `rationale` is rendered verbatim on crashstack.html, and for a validation-failure
     # abstain it used to be a raw pydantic dump — input_value reprs, errors.pydantic.dev
     # links, the lot. Rewriting it HERE rather than only at the point it is produced also

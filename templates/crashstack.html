@@ -137,7 +137,21 @@
         {%- endif %}
       {% endif -%}
     {%- endmacro %}
-    {% if show_evidence and evidence -%}
+    {# WITHHELD: say so, loudly. A withheld dossier renders as an empty evidence panel, which is
+       indistinguishable from "the agent abstained" -- and silently looking like no analysis ran
+       is how a security hole becomes invisible instead of merely closed. #}
+    {% if evidence and evidence.get('withheld') -%}
+    <div class="evidence withheld">
+      <h3>Analysis withheld</h3>
+      <p>This crash report itself shows the process touched memory it did not own, so the
+      analysis is treated as a security issue and is not served on an unauthenticated request.
+      {% if evidence.get('withheld_reasons') %}({{ evidence['withheld_reasons']|join('; ')|e }}){% endif %}</p>
+      <p class="muted">Sign in (append <code>?token=&hellip;</code> once) to read it. The crash
+      report itself remains public on crash-stats &mdash; what is withheld is the mechanism, the
+      suspected regressor and the flagged lines.</p>
+    </div>
+    {% endif -%}
+    {% if show_evidence and evidence and not evidence.get('withheld') -%}
     {% set d = evidence['dossier'] or {} -%}
     {% set node = uuid_info['node'] -%}
     {% set conf = evidence['confidence'] -%}

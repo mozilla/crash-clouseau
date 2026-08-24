@@ -568,3 +568,14 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 .status-badge.status-pending { background-color: #999; }
 .status-badge.status-error { background-color: #c0392b; }
 .status-badge.status-stalled { background-color: #e67e22; margin-left: 0.3em; }
+
+/* A withheld analysis (crashclouseau/sensitive.py). Deliberately loud: an empty evidence panel
+   reads as "the agent abstained", and a security hole that looks like a no-op is worse than one
+   that announces itself. */
+.evidence.withheld {
+    border-left: 4px solid #c0392b;
+    background-color: #fdf3f2;
+    padding: 0.75em 1em;
+    margin: 1em 0;
+}
+.evidence.withheld h3 { margin-top: 0; color: #c0392b; }

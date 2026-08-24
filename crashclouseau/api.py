@@ -31,6 +31,51 @@ def _require_write_token():
         abort(403, "invalid or missing X-Clouseau-Token")
 
 
+# Name of the cookie that remembers a valid ``?token=``, so the secret appears in a URL at most
+# once per browser instead of on every navigation (where it would land in Heroku's router log and
+# in any Referer we emit).
+VIEW_COOKIE = "clouseau_view"
+
+
+def viewer_authorized() -> bool:
+    """May this request see an analysis that `sensitive.py` withheld?
+
+    Reuses ``API_WRITE_TOKEN`` rather than adding a second secret. That is deliberately not
+    least-privilege -- a read token and a write token should differ -- but this deployment has
+    exactly one reader, and a second config var nobody sets is a gate nobody can pass. Splitting
+    it later is one line here.
+
+    Accepts the token from a header (for ``/api/evidence``), a ``?token=`` query arg (browsers
+    cannot send a custom header from the address bar) or ``VIEW_COOKIE`` (set once, from a valid
+    query arg, by ``remember_viewer``).
+
+    With ``API_WRITE_TOKEN`` unset this returns False, matching ``_require_write_token``: an
+    unset secret must never read as "no authentication required". Here that means the withheld
+    analyses are unreachable rather than public, which is the correct direction."""
+    expected = os.getenv("API_WRITE_TOKEN", "")
+    if not expected:
+        return False
+    for supplied in (request.headers.get("X-Clouseau-Token", ""),
+                     request.args.get("token", ""),
+                     request.cookies.get(VIEW_COOKIE, "")):
+        if supplied and hmac.compare_digest(supplied, expected):
+            return True
+    return False
+
+
+def remember_viewer(response):
+    """Persist a valid ``?token=`` as a cookie so it need not ride the URL again.
+
+    Only ever called once the token has already been checked, and only when it arrived as a
+    query arg -- a request authorised by the header or by the cookie has nothing to store.
+    ``httponly`` because no script needs it; ``samesite="Lax"`` so it is not sent on
+    cross-site requests."""
+    if request.args.get("token") and viewer_authorized():
+        response.set_cookie(VIEW_COOKIE, request.args["token"],
+                            httponly=True, samesite="Lax", secure=True, max_age=90 * 86400)
+    return response
+
+
 def javast():
     data = request.get_json()
     channel = data["channel"]
@@ -110,7 +155,7 @@ def evidence():
     if not uuid:
         abort(400, "No uuid provided")
 
-    ev = bugzilla_apply.build_evidence(uuid)
+    ev = bugzilla_apply.build_evidence(uuid, public=not viewer_authorized())
     if ev is None:
         return jsonify({"uuid": uuid, "verdict": None})
     return jsonify(ev)

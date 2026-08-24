@@ -1335,6 +1335,32 @@ def _looks_poison(fault) -> bool:
     return top in _POISON_BYTES and parts.count(top) >= max(2, len(parts) - 1)
 
 
+def _record_sensitivity(dossier, seed):
+    """Record whether this crash's ANALYSIS is too sensitive to publish. A RECORDER, not a gate.
+
+    On 2026-08-20 we filed bug 2065051 from a crash whose fault address was mozjemalloc's
+    ``kAllocPoison``; a human made it a security bug, and :mccr8 asked for poison crashes to be
+    filed as security issues from the start. Restricting the bug would not have contained it:
+    four days later our own ``crashstack.html`` still served the address, "Use-after-free" and
+    the suspected regressor to an anonymous request. This flag is what the publishing surfaces
+    read. Mutates ``dossier`` in place."""
+    from crashclouseau import sensitive
+    try:
+        signals = sensitive.memory_unsafe_signals(seed.get("raw_crash"))
+    except Exception:                                       # pragma: no cover - defensive
+        # Fail SENSITIVE, inverting this codebase's usual swallow-and-continue: a withheld page
+        # costs a click, a published use-after-free cannot be taken back.
+        logger.warning("agent: sensitivity check failed; withholding", exc_info=True)
+        signals = ["sensitivity check failed"]
+    if not signals:
+        return
+    dossier.corroborations = {**(dossier.corroborations or {}),
+                              "memory_unsafe": True,
+                              "memory_unsafe_signals": signals}
+    logger.info("agent: analysis withheld from the public surfaces (%s) for %s",
+                "; ".join(signals), (seed or {}).get("uuid"))
+
+
 def _classify_exposer(dossier, seed):
     """Flag — and, on a STRONG signal, re-rate as a ``lead`` — an 'exposer, not cause'
     verdict: a changeset that EXPOSED a pre-existing latent bug (86 of the 289-bug study's
@@ -3100,6 +3126,13 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # `autofile.min_confidence` and the "soft lead" was a silent suppression.
         if offstack_cfg is None or offstack_cfg["exposer_classifier"]:
             _classify_exposer(result.dossier, seed)
+        # SENSITIVITY, recorded and never acted on here. Deliberately NOT folded into
+        # `_classify_exposer`: that gate mixes model fields in and it MOVES THE RUNG, and this
+        # answer must stay a pure statement about the crash report so the surfaces that publish
+        # the analysis can be gated on it without inheriting a confidence policy. It changes no
+        # verdict, no rung and no filing -- see `crashclouseau/sensitive.py` for why its address
+        # read and byte rule are its own rather than `_looks_poison`'s.
+        _record_sensitivity(result.dossier, seed)
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
         # match raises a bare lead (medium/50%) to `probable` (70%).
         _apply_corroboration_gate(result.dossier, seed)

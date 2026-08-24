@@ -8,6 +8,7 @@ import json
 import re
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, population, report_bug, bugzilla_apply, config
+from . import api, sensitive
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
@@ -27,7 +28,7 @@ def crashstack():
             channel,
             uuid_info["product"],
         )
-        evidence = bugzilla_apply.build_evidence(uuid)
+        evidence = bugzilla_apply.build_evidence(uuid, public=not api.viewer_authorized())
         # Demangle call-path symbols for display (mangled kept as the hover title).
         if evidence:
             cp = (evidence.get("dossier") or {}).get("call_path") or {}
@@ -444,8 +445,11 @@ def codeview():
 
     dossier = {}
     if uuid:
-        ev = bugzilla_apply.build_evidence(uuid)
+        ev = bugzilla_apply.build_evidence(uuid, public=not api.viewer_authorized())
         if ev:
+            # A withheld dossier is `{}` here, so the changeset's own diff still renders (it is
+            # public hg content) with none of OUR line highlighting, which is the part that says
+            # where the analysis was looking.
             dossier = ev.get("dossier") or {}
     diff_lines = _collect_diff_lines(dossier, filename) if filename else []
 
@@ -521,6 +525,13 @@ def _draft_evidence(uuid, changeset):
     except Exception:
         ev = None
     if not ev or ev.get("verdict") != "culprit":
+        return None, None, None
+    # bug.html is the fourth publishing surface and the sharpest of them: it renders the text we
+    # would FILE, which for a memory-safety crash includes `build_exposer_note`'s "so this is a
+    # use-after-free or an uninitialised read". It does not come through `build_evidence`, so it
+    # needs its own check -- see `sensitive.py`.
+    if not api.viewer_authorized() and sensitive.is_withheld(
+            (ev.get("dossier") or {}).get("corroborations")):
         return None, None, None
 
     dossier = ev.get("dossier") or {}

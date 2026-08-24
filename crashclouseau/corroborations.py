@@ -247,6 +247,18 @@ REGISTRY = {
         "Which revision the moz.configure switch was read at. Recorded because the body clock "
         "(searchfox, tip) and the switch clock (hg, build rev) are different clocks."),
 
+    # -- sensitivity ----------------------------------------------------------------------------
+    "memory_unsafe": (
+        "evidence", ("sensitive.py",),
+        "The crash report itself proves the process touched freed/poisoned memory, so the "
+        "ANALYSIS is withheld from every unauthenticated surface. Read by `sensitive.is_withheld`, "
+        "which `bugzilla_apply.build_evidence` and `html._draft_evidence` gate on. Reads as "
+        "`evidence` and not `suppression` on purpose: it moves no rung and blocks no filing, it "
+        "only decides who may read the mechanism."),
+    "memory_unsafe_signals": (
+        "evidence", ("bugzilla_apply.py",),
+        "Which deterministic test fired, so a withheld page can say why without re-deriving it."),
+
     # -- threads ---------------------------------------------------------------------------------
     "absent_named_threads": (
         "diagnostic", (),
