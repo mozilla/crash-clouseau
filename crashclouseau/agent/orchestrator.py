@@ -24,7 +24,7 @@ from datetime import timedelta
 
 from rq import Retry
 
-from crashclouseau import app, config, db, models, worker
+from crashclouseau import app, config, db, models, sensitive, worker
 from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
@@ -1304,10 +1304,23 @@ def _apply_callpath_gate(dossier, seed):
 # worth the re-rating (0x4B: 35 reports / 13 signatures / 22 build days)"; these three sit in
 # the gap and are left out until something asks for them. Said plainly because "the set is cut
 # on provenance" alone would not predict their exclusion.
-_POISON_BYTES = frozenset({0xE5, 0xE4, 0x5A, 0xDD, 0xCD, 0xCC, 0xFD, 0xAB, 0xBE, 0xFB, 0x2B, 0x4B})
+# Owned by `crashclouseau.sensitive` since 2026-08-24, aliased here so this module's readers and
+# `tests/test_exposer_poison.py` keep their names. There is ONE byte set and ONE poison rule now:
+# the module that decides whether to WITHHOLD an analysis and the gate that annotates one cannot
+# disagree about what poison is. `sensitive` is dependency-free precisely so this import direction
+# works -- the reverse pulls a Redis connection into every web request.
+_POISON_BYTES = sensitive.POISON_BYTES
 
 
-def _looks_poison(fault) -> bool:
+# The shared rule, so the widening below reaches the exposer note as well as the withholding
+# gate. `sensitive.looks_poison` is dominance OR a 4-byte poison prefix; the prefix half closes a
+# measured 13.7% recall gap the dominance rule opens at any offset >= 0x100 into the poisoned
+# object (4 of the 12 poison faults in the 500-run prod panel need it: 0xe5e5e5e5e5e5e604,
+# ...e60d, ...e675, 0xe5e5e5e5e5e6022d).
+_looks_poison = sensitive.looks_poison
+
+
+def _looks_poison_dominant_only(fault) -> bool:
     """True when the fault address looks like freed/poisoned/uninitialized memory: its
     bytes are dominated by one known-poison byte (allowing one off-byte for an offset into
     the poisoned object). Small addresses are handled by the field-offset corroboration,
@@ -1448,7 +1461,22 @@ def _classify_exposer(dossier, seed):
     try:
         signals = []
         strong = False
-        fault = _fault_address((seed or {}).get("raw_crash"))
+        # `sensitive.fault_address`, NOT `_fault_address`, and only here. The difference is
+        # that it rejects a PRESENT-but-useless `crash_info.address` (0x0 / all-ones) and falls
+        # through to Socorro's normalized field. Measured on the 500-run prod panel: the deployed
+        # reader finds 2 poison faults where Socorro's own address finds 12, i.e. it is blind to
+        # 10 of 12 (83%) -- on 6 of them `crash_info.address` reads 0x0 or 0xffffffffffffffff
+        # while the top-level field carries 0xe5e5e5e5e5e5e5xx.
+        #
+        # NOT applied to `_fault_address` globally, and that restraint is the measured part. Its
+        # other two callers (the field-offset corroboration at :950 and the struct-layout citation
+        # check) only act on `0 < fault <= MAX_FIELD_FAULT`, and the OLD value in exactly the cases
+        # this fix changes -- 0x0, all-ones -- can never satisfy that window, so today they always
+        # skip. Feeding them Socorro's address instead could make a PROMOTION gate newly fire on
+        # up to 40 of 498 runs (8%, the panel's addresses inside that window), which would change
+        # filing volume. That cannot be measured offline, because `crash_info.address` is not
+        # persisted on any dossier. So it needs its own commit and a prod read, not a ride-along.
+        fault = sensitive.fault_address((seed or {}).get("raw_crash"))
         if _looks_poison(fault):
             signals.append("poison/freed-memory fault address 0x{:x}".format(fault))
             strong = True

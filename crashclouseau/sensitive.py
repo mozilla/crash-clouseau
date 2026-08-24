@@ -62,8 +62,8 @@ withheld page costs a click and a published use-after-free cannot be taken back.
 # web request rendering a page would depend on the queue being configured. This module is
 # imported by `bugzilla_apply`, which the web app imports on every request; it must stay
 # dependency-free. A test that fails on divergence is the cheaper coupling.
-_POISON_BYTES = frozenset({0xE5, 0xE4, 0x5A, 0xDD, 0xCD, 0xCC, 0xFD, 0xAB, 0xBE, 0xFB, 0x2B, 0x4B})
-_MAX_FIELD_FAULT = 0x1000
+POISON_BYTES = frozenset({0xE5, 0xE4, 0x5A, 0xDD, 0xCD, 0xCC, 0xFD, 0xAB, 0xBE, 0xFB, 0x2B, 0x4B})
+MAX_FIELD_FAULT = 0x1000
 
 # Sentinels that are PRESENT in `json_dump.crash_info.address` but carry no information: a null
 # deref and an all-ones read. `_fault_address` treats them as answers because it only tests for
@@ -120,13 +120,13 @@ def looks_poison_dominant(fault) -> bool:
     """``orchestrator._looks_poison``'s rule, re-implemented here so this module has no
     behavioural coupling to the gate that moves the rung. Kept byte-identical on purpose;
     ``tests/test_sensitive.py`` pins the two against each other over the poison census."""
-    if fault is None or fault <= _MAX_FIELD_FAULT:
+    if fault is None or fault <= MAX_FIELD_FAULT:
         return False
     parts = _bytes_of(fault)
     if len(parts) < 2:
         return False
     top = max(set(parts), key=parts.count)
-    return top in _POISON_BYTES and parts.count(top) >= max(2, len(parts) - 1)
+    return top in POISON_BYTES and parts.count(top) >= max(2, len(parts) - 1)
 
 
 def looks_poison_prefix(fault) -> bool:
@@ -135,13 +135,20 @@ def looks_poison_prefix(fault) -> bool:
     Catches the case the dominance rule drops: a fault at an offset >= 0x100 into a poisoned
     object, e.g. ``0xe5e5e5e5e5e50128``, where the low bytes are the offset rather than the
     fill. 13.7% of poison-prefix reports over 89 nightly days."""
-    if fault is None or fault <= _MAX_FIELD_FAULT:
+    if fault is None or fault <= MAX_FIELD_FAULT:
         return False
     parts = _bytes_of(fault)
     if len(parts) < _PREFIX_BYTES:
         return False
     top = parts[-_PREFIX_BYTES:]
-    return len(set(top)) == 1 and top[0] in _POISON_BYTES
+    return len(set(top)) == 1 and top[0] in POISON_BYTES
+
+
+def looks_poison(fault) -> bool:
+    """Either poison rule. THE single predicate: `agent.orchestrator._looks_poison` is an alias
+    for this, so the byte set and the rule cannot drift between the surfaces that WITHHOLD an
+    analysis and the gate that annotates one."""
+    return looks_poison_dominant(fault) or looks_poison_prefix(fault)
 
 
 def memory_unsafe_signals(raw_crash) -> list[str]:

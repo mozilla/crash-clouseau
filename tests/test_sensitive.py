@@ -77,21 +77,41 @@ class TestThePredicate(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(sensitive.memory_unsafe_signals(raw), [])
 
-    def test_the_constants_have_not_diverged(self):
-        """`sensitive` duplicates the byte set rather than importing it, because importing
-        `agent.orchestrator` opens a Redis connection at module scope and this module is imported
-        on every web request. The duplication is only safe if divergence is a red test."""
+    def test_there_is_only_one_byte_set_and_one_rule(self):
+        """`sensitive` OWNS both; `agent.orchestrator` aliases them. Identity, not equality --
+        two equal copies can drift and this cannot. The import direction is forced: `sensitive`
+        must stay dependency-free because importing `agent.orchestrator` opens a Redis connection
+        at module scope, and this module is imported on every web request."""
         from crashclouseau.agent import orchestrator
-        self.assertEqual(sensitive._POISON_BYTES, orchestrator._POISON_BYTES)
-        self.assertEqual(sensitive._MAX_FIELD_FAULT, orchestrator._MAX_FIELD_FAULT)
+        self.assertIs(orchestrator._POISON_BYTES, sensitive.POISON_BYTES)
+        self.assertIs(orchestrator._looks_poison, sensitive.looks_poison)
 
-    def test_the_dominance_rule_still_matches_the_gates_own(self):
+    def test_the_gate_now_sees_the_widened_rule_too(self):
+        """The point of unifying: the prefix half reaches `build_exposer_note`'s published
+        sentence, not just the withholding decision. 4 of the 12 poison faults in the 500-run
+        prod panel need it."""
         from crashclouseau.agent import orchestrator
+        for addr in (0xE5E5E5E5E5E5E604, 0xE5E5E5E5E5E5E60D, 0xE5E5E5E5E5E6022D):
+            with self.subTest(addr=hex(addr)):
+                self.assertFalse(orchestrator._looks_poison_dominant_only(addr))
+                self.assertTrue(orchestrator._looks_poison(addr))
+        # ...and the two rules still agree on everything the dominance rule already caught.
         for addr in (0xE5E5E5E5E5E5E5E8, 0xE5E5E5E5E5E5E5E5, 0xCCCCCCCC, 0x0, 0x1000,
                      0xE512, 0xA4A4, 0xDEADBEEF, 0xFFFFFFFFFFFFFFFF, 0x7FFF12345678):
             with self.subTest(addr=hex(addr)):
-                self.assertEqual(sensitive.looks_poison_dominant(addr),
-                                 orchestrator._looks_poison(addr))
+                if orchestrator._looks_poison_dominant_only(addr):
+                    self.assertTrue(orchestrator._looks_poison(addr))
+
+    def test_the_promotion_gates_keep_the_OLD_address_reader(self):
+        """`_fault_address` is deliberately NOT fixed. Its other callers act only on
+        `0 < fault <= MAX_FIELD_FAULT`, and the old value in exactly the cases the fix changes
+        (0x0, all-ones) can never satisfy that window -- so today they always skip. Feeding them
+        Socorro's address could make a PROMOTION gate newly fire on up to 8% of runs, and that
+        cannot be measured offline because `crash_info.address` is not persisted."""
+        from crashclouseau.agent import orchestrator
+        raw = {"json_dump": {"crash_info": {"address": "0x0"}}, "address": "0x28"}
+        self.assertEqual(orchestrator._fault_address(raw), 0)      # unchanged: skips the window
+        self.assertEqual(sensitive.fault_address(raw), 0x28)       # the corrected read
 
     def test_is_withheld_reads_the_persisted_flag_only(self):
         self.assertTrue(sensitive.is_withheld({"memory_unsafe": True}))
