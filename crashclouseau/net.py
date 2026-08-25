@@ -62,6 +62,11 @@ except Exception:  # pragma: no cover - config missing/broken -> still identify 
 # All of this has to be set on the CLASS. ``Connection.__init__`` reads
 # ``Connection.MAX_RETRIES`` when it builds the urllib3 ``Retry``, and its per-call
 # ``max_retries=`` kwarg is dead code -- assigned to ``self`` after that ``Retry`` exists.
+#
+# Named, because the DIRECT (non-libmozdata) BMO reads in ``report_bug`` have to share it: one
+# left on ``DEFAULT_TIMEOUT``'s 60s read half would put the whole outage straight back.
+SERVICE_TIMEOUT = (5, 6)
+
 try:  # pragma: no cover - trivial global stamp, exercised via the hg tools
     from libmozdata.connection import Connection as _LmdConnection
 
@@ -72,7 +77,7 @@ try:  # pragma: no cover - trivial global stamp, exercised via the hg tools
     from libmozdata.socorro import Socorro as _LmdSocorro
 
     _LmdConnection.MAX_RETRIES = 2
-    _LmdBugzillaBase.TIMEOUT = _LmdSocorro.TIMEOUT = (5, 6)
+    _LmdBugzillaBase.TIMEOUT = _LmdSocorro.TIMEOUT = SERVICE_TIMEOUT
 except Exception:
     pass
 

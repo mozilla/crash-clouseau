@@ -1343,6 +1343,20 @@ class TestReportsIndexBadges(unittest.TestCase):
         self.assertIn(">culprit</span>", self._render("culprit", False))
 
 
+class _FakeBZResponse:
+    """A `requests` response as `_bugzilla_user` uses it: `.json()` + `.raise_for_status()`."""
+
+    def __init__(self, payload, status=200):
+        self._payload, self.status_code = payload, status
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("http {}".format(self.status_code))
+
+
 class TestBugPreview(unittest.TestCase):
     """report_bug.build_bug_preview & helpers: recreate the Socorro crash comment locally
     and resolve the target product::component from the regressor (fallback = the author's
@@ -1978,72 +1992,166 @@ class TestBugPreview(unittest.TestCase):
         self.assertEqual(p["name"], "Keith Cirkel")
 
     def test_bugzilla_user_lookup(self):
-        """``exists`` is the point: a real account with no nick is NOT the same as no
-        account, and only the second may not be put in a needinfo flag."""
+        """``exists`` is one point: a real account with no nick is NOT the same as no account,
+        and only the second may not be put in a needinfo flag. ``askable`` is the other, and
+        both of its fields are invisible unless the read is authenticated -- which is why this
+        one read carries the API key."""
         report_bug._USER_CACHE.clear()
-        captured = {"constructions": 0}
+        reply = {"v": {"users": [{"name": "stransky@x.com", "nick": "stransky",
+                                  "can_login": True,
+                                  "requests": {"needinfo": {"blocked": False}}}],
+                       "faults": []}}
+        calls = []
 
-        # Faithful to the real libmozdata API: BugzillaUser has NO get_data(); the query is
-        # fired in the constructor and the handlers run when wait() drains it. Passing a
-        # fault_user_handler is what makes libmozdata send `permissive`, so an unknown name
-        # arrives as a FAULT instead of an exception.
-        class FakeBZUser:
-            reply = {"user": {"name": "stransky@x.com", "nick": "stransky"}}
+        def fake_get(url, **kw):
+            calls.append((url, kw))
+            return _FakeBZResponse(reply["v"])
 
-            def __init__(self, user_names=None, include_fields=None, user_handler=None,
-                         fault_user_handler=None, user_data=None, **kw):
-                captured["names"] = user_names
-                captured["fault_handler"] = fault_user_handler is not None
-                captured["constructions"] += 1
-                self._h, self._f, self._data = user_handler, fault_user_handler, user_data
-
-            def wait(self):
-                if "user" in self.reply:
-                    self._h(self.reply["user"], self._data)
-                else:
-                    self._f(self.reply["fault"], self._data)
-                return self
-
-        with mock.patch.object(report_bug, "BugzillaUser", FakeBZUser):
+        with mock.patch.object(report_bug.net, "get", fake_get), \
+                mock.patch.object(report_bug.config, "get_bugzilla_token", return_value="KEY"):
             u = report_bug._bugzilla_user("stransky@x.com")
             u2 = report_bug._bugzilla_user("stransky@x.com")      # served from cache
-        self.assertEqual(u, {"exists": True, "nick": "stransky"})
+        self.assertEqual(u, {"exists": True, "nick": "stransky", "askable": True})
         self.assertEqual(u2, u)
-        self.assertEqual(captured["names"], ["stransky@x.com"])
-        self.assertTrue(captured["fault_handler"])                # => permissive
-        self.assertEqual(captured["constructions"], 1)            # cached: one lookup
+        self.assertEqual(len(calls), 1)                           # cached: one lookup
+        url, kw = calls[0]
+        self.assertTrue(url.endswith("/user"), url)
+        self.assertEqual(kw["params"]["names"], "stransky@x.com")
+        # permissive => an unknown name arrives as a FAULT (200) instead of an exception, which
+        # is what makes "no such account" distinguishable from "BMO hiccuped".
+        self.assertEqual(kw["params"]["permissive"], 1)
+        for field in ("can_login", "requests"):
+            self.assertIn(field, kw["params"]["include_fields"])
+        # Anonymously BMO returns NEITHER field, so the key is load-bearing, not decoration.
+        self.assertEqual(kw["headers"]["X-Bugzilla-API-Key"], "KEY")
+        # ...and the page-view bound applies here too: net.DEFAULT_TIMEOUT's 60s read half is
+        # what took crashstack.html down.
+        self.assertEqual(kw["timeout"], report_bug.net.SERVICE_TIMEOUT)
 
         # A name BMO does not know comes back as a fault: exists False, and the caller must
         # never put it in a flag.
-        FakeBZUser.reply = {"fault": {"name": "farre@mozilla.com", "faultString": "nope"}}
-        with mock.patch.object(report_bug, "BugzillaUser", FakeBZUser):
+        reply["v"] = {"users": [], "faults": [{"name": "farre@mozilla.com", "error": True}]}
+        with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("farre@mozilla.com"),
-                             {"exists": False, "nick": ""})
+                             {"exists": False, "nick": "", "askable": False})
 
         # A real account with NO nick still exists -- the old lookup could not tell these
         # apart, and conflating them is what would drop a usable needinfo.
-        FakeBZUser.reply = {"user": {"name": "nonick@x.com", "nick": ""}}
-        with mock.patch.object(report_bug, "BugzillaUser", FakeBZUser):
+        reply["v"] = {"users": [{"name": "nonick@x.com", "nick": ""}], "faults": []}
+        with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("nonick@x.com"),
-                             {"exists": True, "nick": ""})
+                             {"exists": True, "nick": "", "askable": True})
 
-        self.assertEqual(report_bug._bugzilla_user(""), {"exists": False, "nick": ""})
+        # No token -> no header at all (a BOGUS key is a hard 400/code 306), and the fields it
+        # would have carried are simply absent, which must read as "askable" -- see below.
         report_bug._USER_CACHE.clear()
+        calls.clear()
+        with mock.patch.object(report_bug.net, "get", fake_get), \
+                mock.patch.object(report_bug.config, "get_bugzilla_token", return_value=""):
+            report_bug._bugzilla_user("nonick@x.com")
+        self.assertIsNone(calls[0][1]["headers"])
+
+        self.assertEqual(report_bug._bugzilla_user(""),
+                         {"exists": False, "nick": "", "askable": False})
+        report_bug._USER_CACHE.clear()
+
+    def test_an_account_bmo_refuses_to_needinfo_is_not_askable(self):
+        """BMO rejects the flag for an account that EXISTS, for two unrelated reasons, and the
+        create's retry then drops the flag and files anyway -- so the comment asked a nick and
+        nobody was notified. Measured over the 61 bugs filed since 2026-08-05: of the 4 that
+        set no needinfo, 3 were this, one per reason and one repeat (`:jgilbert` disabled,
+        `:tschuster` and `:bvandersloot` blocked). `can_login` alone catches 1 of the 3."""
+        cases = [
+            ("account disabled -- the person left", {"can_login": False}, False),
+            ("not accepting needinfo (away, ...)",
+             {"can_login": True, "requests": {"needinfo": {"blocked": True}}}, False),
+            ("live account", {"can_login": True,
+                              "requests": {"needinfo": {"blocked": False}}}, True),
+            # The polarity that keeps a token-less environment working: no field means unknown,
+            # and unknown means askable. Reading absence as "no" would stop every needinfo.
+            ("fields absent (no token)", {}, True),
+        ]
+        for label, extra, expected in cases:
+            with self.subTest(label):
+                report_bug._USER_CACHE.clear()
+                payload = {"users": [dict({"name": "x@y.z", "nick": "n"}, **extra)],
+                           "faults": []}
+                with mock.patch.object(report_bug.net, "get",
+                                       lambda url, **kw: _FakeBZResponse(payload)):
+                    u = report_bug._bugzilla_user("x@y.z")
+                self.assertEqual(u["askable"], expected, u)
+                self.assertIs(report_bug._askable(u), expected)
+        # A dict that predates the key at all (any caller stubbing this out) stays askable.
+        self.assertTrue(report_bug._askable({"exists": True, "nick": "n"}))
+        report_bug._USER_CACHE.clear()
+
+    def test_a_requestee_bmo_would_refuse_is_not_asked_in_prose_either(self):
+        """bug 2065156, reported by :egubler: we asked `:jgilbert, can you have a look please?`
+        for an account that had been disabled, so no flag was set and nobody was notified. The
+        ask has to go with the flag -- the comment still credits the author on its "Starting
+        point" line, so nothing is lost by the silence."""
+        report_bug._USER_CACHE.clear()
+        known = {"jgilbert@mozilla.com": {"exists": True, "nick": "jgilbert",
+                                          "askable": False}}
+        with mock.patch.object(report_bug, "_bugzilla_user",
+                               lambda e: known.get(e, {"exists": False, "nick": "",
+                                                       "askable": False})), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author", return_value=[]):
+            person = report_bug._needinfo_person(
+                {"node": "n", "author": "Kelsey Gilbert <jgilbert@mozilla.com>",
+                 "author_email": "jgilbert@mozilla.com"}, "nightly")
+        self.assertEqual(person, {})
+        self.assertIsNone(report_bug._needinfo_line(person))
+        # ...and the preview therefore sends no requestee, so the create is never rejected.
+        self.assertEqual((person or {}).get("account") or "", "")
+
+    def test_an_unknown_account_still_gets_the_plain_name_ask(self):
+        """The other branch, and it must NOT change: when the hg address is simply not a
+        Bugzilla account (bug 2066201) the prose names the human anyway so a triager can set
+        the flag in one click. Only a requestee BMO REFUSES loses its ask line."""
+        report_bug._USER_CACHE.clear()
+        with mock.patch.object(report_bug, "_bugzilla_user",
+                               return_value={"exists": False, "nick": "", "askable": False}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author", return_value=[]):
+            person = report_bug._needinfo_person(
+                {"node": "n", "author": "Francis McKenzie <fmckenzie@igalia.com>",
+                 "author_email": "fmckenzie@igalia.com"}, "nightly")
+        self.assertEqual(report_bug._needinfo_line(person),
+                         "Francis McKenzie, can you have a look please?")
+        self.assertEqual(person["account"], "")
+
+    def test_a_second_live_account_for_the_same_human_wins(self):
+        """The ladder keeps going past an unaskable hit: these rungs resolve DIFFERENT
+        addresses for the SAME human, so a dead work account can still be followed by a live
+        personal one."""
+        report_bug._USER_CACHE.clear()
+        known = {"gone@mozilla.com": {"exists": True, "nick": "gone", "askable": False},
+                 "live@gmail.com": {"exists": True, "nick": "live", "askable": True}}
+        with mock.patch.object(report_bug, "_bugzilla_user",
+                               lambda e: known.get(e, {"exists": False, "nick": "",
+                                                       "askable": False})), \
+                mock.patch.object(report_bug, "_bug_people", return_value={
+                    7: [{"email": "live@gmail.com", "real": "A Human", "nick": "live"}]}):
+            acct = report_bug._needinfo_account({"bug": 7}, "nightly",
+                                                "gone@mozilla.com", "A Human")
+        self.assertEqual(acct, {"email": "live@gmail.com", "nick": "live"})
 
     def test_bugzilla_user_lookup_failure_is_not_a_missing_user(self):
         """A transport failure must not be read as "no such account" -- that would silently
-        drop every needinfo whenever BMO hiccups. Unverified addresses stay usable; the
-        create's own fallback carries the risk."""
+        drop every needinfo whenever BMO hiccups. Unverified addresses stay usable AND askable;
+        the create's own fallback carries the risk."""
         report_bug._USER_CACHE.clear()
 
-        class Boom:
-            def __init__(self, **kw):
-                raise RuntimeError("connection reset")
+        def boom(url, **kw):
+            raise RuntimeError("connection reset")
 
-        with mock.patch.object(report_bug, "BugzillaUser", Boom):
+        with mock.patch.object(report_bug.net, "get", boom):
             u = report_bug._bugzilla_user("who@x.com")
         self.assertTrue(u["exists"])
         self.assertTrue(u["unverified"])
+        self.assertTrue(report_bug._askable(u))
         self.assertNotIn("who@x.com", report_bug._USER_CACHE)   # not cached: retry later
         report_bug._USER_CACHE.clear()
 

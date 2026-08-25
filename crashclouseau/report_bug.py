@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from jinja2 import Environment, FileSystemLoader
 from libmozdata import socorro
-from libmozdata.bugzilla import Bugzilla, BugzillaUser
+from libmozdata.bugzilla import Bugzilla
 from libmozdata.hgmozilla import Mercurial
 from . import net
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -1375,58 +1375,95 @@ def _norm_name(name):
     return re.sub(r"\s+", " ", _BZ_ANNOTATION.sub(" ", name or "")).strip().casefold()
 
 
+def _askable(user):
+    """May a needinfo actually REACH this account? ``user`` is a ``_bugzilla_user`` dict.
+
+    ``False`` only when BMO SAID so -- an absent key means unknown, and unknown means yes. That
+    polarity is the safety property: a token-less environment (a dev box, a test that stubs
+    ``_bugzilla_user``) sees neither field, and reading that as "cannot be asked" would silently
+    stop setting every needinfo we currently set."""
+    return (user or {}).get("askable") is not False
+
+
 def _bugzilla_user(email):
-    """What Bugzilla knows about the login ``email``: ``{"exists": bool, "nick": str}``.
+    """What Bugzilla knows about the login ``email``:
+    ``{"exists": bool, "nick": str, "askable": bool}``.
 
-    ``exists`` is the field the old nick-only lookup threw away, and it is the one that
-    matters. It is NOT ``bool(nick)`` -- plenty of real accounts have no nick -- but whether
-    ``/rest/user`` returned a user at all. BMO validates a needinfo requestee while CREATING
-    a bug and rejects the WHOLE post with code 51 for an unknown one, so a requestee that is
-    not an account costs the entire filing, not just the needinfo. That is not theoretical:
-    crash f6fe186b's hg author is ``farre@mozilla.com``, which is nobody on BMO (the account
-    is ``afarre@mozilla.com``), and the create came back 404.
+    ``exists`` is the field the old nick-only lookup threw away. It is NOT ``bool(nick)`` --
+    plenty of real accounts have no nick -- but whether ``/rest/user`` returned a user at all.
+    BMO validates a needinfo requestee while CREATING a bug and rejects the WHOLE post with
+    code 51 for an unknown one, so a requestee that is not an account costs the entire filing,
+    not just the needinfo. That is not theoretical: crash f6fe186b's hg author is
+    ``farre@mozilla.com``, which is nobody on BMO (the account is ``afarre@mozilla.com``), and
+    the create came back 404.
 
-    ``permissive`` is what makes the distinction trustworthy. Passing a ``fault_user_handler``
-    makes libmozdata send it, so BMO answers 200 with the unknown name in ``faults`` instead
-    of erroring -- which means a missing user is now distinguishable from a network blip.
-    Without it, both arrive as an exception and we would drop a perfectly good needinfo every
-    time BMO hiccups. ``exists`` is therefore only False when BMO SAID so.
+    ``askable`` is the same problem one step in: BMO also refuses the flag for an account that
+    DOES exist, for two unrelated reasons, and the retry in
+    ``bugzilla_apply._create_bug_keeping_the_bug`` then drops the flag and files the bug anyway
+    -- so the comment asks ``:nick, can you have a look please?`` and NOBODY is notified. Both
+    reasons are one boolean each:
 
-    Anonymous, like every other read here: ``/rest/user?names=`` answers without an API key.
-    (``match=`` does not -- BMO replies 505, "Logged-out users cannot use the match argument"
-    -- which is why account resolution goes through BUG metadata and not a user search.)
+    * ``can_login: false`` -- the account is disabled, i.e. the person left. Reported by
+      :egubler on bug 2065156, where we asked ``:jgilbert`` five days after filing.
+    * ``requests.needinfo.blocked: true`` -- the user is not accepting needinfo requests
+      (BMO's away/vacation setting, among others).
+
+    Measured 2026-08-25 over the 61 bugs filed since 2026-08-05. 57 set a needinfo and **0 of
+    those 39 distinct requestees is unaskable**, so this gate costs nothing that currently
+    works. Of the 4 that set none, 3 printed a ``:nick`` ask that reached nobody --
+    ``:jgilbert`` (2065156, disabled), ``:tschuster`` (2066354, blocked) and ``:bvandersloot``
+    (2066051, blocked). So ``can_login`` alone would have caught 1 of the 3; do not drop the
+    ``requests`` half. The 4th (2066201) resolved no account and printed the plain-NAME form,
+    which is the deliberate behaviour ``_needinfo_line`` documents and not this bug.
+
+    THIS READ CARRIES THE API KEY, alone among the reads in this module, because anonymously
+    BMO returns neither field -- not even when they are named in ``include_fields`` (verified
+    2026-08-25: ``name`` and ``nick`` come back, ``can_login`` and ``requests`` are simply
+    absent). It stays off ``libmozdata.bugzilla.Bugzilla`` deliberately: those reads must remain
+    anonymous, because ``buginfo.get_bugs`` infers "security bug" from a bug Socorro knows about
+    that a Bugzilla search does not return (see ``config.get_bugzilla_token``). Sending no
+    header at all when there is no token is likewise deliberate -- a BOGUS key is a hard 400
+    (code 306), which arrives here as ``unverified``.
+
+    ``permissive=1`` is what keeps the distinction trustworthy: BMO then answers 200 with the
+    unknown name in ``faults`` instead of erroring, so a missing user is distinguishable from a
+    network blip. Without it both arrive as an exception and we would drop a perfectly good
+    needinfo every time BMO hiccups. ``exists`` is therefore only False when BMO SAID so.
+
+    (``names=`` works this way; ``match=`` does not -- BMO replies 505, "Logged-out users
+    cannot use the match argument" -- which is why account resolution goes through BUG metadata
+    and not a user search.)
 
     Cached + best-effort (never raises)."""
     if not email:
-        return {"exists": False, "nick": ""}
+        return {"exists": False, "nick": "", "askable": False}
     if email in _USER_CACHE:
         return _USER_CACHE[email]
-    got: dict = {}
-
-    def handler(user, data):
-        data["user"] = user
-
-    def fault(f, data):
-        data["fault"] = f
-
     try:
-        # NB: BugzillaUser fires the query in its constructor (Connection.exec_queries) and
-        # is drained by .wait() -- it has NO get_data() (that lives on the sibling Bugzilla
-        # class). The handlers run during wait() and fill ``got``.
-        BugzillaUser(
-            user_names=[email],
-            include_fields=["name", "nick"],
-            user_handler=handler,
-            fault_user_handler=fault,
-            user_data=got,
-        ).wait()
+        # Same base as the writes, so "can this person be asked" is read from whichever
+        # Bugzilla the filing will actually go to; `_bz_rest()` is the BUG endpoint, so trim
+        # the suffix rather than assuming a base (see `security_group`).
+        from crashclouseau.bugzilla_apply import _bz_rest
+        token = config.get_bugzilla_token()
+        r = net.get(
+            "{}/user".format(re.sub(r"/bug/?$", "", _bz_rest())),
+            headers={"X-Bugzilla-API-Key": token} if token else None,
+            params={"names": email, "permissive": 1,
+                    "include_fields": "name,nick,can_login,requests"},
+            timeout=net.SERVICE_TIMEOUT,
+        )
+        r.raise_for_status()
+        users = r.json().get("users") or []
     except Exception as exc:
         # Could not ASK. Not the same as "no such user": leave the address usable and let
         # the create's own fallback carry the risk.
         logger.info("bug preview: bugzilla user lookup failed for %s: %s", email, exc)
-        return {"exists": True, "nick": "", "unverified": True}
-    user = got.get("user")
-    out = {"exists": user is not None, "nick": ((user or {}).get("nick") or "").strip()}
+        return {"exists": True, "nick": "", "askable": True, "unverified": True}
+    user = users[0] if users else None
+    blocked = (((user or {}).get("requests") or {}).get("needinfo") or {}).get("blocked")
+    out = {"exists": user is not None,
+           "nick": ((user or {}).get("nick") or "").strip(),
+           "askable": bool(user) and user.get("can_login") is not False and blocked is not True}
     _USER_CACHE[email] = out
     return out
 
@@ -1519,14 +1556,17 @@ def _needinfo_account(candidate, channel, email, name):
     deliberately the same ladder, and the same fallback, as ``resolve_product_component``
     just above, because it is the same problem:
 
-    1. the hg author's own address, when BMO says it IS an account (the common case, one
-       cheap lookup, and no bug read at all);
+    1. the hg author's own address, when BMO says it IS an account AND that the account can
+       still be asked (the common case, one cheap lookup, and no bug read at all);
     2. the REGRESSOR bug's assignee or creator whose real name is the author's -- the bug the
        changeset landed for knows the person's account even when hg does not;
     3. the same over the author's other recent patches' bugs, which is what answers "and if
        the regressor bug is private, find one that isn't": a restricted bug just vanishes
        from a batched read, and the author's other landings are almost always public.
-    4. ``{}`` -- then we file with no flag rather than filing no bug.
+    4. ``{}`` -- then we file with no flag rather than filing no bug, or
+       ``{"unaskable": True}`` when every account the ladder DID identify is one BMO refuses
+       to needinfo (see ``_bugzilla_user``), which is the one case where the prose ask has to
+       go too.
 
     Step 3 also runs when the regressor bug is perfectly readable but nobody on it matches
     (an unassigned bug filed by a triager is ordinary), which is a deliberate widening of
@@ -1543,8 +1583,12 @@ def _needinfo_account(candidate, channel, email, name):
     if not email and not name:
         return {}
     user = _bugzilla_user(email)
-    if user.get("exists") and not user.get("unverified"):
+    if user.get("exists") and not user.get("unverified") and _askable(user):
         return {"email": email, "nick": user.get("nick", "")}
+    # An account we FOUND and cannot ask is a different outcome from finding none, and the
+    # caller has to be able to tell them apart: one means "no flag, but name the human in the
+    # prose so a triager can set it in one click", the other means the ask cannot land at all.
+    unaskable = bool(user.get("exists")) and not _askable(user)
 
     c = candidate or {}
     # `nodes.bug` is -1, not NULL, when the commit message carries no bug number (2555 of
@@ -1555,8 +1599,9 @@ def _needinfo_account(candidate, channel, email, name):
         bug = 0
     if bug > 0:
         hit = _match_author(_bug_people([bug]).get(bug), name, email)
-        if hit:
+        if hit and _askable(_bugzilla_user(hit["email"])):
             return {"email": hit["email"], "nick": hit["nick"]}
+        unaskable = unaskable or bool(hit)
 
     if email:
         try:
@@ -1570,15 +1615,20 @@ def _needinfo_account(candidate, channel, email, name):
             # comes from the author's most recent work.
             for b in others:
                 hit = _match_author(people.get(b), name, email)
-                if hit:
+                if not hit:
+                    continue
+                # Worth carrying on past one: these are DIFFERENT addresses for the same human,
+                # so a departed work account can still be followed by a live personal one.
+                if _askable(_bugzilla_user(hit["email"])):
                     return {"email": hit["email"], "nick": hit["nick"]}
+                unaskable = True
     # Last: an address we could not CHECK (BMO would not answer the user lookup) beats no
     # needinfo at all, but only after the bug-verified rungs have had their turn -- a
     # name-matched account is better evidence than an unverified guess. If it turns out not
     # to be a login, `_create_bug_keeping_the_bug` drops the flag and still files the bug.
     if user.get("unverified") and email:
         return {"email": email, "nick": ""}
-    return {}
+    return {"unaskable": True} if unaskable else {}
 
 
 def _needinfo_person(candidate, channel):
@@ -1634,6 +1684,14 @@ def _needinfo_person(candidate, channel):
     if _is_bot(email, name, ""):
         return {}
     account = _needinfo_account(c, channel, email, name)
+    if account.get("unaskable"):
+        # Same treatment as a bot, and for the same reason: we know exactly who this is and we
+        # know the ask cannot land -- BMO refuses the flag, `_create_bug_keeping_the_bug` drops
+        # it, and the comment is left asking a nick that notifies nobody. No attribution is lost
+        # by the silence: the comment already credits the author on its "Starting point" line.
+        # Silence is the WRONG answer when the account is merely unknown, which is the other
+        # branch and is what `_needinfo_line`'s docstring argues for.
+        return {}
     return {"nick": account.get("nick", ""), "name": name, "email": email,
             "account": account.get("email", "")}
 
