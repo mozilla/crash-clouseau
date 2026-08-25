@@ -31,11 +31,48 @@ except Exception:  # pragma: no cover - config missing/broken -> still identify 
 # USER_AGENT, verified) — this fixes the agent's pinned blame/history/patch-diff tools,
 # which lean on that client heavily during an off-stack run. Best-effort; libmozdata may
 # be absent in a stripped unit env.
+
+# Two more libmozdata defaults are pinned on the same class, for the same reason as the
+# timeout below: left alone they compose into a dead web dyno.
+#
+# 1. ``MAX_RETRIES = 256`` with ``backoff_factor=1`` over ``[429, 500, 502, 503, 504]``. The
+#    sleeps go 1, 2, 4, 8 ... capped at urllib3's 120s, so ONE request can keep retrying for
+#    ~8.5 hours. Bounded to two retries (~3s of backoff), which is still a real retry: BMO's
+#    rate limiter holds for ~45 min and no retry count outwaits it, so failing fast and
+#    letting the caller degrade is the only useful answer to a 429.
+# 2. ``TIMEOUT = 30`` is the ENTIRE budget gunicorn gives a request, so one stalled read
+#    spends all of it. That does not cost a slow page, it costs the page: the abort arrives
+#    as ``SystemExit`` raised inside the blocked thread, a BaseException that no
+#    ``except Exception`` best-effort guard catches, so crashstack.html 500s instead of
+#    rendering without the block it was waiting on. Seen 2026-08-25: a ``/rest/bug?id=2048793``
+#    read for the bug preview timed out and took the page down with it (H12,
+#    ``service=30000ms``, gunicorn ``WORKER TIMEOUT``).
+#
+# Tightened to ``(connect 5, read 6)`` for the two services the WEB path talks to. Both are
+# measured at 0.3-0.6s -- including the heaviest shape either one is asked for anywhere in the
+# tree, ``datacollector.get_proto_small``'s ``_aggs.proto_signature`` aggregation with
+# ``_facets_size=10000`` over a 7-day window (0.4-0.5s) -- so 6s is >10x headroom, and it is
+# the RETRIES that carry a genuinely slow minute upstream (3 attempts), not the patience of a
+# single one. Worst case is then 3*6+3 = 21s, which fits inside a request with room to render.
+#
+# Deliberately NOT applied to the hg clients, which keep libmozdata's 30: hg.mozilla.org takes
+# 8-13s to answer a json-annotate at the best of times (see below), and the agent leans on that
+# client for every pinned blame/history/patch read.
+#
+# All of this has to be set on the CLASS. ``Connection.__init__`` reads
+# ``Connection.MAX_RETRIES`` when it builds the urllib3 ``Retry``, and its per-call
+# ``max_retries=`` kwarg is dead code -- assigned to ``self`` after that ``Retry`` exists.
 try:  # pragma: no cover - trivial global stamp, exercised via the hg tools
     from libmozdata.connection import Connection as _LmdConnection
 
     if not _LmdConnection.USER_AGENT:
         _LmdConnection.USER_AGENT = USER_AGENT
+
+    from libmozdata.bugzilla import BugzillaBase as _LmdBugzillaBase
+    from libmozdata.socorro import Socorro as _LmdSocorro
+
+    _LmdConnection.MAX_RETRIES = 2
+    _LmdBugzillaBase.TIMEOUT = _LmdSocorro.TIMEOUT = (5, 6)
 except Exception:
     pass
 
