@@ -13,6 +13,7 @@
     "build_facets_limit": 500,
     "backward_lookup_ndays": 3,
     "nightly_window_ndays": 21,
+    "buildhub_lookback_ndays": 30,
     "max_ndays": 30,
     "score":
     {
@@ -35,7 +36,7 @@
             "Firefox":
             {
                 "nightly": 50,
-                "beta": 20,
+                "beta": 5,
                 "release": 20
             }
         }
@@ -76,6 +77,15 @@
                 "nightly": 4,
                 "beta": 4,
                 "release": 4
+            }
+        },
+        "min_build_installs":
+        {
+            "Firefox":
+            {
+                "nightly": 0,
+                "beta": 15,
+                "release": 15
             }
         }
     },
@@ -153,7 +163,7 @@
         },
         "filters":
         {
-            "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr"],
+            "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr", "security/ct/CTKnownLogs.h", "security/manager/ssl/StaticHPKPins.h"],
             "ubiquitous_symbols": ["nsTArray", "nsTHashMap", "nsTHashtable", "nsBaseHashtable", "mozilla::HashMap", "mozilla::HashTable", "PLDHashTable", "RefPtr", "nsCOMPtr", "nsTString", "nsTSubstring", "nsAString", "nsString", "mozilla::Vector", "UniquePtr", "nsRefPtrHashtable"],
             "anchor_frame_patterns": ["MessageLoop::Run", "MessagePump", "nsThread::ThreadFunc", "ThreadFuncPoolThread", "_PR_NativeRunThread", "nsThread::ProcessNextEvent", "mozilla::ipc::MessageChannel::", "TaskController", "XRE_main", "content_process_main", "nsAppShell::", "GeckoStart", "PR_RunThread"],
             "penalty": 0.1

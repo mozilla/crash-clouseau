@@ -240,6 +240,11 @@ NOT_SPIKING = "not_spiking"
 UNTESTABLE_PREFIX = "untestable_prefix"
 BELOW_INSTALL_THRESHOLD = "below_install_threshold"
 IMMATURE = "immature"
+# A build-day removed from the series before it was evaluated, because the build carried
+# essentially no users. See ``datacollector.get_no_user_build_floor``: the harm is not that we
+# might select it, it is that a zero-crash build-day is a ZERO BASELINE for the day after it,
+# and ``is_spike``'s from-zero branch is gated by neither ``floor`` nor ``ratio``.
+DROPPED_NO_USERS = "dropped_no_users"
 
 
 def _as_date(when):

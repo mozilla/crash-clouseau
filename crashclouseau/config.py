@@ -82,6 +82,30 @@ def get_ndays_of_data():
     return _get_global()["max_ndays"]
 
 
+def get_buildhub_lookback_ndays():
+    """How far back ``update.update_builds`` asks Buildhub for builds.
+
+    SEPARATE FROM ``get_ndays`` (3), which is what it used to be, and the difference is
+    whether a non-nightly channel can be switched on at all. ``update()`` runs
+    ``put_filelog`` first, which sets ``LastDate.maxdate = now``; ``update_builds`` reads that
+    back and subtracted 3 days, so a fresh channel was offered only the builds of the last 3
+    days — and beta ships every ~2.00 days (median of 58 consecutive gaps, 2026-04-01..08-24).
+    Over Buildhub's 196 days of beta history a rolling 3-day window holds **0 builds on 23
+    days (12%) and 1 build on 117 (60%)**, so **71% of possible switch-on moments** gave
+    ``Build.get_last_versions(n=3)`` fewer than two rows, and the table then grew one build at
+    a time — roughly five days before the selection window was three deep. The hazard is
+    specific to flipping ``INGEST_CHANNELS`` on a live database, which is the documented
+    canary mechanism, so it would have been the first thing to go wrong and the hardest to
+    see (one warning per 20-minute tick).
+
+    Defaults to ``max_ndays`` (30), which is not a tuned number: it is the same window
+    ``Node.clean`` retains changesets for, so we ask for builds exactly as far back as we
+    keep the pushlog they would be scored against. ``Build.put_data`` is
+    ``on_conflict_do_nothing``, so a wider fetch is idempotent; the cost is one larger
+    Buildhub POST per tick."""
+    return _get_global().get("buildhub_lookback_ndays", get_ndays_of_data())
+
+
 def get_extensions():
     """The source extensions that get ``Changeset`` rows. See ``utils.is_interesting_file``
     for what this does and does not gate — measured, it moves no on-stack candidate."""
@@ -289,6 +313,27 @@ def get_population():
 
 
 def get_threshold(typ, product, channel):
+    """``thresholds.<typ>.<product>.<channel>``, default 1.
+
+    ``installs`` is the minimum distinct installations a build-day needs before a spike counts.
+    ``protos`` is the cap on how many distinct PROTO-SIGNATURE clusters one selected
+    (signature, buildid) pair may contribute — and off nightly it is the dominant cost term,
+    which is the opposite of what nightly's value suggests.
+
+    MEASURED LIVE, 2026-08-25, by running the real selector against real beta data (one run,
+    Firefox beta, window 155.0b2/b3/b4): **4 selected pairs carried 37 distinct protos**, i.e.
+    37 paid LLM runs from 4 selections. Per pair: 19 crashes -> 12 protos, 10 -> 10, 10 -> 10,
+    6 -> 5. Beta crash stacks are nearly all DISTINCT, so the proto-signature dedup that makes
+    nightly cheap (mean 1.07 protos per pair, max 6, so its cap of 50 has NEVER bound) does
+    almost nothing here. Sweep on that same live selection: cap 1 -> 4 runs, 3 -> 12, **5 -> 20**,
+    10 -> 35, 20 -> 37, 50 -> 37.
+
+    5, not 20: at ~$1-3 a run the cap is the difference between ~$20-60 and ~$37-111 for one
+    tick's selections, and the facet is COUNT-ORDERED, so the five kept are the five loudest
+    clusters rather than an arbitrary five. 3 is the priced fallback (12 runs) if beta's real
+    dossier yield comes in above the nightly-calibrated 0.55-0.77 this arithmetic assumes.
+    Nightly's 50 is untouched — it does not bind, and lowering it would change a channel this
+    measurement says nothing about."""
     return (
         _get_global()
         .get("thresholds", {})
@@ -318,6 +363,14 @@ _SPIKE_DEFAULTS = {
     # utils.evaluate_days -- but the `floor` half is NOT, so datacollector applies the
     # whole bar to nightly only.
     "mature_installs": 4,
+    # Minimum distinct INSTALLATIONS a build-day needs before it may act as a spike BASELINE.
+    # Read only off nightly (see `datacollector.get_no_user_build_floor`, which returns 0 for
+    # nightly): it exists for the merge-day `N.0b1` build, which ships to 4-7 installations
+    # FOREVER and would otherwise be a zero baseline for the build after it. Any value in
+    # [8, 24] is equivalent on the measured data (5 merge-day builds at 1-7 installs, the
+    # quietest real build showing ~29 at the one window index that ever selects). NOT reports:
+    # that number is age-dependent and the floor then fires on a real build seen early.
+    "min_build_installs": 15,
 }
 
 

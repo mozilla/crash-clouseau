@@ -326,8 +326,17 @@ class Changeset(db.Model):
         self.fileid = fileid
 
     @staticmethod
-    def reset(revs):
+    def reset(revs, channel=None):
+        """Un-analyse the given changesets so ``to_analyze`` offers them again — the recovery
+        for a patch parse that stored nothing usable.
+
+        ``channel`` because a hash can have a ``nodes`` row per channel (see ``get_scores``):
+        without it, resetting a beta graft also resets the central original, re-fetching a
+        patch that was parsed correctly. ``None`` resets every channel, which is what a
+        hand-run repair usually wants."""
         q = db.session.query(Changeset).join(Node)
+        if channel:
+            q = q.filter(Node.channel == channel)
         q = q.filter(Node.node.in_(revs)).update(
             {
                 "analyzed": False,
@@ -491,11 +500,32 @@ class Changeset(db.Model):
         return res
 
     @staticmethod
-    def get_scores(filename, line, chgsets, csid):
+    def get_scores(filename, line, chgsets, csid, channel=None):
+        """Line-proximity scores for one crash frame against the candidate changesets
+        ``find`` produced for it.
+
+        ``channel`` MUST be passed by anything that scores a real crash. ``find`` is
+        channel-filtered and this was not, and the same changeset hash legitimately has a
+        ``nodes`` row per channel: the cycle merge pushes all of mozilla-central onto
+        mozilla-beta with the hashes preserved (measured: 1,932 of 1,932 merge-window
+        candidates also exist on m-c under the same hash, 5,116 of 5,124 non-merge = 99.8%,
+        with both repos serving byte-identical ``raw-rev``). Unfiltered, one candidate then
+        yields two rows per frame, ``Score.set`` inserts both, and ``CrashStack.get_by_uuid``
+        renders the same changeset twice with two different push dates — the beta one being
+        the merge date, which is up to ~35 days later than the truth.
+
+        Latent on the in-cycle beta window, which is the only one reachable today: a beta
+        uplift is an hg graft with a NEW hash, and 0 of 1,009 candidate-bearing in-cycle
+        changesets exist on m-c under the same hash. It stops being latent the moment the
+        ``mindate`` boundary that excludes the merge push moves (see
+        ``tests/test_beta_windows.py``). ``None`` keeps the old, unfiltered behaviour for a
+        caller that genuinely has no channel."""
         chgs = db.session.query(Changeset).select_from(Changeset).join(Node).join(File)
         chgs = chgs.filter(
             Node.node.in_(chgsets), File.name == filename, Changeset.analyzed.is_(True)
         )
+        if channel:
+            chgs = chgs.filter(Node.channel == channel)
         res = []
         M = config.get_max_score()
         for chg in chgs:
@@ -598,6 +628,39 @@ class Build(db.Model):
 
     @staticmethod
     def get_last_versions(date, channel, product, n=0):
+        """The newest ``n`` builds at or before ``date``, newest first — the SELECTION WINDOW
+        for a non-nightly channel (``datacollector.get_builds``, ``n=3``).
+
+        THE MAJOR-VERSION BREAK IS GONE, AND IT WAS TURNING BETA OFF FOR TWO DAYS A CYCLE.
+        ``.limit(n)`` is applied by the database BEFORE the old Python-side
+        ``major != get_major(q.version): break``, so the day after a central->beta merge the
+        three newest rows are ``155.0b1 / 154.0b10 / 154.0b9``, the break fired on row two,
+        ``len(res) >= 2`` failed, and this returned ``[]``. ``get_builds`` then returned no
+        buildids and ``get_new_signatures`` logged one warning and returned ``({}, [])`` --
+        no ``Stats``, no ``uuids``, and no ``Selection`` rows either (``record_many([])``
+        returns early), so the one table built to answer "why did you do nothing" was silent
+        too. Measured over the Buildhub build list: **12 of 127 beta run-days (9.4%) across 5
+        merges, 2/2/2/2/4 days each** — and they land exactly on the days a freshly uplifted
+        regression first reaches beta users. At a 2-week cycle it would be 14-18%.
+
+        Mixing two majors in the window is not a defect, it is the question: the window asks
+        "is this build crashier than the ones before it", and the builds before the first beta
+        of a cycle ARE the previous cycle's last betas. A signature new since the merge still
+        spikes from zero against them; one that was already crashing at the same rate
+        correctly does not.
+
+        WHAT THE BREAK LOOKED LIKE IT PROTECTED, AND DOES NOT: Buildhub also carries 26-30
+        RC/dot-release builds on ``target.channel=beta`` (154.0, 154.0.1, 153.0.4 ...) which
+        interleave with the betas by buildid. ``buildhub.VERSION_PATS["beta"]`` already keeps
+        them out of this table, and they report ``release_channel=release`` in Socorro, never
+        beta/aurora (20260812182057 = 154.0: 72,019 release / 0 beta) -- so do NOT "fix" that
+        regexp either; it is what protects this window.
+
+        ``len(res) >= 1`` rather than ``>= 2``: a short window is a worse window, not a broken
+        one, and **a silent switch-off is the worse failure**. With one build the caller
+        evaluates one build-day, which ``evaluate_days`` declines as an untestable prefix and
+        RECORDS. Nightly never calls this (its builds come from Socorro), so nightly behaviour
+        is untouched either way."""
         qs = (
             db.session.query(Build.buildid, Build.version, Node.node)
             .select_from(Build)
@@ -611,25 +674,14 @@ class Build(db.Model):
         if n >= 1:
             qs = qs.limit(n)
 
-        res = []
-        major = 0
-        for q in qs:
-            if major == 0:
-                major = utils.get_major(q.version)
-            elif major != utils.get_major(q.version):
-                break
-            res.append(
-                {
-                    "buildid": utils.get_buildid(q.buildid),
-                    "revision": q.node,
-                    "version": q.version,
-                }
-            )
-
-        if len(res) >= 2:
-            return res
-
-        return []
+        return [
+            {
+                "buildid": utils.get_buildid(q.buildid),
+                "revision": q.node,
+                "version": q.version,
+            }
+            for q in qs
+        ]
 
     @staticmethod
     def get_pushdate_before(buildid, channel, product):
@@ -946,6 +998,7 @@ SELECTION_OUTCOMES = frozenset(
         utils.UNTESTABLE_PREFIX,
         utils.BELOW_INSTALL_THRESHOLD,
         utils.IMMATURE,
+        utils.DROPPED_NO_USERS,
     }
 )
 
@@ -979,6 +1032,7 @@ class Selection(db.Model):
     channel = db.Column(db.String(16), nullable=False)
     build_day = db.Column(db.Date, nullable=False)
     # selected | untestable_prefix | below_install_threshold | immature | not_spiking
+    # | dropped_no_users
     outcome = db.Column(db.String(24), nullable=False)
     number = db.Column(db.Integer, nullable=False, default=0)
     # Position in the build-day series and whether that position is testable at all
@@ -1187,7 +1241,7 @@ def _unusable_verdict():
     )
 
 
-def _cluster_dossiers(signatureid, protohash):
+def _cluster_dossiers(signatureid, protohash, channel):
     """Query of the ``done`` dossiers on one proto-signature cluster that are allowed to speak
     for it: instance-suppressed runs (``_INSTANCE_SUPPRESSED``) are excluded, since a broken
     machine or a corrupted fault address says nothing about the next report of the same
@@ -1195,18 +1249,37 @@ def _cluster_dossiers(signatureid, protohash):
     triaged?") and ``UUID.untriaged`` (which asks the same question of every crash at once), so
     the sweeper can never disagree with the gate about what counts as triaged.
 
+    THE CLUSTER IS PER CHANNEL, and it has to be said in SQL because nothing else says it:
+    ``uuids`` has no channel column, and ``protohash = utils.hash(proto_signature)`` is the
+    same string on every channel, so before this argument existed whichever channel was
+    analysed FIRST closed the cluster for the other one, permanently. The dangerous direction
+    is beta closing a NIGHTLY cluster — enabling a second channel would then silently reduce
+    desktop coverage. And the two are genuinely different questions: a beta filing is a
+    different bug, against a different repo, from a different build, with a different candidate
+    window (the cycle's uplifts rather than three days of central). Measured blast radius: of
+    the 224 beta (signature, proto) clusters behind 40 emulated selections, 37 (16.5%) also
+    occur verbatim on nightly within 60 days — an upper bound, since the gate additionally
+    needs the nightly cluster to hold a ``status=done`` dossier.
+
+    ``channel`` may be a plain string or a SQL column expression, so ``untriaged`` can
+    correlate it against its own ``builds`` row.
+
     The sibling join is ALIASED, which is load-bearing for the second caller: ``untriaged``
     correlates this as a subquery against its own ``uuids`` row, and without an alias
     ``UUID.signatureid == signatureid`` would resolve both sides to the same table and be
-    trivially true — the cluster test would then match any dossier at all."""
+    trivially true — the cluster test would then match any dossier at all. The sibling's
+    ``builds`` join needs its own alias for exactly the same reason."""
     corrob = Dossier.payload["dossier"]["corroborations"]
     sib = aliased(UUID)
+    sib_build = aliased(Build)
     return (
         db.session.query(Dossier.id)
         .join(sib, Dossier.uuidid == sib.id)
+        .join(sib_build, sib_build.id == sib.buildid)
         .filter(
             sib.signatureid == signatureid,
             sib.protohash == protohash,
+            sib_build.channel == channel,
             Dossier.status == "done",
             *[
                 or_(corrob[flag].astext.is_(None), corrob[flag].astext != "true")
@@ -1411,13 +1484,15 @@ class UUID(db.Model):
         breaks the schema would otherwise re-pay ~$3 for every new uuid in it forever. Once
         that many broken runs have accumulated the cluster is treated as triaged, loudly."""
         row = (
-            db.session.query(UUID.signatureid, UUID.protohash)
+            db.session.query(UUID.signatureid, UUID.protohash, Build.channel)
+            .select_from(UUID)
+            .join(Build, Build.id == UUID.buildid)
             .filter(UUID.uuid == uuid)
             .first()
         )
         if not row or not row.protohash:
             return False
-        q = _cluster_dossiers(row.signatureid, row.protohash)
+        q = _cluster_dossiers(row.signatureid, row.protohash, row.channel)
         if db.session.query(q.filter(not_(_unusable_verdict())).exists()).scalar():
             return True
         broken = q.filter(_unusable_verdict()).count()
@@ -1483,7 +1558,10 @@ class UUID(db.Model):
                 # candidate. Deliberately the SAME predicate `proto_already_analyzed` uses, minus
                 # the broken-run cap: a cluster at the cap is closed by the gate anyway, so
                 # enqueuing it would just be skipped — harmlessly, and one log line louder.
-                ~_cluster_dossiers(UUID.signatureid, UUID.protohash)
+                # ...and per CHANNEL: `Build` is already joined here as the candidate's own
+                # build, so `Build.channel` correlates and a nightly dossier can no longer
+                # answer for a beta crash (or the reverse).
+                ~_cluster_dossiers(UUID.signatureid, UUID.protohash, Build.channel)
                 .filter(not_(_unusable_verdict()))
                 .exists(),
             )
@@ -1866,7 +1944,7 @@ class CrashStack(db.Model):
         db.session.commit()
 
     @staticmethod
-    def put_frames(uuid, frames, java, commit=True):
+    def put_frames(uuid, frames, java, commit=True, channel=None):
         css = []
         uuidid = UUID.get_id(uuid)
         for frame in frames["frames"]:
@@ -1891,7 +1969,7 @@ class CrashStack(db.Model):
             csets = frame["changesets"]
             if csets:
                 scores = Changeset.get_scores(
-                    frame["filename"], frame["line"], csets, cs.id
+                    frame["filename"], frame["line"], csets, cs.id, channel=channel
                 )
                 if scores:
                     Score.set(scores)

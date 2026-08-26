@@ -362,6 +362,12 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
                 "desc": desc.splitlines()[0][:200] if desc else "",
                 "prior_sig": _prior_hit(c),
                 "pref_flip": bool(c.get("_pref_flip")),
+                # Arrived with a merge push rather than as its own landing (see
+                # `pushlog.collect`). Carried so `_record_window_membership` can refuse to
+                # call it a regression; it does NOT affect the ranking, because a merge
+                # member can perfectly well BE the cause -- it just is not evidence of
+                # recency.
+                "via_merge": bool(c.get("via_merge")),
             }
         )
     logger.info(
@@ -2292,10 +2298,25 @@ def _record_window_membership(dossier, seed):
     window |= {node for node in ((seed or {}).get("candidate_pushdates") or {}) if node}
     if not window:
         return
-    dossier.corroborations = {
-        **(dossier.corroborations or {}),
-        "candidate_in_pushlog_window": cand.node in window,
-    }
+    in_window = cand.node in window
+    flags = {"candidate_in_pushlog_window": in_window}
+    # ...AND HOW IT GOT THERE. On a release branch a whole development cycle arrives as ONE
+    # push at ONE pushdate, so "in this build's pushlog window" stops being recency evidence:
+    # for the beta build after a merge the window is 5,192 changesets against the 45-122 of an
+    # ordinary between-builds window (and mozilla-central pushes ~6,200 in a MONTH). A merge
+    # member may well be the cause -- it just cannot support the `regression` keyword, the
+    # `regressed_by` field or the words "Suspected regressor", which is what
+    # `report_bug.is_suspected_regression` gates on. An uplift-window candidate, by contrast,
+    # is a STRONGER regression claim than anything nightly produces: 93.2% of in-cycle beta
+    # changesets are approved bug-fix uplifts or backouts.
+    if in_window:
+        via_merge = {
+            c.get("node") for c in ((seed or {}).get("candidates") or [])
+            if isinstance(c, dict) and c.get("via_merge") and c.get("node")
+        }
+        if cand.node in via_merge:
+            flags["candidate_arrived_by_merge"] = True
+    dossier.corroborations = {**(dossier.corroborations or {}), **flags}
 
 
 def _record_signature_age_facts(dossier, seed):

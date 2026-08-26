@@ -225,6 +225,14 @@ REGISTRY = {
     "candidate_backout_same_push": ("evidence", ("templates/crashstack.html",), ""),
     "candidate_backout_suppressed": ("suppression", ("templates/crashstack.html",), ""),
     "candidate_backout_capped": ("clamp", ("templates/crashstack.html",), ""),
+    "candidate_arrived_by_merge": (
+        "evidence", ("report_bug.py",),
+        "The candidate reached the channel with a MERGE push (a whole cycle at one pushdate), "
+        "so `candidate_in_pushlog_window` is true and means nothing: 5,192 changesets for the "
+        "beta build after the 2026-08-13 merge against 45-122 for an ordinary one. Read by "
+        "`is_suspected_regression`, which returns False on it -- no `regression` keyword, no "
+        "`regressed_by`, no \"Suspected regressor\". Off-stack only: a merge push gets no "
+        "`changesets` rows (`pushlog.collect`), so nothing can score onto a frame."),
     "candidate_in_pushlog_window": (
         "evidence", ("report_bug.py", "eval/calibrate.py"),
         "Gates the filed bug's regression PROSE, its `regression` keyword and its `regressed_by` "

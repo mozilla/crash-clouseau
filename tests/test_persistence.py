@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-from crashclouseau import db, models
+from crashclouseau import db, models, utils
 from crashclouseau.models import (
     AGENT_STATUS_TYPE,
     DOSSIER_SCHEMA_VERSION,
@@ -153,13 +153,26 @@ class TestPersistenceRoundTrip(unittest.TestCase):
 
     def setUp(self):
         models.db.create_all()
-        # Minimal parent row (buildid/signatureid are nullable FKs).
-        db.session.add(UUID(self.UUID, None, "hash", None))
+        # A real `builds` parent, not a NULL FK: the proto-signature cluster is scoped per
+        # CHANNEL (`models._cluster_dossiers`) and the channel lives on `builds`, so a uuid
+        # with no build row is outside every cluster. In production `update.put_crashes`
+        # skips a crash whose buildid has no row, so `UUID.buildid` is never NULL there —
+        # this fixture now has the production shape.
+        from crashclouseau.models import Build
+
+        self.build = Build(
+            utils.get_build_date("20260817142839"), "Firefox", "nightly", "156.0a1", None
+        )
+        db.session.add(self.build)
+        db.session.commit()
+        db.session.add(UUID(self.UUID, None, "hash", self.build.id))
         db.session.commit()
 
     def tearDown(self):
         # Deleting the parent cascades to dossiers/verdicts.
         db.session.query(UUID).filter(UUID.uuid == self.UUID).delete()
+        db.session.commit()
+        db.session.query(models.Build).filter(models.Build.id == self.build.id).delete()
         db.session.commit()
 
     def test_upsert_idempotent_and_get(self):
@@ -325,8 +338,8 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         # protohash "hash"; add a same-proto sibling and an unrelated (different proto).
         sib = "test-9999-aaaa-bbbb-ccccddddeeee"
         other = "test-8888-aaaa-bbbb-ccccddddeeee"
-        db.session.add(UUID(sib, None, "hash", None))        # same proto cluster
-        db.session.add(UUID(other, None, "otherhash", None))  # different cluster
+        db.session.add(UUID(sib, None, "hash", self.build.id))        # same proto cluster
+        db.session.add(UUID(other, None, "otherhash", self.build.id))  # different cluster
         db.session.commit()
         try:
             # Nothing triaged yet anywhere.
@@ -363,8 +376,8 @@ class TestPersistenceRoundTrip(unittest.TestCase):
         # broken run in one cluster gives up rather than re-paying forever.
         sib = "test-7777-aaaa-bbbb-ccccddddeeee"
         sib2 = "test-6666-aaaa-bbbb-ccccddddeeee"
-        db.session.add(UUID(sib, None, "hash", None))   # same proto cluster as self.UUID
-        db.session.add(UUID(sib2, None, "hash", None))
+        db.session.add(UUID(sib, None, "hash", self.build.id))  # same cluster as self.UUID
+        db.session.add(UUID(sib2, None, "hash", self.build.id))
         db.session.commit()
         try:
             for reason in (

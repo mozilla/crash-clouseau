@@ -118,7 +118,8 @@ class TestWindowPinsTheIncident(unittest.TestCase):
     def test_spike_defaults_cover_every_knob(self):
         """get_spike() indexes _SPIKE_DEFAULTS[typ]; a knob missing from it raises
         KeyError on any config that omits the block."""
-        for typ in ("floor", "ratio", "mature_after_days", "mature_installs"):
+        for typ in ("floor", "ratio", "mature_after_days", "mature_installs",
+                    "min_build_installs"):
             self.assertIn(typ, config._SPIKE_DEFAULTS)
             self.assertIsInstance(config.get_spike(typ, "Nonesuch", "nightly"), int)
 
@@ -134,6 +135,7 @@ class TestOutcomeVocabulary(unittest.TestCase):
                     utils.UNTESTABLE_PREFIX,
                     utils.BELOW_INSTALL_THRESHOLD,
                     utils.IMMATURE,
+                    utils.DROPPED_NO_USERS,
                 }
             ),
         )

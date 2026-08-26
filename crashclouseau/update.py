@@ -115,14 +115,14 @@ def put_report(uuid, buildid, channel, product, chgset):
     if frames:
         sh = frames["hash"]
         if not models.UUID.is_stackhash_existing(sh, buildid, channel, product, False):
-            models.CrashStack.put_frames(uuid, frames, False, commit=True)
+            models.CrashStack.put_frames(uuid, frames, False, commit=True, channel=channel)
             useless = False
 
     jframes = res.get("java")
     if jframes:
         jsh = jframes["hash"]
         if not models.UUID.is_stackhash_existing(jsh, buildid, channel, product, True):
-            models.CrashStack.put_frames(uuid, jframes, True, commit=True)
+            models.CrashStack.put_frames(uuid, jframes, True, commit=True, channel=channel)
             useless = False
 
     models.UUID.add_stack_hash(uuid, sh, jsh)
@@ -181,13 +181,21 @@ def analyze_patches():
 
 
 def update_builds(date, channel, product):
-    """Update the builds"""
+    """Fill the ``builds`` table from Buildhub, back to ``buildhub_lookback_ndays``.
+
+    NOT ``get_ndays()`` (3). ``update()`` calls ``put_filelog`` first, which sets
+    ``LastDate.maxdate`` to now, so ``date`` here is essentially "now" and the subtraction is
+    the whole lookback. Three days is shorter than beta's build interval often enough that
+    **71% of switch-on moments left the selection window under-filled** — see
+    ``config.get_buildhub_lookback_ndays`` for the measurement. Idempotent (``put_data`` is
+    ``on_conflict_do_nothing``), so the wider window costs one larger POST, not duplicate
+    rows."""
     logger.info("Update builds for {}/{}: started.".format(channel, product))
     if not date:
         _, date = models.LastDate.get(channel)
         if date is None:
             date = pytz.utc.localize(datetime.utcnow())
-        date -= relativedelta(days=config.get_ndays())
+        date -= relativedelta(days=config.get_buildhub_lookback_ndays())
     data = buildhub.get(date, channel, prods=product)
     if data:
         models.Build.put_data(data)

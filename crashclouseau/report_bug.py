@@ -1254,8 +1254,21 @@ def is_suspected_regression(corroborations):
     26/26 (Fisher p = 0.257), and all 12 reported rung-70+ negatives are out-of-window, so the
     flag is a proxy for the corpus's own ``is_negative`` label. Bug 2062806 is the wrong-direction
     case: out-of-window, this caveat printed, and hzhao confirmed the mechanism and backed the
-    named changeset out. See ``config.get_agent_calibration``."""
-    return (corroborations or {}).get("candidate_in_pushlog_window")
+    named changeset out. See ``config.get_agent_calibration``.
+
+    A MERGE-WINDOW CANDIDATE IS NOT IN A WINDOW IN THIS SENSE, whatever
+    ``candidate_in_pushlog_window`` says. On a release branch one push carries a whole cycle at
+    one pushdate, so the flag degenerates from "landed in the 1-3 days before the build" to
+    "landed on trunk some time in the last month" -- 5,192 changesets for the beta build after
+    the 2026-08-13 merge, against 45/76/61 for the three builds after it, and against ~6,200
+    for a whole month of mozilla-central. Recency evidence that admits a month is not recency
+    evidence, and this function's entire job is to hold the claim to the narrow standard bug
+    2062119 was filed for breaching. Returns ``False`` rather than ``None``: the run DID
+    establish where the candidate came from, so this is a negative answer, not a silence."""
+    corrob = corroborations or {}
+    if corrob.get("candidate_arrived_by_merge"):
+        return False
+    return corrob.get("candidate_in_pushlog_window")
 
 
 def build_dissent_note(dossier):
@@ -1372,6 +1385,21 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None):
             link += " by {}".format(author)
         if is_suspected_regression(corroborations):
             lines.append("Suspected regressor: {}.".format(link))
+        elif (corroborations or {}).get("candidate_arrived_by_merge"):
+            # TWO REASONS, TWO SENTENCES. `is_suspected_regression` is False here for the OTHER
+            # reason -- the changeset IS in this build's pushlog window, and the window is why it
+            # was seeded at all -- so the out-of-window prose below would state the opposite of
+            # the truth on a bug whose whole purpose is to invite correction, and a reader could
+            # falsify it from the pushlog link in the same comment.
+            lines.append(
+                "Starting point — NOT a suspected cause: {}.\n\nThis changeset reached this "
+                "branch with the cycle merge from mozilla-central, so it IS in this build's "
+                "pushlog window — but that window is one push carrying a whole development "
+                "cycle (thousands of changesets at a single push date), which is not evidence "
+                "that the crash is a recent regression from this one. It was written on trunk "
+                "earlier and shipped here now. If you know where this actually comes from, that "
+                "correction is the most useful thing you could leave on this "
+                "bug.".format(link))
         else:
             # Everything the pipeline has here is "this code is on the crash path", which is a
             # starting point and not an origin. Ask for the correction outright -- it is the

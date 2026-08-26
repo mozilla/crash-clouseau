@@ -103,6 +103,129 @@ def get_maturity_bar(product, channel):
     )
 
 
+def get_no_user_build_floor(product, channel):
+    """Minimum distinct INSTALLATIONS a build-day needs before it may act as a BASELINE —
+    **not nightly**, which is why this is a function and not a config read (same shape as
+    ``get_maturity_bar``).
+
+    THE PROBLEM IS A BUILD NOBODY RAN. Every Firefox cycle ships two builds tagged ``N.0b1``:
+    the merge-day build (whose revision is "Update configs after merge day operations") and,
+    days later, the one that actually reaches users. Lifetime figures for the merge-day builds
+    of v151-v155, all channels, no date bound: **8/4, 13/6, 7/7, 17/4 and 1/1 reports over
+    installations**, against **435-9,124 reports and 268-5,084 installations for all 54 other
+    builds since 2026-04-01** (median 2,850/1,974).
+
+    INSTALLATIONS, NOT REPORTS, and that correction is the whole of this docstring's history.
+    The report gap looks bigger (25x, no overlap, "any floor in [20, 400]") but it is a gap
+    between LIFETIME totals, while the code can only see what has arrived BY NOW — and that is
+    steeply age-dependent, which is why the newest day is exempt at all (0.2-2.7% on its own
+    ship day). The exemption is one build-day wide and the curve is still steep after it: the
+    one measured early point is 154.0b10 at **11.0% of its eventual crashes at 1.25 days**, and
+    window index 1 is exactly one cadence gap old (min 1.26 d, p25 2.00 d over 58 gaps). So the
+    quietest REAL build (435 lifetime reports) shows about 48 reports while it sits at index 1 —
+    under a floor of 100. And index 1 is the ONLY index that ever selects anything: 135 of 135
+    replayed selections landed there, index 2 can never clear ``3 x max(before)`` and index 0 is
+    untestable. Dropping it costs the entire run-day, silently, which is the same switch-off
+    ``Build.get_last_versions`` was just fixed for, reached from the other direction.
+
+    Installations do not have that problem, because a build nobody runs never acquires any: the
+    merge-day builds sit at **4-7 installations FOREVER** while a real build passes 268. The
+    statistic is the MAXIMUM over signatures, never the sum — per-signature install
+    cardinalities do not add (a machine crashing on five signatures would be counted five
+    times), whereas the max is a true lower bound on the build's distinct installations.
+
+    **15 is defensible over [8, 24] and no wider**, and that is a smaller margin than the report
+    gap, so it is stated rather than glossed: the merge-day maximum is 7 (v153, 7 reports from 7
+    installations) and the quietest real build shows ~29 at index 1 (268 lifetime installs at
+    ~11% arrival). If a future cycle ships a merge-day build to more than ~24 installations, this
+    number needs re-measuring, not nudging.
+
+    THE HARM IS THE BASELINE, NOT THE SELECTION. Sitting between two real builds in a 3-build
+    window, that build-day is a ZERO for every signature — and ``utils.is_spike``'s from-zero
+    branch is gated by neither ``floor`` nor ``ratio``, so every signature clearing the
+    6-install threshold on the NEXT build spikes. Replayed over 30 beta run-days: **4 run-days
+    carried 108 of 179 selections (60%) and 104 of 160 from-zero fires (65%)**, and the top of
+    the burst is boilerplate no analysis can act on (``OOM | small`` 236, ``OOM | unknown |
+    js::AutoEnterOOMUnsafeRegion::crash_impl`` 125, ``shutdownhang | RtlWaitOnAddress``,
+    ``AsyncShutdownTimeout | profile-before-change``). Removing it takes distinct selected
+    pairs from 105 to 40 per 30 days and the worst run from 38 to 8.
+
+    NEVER APPLIED TO THE NEWEST BUILD-DAY IN THE WINDOW (the caller enforces it): a build holds
+    only **0.2-2.7% of its eventual crashes on its own ship day** (154.0b10 1.1%, 155.0b1 0.2%)
+    and 77-96% by day 4, so a fresh build is quiet for a reason that has nothing to do with
+    users. The merge-day build only ever hurts once it is no longer the newest.
+
+    AND NEVER ON NIGHTLY. Nightly's builds come from Socorro, not from the ``builds`` table;
+    there is no merge-day build; and a quiet nightly build-day is ordinary (median 315 lifetime
+    reports per build against beta's 2,674). Dropping one there would REMOVE a real baseline
+    and make the from-zero branch fire more, which is the opposite of the fix. ``0`` disables.
+
+    THIS IS NOT THE SAME FIX AS ``Build.get_last_versions``' major-version break, and neither
+    subsumes the other: with the no-user build removed the merge blackout SHIFTS to the shipped
+    b1 and shortens to 2 days each (10 of 127 run-days, replayed). Both are needed."""
+    if channel == "nightly":
+        return 0
+    return config.get_spike("min_build_installs", product, channel)
+
+
+def find_no_user_days(data, floor):
+    """The build-days no installation ever ran, excluding the newest day in the window.
+    ``floor <= 0`` disables and returns an empty set.
+
+    ``data`` is ``{signature: {day: {"count": n, "bids": {...}, "installs": {...}}}}`` as
+    ``get_new_signatures`` assembles it, so this needs no extra request.
+
+    THE MAXIMUM PER-SIGNATURE INSTALL CARDINALITY, and both halves of that matter. Not reports,
+    because the report count is age-dependent and the floor would fire on a real build seen early
+    (see ``get_no_user_build_floor``). Not the SUM of the cardinalities either: they do not add,
+    since a machine crashing on five signatures is counted five times — the max is the only one
+    of the three that is a true lower bound on the build's distinct installations.
+
+    The newest day is exempt unconditionally. It is the day we are here to select, and it is
+    quiet for a reason that is about the clock rather than about users (0.2-2.7% of a build's
+    crashes have arrived on its own ship day)."""
+    if not floor or floor <= 0 or not data:
+        return set()
+    installs = defaultdict(int)
+    for numbers in data.values():
+        for day, info in numbers.items():
+            seen = max((info["installs"] or {}).values(), default=0)
+            installs[day] = max(installs[day], seen)
+    if not installs:
+        return set()
+    newest = max(installs)
+    return {day for day, n in installs.items() if day != newest and n < floor}
+
+
+def dropped_day_records(numbers, dead_days):
+    """``Selection``-shaped records for the dropped build-days this signature crashed on.
+
+    Same key set as ``utils.evaluate_days`` emits, because ``models.Selection._row`` reads
+    them positionally by name. ``index``/``baseline``/``evaluable`` describe a day that was
+    never placed in a series at all, so they say so (-1 / [] / False) rather than inventing a
+    position the day never had."""
+    records = []
+    for day in sorted(dead_days):
+        info = numbers.get(day)
+        if not info or not info["count"]:
+            continue
+        records.append(
+            {
+                "day": day,
+                "count": info["count"],
+                "index": -1,
+                "baseline": [],
+                "evaluable": False,
+                "spiked": False,
+                "bids": dict(info["bids"]),
+                "installs": dict(info["installs"]),
+                "picked": None,
+                "outcome": utils.DROPPED_NO_USERS,
+            }
+        )
+    return records
+
+
 def get_new_signatures(product, channel, date):
     """Collect the crash signatures worth triaging for a product/channel. A signature is
     kept when its per-day crash count SPIKES -- it clears an absolute floor and jumps well
@@ -184,11 +307,35 @@ def get_new_signatures(product, channel, date):
     floor = config.get_spike("floor", product, channel)
     ratio = config.get_spike("ratio", product, channel)
     mature_after, mature_installs = get_maturity_bar(product, channel)
+    # Build-days carried by a build nobody ran: removed from the series BEFORE it is
+    # evaluated, so they cannot be the zero baseline that makes the next build's every
+    # signature spike. Free — the per-signature/per-build facet this function already
+    # fetched is all the arithmetic needs. See `get_no_user_build_floor`.
+    dead_days = find_no_user_days(data, get_no_user_build_floor(product, channel))
+    if dead_days:
+        logger.info(
+            "Dropping {} build-day(s) with no users for {}-{}: {}".format(
+                len(dead_days), product, channel,
+                ", ".join(sorted(d.strftime("%Y-%m-%d") for d in dead_days)),
+            )
+        )
     big_data = {}
     small_data = {}
     selection = []
 
     for sgn, numbers in data.items():
+        # The drop leaves a trace, at this table's own grain: one row per signature that
+        # actually crashed on the dropped day. A no-user build carries 1-17 reports, so this
+        # is a handful of rows, and "why was signature X not selected on the 13th" now has an
+        # answer inside the system instead of needing Socorro rebuilt by hand.
+        selection.extend(
+            dict(rec, signature=sgn)
+            for rec in dropped_day_records(numbers, dead_days)
+        )
+        if dead_days:
+            numbers = {d: v for d, v in numbers.items() if d not in dead_days}
+            if not numbers:
+                continue
         bids, big, records = utils.evaluate_days(
             numbers,
             shift,
