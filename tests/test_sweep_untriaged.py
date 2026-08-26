@@ -94,9 +94,19 @@ class TestSweepBounds(unittest.TestCase):
         _, _, _, q = self._sweep([(10, "u-a", "nightly")], mark=99)
         self.assertEqual(q.call_args.args[0], 99)
 
-    def test_the_cap_is_passed_to_the_query(self):
+    def test_the_query_over_fetches_the_cap_once_per_channel(self):
+        """The SQL `LIMIT` is `max_per_run * channels`, not `max_per_run`, and the difference is
+        what makes the per-channel cap able to do anything. With one `LIMIT max_per_run` ordered
+        by uuid id the candidate list is already fixed before the cap runs, so capping the
+        channel that filled it admits nobody -- it just performs one run fewer. The per-TICK
+        bound is still `max_per_run`; it is enforced in `sweep_untriaged_crashes`, and the rows
+        it does not reach stay behind the cursor."""
         _, _, _, q = self._sweep([(10, "u-a", "nightly")], max_per_run=7)
-        self.assertEqual(q.call_args.args[3], 7)
+        # `_sweep` runs with whatever `get_agent_channels` returns, so assert the SHAPE (a whole
+        # multiple of the cap, at least the cap) rather than one product -- otherwise this test
+        # re-breaks every time a channel is added to the shipped config.
+        self.assertEqual(q.call_args.args[3] % 7, 0)
+        self.assertGreaterEqual(q.call_args.args[3], 7)
 
     def test_an_unreadable_queue_skips_the_pass_without_advancing(self):
         # Fails SAFE, like the reaper's pending sweep: not knowing whether a job is live must not

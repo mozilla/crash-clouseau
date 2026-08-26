@@ -106,7 +106,7 @@
         "min_citations_per_claim": 1,
         "abstain_below_confidence": 0.85,
         "enabled": true,
-        "channels": ["nightly"],
+        "channels": ["nightly", "beta"],
         "queue": "agent",
         "job_timeout": 1800,
         "skip_if_existing": true,
@@ -117,6 +117,7 @@
         {
             "enabled": true,
             "max_per_run": 3,
+            "max_per_channel": 2,
             "min_age_s": 21600,
             "max_age_s": 1209600
         },

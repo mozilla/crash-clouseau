@@ -154,10 +154,33 @@ def analyze_one_report(uuid=None):
         analyze_patches()
 
 
+def _chain_is_running(queue, func):
+    """Is the self-re-enqueuing analysis chain for *func* already on *queue*?
+
+    ``len(queue) <= 1`` USED TO STAND IN FOR THIS AND IT MEASURED THE WRONG THING. The clock
+    enqueues one ``update`` job per (product, channel) onto this same queue every 20 minutes, so
+    the depth it was reading was mostly the CLOCK's, not the chain's. With nightly alone an
+    executing ``update`` saw an empty queue and the chain was seeded; with nightly + beta it can
+    see 2, and ``analyze_reports`` becomes a silent no-op for that tick -- at three channels or
+    two products, for every tick. It fails by doing NOTHING, with no log line: the shape of the
+    four silent no-ops this codebase has already been bitten by.
+
+    Counting only the chain's own function name is the whole fix. Best-effort: if the queue
+    cannot be read we say NO and enqueue, because a duplicate chain job costs one redundant
+    ``to_analyze`` (which returns the same row and is idempotent) while a missing one stalls
+    ingestion until the next tick."""
+    name = "{}.{}".format(func.__module__, func.__name__)
+    try:
+        return any(getattr(job, "func_name", None) == name for job in queue.jobs)
+    except Exception:                                   # pragma: no cover - redis hiccup
+        logger.warning("could not read the queue to check for %s; enqueuing anyway", name)
+        return False
+
+
 def analyze_reports():
-    """Analyze all the non-analyzed reports available in the database"""
+    """Seed the report-scoring chain unless it is already running."""
     queue = worker.get_queue()
-    if len(queue) <= 1:
+    if not _chain_is_running(queue, analyze_one_report):
         queue.enqueue_call(func=analyze_one_report, result_ttl=0)
 
 
@@ -174,9 +197,9 @@ def analyze_one_patch():
 
 
 def analyze_patches():
-    """Analyze all the non-analyzed patches available in the database"""
+    """Seed the patch-parsing chain unless it is already running. See ``_chain_is_running``."""
     queue = worker.get_queue()
-    if len(queue) <= 1:
+    if not _chain_is_running(queue, analyze_one_patch):
         queue.enqueue_call(func=analyze_one_patch, result_ttl=0)
 
 

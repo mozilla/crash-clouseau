@@ -420,9 +420,24 @@ def get_agent_enabled():
 
 
 def get_agent_channels():
-    """Channels the evidence agent runs on. Defaults to nightly only — the product's
-    target population (small volume, high per-crash significance); beta/release would
-    multiply cost with less value. Empty list means "no channel filter" (all)."""
+    """Channels the evidence agent runs on. Empty list means "no channel filter" (all).
+
+    ``AGENT_CHANNELS`` (space-separated, same shape as ``INGEST_CHANNELS``) overrides the config.
+    IT IS A REAL KILL SWITCH, not dead config, and it is the one this file was missing: this is
+    the flag that decides whether the pipeline SPENDS MONEY on a channel, and it was the only one
+    of the canary levers with no environment override — so turning a channel's triage off needed
+    a DEPLOY, and a deploy kills every in-flight ~20-minute run at ~$3 each. It also has to be
+    per channel: ``AUTOFILE_BUGS=0`` is global, so without this the only way to stop beta was to
+    stop nightly too.
+
+    Distinct from ``INGEST_CHANNELS``, which decides what gets INGESTED (free); this decides what
+    gets ANALYSED (~$1-3 a crash). Ingest-only is the cheap canary, and it is the combination
+    ``INGEST_CHANNELS="nightly beta"`` + ``AGENT_CHANNELS=nightly`` expresses."""
+    env = os.getenv("AGENT_CHANNELS")
+    if env is not None:
+        # An explicitly EMPTY value means "no filter" (every channel), matching the config's
+        # own empty-list semantics rather than silently meaning "unset".
+        return env.split()
     return get_agent().get("channels", ["nightly"])
 
 
@@ -466,6 +481,13 @@ _SWEEP_DEFAULTS = {
     # A crash on a build from a month ago is not worth ~$3 — the build is long gone and the same
     # money buys a triage of today's.
     "max_age_s": 1209600,
+    # Per CHANNEL, so one channel's backlog cannot eat another's tick. `max_per_run` is the
+    # per-tick total; this is the most any single channel may take of it. With one channel it is
+    # inert (3 of 3). With two, `tests/test_sweep_untriaged.py`'s own comment describes the
+    # hazard — "three beta candidates would otherwise fill a tick ... and starve the nightly
+    # ones" — and today the only thing preventing it is the channel FILTER, which is exactly what
+    # a beta rollout removes. 2 of 3 leaves at least one slot for anything else that is waiting.
+    "max_per_channel": 2,
 }
 
 

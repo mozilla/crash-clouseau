@@ -3954,9 +3954,16 @@ def sweep_untriaged_crashes():
             if not cfg["enabled"]:
                 return 0
             after = models.SweepMark.get(_SWEEP_MARK)
+            channels = config.get_agent_channels()
+            # OVER-FETCH, so the per-channel cap below has somewhere to put the slot it takes.
+            # `untriaged` applies ONE `LIMIT` in SQL ordered by uuid id, so with a bare
+            # `max_per_run` the candidate list is already fixed before the cap runs — capping one
+            # channel at 2 of 3 then admits nobody, it just does one run fewer. Fetching
+            # `max_per_run * channels` means the rows waiting behind the burst are in hand.
             candidates = models.UUID.untriaged(
-                after, cfg["min_age_s"], cfg["max_age_s"], cfg["max_per_run"],
-                channels=config.get_agent_channels(),
+                after, cfg["min_age_s"], cfg["max_age_s"],
+                cfg["max_per_run"] * max(1, len(channels or ())),
+                channels=channels,
             )
             if not candidates:
                 return 0
@@ -3977,22 +3984,58 @@ def sweep_untriaged_crashes():
                 )
                 return 0
 
-            enqueued, skipped = [], []
+            enqueued, skipped, deferred = [], [], []
+            # THE PER-CHANNEL CAP ONLY EXISTS WHEN THERE IS SOMETHING TO PROTECT. It binds only
+            # when the fetched candidates actually span more than one channel: prod's measured
+            # shape is a burst of 8 on ONE channel, and capping that would cut the drain rate the
+            # "86-crash backlog drains in about a week" figure was priced on (12/day -> 8/day) to
+            # protect a channel with nothing waiting. With two channels competing it is the
+            # anti-starvation rule `tests/test_sweep_untriaged.py` describes and that the channel
+            # FILTER — which enabling a second channel removes — used to provide for free.
+            present = {c for _i, _u, c in candidates}
+            per_channel = (max(1, int(cfg.get("max_per_channel") or cfg["max_per_run"]))
+                           if len(present) > 1 else cfg["max_per_run"])
+            taken = {}
+            # DEFERRED MEANS DEFERRED. The mark stops at the first row this tick did not consume,
+            # because `untriaged` filters `UUID.id > after_id` and the sweep is the ONLY thing
+            # that would ever look at these crashes again (the reaper works from dossier rows and
+            # there are none). Advancing past a capped row would drop it for good — one crash in
+            # three, on the fixture that found this. Rows we enqueued past a deferred one are
+            # re-offered next tick and cost nothing: a crash that got a dossier is no longer a
+            # candidate, and `enqueue_agent`'s proto gate declines the rest.
+            stalled = False
+            mark = after
             for _id, uuid, channel in candidates:
+                if len(enqueued) >= cfg["max_per_run"]:
+                    deferred.append("{} ({}, tick full)".format(uuid, channel or "?"))
+                    stalled = True
+                    break
+                if taken.get(channel, 0) >= per_channel:
+                    deferred.append("{} ({}, per-channel cap)".format(uuid, channel or "?"))
+                    stalled = True
+                    continue
                 if uuid in live:
                     skipped.append(uuid)
-                    continue
-                try:
-                    enqueue_agent(uuid, channel)
-                    enqueued.append(uuid)
-                except Exception:
-                    logger.warning("agent: sweep could not enqueue %s", uuid, exc_info=True)
+                else:
+                    try:
+                        enqueue_agent(uuid, channel)
+                        enqueued.append(uuid)
+                    except Exception:
+                        logger.warning("agent: sweep could not enqueue %s", uuid, exc_info=True)
+                taken[channel] = taken.get(channel, 0) + 1
+                if not stalled:
+                    mark = max(mark, _id)
+            if deferred:
+                logger.info(
+                    "agent: sweep deferred %d candidate(s) (cap %d/channel, %d/tick); they stay "
+                    "behind the cursor at id %d: %s",
+                    len(deferred), per_channel, cfg["max_per_run"], mark, ", ".join(deferred),
+                )
 
-            # Advance past everything CONSIDERED, including what the gate or the queue filter
-            # declined: they were examined, and re-examining them next tick is the loop this
-            # mark exists to prevent. A crash still queued now would have been analysed by then
-            # anyway.
-            models.SweepMark.set(_SWEEP_MARK, max(c[0] for c in candidates))
+            # Advance past everything CONSUMED — enqueued, or declined by the gate or the queue
+            # filter: those were examined, and re-examining them next tick is the loop this mark
+            # exists to prevent. NOT past a row the caps deferred, which was never examined.
+            models.SweepMark.set(_SWEEP_MARK, mark)
             logger.info(
                 "agent: sweep enqueued %d untriaged crash(es) past id %d%s%s",
                 len(enqueued), after,
