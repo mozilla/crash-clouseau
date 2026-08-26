@@ -2546,6 +2546,10 @@ class Dossier(db.Model):
         return (
             db.session.query(
                 UUID.uuid, Signature.signature, Dossier.status,
+                # WHICH CHANNEL, because with more than one the ops view could not answer "is
+                # that stalled run beta or nightly?" at all -- and the two have different costs,
+                # different filing policies and different expected volumes.
+                Build.channel.label("channel"), Build.version.label("version"),
                 Dossier.created, Dossier.updated, Dossier.cost_usd,
                 Dossier.input_tokens, Dossier.output_tokens, Dossier.cache_read_tokens,
                 Dossier.worker_models, Verdict.verdict, Verdict.confidence,
@@ -2575,6 +2579,10 @@ class Dossier(db.Model):
             .select_from(Dossier)
             .join(UUID, Dossier.uuidid == UUID.id)
             .outerjoin(Signature, UUID.signatureid == Signature.id)
+            # OUTER, like the signature join: `uuids.buildid` is a nullable FK and a row without
+            # a build must still appear in the ops view -- an invisible stalled run is the exact
+            # failure this view exists to catch.
+            .outerjoin(Build, Build.id == UUID.buildid)
             # Verdict is upserted 1:1 on uuidid (Verdict.set) and its dossierid is not
             # populated, so join on uuidid -- joining on dossierid would drop every
             # verdict. Dossier is also 1:1 per uuid, so this can't multiply rows.
@@ -2733,14 +2741,104 @@ class Dossier(db.Model):
         return {"uuid": row.uuid} if row else None
 
     @staticmethod
-    def filed_bugs_since(when):
-        """How many bugs the autofiler has filed since *when* — the daily-cap counter."""
-        return (
+    def already_filed_for_signature(signature, channel=None):
+        """``{"uuid", "bug"}`` when we have ALREADY FILED A BUG for *signature*, else ``None``.
+
+        THE GUARD THAT SURVIVES THE TARGET BUG BEING CLOSED, which none of the others do.
+        ``_open_bugs_for_signature`` filters ``resolution: "---"``, so a bug WE filed from
+        nightly and a human then closed is invisible to a later run: ``existing`` is empty, the
+        ``comment_on_existing`` branch never fires, ``_bug_for_this_regression`` is never asked,
+        and ``already_commented`` is only consulted once a venue has been CHOSEN — so it is dead
+        on that path. ``_fixed_after_build_bug`` catches only the subset RESOLVED FIXED after the
+        crash's build was produced.
+
+        MEASURED ON OUR OWN FILINGS. Of the 58 parseable signatures behind the 60 bugs the canary
+        filed since 2026-08-05, 18 also crash on Firefox beta+aurora in the last 21 days. For 11
+        our bug is still OPEN (the existing dedup sees it and skips). For 7 it is CLOSED with no
+        other open bug covering the signature; re-running ``_fixed_after_build_bug`` catches 3
+        (all FIXED after the beta build) and MISSES 4 — 2060922 DUPLICATE, 2061726 INVALID,
+        2063364 INVALID, 2064066 WORKSFORME. So **4 of 18 = 22.2% (95% CI 9.0-45.2%)** of
+        nightly-filed signatures that also crash on beta would have collected a second Clouseau
+        bug, and those four resolutions are exactly the ones where a duplicate is worst.
+
+        IT ALSO CLOSES A DISCLOSURE CASE, for free. The venue lookup is deliberately
+        UNAUTHENTICATED (``bugzilla_apply._open_bugs_for_signature``: "we must not reason about a
+        security bug we can only see because the filing account can"), so a RESTRICTED bug we
+        filed from nightly is invisible to it — and a later run whose own dossier does not trip
+        ``sensitive.is_withheld`` (a different report, possibly a different fault address) would
+        file a PUBLIC bug on that signature. This query never asks BMO, so it sees the restricted
+        bug. Do not "fix" the venue lookup by authenticating it; that trade was made on purpose.
+
+        ``channel`` SCOPES IT, and defaults to every channel. The cross-channel question is the
+        one this is for; passing a channel is how nightly keeps its existing behaviour
+        byte-identical while beta gains the guard (on nightly this is the unshipped half of plan
+        #17's defect A — 5 of 7 duplicate targets were our OWN earlier filings).
+
+        Fails CLOSED like its siblings: a lookup we cannot do returns a truthy sentinel, so a DB
+        failure produces silence rather than a duplicate."""
+        if not signature:
+            return None
+        fb = Dossier.payload["filed_bug"]
+        try:
+            q = (
+                db.session.query(UUID.uuid, fb["bug"].astext.label("bug"))
+                .select_from(Dossier)
+                .join(UUID, Dossier.uuidid == UUID.id)
+                .filter(
+                    # Same `filed` term as `already_commented`: a recorded SKIP must not read as
+                    # a filing.
+                    fb["filed"].astext == "true",
+                    fb["signature"].astext == signature,
+                )
+            )
+            if channel:
+                # OUTER join, and the channel test admits a row whose build is UNKNOWN. This is
+                # a DEDUP guard, so it must fail toward SKIPPING: a missed match is a duplicate
+                # bug on BMO, which this repo treats as the unrecoverable outcome, while a
+                # spurious match costs one filing the next crash on the signature will make
+                # again. (`uuids.buildid` is a nullable FK; `update.put_crashes` skips a crash
+                # whose buildid has no row, so in production it is never NULL -- this is about
+                # which way to be wrong, not about a case we expect.)
+                q = q.outerjoin(Build, Build.id == UUID.buildid).filter(
+                    or_(Build.channel == channel, Build.id.is_(None))
+                )
+            row = q.order_by(Dossier.id).first()
+        except Exception:                                  # pragma: no cover - defensive
+            return {"skipped": "prior-filing lookup failed"}
+        return {"uuid": row.uuid, "bug": row.bug} if row else None
+
+    @staticmethod
+    def filed_bugs_since(when, channel=None):
+        """How many bugs the autofiler has FILED since *when* — the daily-cap counter.
+
+        TWO FIXES IN ONE SIGNATURE, both of which only bite once there is more than one channel.
+
+        ``filed`` is now required. This counted every row with a ``filed_bug`` KEY, and a SKIP is
+        recorded under that same key (see ``filed_bug_rows``, which filters on the flag for
+        exactly this reason). Beta ships at ``comment_on_existing: skip`` and 58-59% of beta
+        signatures have an open bug, so the moment beta is armed the skips would have started
+        eating nightly's cap — a global filing stop caused by declining to file.
+
+        ``channel`` makes the cap per channel. Beta's selections are 48% concentrated in a 4-day
+        post-merge burst, which is exactly when a freshly uplifted regression is worth filing, so
+        one shared cap of 10 would let that burst spend nightly's budget. A row whose payload
+        predates the channel key is counted for EVERY channel rather than none: under-counting a
+        cap is the direction that files too much.
+
+        ``Build.channel`` rather than the payload, so pre-existing rows need no backfill."""
+        fb = Dossier.payload["filed_bug"]
+        q = (
             db.session.query(func.count(Dossier.id))
-            .filter(Dossier.payload.has_key("filed_bug"),   # noqa: W601 - JSONB ? operator
-                    Dossier.updated >= when)
-            .scalar()
-        ) or 0
+            .select_from(Dossier)
+            .filter(fb["filed"].astext == "true", Dossier.updated >= when)
+        )
+        if channel:
+            q = (
+                q.join(UUID, Dossier.uuidid == UUID.id)
+                .join(Build, Build.id == UUID.buildid)
+                .filter(Build.channel == channel)
+            )
+        return q.scalar() or 0
 
     @staticmethod
     def filed_bug_rows():
@@ -3223,10 +3321,29 @@ class Feedback(db.Model):
         return row
 
     @staticmethod
-    def scoreboard():
-        """``{attribution -> count}`` plus per-archetype tallies, for the page and the CLI."""
+    def scoreboard(channel=None):
+        """``{attribution -> count}`` plus per-archetype tallies, for the page and the CLI.
+
+        ``channel`` STRATIFIES IT, joining through ``uuid`` -> ``uuids`` -> ``builds`` rather
+        than needing a column here (this table predates having more than one channel, and there
+        is no migration mechanism for adding a column to an existing table -- see
+        ``models.create``). Without stratification the scoreboard pools two populations and the
+        rate it prints describes neither: beta files under a different policy
+        (``comment_on_existing``), against a signature population that is 84% long-lived where
+        nightly's is not, so a shared "N% correct" would be read as being about both and be
+        about neither. The same denominator argument as ``sigage.hardware_noise``'s.
+
+        A row whose uuid is unknown (or NULL) drops out of a channel-scoped call and stays in the
+        unscoped one, which is the honest direction: it cannot be attributed."""
         out = {"total": 0, "by_attribution": {}, "by_archetype": {}}
-        for row in db.session.query(Feedback).all():
+        q = db.session.query(Feedback)
+        if channel:
+            q = (
+                q.join(UUID, UUID.uuid == Feedback.uuid)
+                .join(Build, Build.id == UUID.buildid)
+                .filter(Build.channel == channel)
+            )
+        for row in q.all():
             out["total"] += 1
             out["by_attribution"][row.attribution] = (
                 out["by_attribution"].get(row.attribution, 0) + 1)

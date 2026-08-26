@@ -509,7 +509,68 @@ def _env_bool(name, default):
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
-def get_agent_autofile():
+# The three values ``agent.autofile.comment_on_existing`` may take, and the two legacy booleans
+# they replace. NOT a boolean any more because the requirement "file only crashes that have no bug
+# in Bugzilla" and the requirement "never write on somebody else's bug" are different rules, and
+# the old ``False`` implemented the SECOND one: ``autofile_bug`` returned
+# ``{"filed": False, "skipped": "open bug N exists"}`` -- no comment AND no new bug -- before it
+# had even asked whether that bug could be about this regression.
+#
+#   comment    an open same-application bug that can be about this regression is the venue.
+#   skip       an open bug on the signature means we write NOTHING. `False` maps here, and two
+#              tests pin that meaning by name.
+#   file_new   never comment; file a new bug, naming the open bugs we chose not to comment on.
+#
+# `skip` is STRICTER than "file only new bugs", measurably so: 58-59% of beta signatures carry an
+# open same-application non-meta bug (58/98 = 59.2%, Wilson 49.3-68.4%; 45/77 = 58%; 43/67 = 64%
+# at selection level) against a 23% nightly control, and `_split_by_application` rescues 0 of 58.
+COMMENT_ON_EXISTING = ("comment", "skip", "file_new")
+
+
+def comment_mode(value):
+    """Coerce ``comment_on_existing`` to one of :data:`COMMENT_ON_EXISTING`.
+
+    PUBLIC, and called AGAIN at the read site (``bugzilla_apply.autofile_bug``) even though this
+    function already normalises what ``get_agent_autofile`` returns. Not belt-and-braces: every
+    test in the suite that exercises the filer mocks ``get_agent_autofile`` with a plain dict
+    (``return_value=``), so the value the filer actually sees is whatever the test wrote --
+    ``True`` -- and a raw ``True`` compared against ``"comment"`` is False. Coercing at both ends
+    means a legacy boolean from a mock, an old config or a stored payload behaves the way it
+    always did instead of silently selecting the strictest mode.
+
+    Legacy booleans are accepted forever: ``True`` -> ``comment`` (the shipped default),
+    ``False`` -> ``skip`` (what it has always DONE). An unrecognised string falls back to
+    ``comment``, i.e. today's behaviour, rather than silently turning writing off -- a typo must
+    not be able to stop the filer, which is the ``_ENUM_ADDITIONS`` failure mode."""
+    if isinstance(value, bool):
+        return "comment" if value else "skip"
+    text = str(value or "").strip().lower()
+    return text if text in COMMENT_ON_EXISTING else "comment"
+
+
+def autofile_channel_declared(channel):
+    """Is *channel* a channel somebody has DECIDED about filing on?
+
+    True for a channel with an ``agent.autofile.channels.<ch>`` entry, and for the one channel
+    the top-level block itself describes (``agent.autofile.default_channel``, nightly). Anything
+    else — a channel that appears in ``INGEST_CHANNELS`` and nowhere in the filing config, or an
+    unknown one — is undeclared, and ``bugzilla_apply.autofile_bug`` refuses to file on it.
+
+    A SEPARATE PREDICATE FROM ``enabled``, because "somebody set this to false" and "nobody has
+    thought about this channel" must not look the same from the filer. An overlay of
+    ``{"enabled": false}`` is a decision; a missing overlay is a gap, and the gap is what release
+    would fall into the moment ``INGEST_CHANNELS`` is cleared (``update_all``'s empty default is
+    ALL configured channels)."""
+    a = get_agent().get("autofile", {})
+    ch = (channel or "").lower()
+    if not ch:
+        return False
+    if ch == (a.get("default_channel") or "nightly").lower():
+        return True
+    return ch in {k.lower() for k in (a.get("channels") or {})}
+
+
+def get_agent_autofile(channel=None):
     """Automatic bug FILING knobs (the only unattended write to Bugzilla).
 
     ``enabled`` is a genuine kill-switch, not dead config: this posts to production BMO
@@ -521,15 +582,36 @@ def get_agent_autofile():
     were lowered to the ``medium`` rung of 50. ``daily_cap`` bounds the damage a bad gate
     can do in one night; the pipeline itself has no such bound."""
     a = get_agent().get("autofile", {})
+    # THE PER-CHANNEL OVERLAY, merged BEFORE the per-key reads below so every one of the twelve
+    # gates in ``autofile_bug`` is covered by one argument. ``channel=None`` returns today's dict
+    # byte-identically, which is what keeps every existing caller and mock honest.
+    #
+    # Nothing in the filing half knew about channels: ``autofile_bug``'s documented gates contain
+    # none, and the ONLY thing that kept filing nightly-only was ``get_agent_channels()`` inside
+    # ``enqueue_agent`` -- which ``enqueue_agent(..., force=True)`` bypasses by design, and that
+    # is exactly what a tasks.html retrigger calls. With ``AUTOFILE_BUGS=1`` live, the day
+    # ``INGEST_CHANNELS`` gained ``beta`` one retrigger click would have filed a beta bug under
+    # the nightly rules.
+    over = (a.get("channels") or {}).get((channel or "").lower()) or {}
+    a = {**a, **{k: v for k, v in over.items() if k != "channels"}}
+    # THE STRICTEST OF THE TWO WINS, IN BOTH DIRECTIONS, and that needs saying because they are
+    # different kinds of statement. `AUTOFILE_BUGS=0` is a KILL SWITCH and must beat any JSON --
+    # a switch a config file can defeat is not one. But an explicit `channels.<ch>.enabled:
+    # false` is a DECISION about one channel, and a global arm must not undo it either, or
+    # "triage this channel but do not file from it yet" cannot be expressed at all: the env var
+    # is global, so `AUTOFILE_BUGS=1` would silently arm every declared channel. Only an
+    # EXPLICIT per-channel `false` is honoured this way -- an absent key still inherits the
+    # top-level default and the global arm, which is how beta is configured.
+    channel_veto = over.get("enabled") is False
     return {
-        "enabled": _env_bool("AUTOFILE_BUGS", a.get("enabled", False)),
+        "enabled": _env_bool("AUTOFILE_BUGS", a.get("enabled", False)) and not channel_veto,
         "min_confidence": a.get("min_confidence", 70),
         "verdicts": a.get("verdicts", ["lead", "culprit"]),
         "needinfo": _env_bool("AUTOFILE_NEEDINFO", a.get("needinfo", True)),
         "daily_cap": a.get("daily_cap", 10),
         # An open bug already referencing the signature: comment there instead of filing a
         # duplicate. Turning this off does NOT file anyway — it skips.
-        "comment_on_existing": a.get("comment_on_existing", True),
+        "comment_on_existing": comment_mode(a.get("comment_on_existing", True)),
         # ...but only if that bug can be ABOUT this regression. How many days the suspected
         # regressor may land AFTER an open bug was filed and still count as that bug's cause;
         # past it, the bug describes crashes the candidate cannot have caused and we file a
@@ -853,7 +935,7 @@ def _normalize_calibration_table(raw):
 __CALIBRATION_CACHE = {}
 
 
-def get_agent_calibration():
+def get_agent_calibration(channel=None):
     """The fitted worth-investigating calibration table (Phase-2): ``{rung score (int) ->
     P(worth-investigating)}`` mapping a verdict's confidence rung (``CONFIDENCE_SCORE`` * 100)
     to its empirical calibrated probability. Sourced from ``agent.calibration.table`` (an inline
@@ -961,6 +1043,20 @@ def get_agent_calibration():
     what the badge claims. The defect was the ARM, not the label and not the pooling. Full
     numbers in ``eval.calibrate``'s module docstring."""
     cal = get_agent().get("calibration", {})
+    # PER CHANNEL, and beta deliberately gets NOTHING. The shipped table is the fit over all 90
+    # rows of `corpus_ship`, every one of them Firefox NIGHTLY -- and this number is not
+    # internal: `report_bug._worth_phrase` puts "N% worth investigating" in the FILED BUG and the
+    # crashstack badge shows it. There is no beta arm of the corpus, so there is nothing to fit
+    # and nothing honest to publish; an empty table leaves `p_worth_investigating` at `None` and
+    # the comment simply omits the sentence, exactly as it did before any calibration existed.
+    # This module's own rule: a number a Bugzilla reviewer reads cannot be fit on the wrong arm.
+    #
+    # `channels: {"<ch>": {...}}` overrides per channel, INCLUDING with an explicit empty table.
+    # An absent channel key falls back to the top-level fit; a channel present with `{}` gets
+    # nothing. That asymmetry is the point: nightly must keep its table without naming itself.
+    over = (cal.get("channels") or {}).get((channel or "").lower())
+    if over is not None:
+        cal = over
     if cal.get("table") is not None:
         return _normalize_calibration_table(cal["table"])
     path = cal.get("path")

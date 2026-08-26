@@ -845,6 +845,7 @@ def build_bug_comment(
     landing_unresolved=False,
     other_app_bugs=None,
     meta_bugs=None,
+    never_comment=False,
     max_frames=_MAX_PREVIEW_FRAMES,
 ):
     """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
@@ -891,7 +892,8 @@ def build_bug_comment(
         build_dissent_note(dossier),
         build_related_bugs_note(
             related_bugs, landing_unresolved=landing_unresolved,
-            node=((dossier or {}).get("candidate") or {}).get("node")),
+            node=((dossier or {}).get("candidate") or {}).get("node"),
+            never_comment=never_comment),
         build_other_app_bugs_note(other_app_bugs),
         build_meta_bugs_note(meta_bugs),
         needinfo,
@@ -943,7 +945,8 @@ _PROVENANCE_TEMPLATE = (
 )
 
 
-def build_related_bugs_note(related_bugs, landing_unresolved=False, node=None):
+def build_related_bugs_note(related_bugs, landing_unresolved=False, node=None,
+                            never_comment=False):
     """Why this is a NEW bug when ``related_bugs`` are open on the same signature, or ``""``.
 
     Two reasons, two sentences, because they are not the same claim. Normally the filer skips
@@ -973,6 +976,25 @@ def build_related_bugs_note(related_bugs, landing_unresolved=False, node=None):
     bugs = [b for b in (related_bugs or []) if b]
     if not bugs:
         return ""
+    if never_comment:
+        # THE POLICY REASON, and it must be said, or this reads as a broken deduplicator. On a
+        # channel configured `comment_on_existing: file_new` the open bug was not ruled out on
+        # the evidence -- it may well be the right place -- we simply do not write on existing
+        # bugs from here. Saying which of the two happened is the difference between "we checked
+        # and it cannot be this" and "we did not check", and a reader who cannot tell cannot
+        # overrule either.
+        return (
+            "Filed as a new bug rather than a comment on {} — {} open on this signature. This "
+            "filer does not comment on existing bugs for crashes on this channel, so {} listed "
+            "here instead of written on; {} may well be the right place for this report. Please "
+            "duplicate if {}.".format(
+                ", ".join("bug {}".format(b) for b in bugs),
+                "which is" if len(bugs) == 1 else "which are",
+                "it is" if len(bugs) == 1 else "they are",
+                "it" if len(bugs) == 1 else "one of them",
+                "it is" if len(bugs) == 1 else "one of them is",
+            )
+        )
     if landing_unresolved:
         return (
             "Filed as a new bug rather than a comment on {} — {} open on this signature, but "
@@ -1813,7 +1835,7 @@ def _bug_version(channel):
 
 
 def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None,
-                      landing_unresolved=False, meta_bugs=None):
+                      landing_unresolved=False, meta_bugs=None, never_comment=False):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -1901,6 +1923,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             landing_unresolved=landing_unresolved,
             other_app_bugs=other_app_bugs,
             meta_bugs=meta_bugs,
+            never_comment=never_comment,
         ),
         "product": product,
         "component": component,

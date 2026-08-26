@@ -123,7 +123,11 @@
         "agent_version": 1,
         "calibration":
         {
-            "table": {"25": 0.5, "50": 0.5714, "70": 0.7234, "85": 0.7234}
+            "table": {"25": 0.5, "50": 0.5714, "70": 0.7234, "85": 0.7234},
+            "channels":
+            {
+                "beta": {}
+            }
         },
         "offstack":
         {
@@ -159,7 +163,16 @@
             "verdicts": ["lead", "culprit"],
             "needinfo": true,
             "daily_cap": 10,
-            "comment_on_existing": true
+            "comment_on_existing": "comment",
+            "default_channel": "nightly",
+            "channels":
+            {
+                "beta":
+                {
+                    "comment_on_existing": "skip",
+                    "daily_cap": 3
+                }
+            }
         },
         "filters":
         {

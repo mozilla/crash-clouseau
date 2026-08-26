@@ -496,15 +496,16 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
    somebody looks at the page, hence the guard in tests/test_tasks_view.py. */
 .tasks { table-layout: fixed; }
 .tasks th:nth-child(1),  .tasks td:nth-child(1)  { width: 7%; }   /* Crash    */
-.tasks th:nth-child(2),  .tasks td:nth-child(2)  { width: 20%; }  /* Signature */
-.tasks th:nth-child(3),  .tasks td:nth-child(3)  { width: 9%; }   /* Status   */
-.tasks th:nth-child(4),  .tasks td:nth-child(4)  { width: 10%; }  /* Verdict  */
-.tasks th:nth-child(5),  .tasks td:nth-child(5)  { width: 10%; }  /* Bug      */
-.tasks th:nth-child(6),  .tasks td:nth-child(6)  { width: 6%; }   /* Duration */
-.tasks th:nth-child(7),  .tasks td:nth-child(7)  { width: 6%; }   /* Cost     */
-.tasks th:nth-child(8),  .tasks td:nth-child(8)  { width: 14%; }  /* Tokens   */
-.tasks th:nth-child(9),  .tasks td:nth-child(9)  { width: 11%; }  /* Started  */
-.tasks th:nth-child(10), .tasks td:nth-child(10) { width: 7%; }   /* Actions  */
+.tasks th:nth-child(2),  .tasks td:nth-child(2)  { width: 3%; }   /* Channel  */
+.tasks th:nth-child(3),  .tasks td:nth-child(3)  { width: 18%; }  /* Signature */
+.tasks th:nth-child(4),  .tasks td:nth-child(4)  { width: 9%; }   /* Status   */
+.tasks th:nth-child(5),  .tasks td:nth-child(5)  { width: 10%; }  /* Verdict  */
+.tasks th:nth-child(6),  .tasks td:nth-child(6)  { width: 9%; }   /* Bug      */
+.tasks th:nth-child(7),  .tasks td:nth-child(7)  { width: 6%; }   /* Duration */
+.tasks th:nth-child(8),  .tasks td:nth-child(8)  { width: 6%; }   /* Cost     */
+.tasks th:nth-child(9),  .tasks td:nth-child(9)  { width: 14%; }  /* Tokens   */
+.tasks th:nth-child(10), .tasks td:nth-child(10) { width: 11%; }  /* Started  */
+.tasks th:nth-child(11), .tasks td:nth-child(11) { width: 7%; }   /* Actions  */
 
 .retrigger-btn {
     font-size: 0.75em;

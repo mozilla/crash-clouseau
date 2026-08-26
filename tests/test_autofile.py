@@ -91,6 +91,17 @@ class _Base(unittest.TestCase):
                               return_value=None),
             mock.patch.object(bugzilla_apply.models.Dossier, "already_commented",
                               return_value=None),
+            # Same reading as its two siblings above — "we have never written about this
+            # before" — and mocked for the same reason, plus one that only bites here: it is a
+            # JSONB query, so on sqlite it RAISES and returns its deliberate fail-closed
+            # sentinel (a truthy dict), which the filer reads as "already filed". Left live it
+            # silently converted every `comment_on_existing != "comment"` test in this file into
+            # a test that the filer declines to write: two failed outright and two more
+            # (`test_comment_on_existing_off_skips_*`) passed for the wrong reason, asserting a
+            # kill-switch skip they never reached. The query itself is tested against real rows
+            # in tests/test_beta_autofile.py::TestTheFiledBugJsonbHalf.
+            mock.patch.object(bugzilla_apply.models.Dossier, "already_filed_for_signature",
+                              return_value=None),
             mock.patch.object(bugzilla_apply.models.Dossier, "filed_bugs_since",
                               return_value=0),
             mock.patch.object(bugzilla_apply.models.Dossier, "record_filed_bug",

@@ -1640,7 +1640,7 @@ def _verdict_row(result):
             "evidence": _gather_evidence(dossier)}
 
 
-def _apply_worth_investigating(dossier):
+def _apply_worth_investigating(dossier, seed=None):
     """Populate ``Verdict.p_worth_investigating`` from the fitted calibration table (Phase-2):
     map the FINAL verdict's confidence rung (after every gate has settled it) to its empirical
     calibrated probability. No-op — leaves ``None`` — when no table is configured (the
@@ -1652,7 +1652,7 @@ def _apply_worth_investigating(dossier):
     v = dossier.verdict
     if v.decision == Decision.abstain or v.confidence is None:
         return
-    table = config.get_agent_calibration()
+    table = config.get_agent_calibration((seed or {}).get("channel"))
     if not table:
         return
     score = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
@@ -3354,7 +3354,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
     # Calibrated worth-investigating probability, from the FINAL (post-gate) rung. Additive;
     # ``None`` until a calibration table is fit + wired. Runs after every gate so it reads the
     # shipped verdict, and outside the offstack-guarded block so on-stack runs get it too.
-    _apply_worth_investigating(result.dossier)
+    _apply_worth_investigating(result.dossier, seed)
     return result
 
 

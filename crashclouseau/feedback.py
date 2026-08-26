@@ -104,6 +104,13 @@ def _filed_bugs():
             # "new_bug" | "comment_on_existing" | absent on a pre-``mode`` filing. Only the
             # first is a bug whose comments are reactions to us; see ``_NOTE_MODES``.
             "mode": info.get("mode"),
+            # WHICH CHANNEL FILED IT, absent on anything filed before the filer recorded it
+            # (every one of those is nightly, the only channel that has ever filed). Carried
+            # because `_NOTE_MODES = ("new_bug",)` is exactly a never-comment channel's mode, so
+            # without this the review corpus pools two populations and any rate read off it
+            # describes neither -- the denominator IS the rule.
+            "channel": info.get("channel"),
+            "buildid": info.get("buildid"),
         })
     return out
 

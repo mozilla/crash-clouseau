@@ -883,7 +883,20 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     its own PUT (see ``_link_regressed_by`` and ``report_bug.build_bug_preview``). Because we now
     write the field the feedback loop reads, ``models.Feedback.classify`` is told what we claimed:
     our own write agreeing with us is ``unconfirmed``, not ``correct``."""
-    cfg = config.get_agent_autofile()
+    channel = uuid_info.get("channel")
+    cfg = config.get_agent_autofile(channel)
+    # THE CHANNEL GATE, and it fails CLOSED. `get_agent_channels()` inside `enqueue_agent` was
+    # the ONLY thing keeping filing nightly-only -- and `enqueue_agent(..., force=True)` bypasses
+    # it by design, which is precisely what `retrigger_agent` (a tasks.html click, and a BULK
+    # retrigger) calls. With `AUTOFILE_BUGS=1` live in prod, the day `INGEST_CHANNELS` gained a
+    # channel -- no deploy, no code change -- one retrigger would have filed on it under
+    # nightly's rules, `comment_on_existing: comment`, i.e. a comment on somebody's open bug.
+    #
+    # A channel with no `agent.autofile.channels.<ch>` entry and no explicit `enabled` files
+    # NOTHING, in the same direction as every other gate in this function.
+    if not config.autofile_channel_declared(channel):
+        return {"filed": False,
+                "skipped": "channel {!r} has no autofile configuration".format(channel)}
     if not cfg["enabled"]:
         return {"filed": False, "skipped": "autofile disabled"}
     if verdict not in cfg["verdicts"]:
@@ -914,19 +927,56 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
 
     since = datetime.now(timezone.utc) - timedelta(days=1)
     try:
-        recent = models.Dossier.filed_bugs_since(since)
+        # PER CHANNEL. A shared cap lets one channel's burst spend another's budget, and beta's
+        # selections are 48% concentrated in the 4 days after a merge -- exactly when a freshly
+        # uplifted regression is worth filing.
+        recent = models.Dossier.filed_bugs_since(since, channel=channel)
     except Exception as exc:                                # pragma: no cover - defensive
         return {"filed": False, "skipped": "cap check failed: {}".format(exc)}
     if recent >= cfg["daily_cap"]:
-        logger.warning("autofile: daily cap %s reached (%s in 24h) — not filing for %s",
-                       cfg["daily_cap"], recent, uuid)
-        return {"filed": False, "skipped": "daily cap {} reached".format(cfg["daily_cap"])}
+        logger.warning("autofile: daily cap %s reached for %s (%s in 24h) — not filing for %s",
+                       cfg["daily_cap"], channel or "?", recent, uuid)
+        return {"filed": False, "skipped": "daily cap {} reached on {}".format(
+            cfg["daily_cap"], channel or "?")}
 
     token = config.get_bugzilla_token()
     if not token:
         return {"filed": False, "skipped": "no Bugzilla API token configured"}
 
     signature = (uuid_info.get("signature") or "").strip()
+
+    # ONE BUG PER SIGNATURE PER CHANNEL, on a channel that never writes on existing bugs.
+    # Consulted only when `mode != "comment"`, which is a derivation and not a new knob: a
+    # channel whose policy is "never touch an existing bug" cannot also want to file a SECOND
+    # bug for a signature it has already filed one for -- that is the same duplicate the policy
+    # exists to avoid, wearing our own bug number.
+    #
+    # It is the only guard that survives the target bug being CLOSED.
+    # `_open_bugs_for_signature` filters `resolution: "---"`, so a bug we filed and a human then
+    # resolved INVALID/DUPLICATE/WORKSFORME is invisible below, `_bug_for_this_regression` is
+    # never asked, and `already_commented` is only consulted for a CHOSEN venue. Measured on our
+    # own 60 filings: 4 of the 18 nightly-filed signatures that also crash on beta would collect
+    # a second bug, and the four resolutions are DUPLICATE / INVALID / INVALID / WORKSFORME.
+    # It also stops a PUBLIC bug being filed on a signature whose nightly bug is RESTRICTED,
+    # which the unauthenticated venue lookup cannot see.
+    if config.comment_mode(cfg["comment_on_existing"]) != "comment":
+        # CHANNEL-BLIND, and that is the entire point: the 22.2% this was measured at is
+        # nightly-filed bugs that a beta run would file a SECOND time (4 of the 18 nightly-filed
+        # signatures that also crash on beta -- 2060922 DUPLICATE, 2061726 INVALID, 2063364
+        # INVALID, 2064066 WORKSFORME). Scoping the lookup to the crash's own channel would make
+        # it blind to exactly that population and leave it asserting nothing. What keeps nightly
+        # byte-identical is the MODE test above, not a channel filter: nightly's mode is
+        # `comment`, so nightly never reaches this line.
+        prior_sig = models.Dossier.already_filed_for_signature(signature)
+        if prior_sig:
+            logger.info("autofile: already filed bug %s for %r on %s (from %s) — not filing "
+                        "again for %s", prior_sig.get("bug") or "?", signature, channel or "?",
+                        prior_sig.get("uuid") or "?", uuid)
+            return {"filed": False, "bug": prior_sig.get("bug"),
+                    "skipped": "already filed bug {} for this signature on {}".format(
+                        prior_sig.get("bug") or "?", channel or "?"),
+                    "prior_signature_filing": prior_sig}
+
     existing = _open_bugs_for_signature(signature)
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
@@ -948,13 +998,33 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     if meta_bugs:
         logger.info("autofile: open bug(s) %s reference this signature but are [meta] trackers "
                     "— not a venue for a crash report", [b["id"] for b in meta_bugs])
-    if existing and not cfg["comment_on_existing"]:
+    # (mode/comment_allowed/withheld are resolved above, right after `cfg`.)
+    # THREE MODES, not a boolean (``config.COMMENT_ON_EXISTING``). ``skip`` is what ``False``
+    # always DID -- no comment AND no new bug, decided before anything asks whether that bug
+    # could even be about this regression -- and two tests pin that meaning by name.
+    # ``file_new`` is the mode for "file only crashes that have no bug in Bugzilla, and never
+    # write on an existing one": no comment, but a new bug that NAMES the open bugs it declined
+    # to comment on, or it reads as a broken deduplicator.
+    mode = config.comment_mode(cfg["comment_on_existing"])
+    comment_allowed = mode == "comment"
+    # THE MEMORY-SAFETY CARVE-OUT, and it is a security regression that ``skip`` would otherwise
+    # introduce rather than a pre-existing one. ``sensitive.is_withheld`` used to be consulted
+    # ~90 lines below this point, so a poison-address crash whose signature has an open PUBLIC
+    # bug would hit the skip first and produce NOTHING: no restricted bug, no comment, no record.
+    # :mccr8 on bug 2065051 -- "Bugs on poison crashes like that should always be filed initially
+    # a security issue" -- and the existing nightly path does exactly that (it declines the
+    # public venue, files a NEW restricted bug, and names the public one as a probable duplicate
+    # in comment 0, never as a ``see_also``). Reach: the deterministic poison gate fires on 1 of
+    # 57 filings and 59.2% of beta signatures have an open venue, so ~1% of rung-70 verdicts --
+    # small, and the highest-value 1%.
+    withheld = sensitive.is_withheld((dossier or {}).get("corroborations"))
+    if existing and mode == "skip" and not withheld:
         return {"filed": False, "skipped": "open bug {} exists".format(existing[0]["id"])}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
     # cannot, and with no landing date NONE of them can be shown to
     # (``_bug_for_this_regression``). Resolved before the preview is built so a new bug filed
     # past an older one can say so, and say which of the two reasons it was.
-    landed = _candidate_landed(dossier, uuid_info.get("channel"))
+    landed = _candidate_landed(dossier, channel)
     bug_id, predating = _bug_for_this_regression(
         existing,
         landed,
@@ -962,6 +1032,25 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         candidate_bug=((dossier or {}).get("candidate") or {}).get("bug"),
     )
     landing_unresolved = landed is None and bug_id is None and bool(predating)
+    # ...AND THEN THE MODE OVERRIDES THE VENUE. Computed in this order on purpose:
+    # ``landing_unresolved`` must describe what the EVIDENCE said, so a bug filed because of the
+    # policy is not reported as one filed because an hg lookup failed. A venue we are not
+    # allowed to use becomes a bug the new one references instead.
+    never_comment = not comment_allowed
+    # ...EXCEPT on a withheld crash, where the SECURITY branch below owns the same decision and
+    # says something more useful about it. Both paths decline the venue and file a new bug; that
+    # one additionally names the public bug as a probable duplicate, explains that the split is
+    # because the report shows a memory-safety fault, and records `public_venue_declined` for the
+    # audit trail. Overriding here first would set `bug_id = None`, so `if withhold and bug_id is
+    # not None` could never fire and a restricted beta filing would carry the generic
+    # "this filer does not comment on existing bugs" note instead — and lose the audit field.
+    if never_comment and bug_id is not None and not withheld:
+        predating = sorted({*(predating or []), bug_id})
+        logger.info("autofile: bug %s could be the venue for %s but this channel (%s) is "
+                    "%s — filing a new bug that references it instead",
+                    bug_id, uuid, channel or "?", mode)
+        bug_id = None
+        landing_unresolved = False
     if predating and bug_id is None:
         if landing_unresolved:
             # WARNING, not info: this is the only path on which a filing is routed by a fact
@@ -1023,6 +1112,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             landing_unresolved=landing_unresolved,
             other_app_bugs=other_app if bug_id is None else None,
             meta_bugs=meta_bugs if bug_id is None else None,
+            never_comment=never_comment,
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
@@ -1039,9 +1129,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "product/component unresolved — refusing to file into the wrong "
                            "component"}
 
-    # THE SECURITY VENUE, and both branches refuse rather than degrade.
+    # THE SECURITY VENUE, and both branches refuse rather than degrade. `withheld` is resolved
+    # far above now (it has to outrank the `skip` mode); this is the same value.
     public_venue_declined = None
-    withhold = sensitive.is_withheld((dossier or {}).get("corroborations"))
+    withhold = withheld
     if withhold and not preview.get("groups"):
         # `build_bug_preview` could not resolve the product's security group, so the only
         # remaining options are "file it publicly" and "do not file". A lost lead is recoverable
@@ -1087,7 +1178,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         public_venue_declined, bug_id = bug_id, None
 
     email = preview.get("needinfo_email") if cfg["needinfo"] else ""
+    # THE CHANNEL AND THE BUILD, on every result. Without them nothing downstream can answer
+    # "how is beta doing": `feedback._filed_bugs` builds its ReviewNote row from exactly these
+    # keys and `_NOTE_MODES = ("new_bug",)` is precisely beta's mode, so beta filings would enter
+    # the review corpus pooled with nightly's -- and retuning either against a pooled denominator
+    # is the mistake the hardware-noise work was written up to prevent ("the denominator is the
+    # whole rule"). `Dossier.list_tasks` reads the channel for the ops view too.
     result = {"filed": False, "uuid": uuid, "signature": signature,
+              "channel": channel, "buildid": utils.get_buildid(uuid_info.get("buildid")),
               "at": datetime.now(timezone.utc).isoformat()}
     if withhold:
         # Persisted so the choice is auditable from the dossier, and so that "how often does the

@@ -80,6 +80,7 @@
       <thead>
         <tr>
           <th>Crash</th>
+          <th>Ch.</th>
           <th>Signature</th>
           <th>Status</th>
           <th>Verdict</th>
@@ -95,6 +96,10 @@
         {% for t in tasks -%}
         <tr>
           <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
+          {# Which channel this run is on. With one channel it was implicit; with two, "is that
+             stalled run beta or nightly?" is a question this view could not answer, and the two
+             have different costs and different filing policies. #}
+          <td title="{{ t.channel or 'unknown' }}{% if t.version %} {{ t.version }}{% endif %}">{{ (t.channel or '?')[:1]|upper }}</td>
           <td class="task-sgn" title="{{ t.signature }}">{{ t.signature }}</td>
           <td>
             <span class="status-badge status-{{ t.status }}"{% if t.error %} title="{{ t.error }}"{% endif %}>{{ t.status }}</span>
@@ -139,7 +144,7 @@
         </tr>
         {% endfor -%}
         {% if not tasks -%}
-        <tr><td colspan="10" class="task-empty">No triage runs yet.</td></tr>
+        <tr><td colspan="11" class="task-empty">No triage runs yet.</td></tr>
         {%- endif %}
       </tbody>
     </table>
