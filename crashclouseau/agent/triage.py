@@ -595,6 +595,55 @@ def _cpu_spread_line(noise: dict, crash: dict | None = None) -> str:
     )
 
 
+def _signature_trend_lines(crash: dict) -> list[str]:
+    """Has this signature's crash RATE changed, as prompt lines, or ``[]``.
+
+    THE QUANTITY THE SELECTOR CANNOT COMPUTE, and the reason bug 2063336 was filed by a human
+    instead of by us. That signature put at most 2 crashes on any one build-day, so the spike rule
+    saw a single-crash from-zero fire — indistinguishable from the ~187 signatures that crash
+    exactly once on a normal nightly day, and 67% of what the rule emits. It selected the signature
+    on 20 run-days and the pipeline said nothing, while :aryx filed off the statistic below: "single
+    digit crashes per version to 14 reports from 14 installs of Firefox 155.0a1".
+
+    Stated as a RATE against the signature's own history with the channel's daily installation
+    count as the denominator, because neither half is optional. Nightly's distinct installs per day
+    fell from a median 860 in June to 462 in August, so over that ramp a signature at a constant
+    per-install rate lost half its raw count — a bare "9 crashes this week against 5 in the two
+    months before" would have the model reading the user base.
+
+    NO SCORE IS SHOWN. `sigtrend.tail_score` is an ordering statistic whose tail is
+    anti-conservative by three to five orders of magnitude against a shuffled null; printing it as
+    a probability would hand the model a confidence that does not exist. The ratio and the two
+    counts are what a human would say out loud, and they are what goes in.
+
+    Ends by naming what the fact does and does not license, because the failure mode here is
+    specific and was measured: the crash STACK does not change across one of these rises (85% of
+    the anchor's post-onset reports sit on a proto-signature that already existed), so a model told
+    "the rate went up 15x" can invent a new mechanism to explain a mechanism that did not change.
+    The rate change is evidence that something made an EXISTING failure more likely, which is a
+    different question from what introduced it.
+
+    THE BLIND SECOND OPINION GETS THIS TOO, via the shared ``_crash_facts``, on the
+    ``_hardware_noise_lines`` reasoning: it is a FACT both models are otherwise blind to, not a
+    suggested direction, so withholding it would only make the second opinion less informed."""
+    from crashclouseau import sigtrend
+
+    facts = crash.get("signature_trend") or {}
+    sentence = sigtrend.describe(facts)
+    if not sentence or not sigtrend.is_rising(facts):
+        return []
+    return [
+        "",
+        "SIGNATURE CRASH RATE HAS RISEN:",
+        "  " + sentence,
+        "  This is a change in how OFTEN an existing failure happens, not evidence of a new "
+        "failure: on a rise like this the crash stack typically does not change at all. Treat it "
+        "as a reason to look for something that made this code path more likely to fail — a "
+        "timing, size, ordering or configuration change — rather than for whatever first "
+        "introduced the crash, which may be years old.",
+    ]
+
+
 def _hardware_noise_lines(crash: dict) -> list[str]:
     """How much of this SIGNATURE is hardware error, as prompt lines, or ``[]``.
 
@@ -1246,6 +1295,10 @@ def _crash_facts(crash: dict) -> list[str]:
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)
     lines += _hardware_noise_lines(crash)
+    # Last of the signature-level block: how old the signature is says whether the crash is new,
+    # and this says whether it got WORSE -- the two answers are independent and a rise on an old
+    # signature is exactly the case the age lines alone read as uninteresting.
+    lines += _signature_trend_lines(crash)
     return lines
 
 

@@ -721,7 +721,34 @@ def build_seed(uuid):
         # signature-level half of the bit-flip gate (`sigage.hardware_noise`). All None when
         # unknown.
         "hardware_noise": _hardware_noise(info, channel),
+        # Has this signature's install-normalised crash RATE changed? (`sigtrend.trend_facts`.)
+        # A DB read, no Socorro call. Empty dict when the rollup has too little history to
+        # compare against, which must read as "not measured" and never as "no change" — the
+        # selector's own trigger cannot tell a 19x rate change apart from the single-crash
+        # from-zero fire that is 67% of its output, and this is that missing quantity.
+        "signature_trend": _signature_trend(info, uuid_info, channel),
     }
+
+
+def _signature_trend(info, uuid_info, channel):
+    """This signature's exposure-normalised rate change, from the daily rollup. ``{}`` on anything
+    unknown, so a rate we could not measure never reads as a flat one.
+
+    A pure database read — the rollup is filled once per run by ``update.put_crashes``, so nothing
+    here costs a Socorro request. Recorded and rendered only: see the ``sigtrend`` module docstring
+    for why this is deliberately not a gate (its recall at a usable lead is half what the current
+    full spend already reaches, so filtering on it would cost cases)."""
+    from crashclouseau import sigtrend
+
+    try:
+        signature = info.get("signature") or ""
+        product = info.get("product") or uuid_info.get("product", "")
+        if not signature or not product or not channel:
+            return {}
+        return sigtrend.trend_facts(product, channel, signature)
+    except Exception:
+        logger.error("Cannot compute the signature trend", exc_info=True)
+        return {}
 
 
 def _hardware_noise(info, channel):
@@ -2433,6 +2460,38 @@ def _record_signature_age_facts(dossier, seed):
         dossier.corroborations = {**(dossier.corroborations or {}), **facts}
 
 
+def _record_signature_trend_facts(dossier, seed):
+    """Record the install-normalised rate change on every reported verdict. Moves no rung.
+
+    Same arrangement, and for the same reason, as ``_record_signature_age_facts``: written before
+    anything depends on it, so "how often does a reported crash sit on a signature whose rate had
+    already multiplied, and did we say so?" is answerable from prod data rather than from a
+    back-test. `31b5f3b` is the lesson — a gate that returned before recording spent nine days
+    unmeasurable.
+
+    Unrecorded rather than zeroed when the rollup could not answer.
+
+    Calls ``sigtrend.trend_facts`` rather than reading ``seed["signature_trend"]``, and that is
+    deliberate twice over. It is the ``_record_signature_age_facts`` arrangement -- one arithmetic,
+    three callers, so the crash brief, the filed bug and this record cannot drift apart. And a
+    value that reaches ``corroborations`` only by being carried in a dict two modules away is
+    invisible to the registry scanner in tests/test_corroboration_registry.py, which follows CALLS
+    by name; a flag nothing can see written is a flag that goes undeclared, which is how five
+    ``sigage`` keys sat live in prod for weeks. The cost is two indexed reads of a rolling table."""
+    if dossier is None or seed is None:
+        return
+    from crashclouseau import sigtrend
+
+    signature = seed.get("signature") or ""
+    product = seed.get("product") or ""
+    channel = seed.get("channel") or ""
+    if not signature or not product or not channel:
+        return
+    facts = sigtrend.trend_facts(product, channel, signature)
+    if facts:
+        dossier.corroborations = {**(dossier.corroborations or {}), **facts}
+
+
 def _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
     """Has this signature's hardware-error share cleared bugbot's line, on a big enough sample?
 
@@ -3335,6 +3394,10 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # how wrong that was. Recorded for every verdict so the gap is measurable before any rung
         # depends on it.
         _record_signature_age_facts(result.dossier, seed)
+        # Nor a gate: whether this signature's install-normalised rate had already changed. The
+        # statistic the selector structurally cannot compute, and the one a human triager used to
+        # file bug 2063336 off a signature we had selected twenty times.
+        _record_signature_trend_facts(result.dossier, seed)
         # Which learned archetypes were in front of the agent. Recorded even when none matched
         # (as an empty list) so "this run saw no hints" and "this run predates the feature" stay
         # distinguishable — `Feedback` joins on this to score a rule against real outcomes.

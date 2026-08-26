@@ -10,7 +10,7 @@ import pytz
 from .logger import logger
 from .pushlog import pushlog
 from . import datacollector as dc
-from . import buildhub, config, inspector, models, utils, worker, patch
+from . import buildhub, config, inspector, models, sigtrend, utils, worker, patch
 
 
 def put_build(buildid, product, channel, version, node=None):
@@ -229,6 +229,17 @@ def put_crashes(date, channel, product):
     """Get and put crashes data in the database"""
     if not date:
         date = pytz.utc.localize(datetime.utcnow())
+    # The per-day install rollup the rate statistic reads (`sigtrend`). BEFORE the selector, so
+    # today's row exists for anything the selector goes on to pick, and outside the try/except
+    # below for the same reason `Selection.record_many` is: it must not be able to stop the
+    # pipeline. `backfill` is idempotent, refetches today (whose row is partial by construction)
+    # and fills gaps oldest-first, so a cold table warms itself in one run of ~70 queries and a
+    # steady-state run costs one.
+    try:
+        sigtrend.backfill(product, channel, asof=date.date() if hasattr(date, "date") else date)
+    except Exception as e:
+        logger.error(e, exc_info=True)
+
     data, selection = dc.get_new_signatures(product, channel, date)
 
     # Record what the selector DECLINED before anything else can fail: `stats` below only
@@ -236,6 +247,8 @@ def put_crashes(date, channel, product):
     # trace at all. Failure here is swallowed inside record_many/prune.
     models.Selection.record_many(selection, product, channel, run_date=date)
     models.Selection.prune()
+    models.SignatureDaily.prune()
+    models.ChannelDaily.prune()
 
     errors = set()
     for sgn, i in data.items():

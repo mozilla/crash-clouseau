@@ -144,6 +144,54 @@ REGISTRY = {
         "round trip was invisible until 2026-08-21."),
     "signature_report_count": ("evidence", ("agent/orchestrator.py",), ""),
 
+    # -- signature crash RATE (`sigtrend.trend_facts`) -----------------------------------------
+    # The quantity the build-day spike rule structurally cannot compute, and the reason bug
+    # 2063336 was filed by :aryx off a signature the selector had already picked on 20 run-days.
+    # Recorded and RENDERED only: no rung, no clamp, no gate. Replayed at a usable lead its recall
+    # is half what the current full spend already reaches, so filtering on it would cost cases --
+    # its measured value is as an ORDERING and as a fact for the agent and the reader.
+    # Keys are literal here, literal in `sigtrend.trend_facts` and literal in
+    # `report_bug.build_trend_note`, so the scanner can see every one of them. `agent/triage.py`
+    # prints the same numbers but gets them through `sigtrend.describe`, so like `sigage`'s keys it
+    # reads the ARITHMETIC and not these flags -- which is why it is not declared as a reader.
+    "signature_trend_installs": (
+        "evidence", ("report_bug.py",),
+        "DISTINCT INSTALLATIONS in the trailing window, never reports: one machine has produced "
+        "81,843 of 86,196 reports in a past measurement, and over 12 matched thresholds the "
+        "install-based test beat the report-based one every time with non-overlapping CIs."),
+    "signature_trend_reports": (
+        "evidence", ("report_bug.py",),
+        "Carried only so a human surface can quote both counts. Never the test."),
+    "signature_trend_expected_installs": (
+        "evidence", ("report_bug.py",),
+        "The baseline rate scaled by the window's CHANNEL exposure. The denominator is the whole "
+        "rule: nightly's distinct installs/day fell from a median 860 in 2026-06 to 462 in "
+        "2026-08, so a comparison of raw counts across that ramp measures the user base."),
+    "signature_trend_ratio": (
+        "evidence", ("report_bug.py",),
+        "observed / expected. What both surfaces actually print, and what `sigtrend.is_rising` "
+        "tests -- deliberately in place of a cut on `signature_trend_score`."),
+    "signature_trend_score": (
+        "diagnostic", (),
+        "The Gamma-Poisson upper tail. NOT A PROBABILITY -- measured against a temporally "
+        "shuffled null it is anti-conservative by three to five orders of magnitude (at a nominal "
+        "1e-6 the null fires 7.5-22.2 times a day). An ordering statistic only: it reaches no "
+        "surface, and BH on it is measurably pointless because the number of signatures tested "
+        "per run-day barely varies (1,838-2,163) so a BH cutoff is a constant alpha in disguise."),
+    "signature_trend_window_days": (
+        "evidence", ("report_bug.py",),
+        "7. A trailing week absorbs the working week by construction -- nightly install exposure "
+        "runs Wed 805 / Sun 624, a 1.29x peak-to-trough that a 3-day window has to fight."),
+    "signature_trend_baseline_days": (
+        "evidence", ("report_bug.py",),
+        "How many of the 56 baseline days were actually COLLECTED. Fewer than 21 and "
+        "`trend_facts` returns nothing at all, so a cold or interrupted rollup cannot produce a "
+        "confident ratio against three days of history."),
+    "signature_trend_baseline_installs": (
+        "diagnostic", (),
+        "The baseline's own install count, kept so the ratio can be re-derived from prod data "
+        "without refetching Socorro."),
+
     # The next six come out of `sigage.age_facts`, whose keys were COMPUTED
     # (`"signature_first_seen_" + key`) until 2026-08-24 and so were invisible to the registry
     # scanner: five of them were live in prod dossiers, undeclared, for weeks. `agent/triage.py`

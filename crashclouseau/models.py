@@ -3671,7 +3671,193 @@ def create():
 # Tables added after the initial deploy. `create()` only calls `create_all()` on a FRESH
 # database, so a long-lived one would never grow a new table and every read of it would fail at
 # runtime — the same gap `_ensure_enum_values` exists to close for enum values.
-_ADDED_TABLES = ("archetypes", "feedback", "reviewnote", "selection", "sweepmarks")
+class ChannelDaily(db.Model):
+    """One row per (product, channel, PROCESSED day): the channel's reports and distinct
+    installations that day. The DENOMINATOR, and it is the whole point of the table.
+
+    Nightly's distinct-install count fell from a median 860/day in 2026-06 to 462/day in 2026-08 —
+    a gradual ~45% ramp, not a step. Over that period a signature whose per-install rate held
+    constant lost half its raw crash count, and one whose raw count merely held steady DOUBLED in
+    rate. Any trend statistic on raw counts is measuring the user base at least as much as the
+    code, which is why `sigtrend` divides by this and never compares counts directly.
+
+    ``day`` is Socorro's ``date``, i.e. ``processed_crash.date_processed``. That choice is what
+    makes the series causal: a row for day D contains exactly what was visible on D, so reading
+    days <= D reproduces what a run on D could have known, with no late arrivals leaking in."""
+
+    __tablename__ = "chandaily"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    product = db.Column(PRODUCT_TYPE, nullable=False)
+    channel = db.Column(CHANNEL_TYPE, nullable=False)
+    day = db.Column(db.Date, nullable=False)
+    reports = db.Column(db.Integer, nullable=False, default=0)
+    installs = db.Column(db.Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        db.UniqueConstraint("product", "channel", "day", name="chandaily_day"),
+    )
+
+    @staticmethod
+    def upsert(product, channel, day, reports, installs, commit=True):
+        try:
+            ins = pg.insert(ChannelDaily).values(
+                product=product, channel=channel, day=day,
+                reports=reports, installs=installs,
+            )
+            db.session.execute(ins.on_conflict_do_update(
+                constraint="chandaily_day",
+                set_=dict(reports=ins.excluded.reports, installs=ins.excluded.installs),
+            ))
+            if commit:
+                db.session.commit()
+            return True
+        except Exception:
+            logger.error("Cannot upsert the channel daily row", exc_info=True)
+            db.session.rollback()
+            return False
+
+    @staticmethod
+    def series(product, channel, start, end):
+        """``{day: (reports, installs)}`` for ``start <= day <= end``."""
+        try:
+            rows = (
+                db.session.query(ChannelDaily.day, ChannelDaily.reports,
+                                 ChannelDaily.installs)
+                .filter(ChannelDaily.product == product,
+                        ChannelDaily.channel == channel,
+                        ChannelDaily.day >= start, ChannelDaily.day <= end)
+                .all()
+            )
+            return {d: (r, i) for d, r, i in rows}
+        except Exception:
+            logger.error("Cannot read the channel daily series", exc_info=True)
+            db.session.rollback()
+            return {}
+
+    @staticmethod
+    def known_days(product, channel, start, end):
+        """The days already collected — so a backfill only fetches the gaps."""
+        return set(ChannelDaily.series(product, channel, start, end))
+
+    @staticmethod
+    def prune(days=90):
+        return _prune_daily(ChannelDaily, days)
+
+
+class SignatureDaily(db.Model):
+    """One row per (product, channel, PROCESSED day, signature): that signature's reports and
+    distinct installations that day.
+
+    DISTINCT INSTALLATIONS ARE THE POINT, and reports are kept only so a human surface can quote
+    both. One machine has produced 81,843 of 86,196 reports in a past measurement here, and 7 of
+    the 59 loudest nightly signatures came from a single installation — so a rate built on reports
+    measures one bad machine as loudly as a real regression. Measured over 12 matched thresholds on
+    294,422 replayed (signature, run-day) rows, the install-based test beat the report-based one
+    every time with non-overlapping confidence intervals (relative risk 16.9 vs 11.0 at the same
+    window, firing half as often).
+
+    Why this exists at all, when ``stats`` already holds per-(signature, build) counts: ``stats`` is
+    indexed by BUILD and only for the pairs the selector KEPT, and the deployed window is 21 days.
+    The trend statistic needs a per-DAY series for EVERY active signature over ~63 days, and the
+    length is not a nicety — replayed at the honest standard (credit only at 3-30 days of lead), a
+    14-day baseline reaches 6 of 57 human cases, 28 days reaches 10, and 56 days reaches 16."""
+
+    __tablename__ = "sigdaily"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    product = db.Column(PRODUCT_TYPE, nullable=False)
+    channel = db.Column(CHANNEL_TYPE, nullable=False)
+    day = db.Column(db.Date, nullable=False)
+    signature = db.Column(db.String(512), nullable=False)
+    reports = db.Column(db.Integer, nullable=False, default=0)
+    installs = db.Column(db.Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        db.UniqueConstraint("product", "channel", "day", "signature",
+                            name="sigdaily_row"),
+        db.Index("sigdaily_lookup_idx", "product", "channel", "signature", "day"),
+    )
+
+    # Same 65535-bind-parameter ceiling as `Selection.record_many`: ~300 signatures a day x 6
+    # columns is nowhere near it, but a backfill upserts many days at once.
+    _CHUNK = 1000
+
+    @staticmethod
+    def record_day(product, channel, day, rows, commit=True):
+        """Upsert ``{signature: (reports, installs)}`` for one day. Never raises."""
+        if not rows:
+            return 0
+        try:
+            values = [
+                {"product": product, "channel": channel, "day": day,
+                 "signature": sgn[:512], "reports": rep, "installs": ins}
+                for sgn, (rep, ins) in rows.items()
+            ]
+            written = 0
+            for start in range(0, len(values), SignatureDaily._CHUNK):
+                chunk = values[start:start + SignatureDaily._CHUNK]
+                ins_stmt = pg.insert(SignatureDaily).values(chunk)
+                db.session.execute(ins_stmt.on_conflict_do_update(
+                    constraint="sigdaily_row",
+                    set_=dict(reports=ins_stmt.excluded.reports,
+                              installs=ins_stmt.excluded.installs),
+                ))
+                written += len(chunk)
+            if commit:
+                db.session.commit()
+            return written
+        except Exception:
+            logger.error("Cannot record the signature daily rows", exc_info=True)
+            db.session.rollback()
+            return 0
+
+    @staticmethod
+    def series(product, channel, signature, start, end):
+        """``{day: (reports, installs)}`` for one signature over an inclusive day range.
+
+        A day with no row is a day with no crash, and the caller must read it as zero rather
+        than as missing — which is only sound because the collector writes a ChannelDaily row
+        for every day it visits, so "no signature row" and "never collected" are told apart
+        there rather than here."""
+        try:
+            rows = (
+                db.session.query(SignatureDaily.day, SignatureDaily.reports,
+                                 SignatureDaily.installs)
+                .filter(SignatureDaily.product == product,
+                        SignatureDaily.channel == channel,
+                        SignatureDaily.signature == signature[:512],
+                        SignatureDaily.day >= start, SignatureDaily.day <= end)
+                .all()
+            )
+            return {d: (r, i) for d, r, i in rows}
+        except Exception:
+            logger.error("Cannot read the signature daily series", exc_info=True)
+            db.session.rollback()
+            return {}
+
+    @staticmethod
+    def prune(days=90):
+        return _prune_daily(SignatureDaily, days)
+
+
+def _prune_daily(model, days):
+    """Drop rows older than ``days``. These tables are a rolling window, not an archive."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        n = (db.session.query(model)
+             .filter(model.day < cutoff)
+             .delete(synchronize_session=False))
+        db.session.commit()
+        return n
+    except Exception:
+        logger.error("Cannot prune %s", model.__tablename__, exc_info=True)
+        db.session.rollback()
+        return 0
+
+
+_ADDED_TABLES = ("archetypes", "chandaily", "feedback", "reviewnote",
+                 "selection", "sigdaily", "sweepmarks")
 
 
 def _ensure_tables():

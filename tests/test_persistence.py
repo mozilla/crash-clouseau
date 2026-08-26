@@ -44,9 +44,9 @@ class TestSchemaDefinition(unittest.TestCase):
         # If this fails you added a model: decide whether prod needs the table created, add it to
         # `_ADDED_TABLES`, then add it here.
         known = {
-            "archetypes", "builds", "changesets", "crashstack", "dossiers", "feedback",
-            "files", "hgauthors", "lastdate", "nodes", "reviewnote", "scores", "selection",
-            "signatures", "stats", "sweepmarks", "uuids", "verdicts",
+            "archetypes", "builds", "changesets", "chandaily", "crashstack", "dossiers",
+            "feedback", "files", "hgauthors", "lastdate", "nodes", "reviewnote", "scores",
+            "selection", "sigdaily", "signatures", "stats", "sweepmarks", "uuids", "verdicts",
         }
         self.assertEqual(
             set(db.metadata.tables) - known, set(),

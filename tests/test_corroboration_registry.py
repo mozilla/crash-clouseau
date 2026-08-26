@@ -313,6 +313,12 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "machine_distinct_signatures", "machine_span_seconds",
         "second_opinion_abstained", "second_opinion_clamped",
         "second_opinion_downgraded_strong", "skeptic_build_flag_unbound",
+        # `sigtrend`. The tail is deliberately write-only: it is an ordering statistic that is
+        # anti-conservative by three to five orders of magnitude against a shuffled null, so no
+        # surface may print it and no threshold may cut on it -- `is_rising` tests the RATIO
+        # instead. The baseline install count is kept so the ratio stays re-derivable from a
+        # persisted dossier without refetching Socorro.
+        "signature_trend_score", "signature_trend_baseline_installs",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

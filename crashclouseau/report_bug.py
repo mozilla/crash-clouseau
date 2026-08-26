@@ -653,6 +653,51 @@ def build_stale_signature_note(corroborations):
     return note + " Clouseau lowered its own confidence one step for that."
 
 
+def build_trend_note(corroborations):
+    """"The rate went up Nx" — the sentence that IS the deliverable for this class, or ``None``.
+
+    :aryx filed bug 2063336 with one line — "single digit crashes per version to 14 reports from 14
+    installs of Firefox 155.0a1" — and baku fixed it five days later. No regressor was ever named,
+    and none was needed: among the human-filed bugs on signatures that were ALREADY crashing,
+    **15 of the 32 fixes (47%) named no regressor at all**, against 36 of 56 in the new-signature
+    class. So on this class the observation is not the preamble to the finding, it is the finding,
+    and it has to survive a report that names no changeset.
+
+    Normalised for the channel's daily installation count, and INSTALLATIONS rather than reports,
+    because a reader who checks will otherwise be right to object: nightly's distinct installs per
+    day fell ~45% between June and August 2026, and one machine has produced 81,843 of 86,196
+    reports in a past measurement here.
+
+    No score, no p-value, no "statistically significant" — `sigtrend.tail_score` is an ordering
+    statistic that is anti-conservative by orders of magnitude, and a bug comment is the last place
+    to launder that into a confidence claim. Two counts and a ratio.
+
+    Costs nothing: ``_record_signature_trend_facts`` already put this in ``corroborations``."""
+    from crashclouseau import sigtrend
+
+    c = corroborations or {}
+    # Read LITERALLY, one `.get` per key, rather than by prefix. A comprehension over
+    # `startswith("signature_trend_")` is invisible to the registry scanner in
+    # tests/test_corroboration_registry.py, which is how five `sigage` keys sat live in prod
+    # dossiers and undeclared for weeks. It also documents exactly what this note depends on.
+    facts = {
+        "signature_trend_installs": c.get("signature_trend_installs"),
+        "signature_trend_reports": c.get("signature_trend_reports"),
+        "signature_trend_expected_installs": c.get("signature_trend_expected_installs"),
+        "signature_trend_ratio": c.get("signature_trend_ratio"),
+        "signature_trend_window_days": c.get("signature_trend_window_days"),
+        "signature_trend_baseline_days": c.get("signature_trend_baseline_days"),
+    }
+    if not sigtrend.is_rising(facts):
+        return None
+    # One arithmetic and one sentence, shared with the crash brief: the prose around them differs
+    # between a model and a human, the numbers must not.
+    sentence = sigtrend.describe(facts)
+    if not sentence:
+        return None
+    return "Crash rate for this signature has risen: " + sentence
+
+
 def build_hardware_note(corroborations, channel=None):
     """One paragraph on how much of this signature is hardware error, or ``""``.
 
@@ -880,6 +925,9 @@ def build_bug_comment(
         build_frames_block(stack, max_frames=max_frames, details=details),
         build_stats_sentence(first, stats, info),
         build_signature_age_note((dossier or {}).get("corroborations"), info.get("buildid")),
+        # Immediately after the age line, because the two answer opposite halves of the same
+        # question a reader asks first: how long has this existed, and did it just get worse.
+        build_trend_note((dossier or {}).get("corroborations")),
         build_stale_signature_note((dossier or {}).get("corroborations")),
         build_hardware_note((dossier or {}).get("corroborations"), channel),
         build_exposer_note((dossier or {}).get("corroborations")),
