@@ -899,7 +899,58 @@ def build_bug_comment(
         needinfo,
         _provenance(channel),
     ]
-    return "\n\n".join(s for s in sections if s)
+    return _unbacktick_bug_refs("\n\n".join(s for s in sections if s))
+
+
+# `bug 123456` in BACKTICKS is not a bug reference to Bugzilla — it is a code span, and BMO's
+# linkifier leaves it as literal text, so the reader gets a bug number they cannot click. A
+# developer complained about exactly that. Measured over the dossiers behind our filings:
+# **33 of the 72 filed bugs (46%) carry at least one**, so it is nearly every other bug we file.
+#
+# DONE HERE AND NOT IN THE PROMPT, deliberately. A prompt line is a probabilistic fix for a
+# deterministic formatting rule; it costs bytes on every run (the ledger in
+# `tests/test_prompt_budget.py` exists because those grew unreviewed once already); and it
+# cannot repair the dossiers already stored — this runs at render time, so a re-comment or a
+# re-filing of an OLD dossier comes out right too. Same reasoning as
+# `schema._normalize_citations`: normalise the model's output, do not ask it nicely.
+#
+# THE SPAN MUST BE NOTHING BUT THE REFERENCE, which is the whole delicacy. Two shapes in the
+# real corpus have to survive untouched, and both would be mangled by a looser rule:
+#   `Bug 2061686 Part 3` and `Bug 2064209 - Fix DeviceResetDetectPlace`   -- quoted COMMIT
+#       TITLES, where the backticks are correct and the text is not a reference; and
+#   `bug=2024012`                                                        -- a field/query
+#       token, which BMO would not linkify unbackticked either.
+# So: optional whitespace, `bug`/`bugs`, whitespace, then only digits and separators, then the
+# closing backtick. Anything else inside the span and it is left alone.
+_BUG_FENCE = re.compile(r"(```.*?```)", re.S)
+_BACKTICKED_BUG_REF = re.compile(r"`\s*bugs?\s+(\d+(?:\s*(?:,|/|&|and)\s*\d+)*)\s*`", re.I)
+_BUG_REF_SEP = re.compile(r"\s*(,|/|&|and)\s*", re.I)
+
+
+def _unbacktick_bug_refs(text):
+    """Strip the backticks off a code span that is ONLY a bug reference, so BMO linkifies it.
+
+    A list keeps its separator and every member gets its own ``bug``, because "bug 1 / 2" only
+    linkifies the first: ```bugs 1 / 2``` becomes "bug 1 / bug 2". (No plural form occurs in the
+    corpus today — 0 of 601 — so that half is written to the requirement, not fitted to data.)
+
+    Fenced blocks are skipped whole: a crash stack or a quoted diff is literal output, and a
+    number in one is not a reference we may rewrite."""
+    if not text or "`" not in text:
+        return text
+
+    def one(match):
+        parts = _BUG_REF_SEP.split(match.group(1))
+        return "".join(
+            "bug " + p if i % 2 == 0
+            # A comma hugs the number it follows; the word and symbol separators do not.
+            else ("{} ".format(p) if p == "," else " {} ".format(p))
+            for i, p in enumerate(parts))
+
+    return "".join(
+        chunk if chunk.startswith("```") else _BACKTICKED_BUG_REF.sub(one, chunk)
+        for chunk in _BUG_FENCE.split(text)
+    )
 
 
 # Last line of every filed bug. One sentence, not a section: the reviewer of bug 2061961 had to
