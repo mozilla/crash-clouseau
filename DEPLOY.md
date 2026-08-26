@@ -12,8 +12,10 @@ the rest are one-time app setup.
   call-graph grounding; it queries searchfox.org over the network).
 - **Agent isolation** — the Procfile runs a dedicated `agentworker` (queue `agent`) so
   ~20-min triage runs never block the ingestion `worker` (queues `high default low`).
-- **Cost controls** — nightly-only (`agent.channels`), one run per proto-signature
-  cluster (dedup), and a **sonnet** principal tier are already in `config/global.json`.
+- **Cost controls** — the analysed channels (`agent.channels`, overridable per deploy-free
+  env var `AGENT_CHANNELS`), one run per proto-signature cluster **per channel** (dedup),
+  a per-channel `autofile.daily_cap`, and a **sonnet** principal tier are all in
+  `config/global.json`.
 
 ## One-time app setup (required)
 1. **Add-ons:** Heroku Postgres + Heroku Redis. (`DATABASE_URL`/`REDIS_URL` are set
@@ -38,6 +40,52 @@ the rest are one-time app setup.
 4. **First ingestion:** the clock's first tick fires ~20 min after it starts. For an
    immediate kick, run once: `heroku run python bin/init.py` (creates schema if needed +
    runs one ingestion pass).
+
+## Turning the beta channel on (plan #18)
+
+Beta support is in the code and wired in `config/global.json` (`agent.channels` includes
+`beta`; `agent.autofile.channels.beta` sets `comment_on_existing: "skip"` and a
+`daily_cap` of 3). **Nothing beta happens until `INGEST_CHANNELS` says so**, and that is
+one env var, no deploy, effective on the next 20-minute tick:
+
+```sh
+# ingest-only canary: beta rows appear, nothing is analysed and nothing is filed
+heroku config:set INGEST_CHANNELS="nightly beta" AGENT_CHANNELS=nightly
+
+# then, when the free output looks right: analyse beta too
+heroku config:set AGENT_CHANNELS="nightly beta"
+```
+
+**Always set `INGEST_CHANNELS` explicitly.** `update_all` reads
+`os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()`, so *clearing* it
+does not mean "nightly" — it means every configured channel, **including release**,
+which nobody has measured or intended.
+
+The two levers are different kinds of thing, which is why they are separate:
+
+| lever | what it costs | how to change it |
+|---|---|---|
+| `INGEST_CHANNELS` | free (Socorro + hg reads) | env var, next tick |
+| `AGENT_CHANNELS` | ~$1-3 per crash | env var, next tick (it used to need a deploy, and a deploy kills in-flight runs at ~$3 each) |
+| `AUTOFILE_BUGS` | Bugzilla writes, **global** | env var, immediate |
+
+`AUTOFILE_BUGS` is global on purpose (a kill switch that only stops one channel is not a
+kill switch). To stop beta *without* stopping nightly, drop it from `AGENT_CHANNELS`:
+beta then costs nothing and files nothing.
+
+### What to watch on the first beta days
+- `tasks.html` now has a channel column — beta runs should be a small minority
+  (projected ~4-6 dossiers/day against nightly's 85-120).
+- `selection.html`: a new `dropped_no_users` outcome appears around each merge. That is
+  the merge-day `N.0b1` build being kept out of the baseline, not a lost signature.
+- The worker log at each cycle merge: `merge push at <date>: keeping N node(s),
+  extracting 0 patches` (N ≈ 5,000-7,000). If that line is *absent* on a merge day, the
+  merge push was patch-extracted after all — expect 3-4 hours of queue and check
+  `pushlog.is_merge_push`.
+- Beta filings carry `comment_on_existing: skip`, so a beta crash whose signature already
+  has an open bug files **nothing** and logs `open bug N exists`. That is the requested
+  behaviour ("only crashes without a bug in Bugzilla"), and it suppresses roughly 58-59%
+  of beta signatures — the alternative, `file_new`, is measured at ~2.4x the volume.
 
 ## Before you deploy: check for live triage runs
 
