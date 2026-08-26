@@ -898,6 +898,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         return {"filed": False,
                 "skipped": "channel {!r} has no autofile configuration".format(channel)}
     if not cfg["enabled"]:
+        # TWO DIFFERENT SILENCES, and only one of them is worth hearing about. The global
+        # switch being off is the ordinary observe-only state, so `_maybe_autofile` suppresses
+        # that log line — otherwise every run on every channel prints one. A channel held by
+        # an explicit `channels.<ch>.enabled: false` is a DECISION about that channel, and it
+        # is the whole instrument of plan #18's Phase 4 ("beta triaged, beta filing held"):
+        # a hold that leaves no trace cannot tell anyone how much it would have filed, which
+        # makes the phase measure nothing. Distinguished by the STRING, because that is what
+        # the caller keys on.
+        if config.autofile_channel_held(channel):
+            return {"filed": False, "channel": channel,
+                    "skipped": "autofile held for channel {!r} (triage-only)".format(channel)}
         return {"filed": False, "skipped": "autofile disabled"}
     if verdict not in cfg["verdicts"]:
         return {"filed": False, "skipped": "verdict {} not fileable".format(verdict)}

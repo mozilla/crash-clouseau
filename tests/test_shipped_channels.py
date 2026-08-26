@@ -186,15 +186,24 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         self.assertEqual(nightly["daily_cap"], 10)
         self.assertEqual(beta["comment_on_existing"], "skip")
         self.assertEqual(beta["daily_cap"], 3)
-        # Those two keys are the WHOLE beta overlay: the rung, the fileable verdicts and the
-        # needinfo behaviour are shared, so a change to any of them moves both channels at once.
-        # `enabled` cannot appear in this diff even if the overlay sets it, because the
-        # `AUTOFILE_BUGS` env read overwrites it for BOTH channels — see
-        # `test_a_global_arm_must_not_arm_a_channel_nobody_armed`.
-        self.assertEqual(
-            {k: v for k, v in beta.items() if nightly.get(k) != v},
-            {"comment_on_existing": "skip", "daily_cap": 3},
-        )
+        # THE OVERLAY DIFF, WITH THE ENV STATED BOTH WAYS, because it depends on `AUTOFILE_BUGS`
+        # and CI's default is not production's. Unset (CI) the top-level `enabled: false` reaches
+        # both channels, so `enabled` is equal on the two and drops out of the diff; with
+        # `AUTOFILE_BUGS=1` (prod) nightly arms and beta's explicit `enabled: false` vetoes, so it
+        # appears. Asserting only the first is how a test passes for a reason that does not hold
+        # where it matters — this file exists to say what PROD does.
+
+        def overlay_diff():
+            n, b = config.get_agent_autofile("nightly"), config.get_agent_autofile("beta")
+            return {k: v for k, v in b.items() if n.get(k) != v}
+
+        with mock.patch.dict(os.environ):
+            os.environ.pop("AUTOFILE_BUGS", None)
+            self.assertEqual(overlay_diff(),
+                             {"comment_on_existing": "skip", "daily_cap": 3})
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            self.assertEqual(overlay_diff(),
+                             {"enabled": False, "comment_on_existing": "skip", "daily_cap": 3})
         self.assertEqual((beta["min_confidence"], beta["verdicts"], beta["needinfo"]),
                          (70, ["lead", "culprit"], True))
         # No argument == nightly, byte for byte. This is what keeps the four existing
@@ -227,37 +236,32 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
                 self.assertIn("no autofile configuration", res["skipped"])
 
     def test_a_global_arm_must_not_arm_a_channel_nobody_armed(self):
-        """DEFECT: `AUTOFILE_BUGS=1` overrides a per-channel `enabled: false`, so plan #18's
-        Phase 4 — "beta triage on, beta filing still held" — cannot be expressed in prod.
+        """PHASE 4 IS EXPRESSIBLE, AND IT IS WHAT IS SHIPPED: beta is TRIAGED and its filing is
+        HELD, with `AUTOFILE_BUGS=1` live in production.
 
-        `_env_bool("AUTOFILE_BUGS", a.get("enabled", False))` is applied AFTER the channel
-        overlay and is SYMMETRIC, so it wins in both directions. The kill direction is correct
-        and deliberate ("a kill switch a JSON overlay can defeat is not a kill switch"); the ARM
-        direction is the defect: prod has `AUTOFILE_BUGS=1`, so `channels.beta.enabled: false`
-        — the exact value plan #18 item 17 prescribes for `config/global.json` and Phase 4/5
-        gate the rollout on — is unreachable. The only lever left is `AGENT_CHANNELS=nightly`,
-        which also stops beta TRIAGE, i.e. the thing Phase 4 exists to measure.
+        `_env_bool("AUTOFILE_BUGS", ...)` is applied after the channel overlay and is symmetric,
+        so it used to win in both directions. The kill direction is deliberate — a kill switch a
+        JSON overlay can defeat is not a kill switch — but the ARM direction was a defect: it
+        made `channels.beta.enabled: false` unreachable in prod, leaving `AGENT_CHANNELS=nightly`
+        as the only brake, which also stops beta TRIAGE, i.e. the thing Phase 4 exists to
+        measure. `config.get_agent_autofile` now honours an EXPLICIT per-channel `false`
+        (`channel_veto`), and `config/global.json` sets it.
 
-        The shipped config makes it live rather than theoretical: the beta overlay carries no
-        `enabled` key at all, so beta inherits the global one and THE FIRST BETA FILING — the
-        one irreversible step in the whole plan, expected to be a single bug every 50-125 days
-        and explicitly "an event to inspect by hand" — happens on deploy, not on a deliberate
-        arm.
+        It matters because the first beta filing is the one irreversible step in the plan —
+        expected at a single bug every 50-125 days, explicitly "an event to inspect by hand" —
+        and without this it would have happened on a deploy rather than on a deliberate arm.
 
-        CONTESTED, AND COUPLED: tests/test_beta_autofile.py::
-        test_the_env_kill_switch_beats_the_overlay asserts the SAME behaviour as correct and
-        deliberate (the switch is global on purpose). Fixing this defect fails that assertion,
-        so the two move in one diff — either an asymmetric `AUTOFILE_BUGS` (arm cannot override
-        an explicit per-channel `false`) or a separate per-channel env switch."""
-        agent = dict(config.get_agent())
-        autofile = dict(agent["autofile"])
-        autofile["channels"] = {"beta": {"enabled": False, "comment_on_existing": "skip",
-                                         "daily_cap": 3}}
-        agent["autofile"] = autofile
-        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}), \
-                mock.patch.object(config, "get_agent", return_value=agent):
+        Asserted against the REAL config, not a patched one, because the mechanism working while
+        the shipped value does not use it is exactly the gap this file exists to close. The
+        mechanism itself (absent key vs explicit false, both switch directions) is pinned in
+        tests/test_beta_autofile.py::test_the_env_kill_switch_beats_the_overlay."""
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
             self.assertTrue(config.get_agent_autofile("nightly")["enabled"])
             self.assertFalse(config.get_agent_autofile("beta")["enabled"])
+        # ...and the hold is a DECISION, not the absence of one: the channel stays declared, so
+        # `autofile_bug` refuses it on `enabled` rather than on "nobody configured this channel".
+        # The two are different states and the filer's skip reason distinguishes them.
+        self.assertTrue(config.autofile_channel_declared("beta"))
 
     def test_the_kill_direction_of_the_global_switch_still_wins(self):
         """The half of the same asymmetry that IS right: `AUTOFILE_BUGS=0` beats an overlay

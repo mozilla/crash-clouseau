@@ -592,6 +592,27 @@ def autofile_channel_declared(channel):
     return ch in {k.lower() for k in (a.get("channels") or {})}
 
 
+def autofile_channel_held(channel):
+    """Is *channel*'s filing held by an EXPLICIT per-channel ``enabled: false``?
+
+    Distinct from ``not get_agent_autofile(channel)["enabled"]``, which is also true when the
+    global ``AUTOFILE_BUGS`` switch is off or the top-level default is false. The three states
+    have to stay apart because only this one is a per-channel DECISION, and only this one is
+    worth a log line: with the global switch off, every run on every channel would say "not
+    filed", which is noise, so ``orchestrator._maybe_autofile`` suppresses that string — and a
+    channel held on purpose would have been suppressed with it.
+
+    THIS IS PLAN #18's PHASE 4 BEING MEASURABLE AT ALL. The point of triaging beta with filing
+    held is to find out how much it WOULD file; a hold that leaves no trace answers nothing, and
+    is the silent-no-op shape this codebase keeps being bitten by. Note the log line is not the
+    durable record — Heroku keeps ~2h and there is no drain — so the number to count over a week
+    is beta dossiers whose verdict reached the filing rung. That is an UPPER bound: the gates
+    after this one (an open bug on the signature, which is 58-59% of beta signatures; the daily
+    cap; product/component resolution) never run, so they cannot subtract."""
+    over = (get_agent().get("autofile", {}).get("channels") or {}).get((channel or "").lower())
+    return bool(over) and over.get("enabled") is False
+
+
 def get_agent_autofile(channel=None):
     """Automatic bug FILING knobs (the only unattended write to Bugzilla).
 

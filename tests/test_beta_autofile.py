@@ -191,10 +191,7 @@ class TestTheOverlayCannotMoveNightly(unittest.TestCase):
             with mock.patch.dict(os.environ):
                 os.environ.pop("AUTOFILE_BUGS", None)
                 self.assertTrue(cconfig.get_agent_autofile("beta")["enabled"])
-            # AND THE OTHER DIRECTION, which is the live prod state: the switch is GLOBAL, so an
-            # overlay cannot disarm one channel while `AUTOFILE_BUGS=1` is set. `enabled: false`
-            # in a channel overlay is therefore inert in production — the per-channel brake is
-            # `AGENT_CHANNELS` (what gets ANALYSED), not this dict.
+            # AND THE OTHER DIRECTION, which is the live prod state.
             #
             # SETTLED, AND THE RULE IS "THE STRICTEST OF THE TWO WINS", because the two are
             # different kinds of statement. `AUTOFILE_BUGS=0` is a KILL SWITCH and beats any
@@ -214,7 +211,9 @@ class TestTheOverlayCannotMoveNightly(unittest.TestCase):
                     # a per-channel veto and not a global one.
                     self.assertTrue(cconfig.get_agent_autofile("nightly")["enabled"])
             # An ABSENT `enabled` key is not a veto: it inherits the top-level default and the
-            # global arm, which is exactly how beta is configured in config/global.json.
+            # global arm. That is how beta was configured until the triage-only phase; it now
+            # sets `enabled: false` explicitly, so the two shapes have to stay distinguishable —
+            # a silent inherit must never read as a decision to hold.
             silent = {"autofile": {"enabled": False,
                                    "channels": {"beta": {"daily_cap": 3}}}}
             with mock.patch.object(cconfig, "get_agent", return_value=silent):
@@ -277,6 +276,65 @@ class _BetaBase(_Base):
         return bugzilla_apply.autofile_bug(
             "u-1", info or _BETA_INFO, {}, dossier or {"candidate": {"node": "n"}},
             verdict, confidence)
+
+
+class TestTheTriageOnlyHoldIsVisible(_BetaBase):
+    """Plan #18 Phase 4 — beta TRIAGED, beta filing HELD — has to leave a trace.
+
+    The hold's whole purpose is to find out how much beta WOULD file before arming it. A hold
+    that is indistinguishable from "the run abstained", "the run never happened" and "the
+    global switch is off" measures nothing, and is the silent-no-op shape this codebase has
+    been bitten by four times.
+
+    `_autofile` suppresses the log line for `"autofile disabled"` on purpose: with
+    `AUTOFILE_BUGS=0` every run on every channel would print one. So the per-channel hold has
+    to say something ELSE or it inherits that silence."""
+
+    def test_the_per_channel_hold_is_not_the_global_switch(self):
+        """Three states, three answers. Only the middle one is a decision about a channel."""
+        agent = dict(cconfig.get_agent())
+        agent["autofile"] = {**agent["autofile"], "channels": {
+            "beta": {"enabled": False}, "release": {"daily_cap": 1}}}
+        with mock.patch.object(cconfig, "get_agent", return_value=agent):
+            self.assertTrue(cconfig.autofile_channel_held("beta"))
+            self.assertFalse(cconfig.autofile_channel_held("nightly"))   # global default only
+            self.assertFalse(cconfig.autofile_channel_held("release"))   # overlay, no `enabled`
+            self.assertFalse(cconfig.autofile_channel_held("esr"))       # undeclared
+            self.assertFalse(cconfig.autofile_channel_held(None))
+
+    def test_the_shipped_config_holds_beta_and_says_so(self):
+        """Against the REAL config, because a mechanism that works while the shipped value does
+        not use it is the gap that let the first beta filing ride on a deploy."""
+        self.assertTrue(cconfig.autofile_channel_held("beta"))
+        self.assertFalse(cconfig.autofile_channel_held("nightly"))
+        res = self._file_beta(enabled=False)
+        self.assertFalse(res["filed"])
+        self.assertIn("held for channel", res["skipped"])
+        self.assertIn("beta", res["skipped"])
+        self.assertEqual(res["channel"], "beta")
+        self.assertEqual((self.created, self.comments, self.puts), ([], [], []))
+
+    def test_the_hold_is_logged_and_the_global_switch_is_not(self):
+        """The suppression in `orchestrator._autofile` keys on the STRING, so this pins the two
+        strings against the one predicate that reads them."""
+        from crashclouseau.agent import orchestrator
+
+        cases = {"autofile disabled": False,
+                 "autofile held for channel 'beta' (triage-only)": True}
+        for skipped, should_log in cases.items():
+            with self.subTest(skipped=skipped):
+                # `_autofile` imports `bugzilla_apply` INSIDE the function, so the name to
+                # patch is the module's own, not an attribute of `orchestrator`.
+                with mock.patch.object(orchestrator.models.CrashStack, "get_by_uuid",
+                                       return_value=({}, {"channel": "beta"})), \
+                        mock.patch.object(bugzilla_apply, "autofile_bug",
+                                          return_value={"filed": False, "skipped": skipped}), \
+                        self.assertLogs(level="INFO") as caught:   # `logger` IS the root logger
+                    orchestrator.logger.info("marker")   # so assertLogs always has a record
+                    orchestrator._autofile(
+                        "u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 90})
+                logged = any("not filed" in line for line in caught.output)
+                self.assertEqual(logged, should_log)
 
 
 class TestTheChannelGate(_BetaBase):
