@@ -25,8 +25,18 @@ the rest are one-time app setup.
      env and nothing in code sets it. Without it every agent run errors (silently, since
      runs are failure-isolated) and crashstack panels stay empty.
    - `heroku config:set SOCORRO_TOKEN=…` — **required for reports.html to populate**; the
-     scoring/ingestion path needs a crash-stats token with protected-data scope. Copy it
-     from the existing app.
+     scoring/ingestion path needs a crash-stats token. Copy it from the existing app.
+     **It does NOT carry protected-data scope**, whatever this line used to claim. Measured
+     2026-08-26 against the live API with the prod token: SuperSearch returns byte-identical
+     columns with and without the header, and every `protected` field is *omitted* rather
+     than nulled — asked for `moz_crash_reason_raw` on two crashes whose PUBLIC
+     `moz_crash_reason` was populated, and it came back absent both times.
+     `SuperSearchUnredacted` answers `403 … requires the 'View Personal Identifiable
+     Information' permission`. So `remote_type`, `url`, `user_comments` and the `phc_*`
+     fields are all unreadable here. That matters beyond provisioning: `remote_type` is the
+     only field that tells a WebExtensions process from a web content process (`process_type`
+     is `content` for both, and has no `extension` value), which is how bug 2066201 was
+     filed against an extension API for a `webIsolated` crash. Tracked in bug 2066600.
    - Do **NOT** set a Bugzilla token (observe-only): with none, the apply route
      hard-fails safe and Clouseau is strictly read-only. Enabling Bugzilla writes wants
      product-owner sign-off (the app is unauthenticated + CORS-open).
