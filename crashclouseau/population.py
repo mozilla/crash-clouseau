@@ -39,7 +39,7 @@ import statistics
 from libmozdata import socorro
 from libmozdata.connection import Query
 
-from . import config
+from . import config, utils
 from .logger import logger
 
 # install_time values outside this range are dropped as unreadable rather than trusted: below it
@@ -188,7 +188,11 @@ def for_crash(uuid_info):
         "_results_number": 0,
     }
     if channel:
-        facet_params["release_channel"] = channel
+        # `get_search_channel`, not the raw label: `aurora` (DevEdition) is 36-41% of beta,
+        # and this panel's whole subject is how CONCENTRATED a signature's installations
+        # are -- a denominator missing a third of the channel reads as concentration that
+        # is not there.
+        facet_params["release_channel"] = utils.get_search_channel(channel)
     own_params = {
         "uuid": uuid_info.get("uuid", ""),
         "_columns": ["install_time"],

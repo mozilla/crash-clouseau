@@ -132,8 +132,23 @@ async def get_info_helper(uuid, changeset, evidence_summary=None):
     cs_api_q = {
         "signature": "=" + info["signature"],
         "build_id": ">=" + info["buildid"],
+        # THE SAME DATE ANCHOR `fetch_signature_stats` CARRIES, and for the same measured
+        # reason: SuperSearch with no `date` silently returns only the last ~8 days of REPORT
+        # dates (measured 2026-08-11 -- a bare nightly query answered 2026-08-04..08-11 and
+        # nothing older), so on any build older than that this query answered `total=0`,
+        # `get_stats` fell to its summing branch, and the hand-drafted comment said "There are
+        # 0 crashes (from 0 installations)" for a crash the autofiled comment counted in the
+        # thousands. The two really do have to compute the same number; they did not, and
+        # nothing said so until `tests/test_beta_channel_wiring` diffed the two param dicts.
+        "date": ">=" + _day_str(info["buildid"]),
         "product": info["product"],
-        "release_channel": info["channel"],
+        # `get_search_channel`, and it must move together with `fetch_signature_stats`
+        # below: the two compute the same number for the same bug (this one for the
+        # hand-drafted `enter_bug.cgi` link, that one for the autofiled comment) and if
+        # only one is widened the two comments quote different crash counts for the same
+        # crash. On beta the raw label loses DevEdition, measured at 25.5% of the reports
+        # overall and 0-72.4% per signature on build 20260819090452.
+        "release_channel": utils.get_search_channel(info["channel"]),
         "_aggs.build_id": ["install_time", "_cardinality.install_time"],
         "_results_number": 0,
         "_facets": "release_channel",
@@ -274,10 +289,18 @@ def build_stats_sentence(first, stats, uuid_info):
         what = "There are {} crashes (from {} installations)".format(count, installs)
     # Same "where" wording as bug.txt: a nightly is named by its channel + major version
     # ("nightly 155"), a release/beta by its full version.
+    #
+    # ON BETA THE VERSION ALONE UNDER-CLAIMS THE NUMBER BESIDE IT. The count above is now
+    # gathered over `utils.get_search_channel(channel)`, i.e. beta AND aurora, because
+    # Socorro files Developer Edition under `aurora` and that is 36-41% of the channel. A
+    # sentence that says "155.0b2" while the number covers beta+DevEdition claims a
+    # narrower population than it measured, so say both.
     channel = (uuid_info or {}).get("channel") or ""
     version = (uuid_info or {}).get("version") or ""
     if channel == "nightly":
         where = "nightly {}".format(utils.get_major(version)) if version else "nightly"
+    elif channel == "beta":
+        where = "beta/DevEdition {}".format(version) if version else "beta/DevEdition"
     else:
         where = version or channel
     buildid = utils.get_buildid((uuid_info or {}).get("buildid"))
@@ -462,7 +485,11 @@ def fetch_signature_stats(uuid, info):
                 # reachable as soon as the nightly window widened to 21 days.
                 "date": ">=" + _day_str(buildid),
                 "product": info.get("product"),
-                "release_channel": info.get("channel"),
+                # `get_search_channel` -- see `get_info_helper`'s twin of this query. This
+                # is the number that reaches the FILED bug ("There are N crashes from M
+                # installations"), so under-counting it by a third is a needinfo that
+                # understates the problem it is asking someone to look at.
+                "release_channel": utils.get_search_channel(info.get("channel")),
                 "_aggs.build_id": ["install_time", "_cardinality.install_time"],
                 "_results_number": 0,
                 "_facets": "release_channel",
@@ -853,7 +880,7 @@ def build_bug_comment(
         build_other_app_bugs_note(other_app_bugs),
         build_meta_bugs_note(meta_bugs),
         needinfo,
-        _PROVENANCE,
+        _provenance(channel),
     ]
     return "\n\n".join(s for s in sections if s)
 
@@ -863,9 +890,27 @@ def build_bug_comment(
 # reader who knows can discount it themselves without the prose hedging every clause. The
 # invitation to resolve it is not politeness — an INVALID from someone who knows the code is a
 # useful outcome, and the alternative is a stale needinfo nobody wants to be rude about.
-_PROVENANCE = (
+# What the LLM analyses, by the crash's own channel. NOT a cosmetic string: the paragraph's
+# whole job is to tell a reader what wrote the analysis so they can discount it, and "analyses
+# nightly crashes" on a bug whose crash is a beta crash is false in the one sentence that is
+# supposed to be reliable. A channel we have no phrase for gets the honest general one rather
+# than a guess — this is a bug comment, not a log line.
+_PROVENANCE_SCOPE = {
+    "nightly": "nightly crashes",
+    "beta": "beta and Developer Edition crashes",
+    "release": "release crashes",
+}
+
+
+def _provenance(channel=None):
+    """The last line of every filed bug, with the crash's own channel named in it."""
+    scope = _PROVENANCE_SCOPE.get((channel or "").lower(), "Firefox crashes")
+    return _PROVENANCE_TEMPLATE.format(scope=scope)
+
+
+_PROVENANCE_TEMPLATE = (
     "_Filed automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), which "
-    "analyses nightly crashes with an LLM. Nothing above was written or checked by a human. "
+    "analyses {scope} with an LLM. Nothing above was written or checked by a human. "
     "Please close it as INVALID if it is wrong — that is useful feedback, not a nuisance._\n\n"
     # THE ATTRIBUTION SENTENCE, and it is not politeness. :mccr8 on bug 2065051: the dupe "is
     # going to kind of cause a bit of a headache for the bug bounty process, because at a casual
@@ -1230,7 +1275,7 @@ def build_dissent_note(dossier):
     corroborating second opinion, so the sentence is constant on the surface that would print it;
     worse, BOTH known-wrong filings carry one at confidence `high` with an SO mechanism restating
     the very claim a reviewer refuted (2065969, RESOLVED/INVALID, and 2065373 itself). Printing
-    agreement there inflates authority against the one thing `_PROVENANCE` is written to invite.
+    agreement there inflates authority against the one thing `_provenance` is written to invite.
     A refutation has the opposite profile: it is rare on this surface, it always points our way,
     and it is the strongest thing we know that we are currently withholding.
 

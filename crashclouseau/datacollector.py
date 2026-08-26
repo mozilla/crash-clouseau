@@ -436,7 +436,10 @@ def get_changeset(buildid, channel, product):
 
     params = {
         "product": product,
-        "release_channel": channel,
+        # `get_search_channel`, like the four queries above it in this module: a beta build
+        # and its DevEdition twin share a buildid (58 of 59 since 2026-04-01, identical
+        # revisions), so the raw label throws away a third of the reports this vote counts.
+        "release_channel": utils.get_search_channel(channel),
         "build_id": buildid,
         "date": search_date,
         "topmost_filenames": '@"hg:hg.mozilla.org/".*:[0-9a-f]+',

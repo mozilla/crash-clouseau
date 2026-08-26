@@ -57,8 +57,28 @@ def put_report(uuid, buildid, channel, product, chgset):
     if channel == "nightly":
         mindate = buildid - relativedelta(days=config.get_ndays())
     else:
+        # +1 second, and on beta that second is load-bearing: the previous build row is the
+        # merge-day build, whose revision is a MEMBER of the central->beta merge push, so
+        # every one of that push's ~5,100 changesets carries exactly this pushdate and
+        # `mindate` lands one second above all of them. The window is then the cycle's
+        # uplifts (measured 45-122 changesets) instead of the whole merged cycle. See
+        # `tests/test_beta_windows.py`, which pins it, and plan #18 item 9 for why the
+        # merge-day `builds` row must never be removed.
         mindate = models.Build.get_pushdate_before(buildid, channel, product)
-        mindate += relativedelta(seconds=1)
+        if mindate is None:
+            # No earlier build row: the builds table was pruned (`Node.clean` +
+            # ON DELETE CASCADE) or this is the first build ever ingested on the channel.
+            # Fall back to the nightly rule rather than lose the report — a wider window is
+            # a worse window, not a broken one, and the scorer still ranks by line
+            # proximity. Loud, because a persistent one means the builds table is not
+            # keeping up with the uuid backlog.
+            logger.warning(
+                "no build before %s on %s/%s: falling back to a %d-day candidate window",
+                utils.get_buildid(buildid), product, channel, config.get_ndays(),
+            )
+            mindate = buildid - relativedelta(days=config.get_ndays())
+        else:
+            mindate += relativedelta(seconds=1)
 
     interesting_chgsets = set()
     res = inspector.get_crash(
@@ -77,7 +97,17 @@ def put_report(uuid, buildid, channel, product, chgset):
     useless = True
     chgsets = models.Changeset.to_analyze(chgsets=interesting_chgsets, channel=channel)
     for nodeid, node in chgsets:
-        data = patch.parse(node, channel=channel)
+        try:
+            data = patch.parse(node, channel=channel)
+        except Exception as e:
+            # ONE candidate's diff, not the report. `patch.parse` now raises on a non-200
+            # instead of handing back `{}` (hg answers 406 to a throttled bulk reader), and
+            # letting that propagate would `UUID.set_error` a report whose only problem is
+            # somebody else's rate limiter — and an errored report is never retried. The
+            # changeset stays `analyzed=False`, so `analyze_patches` picks it up later; this
+            # crash is simply scored without it.
+            logger.warning("cannot parse %s on %s (%s): scoring without it", node, channel, e)
+            continue
         models.Changeset.add_analyzis(data, nodeid, channel)
 
     frames = res.get("nonjava")

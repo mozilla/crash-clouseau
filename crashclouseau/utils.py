@@ -381,10 +381,16 @@ def get_params_for_link(**query):
 
 
 def make_url_for_signature(sgn, date, buildid, channel, product):
-    """Build a Socorro's url for a given signature"""
+    """Build a Socorro's url for a given signature.
+
+    ``get_search_channel``, like every other query keyed on our channel label. This link sits on
+    crashstack.html and reports.html NEXT TO the population panel, which counts beta+aurora --
+    so with the raw label the two disagreed on the same page: the panel's number included
+    Developer Edition and the link the reader clicks to check it did not, and that is 25.5% of
+    the reports overall and up to 72.4% on a single signature (build 20260819090452)."""
     params = get_params_for_link(
         signature="=" + sgn,
-        release_channel=channel,
+        release_channel=get_search_channel(channel),
         product=product,
         build_id=buildid,
         date=">=" + str(date),

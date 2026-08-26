@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
 
+from crashclouseau import utils
 from crashclouseau.logger import logger
 
 # Rows fetched in the single lookup. Higher than any real install's crash count (the worst
@@ -78,7 +79,14 @@ def install_history(install_time, product="Firefox", channel="nightly", before=N
         "_sort": "date",
     }
     if channel:
-        params["release_channel"] = channel
+        # Through `utils.get_search_channel`, never raw. Socorro files Developer Edition
+        # under `aurora`, which is 36-41% of the beta population, so a beta crash asked
+        # about `release_channel=beta` sees none of its DevEdition siblings -- and a
+        # DevEdition crash (whose own reports are ALL `aurora`) saw NOTHING AT ALL, so
+        # `install_history` returned its all-None `empty` dict and the bad-machine gate
+        # could not fire on 36-41% of the channel. Widening costs nothing here: an
+        # installation is on one channel, so the extra term matches only its own reports.
+        params["release_channel"] = utils.get_search_channel(channel)
     got = {}
 
     def handler(json_, data):

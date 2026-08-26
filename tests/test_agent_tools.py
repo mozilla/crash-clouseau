@@ -3,13 +3,21 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 # DATABASE_URL=sqlite:// python -m unittest tests.test_agent_tools
-import asyncio
-import unittest
-from unittest import mock
+#
+# ...and set here too, so `unittest discover` with a bare environment does not fail at IMPORT and
+# silently skip this module (see tests/test_agent.py).
+import os
 
-from crashclouseau.agent import patch_extract
-from crashclouseau.agent.tools.patch import PatchCtx, diff
-from crashclouseau.searchfox import (
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+
+import asyncio  # noqa: E402
+import unittest  # noqa: E402
+from unittest import mock  # noqa: E402
+
+from crashclouseau.agent import patch_extract  # noqa: E402
+from crashclouseau.agent.tools.patch import PatchCtx, diff  # noqa: E402
+from crashclouseau.searchfox import (  # noqa: E402
     CallEdge,
     CallGraph,
     FieldEntry,
@@ -18,16 +26,16 @@ from crashclouseau.searchfox import (
     SearchfoxNoResult,
     SymbolRef,
 )
-from crashclouseau.agent.tools import searchfox_cg as sfcg
-from crashclouseau.agent.tools.searchfox_cg import (
+from crashclouseau.agent.tools import searchfox_cg as sfcg  # noqa: E402
+from crashclouseau.agent.tools.searchfox_cg import (  # noqa: E402
     SearchfoxCtx,
     calls_from,
     calls_to,
     define,
     field_layout,
 )
-from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
-from crashclouseau.vendor.agent_tools.registry import ToolError
+from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server  # noqa: E402
+from crashclouseau.vendor.agent_tools.registry import ToolError  # noqa: E402
 
 
 def _graph():

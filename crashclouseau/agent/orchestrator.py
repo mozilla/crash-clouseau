@@ -698,7 +698,7 @@ def build_seed(uuid):
         "archetypes": _matching_archetypes(info, stack_text, raw_crash),
         # What else the machine that produced this crash has been crashing on — the bad-machine
         # gate's input (`machine.install_history`). Every value None when unknown.
-        "install_history": _install_history(raw_crash),
+        "install_history": _install_history(raw_crash, channel),
         # What share of this SIGNATURE is hardware error rather than a software defect — the
         # signature-level half of the bit-flip gate (`sigage.hardware_noise`). All None when
         # unknown.
@@ -739,7 +739,14 @@ def _hardware_noise(info, channel):
         return empty
 
 
-def _install_history(raw_crash):
+# Socorro's ``release_channel`` -> the channel label WE store and query with. Only DevEdition
+# differs: it is ingested under ``beta`` (same buildid, same revision) and reported as
+# ``aurora``, so a fallback that used the raw label asked Socorro about ``aurora`` alone and
+# `get_search_channel` had nothing to widen.
+_DB_CHANNEL = {"aurora": "beta"}
+
+
+def _install_history(raw_crash, channel=None):
     """This installation's recent crash profile, for ``_apply_bad_machine_gate``.
 
     Costs ONE SuperSearch (~200ms warm) on a run that already takes ~20 minutes, and needs no
@@ -760,7 +767,15 @@ def _install_history(raw_crash):
         return machine.install_history(
             raw.get("install_time"),
             product=raw.get("product") or "Firefox",
-            channel=raw.get("release_channel") or "nightly",
+            # THE CRASH'S DB CHANNEL, not the processed crash's `release_channel`. Socorro files
+            # Developer Edition as `aurora`, so the raw label made this query
+            # `release_channel=aurora` -- and `get_search_channel("aurora")` widens nothing, so
+            # the widening never reached the 36-41% of beta that IS DevEdition and the two halves
+            # of one channel got asymmetric answers. An installation is on one channel, so asking
+            # about `["beta","aurora"]` for either half costs nothing and is the same question.
+            channel=channel or _DB_CHANNEL.get(
+                (raw.get("release_channel") or "").lower(), raw.get("release_channel")
+            ) or "nightly",
             before=raw.get("date_processed"),
             days=cfg["lookback_days"],
         )

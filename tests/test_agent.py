@@ -3,24 +3,35 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 # DATABASE_URL=sqlite:// python -m unittest tests.test_agent
-import asyncio
-import json
-import mmap
-import unittest
-from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
+#
+# The env is SET here, not just documented: importing `crashclouseau` builds a Flask app, so
+# without a DATABASE_URL this module raises `sqlalchemy.exc.ArgumentError` at IMPORT. Thirty other
+# test modules set it themselves; these three only mentioned it in a comment, so
+# `python -m unittest discover tests/` with a bare environment reported 3 errors and silently
+# never loaded 135 tests.
+import os
 
-import claude_agent_sdk
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
-from crashclouseau.agent import triage
-from crashclouseau.agent.errors import MissingHandoffError
-from crashclouseau.agent.result import CrashTriageResult
-from crashclouseau.agent.schema import Decision
-from crashclouseau.agent.triage import build_options, build_result, run_crash_triage
-from crashclouseau.vendor.hackbot_runtime.actions import ACTIONS_SERVER_NAME
-from crashclouseau.vendor.hackbot_runtime.actions.recorder import ActionsRecorder
-from crashclouseau.vendor.hackbot_runtime.errors import AgentError
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import mmap  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest import mock  # noqa: E402
+
+import claude_agent_sdk  # noqa: E402
+
+from crashclouseau.agent import triage  # noqa: E402
+from crashclouseau.agent.errors import MissingHandoffError  # noqa: E402
+from crashclouseau.agent.result import CrashTriageResult  # noqa: E402
+from crashclouseau.agent.schema import Decision  # noqa: E402
+from crashclouseau.agent.triage import build_options, build_result, run_crash_triage  # noqa: E402
+from crashclouseau.vendor.hackbot_runtime.actions import ACTIONS_SERVER_NAME  # noqa: E402
+from crashclouseau.vendor.hackbot_runtime.actions.recorder import ActionsRecorder  # noqa: E402
+from crashclouseau.vendor.hackbot_runtime.errors import AgentError  # noqa: E402
 
 _CRASH = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "nightly"}
 

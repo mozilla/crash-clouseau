@@ -402,6 +402,37 @@ class Changeset(db.Model):
 
     @staticmethod
     def add_analyzis(data, nodeid, channel, commit=True):
+        """Store one changeset's parsed diff onto its ``changesets`` rows and mark them
+        analysed.
+
+        AN EMPTY ``data`` WITH ROWS TO FILL IS LOGGED, LOUDLY. It used to be the silent
+        signature of an hg **406**: ``patch.parse`` fetched raw-rev with a bare
+        ``requests.get`` (no allowlisted User-Agent), the throttled body parsed to ``{}``, and
+        this method still set ``analyzed=True`` with no added/deleted/touched lines — so that
+        candidate scored 0 against every frame, forever, and only ``Changeset.reset`` could
+        undo it. ``patch.parse`` now raises on a non-200, so a throttled fetch never reaches
+        here at all and the caller leaves the changeset un-analysed for a later retry.
+
+        WHAT THIS DELIBERATELY DOES **NOT** DO is leave ``analyzed=False`` on an empty parse.
+        That would turn any changeset whose diff legitimately parses to nothing — the parser
+        drops binary files and, with ``skip_comments=True``, comment-only hunks — into a
+        permanent re-fetch loop on a SERIAL, self-re-enqueuing chain
+        (``update.analyze_one_patch``), which is the same failure class as the livelock fixed
+        in ``UUID.to_analyze``. Measured 2026-08-25 over one day of mozilla-central: 11 of 11
+        non-merge changesets with an interesting file parsed non-empty through ``net.get``, 0
+        fetch failures — which is too small a sample to prove the comment-only case
+        unreachable, so the warning is the instrument. If it ever fires in prod, count it
+        before adding a retry."""
+        rows = (
+            db.session.query(Changeset).filter(Changeset.nodeid == nodeid).count()
+            if not data
+            else 0
+        )
+        if rows:
+            logger.warning(
+                "Empty patch parse for nodeid %s on %s, but %d changeset row(s) expected "
+                "lines: they will score 0 until reset", nodeid, channel, rows,
+            )
         db.session.query(Changeset).filter(Changeset.nodeid == nodeid).update(
             {"analyzed": True}
         )
@@ -602,6 +633,23 @@ class Build(db.Model):
 
     @staticmethod
     def get_pushdate_before(buildid, channel, product):
+        """The push date of the build BEFORE ``buildid`` — the lower bound of a non-nightly
+        crash's candidate window (``update.put_report``). ``None`` when there is no earlier
+        build row.
+
+        THE ``None`` IS THE POINT. This used to be ``return qs.pushdate`` on a ``.first()``
+        that is ``None`` whenever no earlier row exists, i.e. ``AttributeError: 'NoneType'
+        object has no attribute 'pushdate'`` — which on the ingestion path becomes
+        ``UUID.set_error`` on a report that had nothing wrong with it. The selector cannot
+        reach it (a picked build-day sits at window index >= 1, so an older row exists by
+        construction) but two other paths can: ``redo.reset()`` on a UUID whose older build
+        rows were cascade-deleted (``Node.clean`` prunes at ``max_ndays`` and
+        ``builds.nodeid`` is ``ON DELETE CASCADE``, and on beta a whole merge push's ~5,100
+        nodes age out in one instant), and any un-analysed backlog that outlives that
+        pruning. Nightly cannot hit it at all — its ``mindate`` is arithmetic on the buildid.
+
+        The caller decides what an unknown lower bound means; see ``update.put_report``,
+        which falls back to the nightly rule with a warning rather than losing the report."""
         qs = (
             db.session.query(Build.buildid, Node.pushdate).select_from(Build).join(Node)
         )
@@ -614,7 +662,7 @@ class Build(db.Model):
             .order_by(Build.buildid.desc())
             .first()
         )
-        return qs.pushdate
+        return qs.pushdate if qs else None
 
     @staticmethod
     def get_id(bid, channel, product):
@@ -1464,6 +1512,24 @@ class UUID(db.Model):
 
     @staticmethod
     def to_analyze(report_uuid):
+        """The next report to score, as ``(uuid, buildid, channel, product, node)``.
+
+        TWO PREDICATES THAT LOOK COSMETIC AND ARE NOT, because this feeds a SERIAL,
+        SELF-RE-ENQUEUING chain (``update.analyze_one_report`` calls ``analyze_reports``,
+        which enqueues the next one):
+
+        * ``error.is_(False)``. ``set_error`` sets only ``error=True`` and leaves
+          ``analyzed=False``, so a report that fails every time -- a crash whose
+          ``json_dump`` Socorro cannot serve, an hg fetch that keeps 406ing -- was handed
+          straight back to the chain on the next tick, forever, and NOTHING ELSE ever got
+          analysed. A livelock, on any channel, with no log line saying so.
+        * ``ORDER BY id``. Without it the row is whatever Postgres finds first, which is
+          stable enough with one channel to hide the problem and stops being stable the
+          moment there are two: a beta backlog could interleave arbitrarily with nightly's
+          and starve it. Oldest-first is also the order that drains a backlog.
+
+        A specific ``report_uuid`` bypasses both -- that is ``redo.reset``/``single.py``
+        asking for one named report on purpose, including a retry of an errored one."""
         uuid = (
             db.session.query(
                 UUID.uuid, Build.buildid, Build.channel, Build.product, Node.node
@@ -1475,7 +1541,11 @@ class UUID(db.Model):
         if report_uuid:
             uuid = uuid.filter(UUID.uuid == report_uuid).first()
         else:
-            uuid = uuid.filter(UUID.analyzed.is_(False)).first()
+            uuid = (
+                uuid.filter(UUID.analyzed.is_(False), UUID.error.is_(False))
+                .order_by(UUID.id)
+                .first()
+            )
         return uuid
 
     @staticmethod

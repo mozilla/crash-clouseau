@@ -31,7 +31,7 @@ from typing import Annotated
 from pydantic import Field
 
 from libmozdata import socorro
-from crashclouseau import sigage
+from crashclouseau import sigage, utils
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
 # Facets that carry cause-pointing signal: the platform / cpu / process-type / channel /
@@ -139,7 +139,11 @@ async def crash_stats(
         "_facets_size": 20,
     }
     if ctx.channel:
-        params["release_channel"] = ctx.channel
+        # `get_search_channel`: on beta this is the only crash-stats instrument the blind
+        # second opinion has, and the raw label under-counts it by 36-41% (DevEdition is
+        # filed as `aurora`) -- both in the printed total and in the `release_channel`
+        # facet the model reads to judge which channels are affected.
+        params["release_channel"] = utils.get_search_channel(ctx.channel)
     try:
         data = await asyncio.to_thread(_search, params)
     except Exception as exc:  # noqa: BLE001 - a tool must not raise into the agent loop

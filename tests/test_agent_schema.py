@@ -4,13 +4,21 @@
 
 # Run with a DB url set (the package builds a Flask app at import):
 #   DATABASE_URL=sqlite:// python -m unittest tests.test_agent_schema
-import copy
-import json
-import unittest
+#
+# ...and set here too, so `unittest discover` with a bare environment does not fail at IMPORT and
+# silently skip this module (see tests/test_agent.py).
+import os
 
-from pydantic import TypeAdapter, ValidationError
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
-from crashclouseau.agent.schema import (
+import copy  # noqa: E402
+import json  # noqa: E402
+import unittest  # noqa: E402
+
+from pydantic import TypeAdapter, ValidationError  # noqa: E402
+
+from crashclouseau.agent.schema import (  # noqa: E402
     Citation,
     Confidence,
     CrashBrief,
