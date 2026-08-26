@@ -46,6 +46,49 @@ def _row(**kw):
     return SimpleNamespace(**base)
 
 
+class TestTheChannelReachesTheView(unittest.TestCase):
+    """`Dossier.list_tasks` selects `Build.channel`/`Build.version` and `templates/tasks.html`
+    renders them, but `_task_view` is a literal dict between the two and did not name either —
+    so every row rendered `?` / `unknown`, on both channels, from the day the column landed.
+
+    Jinja resolves a missing key to `Undefined`, which is falsy, so `{{ (t.channel or '?') }}`
+    swallowed it silently: the column existed, was uniformly empty, and read as "channel
+    unknown" rather than as a missing feature. It is the day-one observable both `DEPLOY.md`
+    and `next_session.md` point an operator at for the beta rollout, and at ~4-6 beta dossiers
+    a day against nightly's 85-120 an unlabelled beta row cannot be found by eye.
+
+    `_row` here does not set `channel`, deliberately: the view must keep tolerating a row
+    without one (`getattr` default), which is also why adding the key could not have been
+    caught by the existing tests."""
+
+    def test_the_channel_and_version_reach_the_task_dict(self):
+        tasks, _ = html._task_view([_row(channel="beta", version="155.0b4")], STALE, NOW)
+        self.assertEqual(tasks[0]["channel"], "beta")
+        self.assertEqual(tasks[0]["version"], "155.0b4")
+
+    def test_a_row_with_no_build_still_renders(self):
+        """`uuids.buildid` is a nullable FK and `list_tasks` joins `builds` OUTER on purpose —
+        an invisible stalled run is the exact failure the view exists to catch."""
+        tasks, _ = html._task_view([_row()], STALE, NOW)
+        self.assertIsNone(tasks[0]["channel"])
+        self.assertIsNone(tasks[0]["version"])
+
+    def test_the_template_prints_the_initial_not_a_question_mark(self):
+        from flask import render_template
+
+        from crashclouseau import app
+
+        tasks, summary = html._task_view(
+            [_row(uuid="b" * 36, channel="beta", version="155.0b4"),
+             _row(uuid="n" * 36, channel="nightly", version="156.0a1")], STALE, NOW)
+        with app.test_request_context():
+            out = render_template("tasks.html", tasks=tasks, summary=summary,
+                                  stale_after=STALE, now=NOW)
+        self.assertIn('title="beta 155.0b4">B<', out)
+        self.assertIn('title="nightly 156.0a1">N<', out)
+        self.assertNotIn('title="unknown">?<', out)
+
+
 class TestTaskView(unittest.TestCase):
     def test_empty(self):
         tasks, summary = html._task_view([], STALE, NOW)

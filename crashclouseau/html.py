@@ -205,6 +205,18 @@ def _task_view(rows, stale_after_s, now):
         tasks.append(
             {
                 "uuid": r.uuid,
+                # WHICH CHANNEL, and it has to be copied here or the column is dead. The query
+                # selects it (`Dossier.list_tasks`) and the template renders it
+                # (`templates/tasks.html`), but this dict is between them, and it is a literal:
+                # a key it does not name is `Undefined` in Jinja and renders as the `or '?'`
+                # fallback, silently, for every row. `getattr` with a default, like the
+                # `filed_*` keys below, because the view's tests feed hand-built rows.
+                #
+                # It is the day-one observable both DEPLOY.md and next_session.md point an
+                # operator at for the beta rollout, and at ~4-6 beta dossiers a day against
+                # nightly's 85-120 an unlabelled beta row is not findable by eye.
+                "channel": getattr(r, "channel", None),
+                "version": getattr(r, "version", None),
                 "signature": r.signature or "",
                 "status": status,
                 "stalled": is_stalled,
