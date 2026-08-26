@@ -379,6 +379,81 @@ BROKEN_CPU_MODELS = frozenset(cpu_model(c) for c in BROKEN_CPUS)
 POPULATION_BIT_FLIP_RATE = 0.025
 POPULATION_BROKEN_CPU_RATE = 0.041
 
+# ...AND THE SAME TWO NUMBERS PER CHANNEL, because they are a property of the POPULATION and beta
+# is not nightly's. Re-measured 2026-08-25 with the shape of `hardware_noise` (Firefox,
+# `get_search_channel(channel)`, 364 days): nightly 2.55% / 4.15% (n=692,770) -- which reproduces
+# the two constants above, so the instrument agrees with the shipped values -- and beta 6.75% /
+# 5.82% (n=269,501), i.e. 2.6x and 1.4x.
+#
+# WHY IT MATTERS THAT THIS IS PER CHANNEL: the number is printed to the model as "crash
+# population: 2.5%" immediately before "the higher these are, the likelier it is that this
+# signature is a failing-hardware artefact ... any mechanism you can construct for it will be
+# fiction that fits". Telling a beta run that its 6% flip rate is 2.6x the population, when 6.75%
+# IS the beta population, is an instruction to disbelieve an ordinary beta signature. Beta is
+# 41.9% 32-bit x86 against nightly's 1.6%, which is the kind of difference that moves a
+# hardware-annotation rate.
+#
+# `None` MEANS UNMEASURED AND MUST NOT FALL BACK TO NIGHTLY'S: every consumer drops the
+# comparison instead, printing the signature's own share with no population claim beside it.
+# Release is absent on purpose -- nobody measured it, and it is 10%-sampled.
+_POPULATION_RATES = {
+    "nightly": {"bit_flip": 0.025, "broken_cpu": 0.041, "top_cpu_share": 0.32},
+    "beta": {"bit_flip": 0.0675, "broken_cpu": 0.0582, "top_cpu_share": None},
+    "aurora": {"bit_flip": 0.0675, "broken_cpu": 0.0582, "top_cpu_share": None},
+}
+
+# The prose name of each population, so a sentence can say WHOSE population it is quoting.
+POPULATION_LABEL = {
+    "nightly": "Firefox-nightly",
+    "beta": "Firefox-beta",
+    "aurora": "Firefox-beta",
+}
+
+
+def _population(channel):
+    """The rates for *channel*. An ABSENT channel falls back to nightly's; a channel that is
+    NAMED but unmeasured (release) does not.
+
+    The two cases are different questions and must not share an answer. "I was not told which
+    channel" is a caller that predates this split -- every one of them is a nightly path, since
+    that is the only channel the pipeline has run on -- so nightly is the behaviour-preserving
+    answer, the same degradation `compiled_out.build_channel` takes. "This is release" is a
+    channel we genuinely have no measurement for, and there the honest answer is to say nothing
+    rather than publish nightly's denominator against it."""
+    if not channel:
+        return _POPULATION_RATES["nightly"]
+    return _POPULATION_RATES.get(channel.lower(), {})
+
+
+def population_bit_flip_rate(channel=None):
+    """Share of *channel* reports carrying a bit-flip annotation, or ``None`` if unmeasured."""
+    return _population(channel).get("bit_flip")
+
+
+def population_broken_cpu_rate(channel=None):
+    """Share of *channel* reports from a known-defective CPU, or ``None`` if unmeasured."""
+    return _population(channel).get("broken_cpu")
+
+
+def population_top_cpu_share_median(channel=None):
+    """Median top-``cpu_info`` share across *channel*'s signatures, or ``None`` if unmeasured.
+
+    ``None`` on beta, and that is the honest answer: 0.32 was measured over 200 Firefox-NIGHTLY
+    signatures and nobody has run the same sample on beta. A consumer with ``None`` must not
+    quote "the median Firefox-nightly signature" to a beta run -- it drops the comparison and
+    states the share alone."""
+    return _population(channel).get("top_cpu_share")
+
+
+def population_label(channel=None):
+    """"Firefox-beta" / "Firefox-nightly", for a sentence that quotes one of the rates above.
+
+    Same fallback as ``_population``: an absent channel is a nightly caller, so the label must
+    not say "Firefox" while the number beside it is nightly's."""
+    if not channel:
+        return POPULATION_LABEL["nightly"]
+    return POPULATION_LABEL.get(channel.lower(), "Firefox")
+
 # Where the TOP `cpu_info` share sits across the population, so "58 of 58 reports are on one
 # processor model" can be read as remarkable or as ordinary instead of merely quoted. Measured
 # 2026-08-21 over 200 Firefox-nightly signatures drawn the way the spike selector draws them
@@ -388,6 +463,8 @@ POPULATION_BROKEN_CPU_RATE = 0.041
 # for it: that one was fit on `install_time`, whose median is 0.18 and p75 0.47, whereas 0.5 on
 # `cpu_info` fires on 35% of the population. Reporting only -- see `hardware_noise` for the
 # sweep that killed every attempt to suppress on this.
+
+
 POPULATION_TOP_CPU_SHARE_MEDIAN = 0.32
 
 # The floor under the share BEFORE it may be stated, and it is the definition of the sample above
@@ -635,6 +712,37 @@ def json_rev(node, channel="nightly"):
     return out
 
 
+# The repo a changeset ORIGINALLY lands in. Everything on a release branch that did not arrive
+# as an uplift came from here, and this is where its real landing date lives.
+ORIGIN_CHANNEL = "nightly"
+
+
+def landing_pair(node, channel="nightly"):
+    """``(origin_pushdate, channel_pushdate)`` for a changeset, each ``[epoch, tz]`` or ``None``.
+
+    Two clocks, because on a release branch they are DIFFERENT and only one of them is a
+    landing date. ``pushlog.collect`` stamps every changeset with its PUSH date in the repo it
+    was read from, and a central->beta merge is ONE push carrying a whole cycle -- so every
+    changeset in it reports the merge date. Measured 2026-08-25: four sampled non-merge members
+    of beta push 27990 (``f44045181a24``, ``7f4d7e8c27d6``, ``2c98bfc534ef``, ``02297ff55cd2``)
+    all report beta ``2026-08-13T14:15:59`` against central ``2026-07-21T09:46:48`` -- a 23.2-day
+    forward shift, identical across the push -- and six sampled members of push 27533 (6,917
+    changesets, all at ``2026-07-20T17:14:53``) give central dates from 06-15 to 07-13, i.e. a
+    drift of 6.9 to 34.8 days depending on where in the cycle the change landed.
+
+    ``None`` for the origin is the UPLIFT case and not an error: a beta uplift is an hg graft
+    with a NEW hash, so central has never heard of it (0 of 1,009 candidate-bearing in-cycle beta
+    changesets exist on m-c under the same hash) and the beta push date IS its landing date.
+
+    Costs one extra ``json-rev`` on a non-nightly channel, cached per (node, channel) like every
+    other call here; on nightly the two are the same request and the pair is free."""
+    own = json_rev(node, channel).get("pushdate") or None
+    if not channel or channel == ORIGIN_CHANNEL:
+        return own, own
+    origin = json_rev(node, ORIGIN_CHANNEL).get("pushdate") or None
+    return origin, own
+
+
 def pushdate_for_node(node, channel="nightly"):
     """When a changeset landed (``[epoch, tzoffset]``), or ``None``.
 
@@ -644,8 +752,23 @@ def pushdate_for_node(node, channel="nightly"):
     landing date -- so the gate used to silently no-op on precisely the crashes it exists to
     catch. Seen in prod on ``0cf2a052-2eae-4228-824f-6284d0260728``: the candidate landed 126
     days after the signature first appeared, the gate skipped, and only the (paid) blind second
-    opinion noticed."""
-    return json_rev(node, channel).get("pushdate") or None
+    opinion noticed.
+
+    THE ORIGIN REPO WINS WHEN IT KNOWS THE NODE. Off nightly, the channel's own push date is the
+    date the changeset ARRIVED on that branch, which for anything that came in with a cycle
+    merge is the merge date -- up to ~35 days after the code was written (see ``landing_pair``).
+    Five consumers read this number and every one of them wants "when did this code first
+    exist": the stale-signature gate compares it against the signature's first-seen buildid, the
+    prompt prints it as ``landed=``, and ``bugzilla_apply._bug_for_this_regression`` asks whether
+    an open bug predates it -- and a clock that runs late there errs toward accepting an OLD bug
+    as this crash's venue, which is the direction beta's file-only-new-bugs rule forbids.
+
+    Falls back to the channel's own date, which is the genuine uplift answer. Note this is NOT
+    the same decision as ``backedout_by_for_node`` / ``same_push_backout_target`` make: those
+    ask what happened to the changeset ON THIS BRANCH, so they correctly stay on the channel
+    repo."""
+    origin, own = landing_pair(node, channel)
+    return origin or own
 
 
 def git_commit_for_node(node, channel="nightly"):

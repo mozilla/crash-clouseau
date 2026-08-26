@@ -619,6 +619,7 @@ def build_seed(uuid):
     # Best-effort: a lookup failure must never break a seed.
     sig_first_seen = None
     sig_first_seen_any = None
+    sig_first_seen_channel = None
     sig_first_seen_ever = None
     sig_report_count = None
     # ONE request serves two gates. `first_seen` is the stale-signature downweight's clock;
@@ -636,6 +637,7 @@ def build_seed(uuid):
             )
             sig_first_seen = history["first_seen"]
             sig_first_seen_any = history["first_seen_any"]
+            sig_first_seen_channel = history["first_seen_channel"]
             sig_report_count = history["total"]
             # A THIRD request, and deliberately not folded into `signature_history` above: it is
             # a different endpoint (`SignatureFirstDate`, a maintained table rather than a
@@ -693,6 +695,16 @@ def build_seed(uuid):
         # so it is free. Only used to catch a re-signaturing (`_record_signature_age_facts`): the
         # floored value hides exactly the off-channel reports a rename leaves behind.
         "signature_first_seen_any": sig_first_seen_any,
+        # The signature's first-seen ON THIS CHANNEL, unfloored. Free (`signature_history`
+        # already computes it) and it is the whole of the beta story: a regressor that landed on
+        # central during the previous cycle gives an ALL-TIME first-seen of 7-35 days, so
+        # `_OLD_SIGNATURE_GUIDANCE` fires and tells the model that a changeset landing after the
+        # signature already existed cannot have created it -- while the candidate list beside it
+        # prints `landed=<merge day>`, i.e. after that date. Both halves then point the model
+        # away from the one changeset set that CAN contain the origin. See
+        # `triage._signature_age_lines`. 3 of 77 emulated beta selections are this class (4%):
+        # a correctness fix for a small, high-value population, not a volume lever.
+        "signature_first_seen_channel": sig_first_seen_channel,
         # How many reports this signature has EVER had (whole window, not from this build on —
         # `report_bug.fetch_signature_stats` computes that other quantity for the bug comment).
         # ``None`` means the lookup failed and must never read as "a singleton".
@@ -750,6 +762,29 @@ def _hardware_noise(info, channel):
 # ``aurora``, so a fallback that used the raw label asked Socorro about ``aurora`` alone and
 # `get_search_channel` had nothing to widen.
 _DB_CHANNEL = {"aurora": "beta"}
+
+
+def _build_flag_channel(seed):
+    """Which BUILD-FLAG partition this crash belongs to (``compiled_out._CHANNEL_MACROS``).
+
+    Our stored channel label, EXCEPT that Developer Edition needs its own answer and the stored
+    label can never say so: we ingest DevEdition under ``beta`` (it shares beta's buildid and
+    revision), while Socorro files its reports as ``aurora``. The one flag that differs is
+    ``MOZ_DIAGNOSTIC_ASSERT_ENABLED``, which mozilla-beta's ``moz.configure`` gates on
+    ``moz_debug | milestone.is_nightly | moz_dev_edition`` -- so it is ON for DevEdition and OFF
+    for plain beta, and DevEdition is 36-41% of the channel.
+
+    Both halves of getting this wrong are the invisible direction: a DevEdition ``fail`` reading
+    "the diagnostic assert is not compiled into this build" would be FALSE and would BIND, i.e.
+    abstain -- no filing, no second opinion, no ``Feedback`` row -- and the skeptic prompt would
+    assert the macro's absence on the one slice of beta where MOZ_DIAGNOSTIC_ASSERT crashes
+    actually exist.
+
+    Read off the raw crash the seed already carries; no extra lookup."""
+    raw = ((seed or {}).get("raw_crash") or {}).get("release_channel") or ""
+    if raw.lower() == "aurora":
+        return "aurora"
+    return (seed or {}).get("channel")
 
 
 def _install_history(raw_crash, channel=None):
@@ -1848,13 +1883,29 @@ def _apply_signature_age_gate(dossier, seed):
         return
     from crashclouseau import sigage
 
+    channel = (seed or {}).get("channel")
     pushdate = ((seed or {}).get("candidate_pushdates") or {}).get(cand.node)
+    if pushdate is not None and channel and channel != sigage.ORIGIN_CHANNEL:
+        # THE SEEDED DATE IS AN ARRIVAL DATE OFF NIGHTLY, and this gate needs a LANDING date.
+        # `pushlog.collect` stamps every changeset with the push date in the repo it was read
+        # from, and on a release branch a whole cycle arrives in ONE push -- measured, four
+        # members of beta push 27990 all report 2026-08-13T14:15:59 against a central
+        # 2026-07-21T09:46:48, a 23.2-day shift, and members of push 27533 drift 6.9 to 34.8
+        # days. Comparing that against the signature's first-seen buildid clamps a lead whose
+        # changeset PREDATES the crash, which is the "new on beta, long-lived on nightly" class
+        # (3 of 77 emulated beta selections) this gate is most likely to be wrong about.
+        #
+        # ONE hg lookup for the ONE chosen candidate, cached per (node, channel) and usually
+        # already warm -- the backout gate and the git-commit link both go through `json_rev`.
+        # It resolves central first and falls back to the channel repo, which is the genuine
+        # uplift answer. `None` keeps the seeded date rather than losing the gate.
+        pushdate = sigage.pushdate_for_node(cand.node, channel) or pushdate
     if pushdate is None:
         # The agent chose a candidate that was not in the seeded pushlog window (it found it
         # via blame), so no landing date was pre-computed for it. Resolve it now with ONE hg
         # lookup. This only ever runs online: an offline seed carries no
         # `signature_first_seen_buildid` and returned above, so the gate stays a no-op there.
-        pushdate = sigage.pushdate_for_node(cand.node, (seed or {}).get("channel"))
+        pushdate = sigage.pushdate_for_node(cand.node, channel)
     if pushdate is None:
         return
     landed_after = sigage.days_landed_after_first_seen(first_seen, pushdate)
@@ -2521,6 +2572,8 @@ def _apply_bit_flip_gate(dossier, seed):
     sample = noise.get("reports")
     flip_rate = noise.get("bit_flip_rate")
     cpu_rate = noise.get("broken_cpu_rate")
+    # For the background rates quoted in the abstain reason below, which reaches the filed bug.
+    channel = (seed or {}).get("channel")
 
     # Recorded for EVERY verdict, fired or not: without the flags there is no way to count how
     # often the pipeline is looking at probable hardware, which is the measurement that would
@@ -2583,14 +2636,22 @@ def _apply_bit_flip_gate(dossier, seed):
         )
     elif _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
         suppressed = {"hardware_noise_signature_suppressed": True}
+        # The background rates are the CRASH'S OWN CHANNEL'S, and the word "nightly" was
+        # hardcoded here -- in a string that reaches the filed bug and the UI. Beta's
+        # backgrounds are 2.6x and 1.4x nightly's, so on beta this sentence quoted a
+        # denominator that makes an ordinary signature look like an outlier.
+        pop_flip = sigage.population_bit_flip_rate(channel)
+        pop_cpu = sigage.population_broken_cpu_rate(channel)
         reason = (
             "this SIGNATURE is mostly hardware error, whatever this particular report looks "
             "like: of its {} reports on this channel, {:.0f}% carry a Socorro bit-flip "
-            "annotation (nightly background {:.0f}%) and {:.0f}% come from a known-defective "
+            "annotation ({} background {:.0f}%) and {:.0f}% come from a known-defective "
             "Raptor Lake CPU (background {:.0f}%, meta bug 1975808). mozilla/bugbot declines to "
             "file past these same thresholds; suppressed rather than reported".format(
-                sample, 100 * (flip_rate or 0), 100 * sigage.POPULATION_BIT_FLIP_RATE,
-                100 * (cpu_rate or 0), 100 * sigage.POPULATION_BROKEN_CPU_RATE,
+                sample, 100 * (flip_rate or 0), sigage.population_label(channel),
+                100 * (pop_flip if pop_flip is not None else 0),
+                100 * (cpu_rate or 0),
+                100 * (pop_cpu if pop_cpu is not None else 0),
             )
         )
     if suppressed is None:
@@ -2732,8 +2793,9 @@ def _resolve_struct_layout(dossier, seed):
     wanted = wanted[:_MAX_LAYOUT_LOOKUPS]
     out = {"fault": fault, "verified": [], "refuted": [], "unresolved": []}
 
-    from crashclouseau.searchfox import SearchfoxClient
+    from crashclouseau.searchfox import SearchfoxClient, repo_for_channel
 
+    repo = repo_for_channel((seed or {}).get("channel")).value
     try:
         client = SearchfoxClient()
     except Exception as exc:  # pragma: no cover - binary missing / misconfigured
@@ -2755,7 +2817,11 @@ def _resolve_struct_layout(dossier, seed):
             out["unresolved"].append({**entry, "reason": "no searchfox client"})
             continue
         try:
-            layout = client.field_layout(cit.type_name)
+            # The crash's OWN tree, not `default_repo`. This gate is FAIL CLOSED, so reading
+            # firefox-main for a beta crash does not merely mis-cite: a layout that differs
+            # between the two trees silently costs the lead->probable promotion, and the
+            # `refuted` bucket then blames the model for the tool's tree.
+            layout = client.field_layout(cit.type_name, repo=repo)
         except Exception as exc:
             # SearchfoxNoResult (template / under-qualified / non-class), timeout, non-zero
             # exit: all "we could not check", all fail closed.
@@ -2902,6 +2968,8 @@ def _apply_compiled_out_gate(dossier, seed):
     (``compiled_out._LITERAL_OFF``), so an answer with no rev on it cannot be reproduced, and
     "a moz.configure switch that is off unless someone asks for it" is not something a module
     owner can check without going to find which switch."""
+    from crashclouseau import compiled_out
+
     v = getattr(dossier, "verdict", None)
     found = (seed or {}).get("compiled_out")
     if v is None or v.decision == Decision.abstain or not found:
@@ -2909,14 +2977,26 @@ def _apply_compiled_out_gate(dossier, seed):
     symbol, macro = found.get("symbol"), found.get("macro")
     provenance = found.get("provenance") or "diff"
     switch, rev = found.get("switch") or "", found.get("rev") or ""
+    # THE SWITCH HALF OF THE SENTENCE HAS TWO SHAPES. Off nightly the OFF-ness of a macro can
+    # come from the CHANNEL rather than from a configure switch (`NIGHTLY_BUILD` on beta), and
+    # "off unless someone passes `is defined only when the milestone is a nightly`" would be
+    # gibberish in a bug comment. `compiled_out` marks which kind of answer it gave.
+    if compiled_out.is_channel_off_answer(switch):
+        why = compiled_out.channel_off_phrase(switch)
+        rev_note = ""
+    elif switch:
+        why = "is off unless someone passes `{}`".format(switch)
+        rev_note = (" (read from the moz.configure of the build that crashed, "
+                    "rev `{}`)".format(rev[:12]) if rev else "")
+    else:
+        why = "comes from a moz.configure switch that is off unless someone asks for it"
+        rev_note = (" (read from the moz.configure of the build that crashed, "
+                    "rev `{}`)".format(rev[:12]) if rev else "")
     dead = (
         "`{}`, which is a NO-OP in this build: its {} body is entirely inside `#ifdef {}`, and "
         "`{}` {}{}"
         .format(symbol, "/".join((found.get("functions") or [])[:3]), macro, macro,
-                "is off unless someone passes `{}`".format(switch) if switch else
-                "comes from a moz.configure switch that is off unless someone asks for it",
-                " (read from the moz.configure of the build that crashed, "
-                "rev `{}`)".format(rev[:12]) if rev else "")
+                why, rev_note)
     )
     if provenance == "mechanism":
         reason = (
@@ -3422,6 +3502,16 @@ def run_evidence_agent(uuid, force=False):
         seed = build_seed(uuid)
         if seed is None:
             return
+
+        # THE RUN'S CHANNEL, for the consumers that cannot be handed it as an argument. Today
+        # that is `agent.schema.Dossier._skeptic_veto` -> `compiled_out.is_build_flag_ground`,
+        # a pydantic validator with no access to the crash: without this, the build-flag
+        # partition it applies to a beta dossier would be nightly's, which is wrong in BOTH
+        # directions (see `compiled_out._CHANNEL_MACROS`). Set for the whole rest of the run
+        # and deliberately never reset -- one RQ job is one crash.
+        from crashclouseau import compiled_out
+
+        compiled_out.set_build_channel(_build_flag_channel(seed))
 
         seed_score = _seed_score(uuid)
         # Atomically claim the run (sets status=running). This is the authoritative,

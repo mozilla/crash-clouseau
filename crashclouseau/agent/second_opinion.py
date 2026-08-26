@@ -126,8 +126,9 @@ def build_options(crash: dict, candidate: dict | None = None, *,
     if searchfox_client is None:
         searchfox_client = SearchfoxClient()
     mcp_servers = {
-        "searchfox": build_sdk_server("searchfox", SearchfoxCtx(client=searchfox_client),
-                                      searchfox_cg.TOOLS),
+        "searchfox": build_sdk_server(
+            "searchfox", SearchfoxCtx(client=searchfox_client, channel=channel),
+            searchfox_cg.TOOLS),
         "patch": build_sdk_server("patch", PatchCtx(channel=channel), patch_tools.TOOLS),
         "history": build_sdk_server("history", HistoryCtx(channel=channel, build_rev=pin_rev),
                                     history_tools.TOOLS),

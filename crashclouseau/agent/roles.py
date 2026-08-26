@@ -88,31 +88,83 @@ _GROUND = (
 #
 # THE THREE MACRO LISTS ARE RENDERED FROM `compiled_out` so the prompt and the gate cannot drift
 # -- `tests/test_compiled_out_guard.py` pins that all 20 are present.
-_COMPILED_OUT = (
-    "ONE THING THAT LOOKS LIKE A HOLE AND IS NOT: code that is not in THIS build. A symbol can "
-    "be real, findable and linked while doing NOTHING because its whole body sits inside "
-    "`#ifdef X` — `js::gc::AutoMarkingLock` (`js/src/gc/Cell.h`, \"a no op outside "
-    "concurrent marking builds\") refuted three of our filings. So ask it of every symbol the "
-    "MECHANISM DEPENDS ON, not just the ones you cited, reading bodies with "
-    "`mcp__source__raw_file`. Machinery absent from the build that crashed makes the candidate "
-    "demonstrably UNRELATED: that is `fail`, not `unverifiable`. THREE LIMITS, because a wrong "
-    "\"off\" silently kills a good lead. (1) Never conclude \"off\" for {channel_on}: they are "
-    "ON in the nightly we analyse (an opt build DEFINES `NDEBUG`), and 9-11% of the crashes we "
-    "analyse are MOZ_DIAGNOSTIC_ASSERT crashes. {build_type_off} are the opposite — an "
-    "official Nightly is an OPT build, so "
-    "\"this `#ifdef DEBUG` assertion is not in the shipped binary\" is true and free; read that "
-    "off the build type, never off `moz.configure`. (2) A PLATFORM macro ({platform}) is "
-    "answered by this report\'s own `OS:` line above, never by a `moz.configure` walk. (3) A "
-    "path reachable only when a `StaticPrefList.yaml` pref is on is `unverifiable`, NEVER "
-    "`fail`: the YAML default is not what shipped (16 prefs ship the opposite value from "
-    "firefox.js; 82 more default to a nightly-on build template). And a `moz.configure` default "
-    "is evidence, not proof — a mozconfig can turn a default-off switch on — so a "
-    "`fail` resting only on one is re-checked in code; say in your note which ground you used. "
-).format(
-    channel_on=", ".join(sorted(compiled_out.CHANNEL_ON_DENY)),
-    build_type_off=", ".join(sorted(compiled_out.BUILD_TYPE_DENY - compiled_out.CHANNEL_ON_DENY)),
-    platform=", ".join(sorted(compiled_out.PLATFORM_DENY)),
-)
+# The build name a prompt should use for each channel, and whether MOZ_DIAGNOSTIC_ASSERT is on.
+# Read from each branch's own `moz.configure` -- see `compiled_out._CHANNEL_MACROS`.
+_BUILD_NAME = {
+    "nightly": "nightly",
+    "beta": "beta",
+    "aurora": "Developer Edition",
+    "release": "release",
+}
+
+
+def _compiled_out_text(channel=None):
+    """The compiled-out clause of the skeptic prompt, FOR ONE CHANNEL.
+
+    A FUNCTION AND NOT A CONSTANT, because the constant was wrong on beta in both directions.
+    Three of the five macros it told the skeptic never to conclude "off" for are OFF on beta
+    (`NIGHTLY_BUILD`, `EARLY_BETA_OR_EARLIER`, `MOZ_DIAGNOSTIC_ASSERT_ENABLED`) and one of the
+    three it called genuinely-off is ON there (`RELEASE_OR_BETA`). So on a beta crash the old
+    text refused the correct conclusion about nightly-gated code, asserted that 9-11% of the
+    crashes are MOZ_DIAGNOSTIC_ASSERT crashes when on beta they cannot be, and handed out a free
+    "this `RELEASE_OR_BETA` code isn't in the build" veto that is wrong by construction.
+
+    The three macro lists are still RENDERED from `compiled_out`, now per channel, so the prompt
+    and `is_build_flag_ground` cannot drift."""
+    channel = (channel or "nightly").lower()
+    on = compiled_out.channel_on_deny(channel)
+    off = compiled_out.channel_off(channel)
+    build = _BUILD_NAME.get(channel, channel or "nightly")
+    # Only assert the MOZ_DIAGNOSTIC_ASSERT prevalence where the macro is actually ON. On beta
+    # it is off (`when=moz_debug | milestone.is_nightly | moz_dev_edition`), so the nightly
+    # figure would be a false fact about the build in hand.
+    diag = (
+        " and 9-11% of the crashes we analyse are MOZ_DIAGNOSTIC_ASSERT crashes"
+        if "MOZ_DIAGNOSTIC_ASSERT_ENABLED" in on else ""
+    )
+    # ...and off nightly, say the thing that is now TRUE and was previously forbidden.
+    nightly_gated = ""
+    if "NIGHTLY_BUILD" in off:
+        nightly_gated = (
+            "This crash is on {build}, NOT nightly: code behind `#ifdef NIGHTLY_BUILD` or "
+            "`#ifdef EARLY_BETA_OR_EARLIER` (an alias for it) is genuinely ABSENT from this "
+            "build, so a symbol whose whole body sits inside one of them does nothing here -- "
+            "that is `fail`, and on this channel it is the commonest shape of the trap above. "
+        ).format(build=build)
+    return (
+        "ONE THING THAT LOOKS LIKE A HOLE AND IS NOT: code that is not in THIS build. A symbol "
+        "can be real, findable and linked while doing NOTHING because its whole body sits "
+        "inside `#ifdef X` — `js::gc::AutoMarkingLock` (`js/src/gc/Cell.h`, \"a no op outside "
+        "concurrent marking builds\") refuted three of our filings. So ask it of every symbol "
+        "the MECHANISM DEPENDS ON, not just the ones you cited, reading bodies with "
+        "`mcp__source__raw_file`. Machinery absent from the build that crashed makes the "
+        "candidate demonstrably UNRELATED: that is `fail`, not `unverifiable`. {nightly_gated}"
+        "THREE LIMITS, because a wrong \"off\" silently kills a good lead. (1) Never conclude "
+        "\"off\" for {channel_on}: they are ON in the {build} build that crashed (an opt build "
+        "DEFINES `NDEBUG`){diag}. {build_type_off} are the opposite — an official {build} is an "
+        "OPT build, so \"this `#ifdef DEBUG` assertion is not in the shipped binary\" is true "
+        "and free; read that off the build type, never off `moz.configure`. (2) A PLATFORM macro "
+        "({platform}) is answered by this report's own `OS:` line above, never by a "
+        "`moz.configure` walk. (3) A path reachable only when a `StaticPrefList.yaml` pref is on "
+        "is `unverifiable`, NEVER `fail`: the YAML default is not what shipped (16 prefs ship "
+        "the opposite value from firefox.js; 82 more default to a nightly-on build template). "
+        "And a `moz.configure` default is evidence, not proof — a mozconfig can turn a "
+        "default-off switch on — so a `fail` resting only on one is re-checked in code; say in "
+        "your note which ground you used. "
+    ).format(
+        channel_on=", ".join(sorted(on)),
+        build_type_off=", ".join(sorted(off)),
+        platform=", ".join(sorted(compiled_out.PLATFORM_DENY)),
+        build=build,
+        diag=diag,
+        nightly_gated=nightly_gated,
+    )
+
+
+# The NIGHTLY rendering, baked into `_ROLES` so the prompt a reader (and every existing test)
+# sees is a real prompt rather than a template. `make_role` swaps it for the channel's own
+# rendering when the crash is not on nightly.
+_COMPILED_OUT = _compiled_out_text("nightly")
 
 _ROLES: dict[str, dict] = {
     "crash-interpreter": {
@@ -282,16 +334,24 @@ def role_names() -> list[str]:
     return list(_ROLES)
 
 
-def make_role(name: str, llm_cfg: dict | None = None) -> AgentDefinition:
+def make_role(name: str, llm_cfg: dict | None = None, channel: str | None = None) -> AgentDefinition:
+    """One subagent definition. ``channel`` re-renders the skeptic's compiled-out clause for a
+    non-nightly crash (see ``_compiled_out_text``); every other role is channel-independent, and
+    ``channel=None`` reproduces the nightly prompt byte-for-byte."""
     spec = _ROLES[name]
     # Prefer the (possibly swept) llm_cfg passed by build_options so a sweep's per-role
     # model/effort actually reaches the subagent; fall back to the base config.
     rcfg = ((llm_cfg or {}).get("roles") or {}).get(name)
     if rcfg is None:
         rcfg = config.get_llm_role(name)
+    prompt = spec["prompt"]
+    if channel and channel.lower() != "nightly" and _COMPILED_OUT in prompt:
+        # A targeted swap rather than a template, so `_ROLES[...]["prompt"]` stays a real,
+        # readable nightly prompt (which is also what the guard tests read).
+        prompt = prompt.replace(_COMPILED_OUT, _compiled_out_text(channel))
     kwargs = dict(
         description=spec["description"],
-        prompt=spec["prompt"],
+        prompt=prompt,
         tools=list(spec["tools"]),
         model=rcfg.get("model", "inherit"),
         # DOCUMENTATION ONLY -- this line does NOT keep the subagent inline. Keep it
@@ -347,5 +407,6 @@ def make_role(name: str, llm_cfg: dict | None = None) -> AgentDefinition:
     return AgentDefinition(**kwargs)
 
 
-def build_roles(llm_cfg: dict | None = None) -> dict[str, AgentDefinition]:
-    return {name: make_role(name, llm_cfg) for name in _ROLES}
+def build_roles(llm_cfg: dict | None = None,
+                channel: str | None = None) -> dict[str, AgentDefinition]:
+    return {name: make_role(name, llm_cfg, channel) for name in _ROLES}

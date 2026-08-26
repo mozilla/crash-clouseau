@@ -35,9 +35,48 @@ symbol exists in the whole corpus, `gc::AutoMarkingLock`, and it fires on exactl
 16 a human FIXED or duplicated. 2062114 is not reachable this way and is left uncaught: its
 citation is real code and its changeset's four identifiers contain nothing hollow.
 """
+import contextvars
 import re
 
 from .logger import logger
+from .searchfox import repo_for_channel
+
+# THE CHANNEL THE CURRENT RUN IS ANALYSING, as a context variable.
+#
+# A CONTEXT VARIABLE AND NOT AN ARGUMENT, for exactly one reason: the consumer that most needs
+# it is ``agent.schema.Dossier._skeptic_veto``, a pydantic ``model_validator`` that decides
+# whether a skeptic ``fail`` may abstain a lead. A validator sees only the model, and the
+# dossier has no channel field -- adding one would put a channel the MODEL could set into the
+# handoff, which is the class of field ``parse_and_validate`` strips on purpose. Threading it
+# through ``parse_and_validate`` would miss the ``_salvage`` path and ``dossier_from_db_json``.
+#
+# ``orchestrator.run_evidence_agent`` sets it once per run; ``eval/runner`` does the same. A
+# ContextVar (not a module global) so the eval harness's concurrent cases cannot read each
+# other's channel.
+#
+# THE DEFAULT IS "nightly" AND THAT IS A DEGRADATION, NOT A GUESS: it is the partition this
+# gate applied unconditionally for a year, so a path that forgets to set the channel behaves
+# exactly as it did before this change rather than in some new way. Every function here takes
+# an explicit ``channel`` too, and callers that have one should pass it.
+_BUILD_CHANNEL = contextvars.ContextVar("crashclouseau_build_channel", default="nightly")
+
+
+def build_channel():
+    """The channel of the run currently being analysed (default ``"nightly"``)."""
+    return _BUILD_CHANNEL.get()
+
+
+def set_build_channel(channel):
+    """Set the current run's channel; returns the token to ``reset`` with."""
+    return _BUILD_CHANNEL.set((channel or "nightly").lower())
+
+
+def reset_build_channel(token):
+    """Undo a ``set_build_channel``. Best-effort: a token from another context just no-ops."""
+    try:
+        _BUILD_CHANNEL.reset(token)
+    except ValueError:  # pragma: no cover - token from a different context
+        pass
 
 # Macros we will not reason about even if the resolver somehow answers, because being wrong about
 # them is expensive and being right adds nothing. THREE lists, and the split is load-bearing: the
@@ -77,13 +116,145 @@ from .logger import logger
 # (moz.configure:187-194 folds them into the `MOZ_DEBUG_DEFINES` *list* via `set_config`), but
 # that is an accident of how one file happens to be written today. Do not thin any of the three
 # lists on the strength of it.
-CHANNEL_ON_DENY = frozenset({
-    "MOZ_DIAGNOSTIC_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
-    "MOZILLA_OFFICIAL", "NDEBUG",
-})
-BUILD_TYPE_DENY = CHANNEL_ON_DENY | frozenset({
-    "DEBUG", "MOZ_ASSERT_ENABLED", "RELEASE_OR_BETA",
-})
+#
+# AND EVERY ONE OF THOSE SENTENCES IS ABOUT NIGHTLY. Three of the five "ON, never conclude
+# off" macros are OFF on beta and one of the three "genuinely off" ones is ON, so the same
+# table applied to a beta crash is wrong in BOTH directions and no single relaxation fixes it.
+# Read from mozilla-beta's own source on 2026-08-25 (`hgedge.raw_file(..., channel="beta")`):
+#
+#   build/moz.configure/init.configure -- "if we have 'a1' in GRE_MILESTONE, we're building
+#     Nightly (define NIGHTLY_BUILD) - otherwise, we're building Release/Beta";
+#     `set_define("NIGHTLY_BUILD", milestone.is_nightly)`,
+#     `set_define("RELEASE_OR_BETA", milestone.is_release_or_beta)`, and
+#     `is_early_beta_or_earlier = is_nightly` with the comment "EARLY_BETA_OR_EARLIER is an
+#     alias for NIGHTLY_BUILD, pending its removal".
+#   moz.configure -- `set_define("MOZ_DIAGNOSTIC_ASSERT_ENABLED", True,
+#     when=moz_debug | milestone.is_nightly | moz_dev_edition)`.
+#
+# So on beta: NIGHTLY_BUILD, EARLY_BETA_OR_EARLIER and MOZ_DIAGNOSTIC_ASSERT_ENABLED are OFF,
+# and RELEASE_OR_BETA is ON. `MOZ_DIAGNOSTIC_ASSERT_ENABLED` is keyed on the RAW
+# `release_channel` and not on our stored label, because `moz_dev_edition` puts it back ON for
+# Developer Edition -- which Socorro files as `aurora`, and which is 36-41% of the channel.
+# MOZILLA_OFFICIAL and NDEBUG are ON on every official opt build, so they do not move; DEBUG
+# and MOZ_ASSERT_ENABLED are off on every official opt build, so they do not either.
+#
+# `nightly`'s partition below is BYTE-IDENTICAL to the two frozensets this replaced. That is
+# deliberate: this change must be a pure extension on the channel the pipeline has run on for
+# a year.
+
+
+_CHANNEL_MACROS = {
+    # channel -> (on: claiming these are OFF is wrong,
+    #             off: these really are absent from the build, and it is free to say so)
+    "nightly": (
+        frozenset({"MOZ_DIAGNOSTIC_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
+                   "MOZILLA_OFFICIAL", "NDEBUG"}),
+        frozenset({"DEBUG", "MOZ_ASSERT_ENABLED", "RELEASE_OR_BETA"}),
+    ),
+    "beta": (
+        frozenset({"MOZILLA_OFFICIAL", "NDEBUG", "RELEASE_OR_BETA"}),
+        frozenset({"DEBUG", "MOZ_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
+                   "MOZ_DIAGNOSTIC_ASSERT_ENABLED"}),
+    ),
+    # Developer Edition: beta plus `moz_dev_edition`, which restores MOZ_DIAGNOSTIC_ASSERT.
+    "aurora": (
+        frozenset({"MOZILLA_OFFICIAL", "NDEBUG", "RELEASE_OR_BETA",
+                   "MOZ_DIAGNOSTIC_ASSERT_ENABLED"}),
+        frozenset({"DEBUG", "MOZ_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
+    ),
+    "release": (
+        frozenset({"MOZILLA_OFFICIAL", "NDEBUG", "RELEASE_OR_BETA"}),
+        frozenset({"DEBUG", "MOZ_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
+                   "MOZ_DIAGNOSTIC_ASSERT_ENABLED"}),
+    ),
+}
+
+# Macros whose OFF-ness follows from the CHANNEL ALONE and which are worth detecting as a
+# hollow-symbol guard, per channel. `guard_deny` keeps them OUT of its deny list so
+# `guard_macros` can see them, and `_default_off_switch` answers them from the channel instead
+# of walking `moz.configure` (there is no `option()` behind a milestone predicate to find).
+#
+# WHY THIS EXISTS: on beta, a symbol whose entire body sits inside `#ifdef NIGHTLY_BUILD` is
+# the single most common way a symbol is genuinely hollow -- and it was undetectable, because
+# NIGHTLY_BUILD sat in the deny list `guard_macros` subtracts. Compare the nightly evidence
+# that built this gate: 3 of the 4 confirmed JS-owner refutations were compiled-out cases and
+# the guarded thing was a HOLLOW SYMBOL every time (`gc::AutoMarkingLock`).
+#
+# EMPTY ON NIGHTLY, so nightly's behaviour is unchanged. `RELEASE_OR_BETA` would be a correct
+# member there (that code really is absent from a nightly) and is deliberately left out: the
+# walk answers "" for it anyway (`set_define("RELEASE_OR_BETA", milestone.is_release_or_beta)`
+# has no `option()` behind it), so admitting it would buy a lookup and no detection, and this
+# change is not the place to move nightly.
+_CHANNEL_OFF_HOLLOW = {
+    "beta": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
+    "aurora": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
+    "release": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
+}
+
+# How each channel's OFF macros read in the published suppression, when the answer comes from
+# the channel rather than from a configure switch.
+_CHANNEL_OFF_PHRASE = {
+    "NIGHTLY_BUILD": "is defined only when the milestone is a nightly (`a1`), and this crash "
+                     "is on {channel}",
+    "EARLY_BETA_OR_EARLIER": "is an alias for `NIGHTLY_BUILD` (init.configure: "
+                             "`is_early_beta_or_earlier = is_nightly`), and this crash is on "
+                             "{channel}",
+}
+
+
+# A ``_default_off_switch`` answer that is a CHANNEL sentence rather than a ``--enable-x``
+# switch name is prefixed with this, so the one consumer that renders it into a bug comment
+# (``orchestrator._apply_compiled_out_gate``) can pick the right wording instead of printing
+# "off unless someone passes `is defined only when the milestone is ...`".
+_CHANNEL_OFF_MARK = "channel:"
+
+
+def is_channel_off_answer(answer):
+    """Did :func:`_default_off_switch` answer from the CHANNEL rather than with a switch?"""
+    return isinstance(answer, str) and answer.startswith(_CHANNEL_OFF_MARK)
+
+
+def channel_off_phrase(answer):
+    """The prose half of a channel answer (``is_channel_off_answer`` first)."""
+    return answer[len(_CHANNEL_OFF_MARK):] if is_channel_off_answer(answer) else answer
+
+
+def _partition(channel):
+    return _CHANNEL_MACROS.get((channel or "").lower(), _CHANNEL_MACROS["nightly"])
+
+
+def channel_on_deny(channel=None):
+    """Macros ON in a *channel* build: concluding they are "off" is simply the wrong answer."""
+    return _partition(channel or build_channel())[0]
+
+
+def channel_off(channel=None):
+    """Macros genuinely ABSENT from a *channel* build: saying so is true, and free -- read it
+    off the build type, never off a ``moz.configure`` walk."""
+    return _partition(channel or build_channel())[1]
+
+
+def build_type_deny(channel=None):
+    """Both halves: every macro the ``moz.configure`` walk must not be asked about."""
+    on, off = _partition(channel or build_channel())
+    return on | off
+
+
+def guard_deny(channel=None):
+    """What ``guard_macros`` subtracts: the build-type and platform macros, MINUS the ones this
+    channel answers by itself and that are worth catching as a hollow guard
+    (``_CHANNEL_OFF_HOLLOW`` -- empty on nightly, so nightly is unchanged)."""
+    channel = (channel or build_channel() or "").lower()
+    return (build_type_deny(channel) | PLATFORM_DENY) - _CHANNEL_OFF_HOLLOW.get(
+        channel, frozenset()
+    )
+
+
+# The nightly partition, kept as module constants because that is what a year of docstrings,
+# `agent.roles._COMPILED_OUT` and `tests/test_compiled_out_guard.py` refer to. They are the
+# `nightly` entry above and nothing else may read them for a non-nightly crash.
+CHANNEL_ON_DENY = _CHANNEL_MACROS["nightly"][0]
+BUILD_TYPE_DENY = CHANNEL_ON_DENY | _CHANNEL_MACROS["nightly"][1]
 PLATFORM_DENY = frozenset({
     "XP_WIN", "XP_UNIX", "XP_LINUX", "XP_MACOSX", "XP_DARWIN", "XP_IOS", "ANDROID",
     "MOZ_WIDGET_GTK", "MOZ_WIDGET_ANDROID", "MOZ_WIDGET_COCOA", "MOZ_X11", "MOZ_WAYLAND",
@@ -202,15 +373,23 @@ def hollow_functions(text, macro):
     return hollow
 
 
-def guard_macros(text):
-    """Every macro named by an ``#if``/``#ifdef`` inside *text*, minus :data:`GUARD_DENY`."""
+def guard_macros(text, channel=None):
+    """Every macro named by an ``#if``/``#ifdef`` inside *text*, minus :func:`guard_deny` for
+    this crash's channel.
+
+    Not :data:`GUARD_DENY` any more, and the difference only shows off nightly: on beta
+    ``NIGHTLY_BUILD``/``EARLY_BETA_OR_EARLIER`` come BACK into scope, because a symbol whose
+    whole body is inside ``#ifdef NIGHTLY_BUILD`` is hollow in a beta build and that is the
+    commonest shape there. ``guard_deny("nightly")`` == ``GUARD_DENY``, so nightly is
+    unchanged."""
+    deny = guard_deny(channel)
     found = []
     for line in text.splitlines():
         m = _DIRECTIVE.match(line)
         if not m or m.group(1) not in ("if", "ifdef", "ifndef", "elif"):
             continue
         for name in _MACRO_NAME.findall(m.group(2)):
-            if name not in found and name not in GUARD_DENY:
+            if name not in found and name not in deny:
                 found.append(name)
     return found
 
@@ -352,9 +531,26 @@ def _default_off_switch(macro, client, channel="nightly", rev=""):
     published suppression needs and could not get: "off unless someone passes
     `--enable-gc-concurrent-marking`" is a sentence the module owner reading the bug can check in
     ten seconds, and "comes from a moz.configure switch that is off unless someone asks for it"
-    -- what the gate said for a month -- is not. It was in hand here the whole time."""
+    -- what the gate said for a month -- is not. It was in hand here the whole time.
+
+    A CHANNEL-OFF MACRO SHORT-CIRCUITS THE WALK. ``NIGHTLY_BUILD`` on beta is off because of the
+    milestone, not because of a switch: ``set_define("NIGHTLY_BUILD", milestone.is_nightly)`` has
+    no ``option()`` behind it, so the walk below would answer "" and the hollow symbol would go
+    undetected. The phrase returned instead is a channel sentence rather than a switch name --
+    see :data:`_CHANNEL_OFF_PHRASE` and ``orchestrator._apply_compiled_out_gate``, which renders
+    whichever it gets."""
+    channel = (channel or build_channel() or "nightly").lower()
+    if macro in _CHANNEL_OFF_HOLLOW.get(channel, frozenset()):
+        phrase = _CHANNEL_OFF_PHRASE.get(macro)
+        if phrase:
+            return _CHANNEL_OFF_MARK + phrase.format(channel=channel)
     try:
-        hits = client.search('set_define("%s"' % macro, limit=4)
+        # The crash's OWN tree: `moz.configure` is not the same file on beta as on central
+        # (`is_early_beta_or_earlier` is an alias for `is_nightly`, and
+        # MOZ_DIAGNOSTIC_ASSERT_ENABLED is gated on the milestone), and the answer this walk
+        # returns is published in a bug comment as a fact about the build that crashed.
+        hits = client.search('set_define("%s"' % macro, limit=4,
+                             repo=repo_for_channel(channel).value)
     except Exception as exc:                       # pragma: no cover - network/binary
         logger.warning("compiled_out: set_define search failed for %s: %s", macro, exc)
         return ""
@@ -544,10 +740,10 @@ def hollow_symbols(symbols, client=None, channel="nightly", rev=""):
     checked = {}
     for symbol in symbols:
         try:
-            source = client.define(symbol).source or ""
+            source = client.define(symbol, repo=repo_for_channel(channel).value).source or ""
         except Exception:
             continue                               # unknown symbol: say nothing
-        for macro in guard_macros(source):
+        for macro in guard_macros(source, channel):
             functions = hollow_functions(source, macro)
             if not functions:
                 continue
@@ -577,7 +773,25 @@ _PLATFORM_GROUND = re.compile(
 # tooling" is a WebRender cargo-feature note, which must still unbind. `NDEBUG` is deliberately
 # NOT here: an opt build DEFINES it (:data:`CHANNEL_ON_DENY`), so "this `#ifdef NDEBUG` code is
 # not in the build" is wrong by construction and must NOT be given a veto that makes it bind.
+# The nightly off-side regex, kept as a constant because the docstrings name it. `MOZ_ASSERT\w*`
+# is deliberately broader than the macro name -- a note says "MOZ_ASSERT" or
+# "MOZ_ASSERT_UNREACHABLE" far more often than it says "MOZ_ASSERT_ENABLED" -- so `_off_ground`
+# expands that one member rather than escaping it.
 _BUILD_TYPE_GROUND = re.compile(r"\b(?:DEBUG|MOZ_ASSERT\w*|RELEASE_OR_BETA)\b")
+_OFF_GROUND_PATTERN = {"MOZ_ASSERT_ENABLED": r"MOZ_ASSERT\w*"}
+_OFF_GROUND_CACHE = {}
+
+
+def _off_ground(off):
+    """A regex matching any macro in *off*, i.e. "this really is absent from the build"."""
+    key = tuple(sorted(off))
+    if key not in _OFF_GROUND_CACHE:
+        _OFF_GROUND_CACHE[key] = re.compile(
+            r"\b(?:%s)\b" % "|".join(_OFF_GROUND_PATTERN.get(m, re.escape(m)) for m in key)
+        )
+    return _OFF_GROUND_CACHE[key]
+
+
 _OPT_BUILD_GROUND = re.compile(r"\b(?:opt|non-?debug|release) (?:build|nightly)", re.I)
 
 # The two halves of a build-flag GROUND, required together: a macro-shaped token or a
@@ -603,7 +817,7 @@ _OFF_DEFAULT = re.compile(
     r"\bnot (?:enabled|set|turned on|available)\b|\b(?:is|was|are|were) off\b(?!-)", re.I)
 
 
-def is_build_flag_ground(note, citations=()):
+def is_build_flag_ground(note, citations=(), channel=None):
     """Does this skeptic ``fail`` rest on "a CONFIGURE SWITCH kept this code out of the binary"?
 
     A question about the claim's GROUND, not its conclusion.
@@ -697,10 +911,24 @@ def is_build_flag_ground(note, citations=()):
         return False
     if _PLATFORM_GROUND.search(text):
         return False
-    # A CHANNEL_ON macro is checked BEFORE the build-type veto: `MOZ_DIAGNOSTIC_ASSERT_ENABLED is
+    # A CHANNEL-ON macro is checked BEFORE the build-type veto: `MOZ_DIAGNOSTIC_ASSERT_ENABLED is
     # off` is wrong by construction even when the same note also says `#ifdef DEBUG`.
-    if any(re.search(r"\b%s\b" % m, text) for m in CHANNEL_ON_DENY):
+    #
+    # BOTH SETS ARE PER CHANNEL, and this predicate INVERTS between them, which is why no single
+    # relaxation could have made it right on beta: a beta note "behind `#ifdef NIGHTLY_BUILD`,
+    # not compiled into this build" used to match the nightly ON list, return True, and DISCARD a
+    # correct noise-kill; and "this `#ifdef RELEASE_OR_BETA` code is not in the build" used to
+    # match the nightly off-side regex, return False, and let a claim that is wrong on beta
+    # ABSTAIN a good lead.
+    # `channel or build_channel()`, exactly like `channel_on_deny` / `channel_off` /
+    # `build_type_deny` / `guard_deny`. `_skeptic_veto` is this function's only caller and it has
+    # NO channel to pass -- being a pydantic validator is why the ContextVar exists at all -- so
+    # a bare `_partition(channel)` made the ContextVar's single documented consumer read
+    # nightly's table for a beta crash, and a correct "behind `#ifdef NIGHTLY_BUILD`" noise-kill
+    # went on unbinding while `skeptic_build_flag_unbound` recorded that the rule had worked.
+    on, off = _partition(channel or build_channel())
+    if any(re.search(r"\b%s\b" % m, text) for m in on):
         return True
-    if _BUILD_TYPE_GROUND.search(text) or _OPT_BUILD_GROUND.search(text):
+    if _off_ground(off).search(text) or _OPT_BUILD_GROUND.search(text):
         return False
     return True

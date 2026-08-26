@@ -76,14 +76,52 @@ def _parent_hang(n_threads=40):
     }
 
 
-# name -> (measured bytes on 2026-08-24 at HEAD, tolerance). The tolerance is deliberately tight:
-# v109's whole system.md change was +638 bytes and it has to be impossible to make that quietly.
+def _beta(crash, ages=False):
+    """The same crash on BETA. A separate fixture set, because every ledger entry above is
+    nightly and the beta prompt is a DIFFERENT prompt: `_system_prompt` re-renders the
+    revision-drift section for the beta branch, `_signature_age_lines` can state two ages, and
+    the hardware paragraphs quote beta's own population rates. Without a beta fixture a
+    beta-only sentence adds ZERO bytes to the four numbers above and the ledger stays green --
+    which is exactly the v109 failure this file was written to prevent.
+
+    ``ages=True`` adds the signature-age keys in the shape that triggers the beta-only
+    "new on beta, old everywhere" block (`triage._channel_age_lines`)."""
+    out = dict(crash, channel="beta", version="156.0b3")
+    if ages:
+        out.update({
+            # All-time debut a month ago (the nightly debut of a change that rode the merge),
+            # first beta report on this cycle's first beta build.
+            "signature_first_seen_ever": "20260721000000",
+            "signature_first_seen_buildid": "20260721000000",
+            "signature_first_seen_any": "20260721000000",
+            "signature_first_seen_channel": "20260817142839",
+        })
+    return out
+
+
+# name -> (measured bytes, tolerance). Nightly rows measured 2026-08-24 at HEAD; the beta rows
+# and the two age rows 2026-08-25. The tolerance is deliberately tight: v109's whole system.md
+# change was +638 bytes and it has to be impossible to make that quietly.
 _MEASURED = {
     "system.md": (16157, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     "crash facts, 40-thread parent hang": (1901, 200),
     "user prompt, 40-thread parent hang": (2675, 300),
+    # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
+    # branch and trunk have diverged, so "a small line delta is expected drift" needed the
+    # sentence saying which tree the tools read and that trunk code is not what shipped.
+    "system.md, beta": (16697, 400),
+    # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
+    # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
+    # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
+    "crash facts, plain deref (beta)": (219, 60),
+    "user prompt, plain deref (beta)": (985, 120),
+    # The two-age block, which only a non-nightly channel can produce. Compare the nightly
+    # single-age fixture below: the second age plus its guidance is what the difference buys.
+    "crash facts, beta with two signature ages": (1342, 200),
+    "user prompt, beta with two signature ages": (2108, 300),
+    "crash facts, nightly with one signature age": (1040, 200),
 }
 
 _HOWTO = (
@@ -103,9 +141,18 @@ class TestPromptBudget(unittest.TestCase):
                 name, actual, want, tol, _HOWTO))
 
     def test_the_standing_system_prompt_is_pinned(self):
-        """Read whole on every run, `lru_cache`d, identical for every crash -- so a byte here is
-        the most expensive byte in the pipeline."""
+        """Read whole on every run, `lru_cache`d, identical for every crash ON ONE CHANNEL -- so
+        a byte here is the most expensive byte in the pipeline."""
         self._check("system.md", len(triage._system_prompt()))
+        self._check("system.md, beta", len(triage._system_prompt("beta")))
+
+    def test_the_beta_prompt_is_a_different_prompt(self):
+        """Not a size assertion -- the reason the beta rows exist. If these three ever stop
+        holding, the fixtures have stopped covering the channel."""
+        beta = triage._system_prompt("beta")
+        self.assertIn("mozilla-beta", beta)
+        self.assertNotIn('"repo": "mozilla-central"', beta)
+        self.assertNotEqual(beta, triage._system_prompt())
 
     def test_the_per_crash_facts_are_pinned(self):
         """`_crash_facts` is shared BYTE-FOR-BYTE with the blind second opinion
@@ -114,11 +161,29 @@ class TestPromptBudget(unittest.TestCase):
                     len("\n".join(triage._crash_facts(_PLAIN))))
         self._check("crash facts, 40-thread parent hang",
                     len("\n".join(triage._crash_facts(_parent_hang()))))
+        self._check("crash facts, plain deref (beta)",
+                    len("\n".join(triage._crash_facts(_beta(_PLAIN)))))
+
+    def test_the_signature_age_block_is_pinned_on_both_channels(self):
+        """The two-age block is beta-only prose (`triage._channel_age_lines`), so it is invisible
+        to every nightly fixture. Both rows, so the DELTA is what a reviewer reads."""
+        self._check("crash facts, nightly with one signature age",
+                    len("\n".join(triage._crash_facts(dict(
+                        _PLAIN,
+                        signature_first_seen_ever="20260721000000",
+                        signature_first_seen_buildid="20260721000000",
+                        signature_first_seen_any="20260721000000")))))
+        self._check("crash facts, beta with two signature ages",
+                    len("\n".join(triage._crash_facts(_beta(_PLAIN, ages=True)))))
+        self._check("user prompt, beta with two signature ages",
+                    len(triage._user_prompt(_beta(_PLAIN, ages=True))))
 
     def test_the_user_prompt_is_pinned(self):
         self._check("user prompt, plain deref", len(triage._user_prompt(_PLAIN)))
         self._check("user prompt, 40-thread parent hang",
                     len(triage._user_prompt(_parent_hang())))
+        self._check("user prompt, plain deref (beta)",
+                    len(triage._user_prompt(_beta(_PLAIN))))
 
     def test_the_thread_block_is_the_dominant_per_crash_term(self):
         """Not a size assertion -- a shape one, and the reason the hang fixture exists. If this

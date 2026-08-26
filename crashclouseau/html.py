@@ -333,17 +333,20 @@ def reports_no_score():
 
 
 # searchfox tree per Firefox channel (post hg->git migration; mozilla-* names
-# 301-redirect to these). Unknown channels fall back to the main tree.
-_SF_TREE = {
-    "nightly": "firefox-main",
-    "beta": "firefox-beta",
-    "release": "firefox-release",
-}
+# 301-redirect to these). RENDERED from `searchfox.repo_for_channel`, not restated: this map
+# was a second hand-written copy of the agent side's channel->repo decision, and the agent
+# side did not have one at all (`SearchfoxCtx` had no channel, so every beta read went to
+# firefox-main). One table, two consumers -- see `searchfox._CHANNEL_REPO`.
 _SF_DEFAULT_TREE = "firefox-main"
 
 
 def _searchfox_tree(channel):
-    return _SF_TREE.get(channel, _SF_DEFAULT_TREE)
+    try:
+        from crashclouseau.searchfox import repo_for_channel
+
+        return repo_for_channel(channel).tree
+    except Exception:  # pragma: no cover - defensive; a UI link must never 500
+        return _SF_DEFAULT_TREE
 
 
 def _collect_diff_lines(dossier, filename):

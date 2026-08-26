@@ -110,11 +110,51 @@ def _model_id(model: str) -> str:
     return _MODEL_IDS.get(model, model)
 
 
-@functools.lru_cache(maxsize=1)
-def _system_prompt() -> str:
+# The revision-drift paragraph names a repo, and for a year there was only one. `system.md` keeps
+# the nightly wording (it is the readable prompt, and the byte ledger measures it); a non-nightly
+# crash gets these substitutions, which is the smallest change that cannot leave the two out of
+# step.
+_DRIFT_NIGHTLY = (
+    "The searchfox tools read ~tip of mozilla-central, which is NEWER than the crash build."
+)
+
+
+def _drift_paragraph(repo, channel):
+    """The revision-drift opener for a crash whose tools read *repo*."""
+    return (
+        "The searchfox tools read ~tip of {repo} — the {channel} branch, NOT trunk — which is "
+        "NEWER than the crash build. Two branches matter here and they have DIVERGED: {repo} "
+        "carries uplifts that are not on mozilla-central, and mozilla-central carries a whole "
+        "train of changes that were never in this build. So code you find on trunk is not "
+        "evidence about what shipped. Querying mozilla-central deliberately is often the right "
+        "move — a {channel} regressor usually LANDED there first, so that is where its history "
+        "and its original landing date live — but pass the repo explicitly and say in your note "
+        "which tree you read.".format(repo=repo, channel=channel)
+    )
+
+
+# maxsize 8, not 1: the prompt is now per channel (nightly / beta / aurora / release), and a
+# cache of one would re-read and re-substitute on every alternation.
+@functools.lru_cache(maxsize=8)
+def _system_prompt(channel: str | None = None) -> str:
     path = os.path.join(os.path.dirname(__file__), "prompts", "system.md")
     with open(path, "r") as handle:
-        return handle.read()
+        text = handle.read()
+    if not channel or channel.lower() == "nightly":
+        return text
+    from crashclouseau.searchfox import repo_for_channel
+
+    repo = repo_for_channel(channel).value
+    if repo != "mozilla-central":
+        text = text.replace(_DRIFT_NIGHTLY, _drift_paragraph(repo, channel.lower()))
+        text = text.replace("## Revision drift (searchfox indexes ~tip, not the crash build)",
+                            "## Revision drift (searchfox indexes ~tip of {}, not the crash "
+                            "build)".format(repo))
+        # The handoff EXAMPLE hands the model the repo token to echo into its citations. Left at
+        # `mozilla-central` it invites a beta run to record trunk as the source of code it read
+        # on the beta branch.
+        text = text.replace('"repo": "mozilla-central"', '"repo": "{}"'.format(repo))
+    return text
 
 
 def _short_value(value, limit=300):
@@ -487,7 +527,7 @@ def _cpu_summary(raw: dict, sysinfo: dict) -> str:
     return out
 
 
-def _cpu_spread_line(noise: dict) -> str:
+def _cpu_spread_line(noise: dict, crash: dict | None = None) -> str:
     """Which PROCESSOR MODELS this signature's reports come from, as one line, or ``""``.
 
     BUG 2065373, and :jstutte's review of it: "could clouseau do some OS / install distribution
@@ -522,13 +562,27 @@ def _cpu_spread_line(noise: dict) -> str:
         return ""
     if seen < sigage.POPULATION_TOP_CPU_SHARE_MIN_REPORTS:
         return ""
+    # The BACKGROUND half of this sentence exists only for a channel whose median was actually
+    # measured. 0.32 comes from 200 Firefox-NIGHTLY signatures and nobody has run that sample on
+    # beta, so on beta the share is stated with no "the median signature sits at ..." beside it.
+    # Quoting the nightly median to a beta run would be the `hardware-noise-denominator` mistake
+    # in the direction that reads as evidence.
+    median = sigage.population_top_cpu_share_median((crash or {}).get("channel"))
+    background = (
+        " Background: the median {} signature with at least 5 reports sits at {:.0f}%, and 13% "
+        "of them (26 of 200 sampled 2026-08-21) sit at 100% — one processor model is ORDINARY, "
+        "and every suppression threshold tested on this statistic suppressed a crash that was "
+        "later FIXED.".format(sigage.population_label((crash or {}).get("channel")),
+                              100 * median)
+        if median is not None else
+        " Background: how concentrated a typical signature on this channel is has NOT been "
+        "measured (the 32% figure this note quotes elsewhere is Firefox-nightly's), so treat "
+        "the number above as unbenchmarked — do not read it as high or as low."
+    )
     return (
         "CPU-MODEL SPREAD OF THIS SIGNATURE — a fact, not a verdict, and deliberately stated "
         "apart from the paragraph above. Of the {} reports that carry a cpu_info string, "
-        "{:.0f}% are on {}{}. Background: the median Firefox-nightly signature with at least 5 "
-        "reports sits at {:.0f}%, and 13% of them (26 of 200 sampled 2026-08-21) sit at 100% — "
-        "one processor model is ORDINARY, and every suppression threshold tested on this "
-        "statistic suppressed a crash that was later FIXED. Read it as SCOPE and as evidence "
+        "{:.0f}% are on {}{}.{} Read it as SCOPE and as evidence "
         "in NEITHER direction: when a signature is confined to one CPU model, one GPU driver "
         "or one distribution, naming which is worth more than calling the population small — "
         "but concentration is not support for a bug either, since in that same sample the most "
@@ -537,7 +591,7 @@ def _cpu_spread_line(noise: dict) -> str:
             seen, 100 * share, noise.get("top_cpu_term") or "one model",
             ", the only model seen" if terms == 1
             else ", one of {} models seen".format(terms),
-            100 * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN)
+            background)
     )
 
 
@@ -576,14 +630,27 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     cpu = noise.get("broken_cpu_rate")
     if not sample or (flip is None and cpu is None):
         return []
+    # THE POPULATION IS THIS CRASH'S OWN CHANNEL'S. Beta reads 6.75% / 5.82% against nightly's
+    # 2.55% / 4.15%, so quoting nightly's here would tell a beta run that an ordinary beta
+    # signature is 2.6x the population -- immediately before the paragraph that says a high
+    # share means any mechanism it constructs "will be fiction that fits". An UNMEASURED
+    # population (release) drops the comparison rather than borrowing nightly's.
+    channel = crash.get("channel")
+    pop_flip = sigage.population_bit_flip_rate(channel)
+    pop_cpu = sigage.population_broken_cpu_rate(channel)
+    pop_name = sigage.population_label(channel)
     bits = []
     if flip is not None:
-        bits.append("{:.0f}% carry a Socorro bit-flip annotation (crash population: "
-                    "{:.0f}%)".format(100 * flip, 100 * sigage.POPULATION_BIT_FLIP_RATE))
+        bits.append("{:.0f}% carry a Socorro bit-flip annotation{}".format(
+            100 * flip,
+            "" if pop_flip is None else
+            " ({} population: {:.0f}%)".format(pop_name, 100 * pop_flip)))
     if cpu is not None:
         bits.append("{:.0f}% come from a known-defective Intel Raptor Lake CPU (family 6 model "
-                    "183 stepping 1, meta bug 1975808; crash population: {:.0f}%)".format(
-                        100 * cpu, 100 * sigage.POPULATION_BROKEN_CPU_RATE))
+                    "183 stepping 1, meta bug 1975808{})".format(
+                        100 * cpu,
+                        "" if pop_cpu is None else
+                        "; {} population: {:.0f}%".format(pop_name, 100 * pop_cpu)))
     out = [
         "",
         "HARDWARE-ERROR SHARE OF THIS SIGNATURE, on this crash's own channel over the last "
@@ -598,7 +665,7 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     ]
     # Appended as its OWN paragraph, never folded into the two above: concentration is not a
     # hardware-error share and must not inherit that paragraph's instruction.
-    spread = _cpu_spread_line(noise)
+    spread = _cpu_spread_line(noise, crash)
     if spread:
         out.append(spread)
     return out
@@ -686,6 +753,18 @@ def _signature_age_lines(crash: dict) -> list[str]:
                     windowed, sigage.buildid_day(windowed), _days_phrase(age_win)))
         if age_ever <= sigage.NEW_SIGNATURE_DAYS:
             guidance = _NEW_SIGNATURE_GUIDANCE
+        else:
+            # NEW TO THIS CHANNEL, OLD EVERYWHERE. Off nightly the two are routinely different
+            # and the difference is the whole question. A regressor that landed on
+            # mozilla-central during the previous cycle gives an all-time first-seen of 7-35
+            # days at a 4-week cadence (7-21 at two weeks) -- old enough for the guidance above
+            # to tell the model that a changeset landing after the signature existed cannot have
+            # created it, while the candidates beside it all print the merge date. Both halves
+            # then point away from the only changeset set that can contain the origin.
+            channel_said, channel_guidance = _channel_age_lines(crash, ever, age_ever)
+            if channel_said:
+                said.extend(channel_said)
+                guidance = channel_guidance
     elif age_win is not None:
         # No row in `SignatureFirstDate`. Measured over 14 days of prod: 7.6% of dossiers analyse
         # a crash within an hour of its signature's first report EVER, and the table's cron has
@@ -728,6 +807,48 @@ _NEW_SIGNATURE_GUIDANCE = (
     " caused it is very likely to be in that window, and 'this changeset introduced this crash' is"
     " a claim the dates actually support. The one thing that would undo it is a renaming — an old"
     " crash re-signatured onto a new name — and where we can detect that, it is said above."
+)
+
+# How old is this signature ON ITS OWN CHANNEL, said only when that differs from "how old is it
+# anywhere" by enough to matter. Nightly is mozilla-central's own channel, so the two are the
+# same question there and this never fires; `_CHANNEL_NEW_DAYS` is deliberately the same
+# `NEW_SIGNATURE_DAYS` boundary the all-time clock uses, so there is one definition of "new".
+_CHANNEL_LABEL = {"beta": "beta", "aurora": "Developer Edition", "release": "release"}
+
+
+def _channel_age_lines(crash, ever, age_ever):
+    """``(lines, guidance)`` for "new to this channel, old elsewhere", else ``([], None)``."""
+    channel = (crash.get("channel") or "").lower()
+    label = _CHANNEL_LABEL.get(channel)
+    first_channel = crash.get("signature_first_seen_channel")
+    if not label or not first_channel:
+        return [], None
+    age_channel = sigage.signature_age_days(first_channel, crash.get("buildid"))
+    if age_channel is None or age_channel > sigage.NEW_SIGNATURE_DAYS:
+        return [], None
+    if str(first_channel) == str(ever):
+        # Same build on both clocks: the signature is simply new, and the all-time branch above
+        # has already said so correctly.
+        return [], None
+    return (
+        ["...but it is NEW ON {}: its first {} report is build {} ({}), {}. The figure above is"
+         " its debut ANYWHERE, which for a change that rode this cycle's merge from"
+         " mozilla-central is the nightly debut, weeks before this branch ever built it."
+         .format(label.upper(), label, first_channel, sigage.buildid_day(first_channel),
+                 _before_this_build(age_channel, first_channel, crash.get("buildid")))],
+        _NEW_TO_CHANNEL_GUIDANCE.format(label=label),
+    )
+
+
+_NEW_TO_CHANNEL_GUIDANCE = (
+    "What to do with that: treat the window below as TRUSTWORTHY even though the signature is not"
+    " new. The crash is new to {label} users, so something reached them that had not before — a"
+    " change uplifted onto this branch, or a change that came in with the merge from"
+    " mozilla-central and only now ships here. 'This changeset introduced this crash on {label}'"
+    " is a claim the dates support; 'this changeset introduced this crash' full stop is not, and"
+    " the difference is worth stating explicitly in your mechanism. Note the landing dates below"
+    " are the date the change reached {label}, which for anything that arrived with the cycle"
+    " merge is the merge date and NOT when the code was written."
 )
 
 _UNDATED_SIGNATURE_GUIDANCE = (
@@ -1239,7 +1360,20 @@ def _user_prompt(crash: dict) -> str:
                 parts.append("bug={}".format(c["bug"]))
             pushdate = c.get("pushdate")
             if pushdate:
-                parts.append("landed={}".format(_fmt_pushdate(pushdate)))
+                # `landed=` ONLY WHEN IT IS A LANDING DATE. A candidate that arrived with a
+                # release branch's cycle merge carries the MERGE's push date -- one date for a
+                # whole cycle of work, measured 6.9 to 34.8 days after the code was actually
+                # written -- so labelling it `landed=` tells the model something false, and in
+                # the direction that makes an old changeset look like a recent one. Naming it as
+                # an arrival is free; resolving the true landing date for every candidate in a
+                # merge window is up to 150 hg round-trips, which is why this is a label and not
+                # a lookup (the ONE chosen candidate does get the lookup, in
+                # `orchestrator._apply_signature_age_gate`).
+                parts.append(
+                    "arrived-with-the-cycle-merge={} (NOT its landing date; it was written "
+                    "earlier, on trunk)".format(_fmt_pushdate(pushdate))
+                    if c.get("via_merge") else
+                    "landed={}".format(_fmt_pushdate(pushdate)))
             if c.get("backedout"):
                 # This seed flag is `pushlog.is_backed_out(desc)` = the changeset IS ITSELF a
                 # backout commit. It does NOT mean it was backed out — labelling it "backed-out"
@@ -1383,7 +1517,7 @@ def build_options(
     # P1 pinned mode: an off-stack run pins blame/source reads to the crash BUILD rev so a
     # tip read can't leak the post-build fix. Empty for on-stack runs (tools keep tip).
     pin_rev = crash.get("pin_rev", "")
-    ctx = SearchfoxCtx(client=searchfox_client)
+    ctx = SearchfoxCtx(client=searchfox_client, channel=channel)
     patch_ctx = PatchCtx(channel=channel)
     history_ctx = HistoryCtx(channel=channel, build_rev=pin_rev)
     source_ctx = SourceCtx(channel=channel, build_rev=pin_rev)
@@ -1405,9 +1539,9 @@ def build_options(
         allowed += actions_to_tool_names(NEEDINFO_ACTIONS)
 
     kwargs = dict(
-        system_prompt=_system_prompt(),
+        system_prompt=_system_prompt(channel),
         mcp_servers=mcp_servers,
-        agents=roles.build_roles(llm_cfg),
+        agents=roles.build_roles(llm_cfg, channel=channel),
         allowed_tools=allowed,
         model=model,
         max_turns=max_turns,

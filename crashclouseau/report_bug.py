@@ -653,7 +653,7 @@ def build_stale_signature_note(corroborations):
     return note + " Clouseau lowered its own confidence one step for that."
 
 
-def build_hardware_note(corroborations):
+def build_hardware_note(corroborations, channel=None):
     """One paragraph on how much of this signature is hardware error, or ``""``.
 
     WHAT BUG 2064600 SHOULD HAVE SAID. We filed a display-list crash at 97% worth-investigating;
@@ -691,13 +691,22 @@ def build_hardware_note(corroborations):
     from crashclouseau import sigage
 
     parts = []
-    if flip is not None and flip >= _HARDWARE_NOTE_LIFT * sigage.POPULATION_BIT_FLIP_RATE:
-        parts.append("{:.0f}% carry a possible-bit-flip annotation (crash population: "
-                     "{:.0f}%)".format(100 * flip, 100 * sigage.POPULATION_BIT_FLIP_RATE))
-    if cpu is not None and cpu >= _HARDWARE_NOTE_LIFT * sigage.POPULATION_BROKEN_CPU_RATE:
+    # THE POPULATION IS THE CRASH'S OWN CHANNEL'S, and the LIFT is measured against it: beta
+    # runs 6.75% / 5.82% against nightly's 2.55% / 4.15%, so a beta signature at 6% is ORDINARY
+    # and nightly's denominator would have published it as 2.6x the population in a bug comment.
+    # An unmeasured population says nothing at all rather than borrowing nightly's -- this whole
+    # paragraph exists to tell a reviewer the crash may be hardware, and a wrong denominator
+    # there is the `hardware-noise-denominator` mistake with a Bugzilla comment attached.
+    pop_flip = sigage.population_bit_flip_rate(channel)
+    pop_cpu = sigage.population_broken_cpu_rate(channel)
+    pop_name = sigage.population_label(channel)
+    if flip is not None and pop_flip is not None and flip >= _HARDWARE_NOTE_LIFT * pop_flip:
+        parts.append("{:.0f}% carry a possible-bit-flip annotation ({} population: "
+                     "{:.0f}%)".format(100 * flip, pop_name, 100 * pop_flip))
+    if cpu is not None and pop_cpu is not None and cpu >= _HARDWARE_NOTE_LIFT * pop_cpu:
         parts.append("{:.0f}% come from the known-buggy Intel Raptor Lake (family 6 model 183 "
-                     "stepping 1, bug 1975808; crash population: {:.0f}%)".format(
-                         100 * cpu, 100 * sigage.POPULATION_BROKEN_CPU_RATE))
+                     "stepping 1, bug 1975808; {} population: {:.0f}%)".format(
+                         100 * cpu, pop_name, 100 * pop_cpu))
     # Whether the crash we actually analysed is one of the suspect ones. Both flags are recorded
     # for every verdict, so an absent one means "not established" and is left unsaid.
     cpu_known = "report_on_broken_cpu" in c
@@ -710,13 +719,13 @@ def build_hardware_note(corroborations):
     if parts:
         note = ("Hardware-error share of this signature: of its {} reports on this channel over "
                 "the last year, {}.{}".format(sample, "; and ".join(parts), tail))
-    spread = _cpu_spread_sentence(c)
+    spread = _cpu_spread_sentence(c, channel)
     if spread:
         note = (note + " " + spread) if note else spread
     return note
 
 
-def _cpu_spread_sentence(corroborations):
+def _cpu_spread_sentence(corroborations, channel=None):
     """The CPU-model concentration for the filed bug, when it is unusual, or ``""``.
 
     THE SAME NUMBER THE CRASH BRIEF GAVE THE MODEL (`triage._cpu_spread_line`), stated with the
@@ -749,16 +758,22 @@ def _cpu_spread_sentence(corroborations):
         return ""
     if seen < sigage.POPULATION_TOP_CPU_SHARE_MIN_REPORTS:
         return ""
-    if share < _HARDWARE_NOTE_LIFT * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN:
+    # SILENT WHERE THE MEDIAN IS UNMEASURED. 0.32 is 200 Firefox-NIGHTLY signatures; there is no
+    # beta equivalent, and both halves of this sentence are the comparison -- the lift that
+    # decides whether to print at all, and the "the median signature sits at N%" clause. With no
+    # median there is no claim to make, so the note is omitted rather than published against the
+    # wrong population.
+    median = sigage.population_top_cpu_share_median(channel)
+    if median is None or share < _HARDWARE_NOTE_LIFT * median:
         return ""
     return ("CPU-model spread: {:.0f}% of the {} reports that carry a cpu_info string are on "
-            "{}{}. The median Firefox-nightly signature sits at {:.0f}% and 13% of them are on "
+            "{}{}. The median {} signature sits at {:.0f}% and 13% of them are on "
             "a single model, so this is a hint about SCOPE — a driver, a distribution, an "
             "instruction set — and not a hardware verdict.".format(
                 100 * share, seen, c.get("signature_top_cpu_term") or "one model",
                 ", the only model seen" if terms == 1
                 else ", one of {} models seen".format(terms),
-                100 * sigage.POPULATION_TOP_CPU_SHARE_MEDIAN))
+                sigage.population_label(channel), 100 * median))
 
 
 def build_exposer_note(corroborations):
@@ -865,7 +880,7 @@ def build_bug_comment(
         build_stats_sentence(first, stats, info),
         build_signature_age_note((dossier or {}).get("corroborations"), info.get("buildid")),
         build_stale_signature_note((dossier or {}).get("corroborations")),
-        build_hardware_note((dossier or {}).get("corroborations")),
+        build_hardware_note((dossier or {}).get("corroborations"), channel),
         build_exposer_note((dossier or {}).get("corroborations")),
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,

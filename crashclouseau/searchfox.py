@@ -149,6 +149,37 @@ class Repo(str, Enum):
         return self.value
 
 
+# The ONE channel -> searchfox repo map. `html._searchfox_tree` renders its tree names from
+# this via `Repo.tree`, and `agent/tools/searchfox_cg.SearchfoxCtx` resolves its per-run default
+# through `repo_for_channel`, so the UI's links and the agent's reads cannot disagree about
+# which tree a crash belongs to. An unknown channel falls back to central rather than raising:
+# a wrong-but-indexed tree degrades an answer, an exception loses the whole run.
+_CHANNEL_REPO = {
+    "nightly": Repo.CENTRAL,
+    "beta": Repo.BETA,
+    # Socorro files Developer Edition under `aurora`; it is built from mozilla-beta.
+    "aurora": Repo.BETA,
+    "release": Repo.RELEASE,
+}
+
+
+def repo_for_channel(channel) -> Repo:
+    """The searchfox repo a crash on ``channel`` should be read in.
+
+    WHY THIS EXISTS: every ``SearchfoxClient`` method takes ``repo=None`` and ``_coerce_repo``
+    then falls through to ``agent.searchfox.default_repo`` = ``mozilla-central``. For a beta
+    crash that means every ``calls_from`` / ``calls_to`` / ``define`` / ``search`` /
+    ``field_layout`` read, and every permalink cited in the filed bug, came from firefox-main
+    tip -- code that may never have existed in the beta build, while the build's own uplifts are
+    absent from it. Two deterministic gates read the same tree (``_resolve_struct_layout``,
+    which is fail-closed, and ``compiled_out``), so the cost is not only a wrong citation.
+
+    ``firefox-beta`` is indexed at its own branch tip (measured 2026-08-11: ``cd001e124b15`` /
+    154.0b9 while ``firefox-main`` was at 155.0a1), which for a BETA crash is the correct tree
+    -- unlike the Fenix-nightly case in plan #16, where the same tree was a cycle behind."""
+    return _CHANNEL_REPO.get((channel or "").lower(), Repo.CENTRAL)
+
+
 def _coerce_repo(repo) -> Repo:
     if repo is None:
         repo = _settings().get("default_repo", "mozilla-central")

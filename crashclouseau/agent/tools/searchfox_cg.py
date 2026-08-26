@@ -33,14 +33,40 @@ from crashclouseau.searchfox import (
     SearchHit,
     SymbolRef,
 )
+from crashclouseau.searchfox import repo_for_channel
 from crashclouseau.vendor.agent_tools.registry import ToolError, tool, tools_in
 
 
 @dataclass
 class SearchfoxCtx:
-    """Shared per-run searchfox client (one in-process cache per run)."""
+    """Shared per-run searchfox client (one in-process cache per run), plus the CHANNEL the
+    crash is on.
+
+    ``channel`` was missing, and it was the only one of the five MCP contexts without it
+    (``PatchCtx`` / ``HistoryCtx`` / ``SourceCtx`` / ``SocorroCtx`` all take it). Every
+    ``SearchfoxClient`` method takes ``repo=None``, and ``searchfox._coerce_repo(None)`` falls
+    through to ``agent.searchfox.default_repo`` = ``mozilla-central`` — so for a beta crash the
+    whole call-graph surface, every ``define``/``search``/``field_layout``, and every permalink
+    the filed bug cites came from firefox-main tip: code that may never have been in the beta
+    build, missing the uplifts that were. ``SearchfoxCitation.repo`` then honestly recorded
+    ``mozilla-central`` and nothing downstream could tell it was the wrong tree.
+
+    ``repo`` resolves ONCE per run (``searchfox.repo_for_channel``) and every tool uses it as
+    its default, so a tool may still be pointed elsewhere explicitly — which is a real need:
+    a beta regressor usually LANDED on central, so "look at where it came from" is a legitimate
+    query. Same affordance as ``tools/history.py``'s channel argument."""
 
     client: SearchfoxClient
+    channel: str = ""
+
+    @property
+    def repo(self) -> str:
+        """The searchfox repo token this run reads by default."""
+        return repo_for_channel(self.channel).value
+
+    def repo_or(self, repo):
+        """``repo`` if the caller named one, else this run's own repo."""
+        return repo or self.repo
 
 
 def _sf_error(exc: SearchfoxError, what: str) -> ToolError:
@@ -116,12 +142,12 @@ def _fmt_field_layout(fl: FieldLayout) -> str:
 async def calls_from(
     ctx: SearchfoxCtx,
     symbol: Annotated[str, Field(description="Mangled or demangled symbol to expand outward.")],
-    repo: Annotated[str | None, Field(description="searchfox repo token, e.g. mozilla-central (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: THIS CRASH'S OWN repo -- mozilla-central for a nightly crash, mozilla-beta for a beta/DevEdition one). Pass mozilla-central explicitly to look at where a beta regressor originally landed. No autoland.")] = None,
     depth: Annotated[int, Field(description="Call-graph depth; 1 = direct callees.")] = 1,
 ) -> str:
     """List the functions CALLED BY `symbol` out to `depth`, each with its mangled symbol id + searchfox permalink for citation. Walk this outward from a crash frame toward off-stack callees."""
     try:
-        graph = await asyncio.to_thread(ctx.client.calls_from, symbol, repo, depth)
+        graph = await asyncio.to_thread(ctx.client.calls_from, symbol, ctx.repo_or(repo), depth)
     except SearchfoxNoResult:
         return f"No callees found for {symbol!r}."
     except SearchfoxError as exc:
@@ -133,12 +159,12 @@ async def calls_from(
 async def calls_to(
     ctx: SearchfoxCtx,
     symbol: Annotated[str, Field(description="Mangled or demangled symbol whose callers to find.")],
-    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
     depth: Annotated[int, Field(description="Call-graph depth; 1 = direct callers.")] = 1,
 ) -> str:
     """List the functions that CALL `symbol` out to `depth`, each with its mangled symbol id + searchfox permalink for citation. Walk this to find off-stack callers that may pass bad state in."""
     try:
-        graph = await asyncio.to_thread(ctx.client.calls_to, symbol, repo, depth)
+        graph = await asyncio.to_thread(ctx.client.calls_to, symbol, ctx.repo_or(repo), depth)
     except SearchfoxNoResult:
         return f"No callers found for {symbol!r}."
     except SearchfoxError as exc:
@@ -151,13 +177,13 @@ async def calls_between(
     ctx: SearchfoxCtx,
     source: Annotated[str, Field(description="Source symbol/class scope.")],
     target: Annotated[str, Field(description="Target symbol/class scope.")],
-    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
     depth: Annotated[int, Field(description="Path depth to search.")] = 2,
 ) -> str:
     """Direct call edges on paths between `source` and `target`. NB `--calls-between` is class/namespace-scoped, so it may return nothing for plain function pairs; prefer calls_from/calls_to at higher depth for function-level reach. Returns 'no path' rather than fabricating an edge."""
     try:
         graph = await asyncio.to_thread(
-            ctx.client.calls_between, source, target, repo, depth
+            ctx.client.calls_between, source, target, ctx.repo_or(repo), depth
         )
     except SearchfoxNoResult:
         return f"No path found between {source!r} and {target!r}."
@@ -170,11 +196,11 @@ async def calls_between(
 async def define(
     ctx: SearchfoxCtx,
     symbol: Annotated[str, Field(description="Symbol whose full definition body to fetch.")],
-    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
 ) -> str:
     """Fetch the full source body of `symbol`'s definition, with a commit-pinned permalink and line range for citation. Use to read a function before reasoning about its data flow."""
     try:
-        definition = await asyncio.to_thread(ctx.client.define, symbol, repo)
+        definition = await asyncio.to_thread(ctx.client.define, symbol, ctx.repo_or(repo))
     except SearchfoxNoResult:
         return f"No definition found for {symbol!r}."
     except SearchfoxError as exc:
@@ -186,12 +212,12 @@ async def define(
 async def lookup(
     ctx: SearchfoxCtx,
     name: Annotated[str, Field(description="Name/identifier to resolve to source locations.")],
-    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
     limit: Annotated[int, Field(description="Max locations to return.")] = 50,
 ) -> str:
     """Resolve `name` to source locations (built on search). NB these carry no mangled symbol id; use a symbol id from a calls_* result when one is required."""
     try:
-        refs = await asyncio.to_thread(ctx.client.lookup, name, repo, limit)
+        refs = await asyncio.to_thread(ctx.client.lookup, name, ctx.repo_or(repo), limit)
     except SearchfoxError as exc:
         raise _sf_error(exc, "lookup") from exc
     return _fmt_refs(refs)
@@ -202,12 +228,12 @@ async def search(
     ctx: SearchfoxCtx,
     query: Annotated[str, Field(description="Text (or regex, if regex=true) to search the indexed source for.")],
     regex: Annotated[bool, Field(description="Treat query as a regular expression.")] = False,
-    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
     limit: Annotated[int, Field(description="Max matches to return.")] = 50,
 ) -> str:
     """Free-text (or regex) search over the indexed source, each hit with file:line + permalink. Use to bridge call-graph holes (virtual/IPC/FFI) by finding implementors/message names/symbols."""
     try:
-        hits = await asyncio.to_thread(ctx.client.search, query, regex, repo, limit)
+        hits = await asyncio.to_thread(ctx.client.search, query, regex, ctx.repo_or(repo), limit)
     except SearchfoxError as exc:
         raise _sf_error(exc, "search") from exc
     return _fmt_hits(hits)
@@ -217,11 +243,11 @@ async def search(
 async def field_layout(
     ctx: SearchfoxCtx,
     class_name: Annotated[str, Field(description="Bare C++ class/struct name (no template <...> args), e.g. mozilla::detail::nsTStringRepr.")],
-    repo: Annotated[str | None, Field(description="searchfox repo token (default: configured; no autoland).")] = None,
+    repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
 ) -> str:
     """Byte-level memory layout (offset/size/type/name of each field) of a C++ class/struct. Use to VERIFY a null/small-address fault: a fault at address 0xN on type T is a null-deref of whichever field T places at byte offset N — turning an otherwise 'unverifiable' offset claim into a citable `struct_layout` fact. Pass the FULLY-QUALIFIED class name WITH namespaces and WITHOUT template <...> args (e.g. `mozilla::detail::nsTStringRepr`, taken from the crash signature/frames); a bare or template-suffixed name returns nothing. Layout the CONTAINING object (whose field is at the fault offset), not a template accessor."""
     try:
-        fl = await asyncio.to_thread(ctx.client.field_layout, class_name, repo)
+        fl = await asyncio.to_thread(ctx.client.field_layout, class_name, ctx.repo_or(repo))
     except SearchfoxNoResult:
         return (
             f"No field layout found for {class_name!r}. field-layout needs the "

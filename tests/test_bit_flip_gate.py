@@ -712,9 +712,13 @@ class TestTheBriefCarriesTheHardware(unittest.TestCase):
     def test_the_signature_share_is_stated_against_the_population(self):
         # A bare "50%" is unreadable: the model cannot know it is alarming without the 2.5%.
         lines = "\n".join(triage._crash_facts({"raw_crash": {}, "hardware_noise": _noise()}))
-        self.assertIn("50% carry a Socorro bit-flip annotation (crash population: 2%)", lines)
+        # The population is NAMED now, because it is per channel: beta's bit-flip rate is 6.75%
+        # against nightly's 2.55%, so "crash population" alone was a number with no denominator
+        # attached to it (`sigage.population_bit_flip_rate`).
+        self.assertIn(
+            "50% carry a Socorro bit-flip annotation (Firefox-nightly population: 2%)", lines)
         self.assertIn("17% come from a known-defective Intel Raptor Lake", lines)
-        self.assertIn("crash population: 4%", lines)  # nightly Raptor Lake background
+        self.assertIn("Firefox-nightly population: 4%", lines)  # Raptor Lake background
         self.assertIn("NOT hardware error", lines)    # Nikkel's "next step"
 
     def test_the_blind_second_opinion_is_told_too(self):

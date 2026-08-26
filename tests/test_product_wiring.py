@@ -18,7 +18,7 @@ from unittest import mock  # noqa: E402
 
 from flask import render_template  # noqa: E402
 
-from crashclouseau import app, bugzilla_apply, config, html, population, report_bug  # noqa: E402
+from crashclouseau import app, bugzilla_apply, config, html, population, report_bug, searchfox  # noqa: E402,E501
 
 
 _SEARCHFOX = {
@@ -1158,7 +1158,25 @@ class TestCodeview(unittest.TestCase):
         self.assertEqual(html._searchfox_tree("nightly"), "firefox-main")
         self.assertEqual(html._searchfox_tree("beta"), "firefox-beta")
         self.assertEqual(html._searchfox_tree("release"), "firefox-release")
-        self.assertEqual(html._searchfox_tree("aurora"), "firefox-main")  # unknown -> default
+        # `aurora` IS beta: Socorro files Developer Edition under it, and DevEdition is built
+        # from mozilla-beta (58 of 59 buildids shared with beta since 2026-04-01, identical
+        # revisions). It used to land on the default tree as an "unknown channel"; it is not
+        # unknown, and a third of the beta population arrives under that label.
+        self.assertEqual(html._searchfox_tree("aurora"), "firefox-beta")
+        self.assertEqual(html._searchfox_tree("esr140"), "firefox-main")  # unknown -> default
+        self.assertEqual(html._searchfox_tree(None), "firefox-main")
+
+    def test_the_ui_and_the_agent_read_the_same_tree(self):
+        """`html._searchfox_tree` and `SearchfoxCtx.repo` must never disagree about which
+        searchfox tree a crash belongs to — they were two hand-written maps, and the agent's
+        did not exist at all (every beta read went to firefox-main)."""
+        from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
+
+        for channel in ("nightly", "beta", "aurora", "release", "esr140", ""):
+            ctx = SearchfoxCtx(client=None, channel=channel)
+            self.assertEqual(
+                searchfox.Repo(ctx.repo).tree, html._searchfox_tree(channel), channel
+            )
 
 
 class TestDraftEvidence(unittest.TestCase):
