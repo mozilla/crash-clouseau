@@ -194,7 +194,16 @@ def retrigger():
     """Re-run triage for one uuid from the tasks view (error/running/stalled). If the
     task is still running its RQ job is stopped first so we don't pay for two runs. The
     run is forced past the nightly/proto/skip-existing gates since the operator asked
-    for this specific uuid. This is analysis only -- it writes nothing to Bugzilla."""
+    for this specific uuid.
+
+    IT CAN WRITE TO BUGZILLA. This line used to say "analysis only -- it writes nothing to
+    Bugzilla", which was never true: the re-run is an ordinary run and reaches ``_maybe_autofile``
+    like any other. On 2026-08-24 a 20-uuid retrigger experiment put a second copy of one analysis
+    on bug 2065072 and filed a new bug 2066051. ``retrigger_agent`` logs a warning when the crash
+    has already been filed, and ``Dossier._STICKY_PAYLOAD_KEYS`` keeps the ``filed_bug`` record
+    across the reset so the idempotence keys still hold — but a crash that has NEVER filed (an
+    abstain, or a create BMO rejected) will file on the re-run if the new verdict qualifies, which
+    is usually the point of retriggering it."""
     from crashclouseau.agent import orchestrator
 
     data = request.get_json(silent=True) or {}
