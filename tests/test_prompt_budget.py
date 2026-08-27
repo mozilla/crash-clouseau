@@ -102,8 +102,14 @@ def _beta(crash, ages=False):
 # name -> (measured bytes, tolerance). Nightly rows measured 2026-08-24 at HEAD; the beta rows
 # and the two age rows 2026-08-25. The tolerance is deliberately tight: v109's whole system.md
 # change was +638 bytes and it has to be impossible to make that quietly.
+#
+# 2026-08-27, system.md +958 (16157 -> 17115, and beta with it): the `abstain_kind` vocabulary,
+# which is the price of learning what our 55-abstains-a-day actually are. It replaces a line
+# saying `abstain` is "ONLY for genuine noise" -- measurably false, 71% of abstains are
+# model-authored conclusions -- with eight words and a clause each. The first draft cost 1,715
+# and this ledger is what sent it back to be halved.
 _MEASURED = {
-    "system.md": (16157, 400),
+    "system.md": (17115, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     "crash facts, 40-thread parent hang": (1901, 200),
@@ -111,7 +117,7 @@ _MEASURED = {
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (16697, 400),
+    "system.md, beta": (17655, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.

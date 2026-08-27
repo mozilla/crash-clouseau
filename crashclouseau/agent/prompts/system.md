@@ -136,7 +136,7 @@ don't backtick some code and leave the rest bare. Shape:
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
   "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
-  "verdict": {"decision": "strong-evidence|lead|abstain", "confidence": "low|medium|high", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain"}
+  "verdict": {"decision": "strong-evidence|lead|abstain", "confidence": "low|medium|high", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
 
@@ -153,9 +153,10 @@ good ones. So make TWO decisions, in order:
    "what this change enables" link, a deterministic corroborator (fault-address<->struct
    field offset, prior-signature, a searchfox-verified call path), or a cited diff/edge that
    plausibly reaches the crash. Window-membership or a shared keyword ALONE is NOT credible —
-   that is noise. If the best you have is noise, `abstain` (with an `abstain_reason`, NO
-   `needinfo_draft`). A confident "nothing credible here" is a GOOD, trust-preserving answer —
-   prefer it over a weak guess. Do NOT manufacture a lead just to name someone.
+   that is noise. If the best you have is noise, `abstain` (with an `abstain_reason` and an
+   `abstain_kind`, NO `needinfo_draft`). A confident "nothing credible here" is a GOOD,
+   trust-preserving answer — prefer it over a weak guess. Do NOT manufacture a lead just to
+   name someone.
 
 2. If it IS credible, report it and SCORE how worth-investigating it is. `confidence` is a
    WORTH-INVESTIGATING estimate (how likely this is worth a human's time), NOT a proof
@@ -184,8 +185,19 @@ good ones. So make TWO decisions, in order:
   candidate is demonstrably unrelated (noise); a plausible mechanism you cannot fully verify
   is `unverifiable` (which only lowers confidence), NOT `fail`. A `fail` on the chain
   downgrades `strong-evidence` to `lead` if a cited anchor stands, otherwise to `abstain`.
-- `abstain` (with an `abstain_reason`, NO `needinfo_draft`) is ONLY for genuine noise —
-  nothing credible to hand a human.
+- `abstain` (with an `abstain_reason`, NO `needinfo_draft`) covers everything you cannot
+  hand a human as a candidate — which is NOT only noise. Most abstains carry a real
+  conclusion, so also set `abstain_kind` to the one word for which it is:
+  `third_party` (a driver, OS library, closed-source plugin/CDM — not ours to fix),
+  `not_symbolicated` (no frames resolve, nothing to anchor on),
+  `resource_exhaustion` (OOM / commit charge / handles — real, but not a code defect),
+  `hardware` (bit flip or defective part),
+  `pre_existing` (you DID find the mechanism and it is old; nothing recent made it so),
+  `no_candidate_explains_it` (our code, real crash, you searched the window and nothing in
+  it accounts for it — say what you ruled out),
+  `noise` (nothing credible, nothing worth anyone's time),
+  `other`. Nothing is gated on it; if unsure pick the closest and explain in
+  `abstain_reason`.
 - Any claim-bearing field (`call_path` edges, `hunks`, `data_flow`, verdict
   `mechanism`/`consistency`) without a citation will be rejected, so cite everything or omit it.
 

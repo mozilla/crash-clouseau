@@ -1258,11 +1258,25 @@ def _unusable_verdict():
     a time. ``reason IS NOT NULL AND (...)`` is FALSE rather than NULL there, so the negation
     keeps the row. Same for a ``done`` row with no dossier payload at all, which is what an
     operator marking a row done by hand leaves behind."""
+    # (See the two arms below for how the structured ``abstain_kind`` joins the prefix match.)
     reason = Dossier.payload["dossier"]["verdict"]["abstain_reason"].astext
-    return and_(
+    kind = Dossier.payload["dossier"]["verdict"]["abstain_kind"].astext
+    by_prefix = and_(
         reason.isnot(None),
         or_(*[reason.like(p + "%") for p in _UNUSABLE_VERDICT_PREFIXES]),
     )
+    # ...OR the structured answer, which is the same fact said once instead of matched by
+    # prose. ``agent.schema.AbstainKind.pipeline_error`` is set at both places that build one
+    # of the reasons above, so a future reword of either string cannot silently un-detect a
+    # broken run — which, given what this decides (whether a cluster is permanently closed to
+    # further analysis), is a failure nobody would see. The prefixes stay because they are the
+    # only thing that can read the ~2,200 dossiers already persisted without the field.
+    #
+    # BOTH ARMS MUST BE FALSE-NOT-NULL for the reason the docstring gives: ``kind`` is NULL on
+    # every one of those older rows, and ``FALSE OR NULL`` is NULL, which would drop the row
+    # out of both arms of the caller's query. Hence the explicit ``isnot(None)``.
+    by_kind = and_(kind.isnot(None), kind == "pipeline_error")
+    return or_(by_prefix, by_kind)
 
 
 def _cluster_dossiers(signatureid, protohash, channel):

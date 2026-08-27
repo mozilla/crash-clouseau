@@ -81,6 +81,67 @@ class Decision(str, Enum):
     abstain = "abstain"
 
 
+class AbstainKind(str, Enum):
+    """WHY a run abstained, in one word. Descriptive; nothing gates on it.
+
+    THE CONTRACT AND THE BEHAVIOUR HAD DIVERGED. ``system.md`` says ``abstain`` is "ONLY for
+    genuine noise", and that is not what the model does with it: over 30 days of prod, 1,646
+    of the 2,325 abstains (71%) are model-authored, and reading them they are full of specific,
+    correct conclusions -- "the fault is inside AMD's driver binary", "``GMPLoader::Load``'s
+    intentional MOZ_CRASH when ``PR_LoadLibraryWithFlags`` fails with ERROR_COMMITMENT_LIMIT",
+    "the real culprit lives in the JS-side async-shutdown clients that failed to resolve".
+    An abstain is not "nothing found"; it is usually "found something, and it is not a
+    changeset". All of that lands in ``abstain_reason`` free text and reaches nobody.
+
+    WHY THE MODEL EMITS IT RATHER THAN A CLASSIFIER READING IT BACK. This taxonomy was derived
+    by reading a random 22 and then trying to apply it to all 1,648 by keyword -- and the
+    keyword pass FAILED: it scored ``hardware`` at 26.8% because agents RULING OUT hardware say
+    the word ("the signature's low hardware-attribution rate"), and 22% would not classify at
+    all though most of that residue plainly said "nothing in the window explains it". A
+    category the writer knows and the reader has to guess is a category that has to be written
+    down.
+
+    THE POINT OF THE SPLIT is that most of these abstains are CORRECTLY silent and a few are
+    not, and today nothing can tell them apart. ``third_party``/``hardware``/
+    ``resource_exhaustion``/``not_symbolicated``/``noise`` are crashes that are not ours to
+    fix or not worth anyone's time. ``no_candidate_explains_it`` and ``pre_existing`` are our
+    code, really crashing, with the cause unfound or old -- the only two where a human might
+    want to see something. Nothing acts on that yet, deliberately: this ships so the shares
+    become measurable from prod before any surface reads them.
+
+    ``other`` is the ``_missing_`` target for the same reason ``FailureClass`` has one -- see
+    that enum's note. An ABSENT field stays ``None`` and means "not stated", which is a
+    different fact from ``other`` ("stated, unrecognised") and from ``noise`` ("stated,
+    nothing here"). Never required: a field the model may omit must never destroy a verdict,
+    which is what the 2026-08-05 citation-kind losses cost."""
+
+    third_party = "third_party"
+    not_symbolicated = "not_symbolicated"
+    resource_exhaustion = "resource_exhaustion"
+    hardware = "hardware"
+    pre_existing = "pre_existing"
+    no_candidate_explains_it = "no_candidate_explains_it"
+    noise = "noise"
+    # NOT MODEL-EMITTED, and deliberately absent from the prompt: this is OUR machinery
+    # failing, not a judgement about the crash. A handoff that could not be parsed, or a
+    # dossier that failed validation, currently lands in the same undifferentiated abstain
+    # bucket as a driver crash -- which is exactly how 45 destroyed verdicts (mean $3.00,
+    # evidence intact, verdict discarded) stayed invisible for a month. Set by
+    # ``_bare_abstain`` and by the salvage path. The enum would accept the string from a
+    # model too -- nothing enforces the split -- but the word appears nowhere in the prompt,
+    # so in practice it means what it says.
+    pipeline_error = "pipeline_error"
+    other = "other"
+
+    @classmethod
+    def _missing_(cls, value):
+        s = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        for member in cls:
+            if member.value == s:
+                return member
+        return cls.other
+
+
 class Confidence(str, Enum):
     low = "low"
     medium = "medium"
@@ -547,6 +608,13 @@ class Verdict(BaseModel):
     p_worth_investigating: float | None = None
     needinfo_draft: str | None = None
     abstain_reason: str | None = None
+    # WHICH KIND of abstain, so the 55-a-day of them stop being one undifferentiated bucket.
+    # ``None`` = the model did not say, which is distinct from ``other`` and from ``noise``;
+    # see ``AbstainKind``. Optional on every decision and never validated against one -- a
+    # field the model may omit must not be able to destroy a verdict. Additive and backward
+    # compatible: older persisted dossiers omit it and read back as ``None``, and it rides the
+    # dossier JSONB, so counting it needs no migration.
+    abstain_kind: AbstainKind | None = None
     mechanism: Claim | None = None
     consistency: Claim | None = None
 
@@ -728,6 +796,7 @@ class Dossier(BaseModel):
                     decision=Decision.abstain,
                     confidence=Confidence.low,
                     abstain_reason=detail + "; no cited candidate/hunk/edge remains",
+                    abstain_kind=AbstainKind.noise,
                 )
         # (1b) A skeptic fail on a model-emitted lead = noise -> abstain (guardrail teeth).
         elif v.decision == Decision.lead and binding:
@@ -736,6 +805,7 @@ class Dossier(BaseModel):
                 confidence=Confidence.low,
                 abstain_reason="skeptic flagged this lead as noise / unrelated "
                                "(failed: {})".format(", ".join(binding) or "?"),
+                abstain_kind=AbstainKind.noise,
             )
         # (1c) The only fails left rest on a configure-switch claim, which the deterministic
         # compiled-out gate decides. Keep the lead and RECORD it, so a rule whose whole
@@ -755,6 +825,7 @@ class Dossier(BaseModel):
                 confidence=Confidence.low,
                 abstain_reason="lead has no cited candidate/hunk/edge anchor; "
                                "nothing to act on",
+                abstain_kind=AbstainKind.noise,
             )
         return self
 
@@ -964,7 +1035,8 @@ def validate_dossier(obj: dict) -> Dossier:
 
 
 def _abstain(reason: str) -> Dossier:
-    return Dossier(verdict=Verdict(decision=Decision.abstain, abstain_reason=reason))
+    return Dossier(verdict=Verdict(decision=Decision.abstain, abstain_reason=reason,
+                                   abstain_kind=AbstainKind.pipeline_error))
 
 
 # The abstain_reason ``parse_and_validate`` uses when there was no readable handoff at
@@ -1106,6 +1178,9 @@ def parse_and_validate(result: str | dict) -> Dossier:
                 abstain_reason="dossier validation failed (verdict unusable): {}".format(
                     _format_paths(_validation_paths(exc))
                 ),
+                # OUR failure, not a judgement about the crash — and the one that hides best,
+                # because the evidence survives salvage and only the verdict is lost.
+                abstain_kind=AbstainKind.pipeline_error,
             )
         try:
             return Dossier(**kwargs)
