@@ -1566,6 +1566,38 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
     return "\n\n".join(lines) if lines else None
 
 
+# BMO's `short_desc` column. A create whose summary is longer comes back
+# `400 code 104 "The text you entered in the Summary field is too long"`.
+_BMO_SUMMARY_MAX = 255
+
+
+def bug_title(signature):
+    """``Crash in [@ signature]``, capped at BMO's 255-character summary limit.
+
+    SOCORRO'S OWN CAP IS ALSO 255, so the wrapper's 13 characters are exactly what pushes a
+    long signature over: every signature longer than 242 is unfileable without this. Measured
+    over 1,770 analysed prod signatures, 23 (1.3%) are — 21 of them sitting at Socorro's cap,
+    where it has already appended its own " ..." — and the whole class had NEVER produced a
+    bug: of 27 runs on them, 3 reached a reported verdict, 2 of those at rung 70, and 0 were
+    filed. Crash 86cbca8b (``AsyncShutdownTimeout | profile-change-teardown | Extension
+    shutdown: <17 add-on ids>``, 268 characters of title) is the one that surfaced it; the
+    other two were 2026-08-06 and 2026-08-13 and nobody noticed, because a rejected create
+    leaves no row (see ``bugzilla_apply``'s ``filing_error``).
+
+    ONLY THE SUMMARY IS TRUNCATED. ``cf_crash_signature`` keeps the signature whole, which is
+    what makes the bug findable and dedupable — including by our own
+    ``_open_bugs_for_signature``, whose ``cf_crash_signature`` clause still matches exactly.
+    Its OTHER clause, the ``short_desc`` prefix search, cannot match a truncated summary, and
+    that is a real if minor loss: a bug whose ``cf_crash_signature`` is empty and whose summary
+    is truncated is invisible to the venue lookup. Only the cf field is ever written by us."""
+    sig = (signature or "").strip()
+    room = _BMO_SUMMARY_MAX - len("Crash in [@ ]")
+    if len(sig) > room:
+        # Socorro truncates with a trailing " ..." of its own; do not stack a second one.
+        sig = sig[:room - 3].rstrip().rstrip(".").rstrip() + "..."
+    return "Crash in [@ {}]".format(sig)
+
+
 def build_incomplete_fix_note(fix, channel=None):
     """The paragraph for a crash whose signature's OWN bug is already FIXED and shipped.
 
@@ -2191,8 +2223,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
-        # these bugs searchable/dedupable alongside Socorro-filed ones.
-        "title": "Crash in [@ {}]".format((uuid_info.get("signature") or "").strip()),
+        # these bugs searchable/dedupable alongside Socorro-filed ones. Capped at BMO's
+        # 255-character limit, which 1.3% of signatures exceed — see ``bug_title``.
+        "title": bug_title(uuid_info.get("signature")),
         "comment": build_bug_comment(
             uuid_info,
             stack,

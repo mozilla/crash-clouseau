@@ -1477,6 +1477,26 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                                bug_id, unset)
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
+        # PERSIST THE REJECTION. A failed write used to return here having written nothing, so
+        # the only trace was a log line on a dyno with no drain and a ~2h window. That is how
+        # BMO refused three creates for an over-long summary — 2026-08-06, 08-13 and 08-27 —
+        # and nobody knew until somebody asked about the third by hand. Two of them were rung 70.
+        #
+        # A SEPARATE KEY from `filed_bug`, deliberately: that one is the per-uuid idempotence
+        # key (`already_filed`), and a failure recorded there would make a retrigger read as
+        # "already filed" and permanently close a crash whose bug was never created. This key
+        # is not in `_STICKY_PAYLOAD_KEYS` either, so a later successful run drops it rather
+        # than leaving a stale error beside a real filing.
+        try:
+            models.Dossier.record_filing_error(uuid, {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "error": str(exc)[:500],
+                "signature": signature,
+                "title_len": len((preview or {}).get("title") or ""),
+                "mode": "comment" if bug_id is not None else "new_bug",
+            })
+        except Exception:                                   # pragma: no cover - defensive
+            logger.warning("autofile: could not record the filing error for %s", uuid)
         return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}
 
     models.Dossier.record_filed_bug(uuid, result)

@@ -2709,6 +2709,28 @@ class Dossier(db.Model):
         return True
 
     @staticmethod
+    def record_filing_error(uuid, info, commit=True):
+        """Stamp ``payload["filing_error"]`` with a Bugzilla write BMO rejected.
+
+        NOT ``filed_bug``: that key is the per-uuid idempotence key (``already_filed``), and a
+        failure recorded there would read as "already filed" and permanently close a crash whose
+        bug was never created. Deliberately absent from ``_STICKY_PAYLOAD_KEYS`` too, so a later
+        run that succeeds drops it instead of leaving a stale error beside a real filing.
+
+        Exists because the failure was invisible: a rejected create returned without writing
+        anything, so the only record was a log line on a dyno with no drain."""
+        d = Dossier.get_by_uuid(uuid)
+        if d is None or not d.payload:
+            return False
+        payload = dict(d.payload)
+        payload["filing_error"] = info
+        d.payload = payload
+        db.session.add(d)
+        if commit:
+            db.session.commit()
+        return True
+
+    @staticmethod
     def already_filed(uuid):
         """The recorded ``filed_bug`` for this crash, or ``None``. Fails CLOSED (returns a
         truthy sentinel) on a DB error so a lookup failure can never authorise a re-file."""
