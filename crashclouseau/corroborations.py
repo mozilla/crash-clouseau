@@ -171,6 +171,22 @@ REGISTRY = {
         "evidence", ("report_bug.py",),
         "observed / expected. What both surfaces actually print, and what `sigtrend.is_rising` "
         "tests -- deliberately in place of a cut on `signature_trend_score`."),
+    # -- how wide the candidate window was (`orchestrator._offstack_window`) -------------------
+    # Recorded only, and only off-stack. The widening is the study's highest-value finding
+    # (spike/trend/REPORT.md section 8) and it is otherwise unmeasurable in prod: the log line
+    # lives ~2h on a dyno with no drain and the seed is not persisted.
+    "candidate_window_hours": (
+        "diagnostic", (),
+        "Hours of pushlog the off-stack candidate list was drawn from. Absent on the on-stack "
+        "path, whose candidates come from `Changeset.find`'s stack-file-FILTERED window over "
+        "`config.get_ndays()` days -- a different quantity, which is why this is unrecorded "
+        "there rather than written as that number."),
+    "candidate_window_widened": (
+        "diagnostic", (),
+        "Did a rising signature widen the lower bound from the previous build to 24h? Paired "
+        "with `signature_trend_ratio`, which is what decided it, so the deployed widening rate "
+        "and the deployed containment can both be read off prod instead of off the back-test."),
+
     "signature_trend_score": (
         "diagnostic", (),
         "The Gamma-Poisson upper tail. NOT A PROBABILITY -- measured against a temporally "

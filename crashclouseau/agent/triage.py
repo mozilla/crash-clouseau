@@ -1336,10 +1336,25 @@ def _user_prompt(crash: dict) -> str:
             # first-bad-build pushlog window (lightly pre-ranked by signature/desc overlap,
             # NOT by proximity). The regressor is somewhere in here. Triage by DESCRIPTION
             # first and read only the promising few diffs; reads are PINNED to the build.
+            # WHAT THE WINDOW ACTUALLY IS, not what it usually is. `_offstack_window` widens
+            # the lower bound to 24h before the build when the signature's rate is rising, and
+            # a prompt that says "between the last-good build and this crash's build" would then
+            # be describing a window the run did not use — telling the model that a candidate
+            # which landed two builds ago cannot be in front of it, when it is.
+            win = crash.get("candidate_window") or {}
+            if win.get("widened") and win.get("hours"):
+                extent = (
+                    "the FULL pushlog window covering the {:.0f} hours before this crash's "
+                    "build — WIDER than the usual last-good-build bound, because this "
+                    "signature's crash rate is already rising and the landing that started a "
+                    "rise routinely predates the last good build".format(win["hours"])
+                )
+            else:
+                extent = ("the FULL pushlog window between the last-good build and this "
+                          "crash's build")
             lines += [
                 "",
-                "Candidate changesets = the FULL pushlog window between the last-good "
-                "build and this crash's build (this crash is OFF-STACK: no candidate "
+                "Candidate changesets = " + extent + " (this crash is OFF-STACK: no candidate "
                 "touched a file on the stack, so there is NO proximity score — the list "
                 "is only lightly pre-ranked and the regressor may be anywhere in it). "
                 "Work it as a funnel: (1) scan the one-line descriptions and pick the few "

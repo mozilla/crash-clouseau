@@ -167,9 +167,16 @@ def collect(data, file_filter, channel=None, drop_merge_files=False):
 
 
 def pushlog(
-    startdate, enddate, channel="nightly", file_filter=utils.is_interesting_file
+    startdate, enddate, channel="nightly", file_filter=utils.is_interesting_file,
+    drop_merge_files=None,
 ):
-    """Get the pushlog from hg.mozilla.org"""
+    """Get the pushlog from hg.mozilla.org.
+
+    ``drop_merge_files`` defaults (``None``) to ``suppresses_merge_extraction(channel)``, which
+    is what the ingestion caller wants: it is the path that writes ``changesets`` rows and then
+    owes one ``patch.parse`` per row. A caller that only READS the window -- the off-stack
+    candidate enumeration -- passes ``False`` to keep the file lists it ranks with, exactly as
+    ``pushlog_for_revs`` already does. See ``collect``."""
     # Get the pushes where startdate <= pushdate <= enddate
     # pushlog uses strict inequality, it's why we add +/- 1 second
     fmt = "%Y-%m-%d %H:%M:%S"
@@ -184,8 +191,10 @@ def pushlog(
     )
     # `drop_merge_files=True`: this is the path whose output becomes `changesets` rows, and
     # therefore one serial `patch.parse` per row -- 1,932-2,678 of them per beta merge.
+    if drop_merge_files is None:
+        drop_merge_files = suppresses_merge_extraction(channel)
     return collect(r.json(), file_filter, channel=channel,
-                   drop_merge_files=suppresses_merge_extraction(channel))
+                   drop_merge_files=drop_merge_files)
 
 
 def pushlog_for_revs(

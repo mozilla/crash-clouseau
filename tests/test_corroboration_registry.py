@@ -319,6 +319,11 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # instead. The baseline install count is kept so the ratio stays re-derivable from a
         # persisted dossier without refetching Socorro.
         "signature_trend_score", "signature_trend_baseline_installs",
+        # The candidate window's width, and whether a rise widened it. Write-only on purpose and
+        # for a bounded time: the widening's containment was measured on a BACK-TEST (8-12 of 20
+        # against production's 5 of 20) and these two are how the DEPLOYED rate gets read off the
+        # persisted dossiers instead. Nothing may gate on them until that read exists.
+        "candidate_window_hours", "candidate_window_widened",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

@@ -281,7 +281,88 @@ def _looks_pref_flip(desc, files):
     return any(any(h in str(f).lower() for h in _PREF_FILE_HINTS) for f in (files or []))
 
 
-def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
+# The look-back for a RISING signature's off-stack window, in hours. MEASURED, not chosen.
+# Over the 20 human-filed existing-signature bugs that carry a `regressed_by`, a flat window
+# ending at the first crashing build contains the blamed regressor 5/20 at production's
+# previous-build bound (a median 3.21 h of pushlog), 7/20 at 12 h and 12/20 at 24 h — and 48 h,
+# 168 h and 504 h contain exactly the same 12 for 2-20x the changesets. That is a KNEE, not a
+# slope, and there is nothing between: the required look-back is bimodal, 12 of the 16 cases whose
+# blamed landing precedes the anchor build need <= 17.4 h and the other 4 need 1,188-2,868 h, with
+# no case in between. So this is not a threshold to tune — widening it past a day buys cost only.
+#
+# The 12/20 is measured as-of the human's filing day, when the anchor build is sharpest; re-run
+# earlier it tracks the offset (6/20 at -14 d, 8/20 at -7 d, 10/20 at -1 d), so at a realistic
+# run-day expect 8-10 of 20 against a 0.581 random-placement floor.
+#
+# It is what would have named `3bb594db2dda` ("Bug 1158387 - Cookie DB: PRAGMA synchronous =
+# NORMAL", one file, `netwerk/cookie/CookiePersistentStorage.cpp` — the file in the crash's
+# MOZ_CRASH reason) on bug 2063336, which nobody ever did: it landed 13.69 h before the first
+# crashing build, i.e. outside the deployed window and inside this one. spike/trend/REPORT.md §8.
+#
+# THE CAP IS PART OF THE RESULT. A 24 h window on that build is 305 changesets against the
+# deployed window's 95, so `max_candidates` (150) now truncates where it used to not, and the
+# ranking decides what survives. Verified end to end against live hg: the culprit comes out at
+# rank 78 of 150 — inside, on the strength of one signature<->desc token ("cookie"), with about
+# half the cap to spare. Lowering `max_candidates` would start throwing this class away, and the
+# log line prints kept-of-total on every run so that stays visible.
+_RISE_WINDOW_HOURS = 24
+
+
+def _offstack_window(uuid_info, rising=False):
+    """WHICH slice of the pushlog ``_offstack_candidates`` enumerates. Returns one of
+
+      ``{"mode": "revs",  "startrev", "endrev", "hours": None, "widened": False}``
+      ``{"mode": "dates", "start", "end", "hours": float, "widened": bool}``
+
+    Raises rather than returning a sentinel when the crash carries no usable build (the callers
+    already wrap it: ``_offstack_candidates`` returns [] and the seed abstains).
+
+    ``rising`` is the only lever. When this signature's install-normalised rate has already
+    multiplied (``sigtrend.is_rising``) the lower bound moves from "the previous build" to
+    ``_RISE_WINDOW_HOURS`` before this one. Scoped to a rise rather than applied to every crash
+    because it costs roughly 3x the changesets — measured on bug 2063336's anchor build, 95 in the
+    deployed window against 305 in the 24 h one — while a rise is ~2 signatures a day against the
+    ~68 signature/build-day pairs the selector bills.
+
+    NEVER NARROWER THAN THE DEPLOYED WINDOW, which is the one way this change could lose a
+    candidate it catches today. Nightly builds 2-4 times a day so 24 h is normally a strict
+    superset, but a gap in the build stream would otherwise truncate it; the lower bound is
+    therefore the EARLIER of the two, and a widened window is a superset of the deployed one by
+    construction rather than by cadence. (It includes the previous build's own push, which the
+    rev-bounded form excludes — a superset again, and one changeset-push wide.)
+
+    The upper bound stays the crash's own build. The study's window ends at the FIRST build
+    carrying the signature after the rise, which is not in general the build we are analysing; a
+    run on a later build reaches back 24 h from THAT build and so contains the regressor only
+    while the rise is young. That is a deliberate under-reach: deriving the first crashing build
+    needs the change-point estimator this study measured as noise (interval median 16 d, LR test
+    fires MORE often at random dates than at real filings), and the crash's own build is the one
+    bound that is already known, exact, and free."""
+    channel = uuid_info.get("channel")
+    product = uuid_info.get("product")
+    buildid = uuid_info.get("buildid")
+    build_node = uuid_info.get("node")
+    two = models.Build.get_two_last(buildid, channel, product)
+    if len(two) != 2:
+        # Predecessor build not ingested (fresh/partial DB): degrade to a date window
+        # mirroring update.put_report's nightly lookback so we still seed.
+        start = buildid - timedelta(days=config.get_ndays())
+        return {"mode": "dates", "start": start, "end": buildid,
+                "hours": (buildid - start).total_seconds() / 3600.0, "widened": False}
+    if not rising:
+        # Prefer the crash's own build node as tochange (it IS the first-bad build);
+        # fall back to get_two_last's newest entry if the uuid carries no node.
+        return {"mode": "revs", "startrev": two[0]["revision"],
+                "endrev": build_node or two[1]["revision"], "hours": None, "widened": False}
+    start = buildid - timedelta(hours=_RISE_WINDOW_HOURS)
+    prev = models.Build.get_pushdate_before(buildid, channel, product)
+    if prev is not None and prev < start:
+        start = prev
+    return {"mode": "dates", "start": start, "end": buildid,
+            "hours": (buildid - start).total_seconds() / 3600.0, "widened": True}
+
+
+def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset(), window=None):
     """P1: enumerate the crash's first-bad-build pushlog window as agent candidates when
     NOTHING scored onto a stack frame (an off-stack regressor). Returns build_seed's
     normal candidate shape (``{node, score, bug, backedout, pushdate, noise, desc}``) with
@@ -293,32 +374,33 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
     are dropped. Best-effort: returns [] on any failure (the caller then abstains) — never
     raises.
 
-    The window is bounded by the DB (``Build.get_two_last``) so it is migration-proof and
-    needs no dead Buildhub lookup; ``pushlog_for_revs`` is one ``json-pushes`` GET through
-    ``net.get`` (allowlisted UA). ``file_filter=lambda f: True`` DROPS the
+    WHICH window is ``_offstack_window``'s decision, not this function's: the deployed
+    previous-build bound, or ``_RISE_WINDOW_HOURS`` when the signature's rate is already rising.
+    Pass ``window`` to use bounds already computed (``build_seed`` does, because it holds the
+    trend); omitted, this recomputes them at the deployed, un-widened bound.
+
+    Either way the bounds come from the DB (``Build.get_two_last`` / ``get_pushdate_before``) so
+    they are migration-proof and need no dead Buildhub lookup, and either way the fetch is one
+    ``json-pushes`` GET through ``net.get`` (allowlisted UA) — a wider window costs more
+    changesets in one response, not more requests. ``file_filter=lambda f: True`` DROPS the
     interesting-extensions filter so a non-source-file regressor is still enumerated."""
     from crashclouseau import pushlog
 
     channel = uuid_info.get("channel")
-    product = uuid_info.get("product")
-    buildid = uuid_info.get("buildid")
-    build_node = uuid_info.get("node")
     try:
-        two = models.Build.get_two_last(buildid, channel, product)
-        if len(two) == 2:
-            startrev = two[0]["revision"]
-            # Prefer the crash's own build node as tochange (it IS the first-bad build);
-            # fall back to get_two_last's newest entry if the uuid carries no node.
-            endrev = build_node or two[1]["revision"]
+        bounds = window if window is not None else _offstack_window(uuid_info)
+        if bounds["mode"] == "revs":
             window = pushlog.pushlog_for_revs(
-                startrev, endrev, channel=channel, file_filter=lambda f: True
+                bounds["startrev"], bounds["endrev"], channel=channel,
+                file_filter=lambda f: True
             )
         else:
-            # Predecessor build not ingested (fresh/partial DB): degrade to a date window
-            # mirroring update.put_report's nightly lookback so we still seed.
-            start = buildid - timedelta(days=config.get_ndays())
+            # `drop_merge_files=False` for parity with the rev-bounded branch: this path only
+            # READS the window, writes no `changesets` rows and pays for no `patch.parse`, and
+            # `_looks_pref_flip` ranks on the file lists.
             window = pushlog.pushlog(
-                start, buildid, channel=channel, file_filter=lambda f: True
+                bounds["start"], bounds["end"], channel=channel,
+                file_filter=lambda f: True, drop_merge_files=False,
             )
     except Exception as exc:
         logger.warning(
@@ -371,8 +453,11 @@ def _offstack_candidates(uuid_info, offstack_cfg, prior_bugs=frozenset()):
             }
         )
     logger.info(
-        "agent: off-stack window for %s -> %d candidates (cap %d)",
-        uuid_info.get("uuid"), len(out), offstack_cfg["max_candidates"],
+        "agent: off-stack window for %s (%s, %s) -> %d of %d changesets (cap %d)",
+        uuid_info.get("uuid"),
+        "{:.1f}h".format(bounds["hours"]) if bounds.get("hours") else "previous build",
+        "WIDENED for a rising signature" if bounds.get("widened") else "deployed bound",
+        len(out), len(nonmerge), offstack_cfg["max_candidates"],
     )
     return out
 
@@ -482,6 +567,13 @@ def build_seed(uuid):
                 f["inlines"] = fi
 
     stack_text = _stack_text(frames)
+    channel = info.get("channel") or uuid_info.get("channel") or "nightly"
+    # Read the rate BEFORE the candidate window is built, because it now decides how wide that
+    # window is (`_offstack_window`). Two indexed reads of a rolling table, no Socorro call, and
+    # the same value goes on to the seed below — one arithmetic, so the window this run used and
+    # the sentence the reader is shown can never disagree about whether the signature was rising.
+    signature_trend = _signature_trend(info, uuid_info, channel)
+    candidate_window = None
     prior_hints: list = []
     prior_bugs: set = set()
     if is_offstack:
@@ -501,8 +593,17 @@ def build_seed(uuid):
             except Exception as exc:  # pragma: no cover - defensive; never break a seed
                 logger.warning("agent: prior-signature lookup failed for %s: %s", uuid, exc)
         # P1: no changeset scored onto a stack frame — seed the full first-bad-build
-        # pushlog window (already ranked/capped, score=None) instead of skipping.
-        candidates = _offstack_candidates(uuid_info, offstack_cfg, prior_bugs)
+        # pushlog window (already ranked/capped, score=None) instead of skipping. The window is
+        # WIDER when this signature's rate is already rising: see `_offstack_window`.
+        from crashclouseau import sigtrend
+
+        try:
+            candidate_window = _offstack_window(
+                uuid_info, rising=sigtrend.is_rising(signature_trend))
+        except Exception as exc:  # pragma: no cover - defensive; `_offstack_candidates` re-tries
+            logger.warning("agent: off-stack window bounds failed for %s: %s", uuid, exc)
+        candidates = _offstack_candidates(
+            uuid_info, offstack_cfg, prior_bugs, window=candidate_window)
         if not candidates:
             # Window enumeration failed (no bounds / hg error): nothing to reason about,
             # so abstain rather than run the agent on an empty candidate set.
@@ -574,7 +675,6 @@ def build_seed(uuid):
     # worked in the crashing area. So off-stack we instead BLAME the crashing lines
     # (``_crashing_area_experts``, below, once pin_rev is known) to surface who actually
     # wrote the crashing code.
-    channel = info.get("channel") or uuid_info.get("channel") or "nightly"
     experts = []
     if not is_offstack:
         try:
@@ -726,7 +826,18 @@ def build_seed(uuid):
         # compare against, which must read as "not measured" and never as "no change" — the
         # selector's own trigger cannot tell a 19x rate change apart from the single-crash
         # from-zero fire that is 67% of its output, and this is that missing quantity.
-        "signature_trend": _signature_trend(info, uuid_info, channel),
+        "signature_trend": signature_trend,
+        # The pushlog slice `candidates` was drawn from, when the off-stack path drew it: how
+        # many hours wide, and whether `_offstack_window` widened it for a rising signature.
+        # ``None`` on the on-stack path, whose candidates come from `Changeset.find`'s own
+        # `config.get_ndays()`-day, stack-file-FILTERED window instead — a different quantity
+        # that this key must not be read as. Scalars only: the bounds themselves carry datetimes
+        # and revisions that nothing downstream needs.
+        "candidate_window": (
+            {"hours": round(candidate_window["hours"], 2)
+             if candidate_window.get("hours") else None,
+             "widened": bool(candidate_window.get("widened"))}
+            if candidate_window else None),
     }
 
 
@@ -2460,6 +2571,35 @@ def _record_signature_age_facts(dossier, seed):
         dossier.corroborations = {**(dossier.corroborations or {}), **facts}
 
 
+def _record_candidate_window_facts(dossier, seed):
+    """Record HOW WIDE the pushlog window this run's candidates came from was. Moves no rung.
+
+    Written because the widening (`_offstack_window`) is otherwise invisible. Its log line lives
+    ~2 hours — the dyno has no log drain — and the seed is not persisted, so without this there is
+    no way to answer "how often did a rise widen the window, and did the named candidate come out
+    of the part only the widening could see?" from prod. That question is the whole point of
+    shipping it: the study measures 8-12 of 20 against production's 5 of 20 on a back-test, and a
+    back-test is not the deployed rate. `bdd848c` is the same arrangement for the beta filing hold,
+    and `31b5f3b` is the lesson for skipping it.
+
+    Unrecorded rather than zeroed on the on-stack path: those candidates come from
+    ``Changeset.find``'s stack-file-filtered window, which is a different quantity, and a 0 here
+    would read as "the window was empty"."""
+    if dossier is None or seed is None:
+        return
+    win = seed.get("candidate_window") or {}
+    hours = win.get("hours")
+    if hours is None:
+        return
+    corroborations = dict(dossier.corroborations or {})
+    # Literal subscripts, not a dict carried in from `_offstack_window`: the registry scanner in
+    # tests/test_corroboration_registry.py follows calls and literal writes, not dicts assembled
+    # two modules away. `sigage.age_facts` was unrolled for the same reason.
+    corroborations["candidate_window_hours"] = hours
+    corroborations["candidate_window_widened"] = bool(win.get("widened"))
+    dossier.corroborations = corroborations
+
+
 def _record_signature_trend_facts(dossier, seed):
     """Record the install-normalised rate change on every reported verdict. Moves no rung.
 
@@ -3398,6 +3538,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # statistic the selector structurally cannot compute, and the one a human triager used to
         # file bug 2063336 off a signature we had selected twenty times.
         _record_signature_trend_facts(result.dossier, seed)
+        # And how wide the window those candidates came out of was — the rate above is what
+        # decides it, so the two are recorded together or neither can be read.
+        _record_candidate_window_facts(result.dossier, seed)
         # Which learned archetypes were in front of the agent. Recorded even when none matched
         # (as an empty list) so "this run saw no hints" and "this run predates the feature" stay
         # distinguishable — `Feedback` joins on this to score a rule against real outcomes.
