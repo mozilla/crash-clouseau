@@ -246,6 +246,30 @@ class Node(db.Model):
         return seen
 
     @staticmethod
+    def landing_for_bug(bug, channel):
+        """The EARLIEST local changeset that carries ``bug`` on ``channel``, as
+        ``{"node", "pushdate"}``, or ``None``.
+
+        "Did the fix for bug N land before this build?" answered from our own pushlog rather
+        than from BMO's ``cf_last_resolved`` — which is the bug's RESOLUTION clock, not its
+        patch's LANDING clock, and the two disagree whenever a bug is resolved late (see
+        ``bugzilla_apply._fixed_after_build_bug``, which has to live with that gap because it
+        asks about bugs whose fix is by construction NOT in our window).
+
+        Bounded by ``Node.clean``'s retention (``config.get_ndays_of_data()``, 30 days), so a
+        bug fixed longer ago than that answers ``None``. The caller must read that as "cannot
+        prove the fix is in this build", never as "it is not"."""
+        if not bug or bug <= 0:
+            return None
+        row = (
+            db.session.query(Node.node, Node.pushdate)
+            .filter(Node.channel == channel, Node.bug == bug, Node.merge.is_(False))
+            .order_by(Node.pushdate.asc())
+            .first()
+        )
+        return {"node": row[0], "pushdate": row[1]} if row else None
+
+    @staticmethod
     def get_min_date(channel):
         m = (
             db.session.query(db.func.min(Node.pushdate))

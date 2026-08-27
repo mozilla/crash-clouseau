@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import net
 
-from crashclouseau import config, models, sensitive, utils
+from crashclouseau import config, corroborations, models, sensitive, utils
 from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
@@ -792,9 +792,56 @@ def _fixed_after_build_bug(signature, buildid, product):
     # (It used to run its own `_is_specific_signature` gate on the summary clause; that length
     # test was retired for `_summary_is_about`, which decides the same 200-signature panel on
     # FORM instead of on a 16-character threshold read off two points.)
+    for bug, resolved in _fixed_bugs_about(sig, product):
+        if resolved is not None and resolved > build_dt:
+            return bug["id"]
+    return None
+
+
+_FIXED_BUGS_CACHE: dict = {}
+
+
+def _fixed_bugs_about(signature, product, use_cache=False):
+    """``[(bug_row, resolved_datetime), ...]`` for the bugs on *signature* that are RESOLVED
+    FIXED and belong to this crash's own application, lowest id first.
+
+    The query, the ``_split_by_application`` drop, the ``_row_is_about`` re-check and the
+    FIXED-only rule are shared by the TWO questions the resolution date can answer — was this
+    crash reported before somebody fixed it (``_fixed_after_build_bug``), and is this crash
+    still happening on a build that already contains the fix (``_incomplete_fix_bug``). They are
+    mirror images across the same inequality, so they must see the same bug set or the pair
+    stops being exhaustive. Every argument for the filters is in ``_fixed_after_build_bug``.
+
+    Deliberately NOT merged with ``_open_bugs_for_signature``: that one filters
+    ``resolution="---"`` and must keep doing so (a closed bug is not a comment venue), and 30+
+    tests mock it by name. Keep the two param dicts in step by hand.
+
+    Public, unauthenticated, read-only. ``[]`` on any failure, which both callers read as "no
+    information" — see each one for which way that makes it fail."""
+    sig = (signature or "").strip()
+    if not sig:
+        return []
+    from crashclouseau import sigage
+
+    # OPT-IN caching, per (signature, product), for the worker's lifetime. `_incomplete_fix_bug`
+    # asks this on every run that would otherwise file nothing -- ~90% of them -- and the same
+    # signature recurs across proto-clusters and build days, so uncached it is a BMO request per
+    # dossier on a service that rate-limits for ~45 minutes.
+    #
+    # OFF for `_fixed_after_build_bug`, deliberately: that one SUPPRESSES a filing, it runs at
+    # most once per filing attempt so it costs nothing to keep live, and a stale "no FIXED bug
+    # yet" would let through exactly the duplicate it exists to stop.
+    key = (sig, product or "")
+    if use_cache and key in _FIXED_BUGS_CACHE:
+        return _FIXED_BUGS_CACHE[key]
+
     params = {
-        "include_fields": "id,summary,status,resolution,product,cf_crash_signature,"
-                          "cf_last_resolved",
+        # `assigned_to` AND `assigned_to_detail`: BMO returns a `*_detail` field only when the
+        # BASE field is also requested, and silently omits it otherwise -- which read as
+        # "unassigned" here rather than as an error.
+        "include_fields": "id,summary,status,resolution,product,component,"
+                          "cf_crash_signature,cf_last_resolved,creation_time,"
+                          "assigned_to,assigned_to_detail",
         "j_top": "OR",
         "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
         "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
@@ -804,16 +851,116 @@ def _fixed_after_build_bug(signature, buildid, product):
         r.raise_for_status()
         bugs = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
-        logger.warning("autofile: fixed-bug lookup failed for %r: %s — filing anyway",
-                       signature, exc)
-        return None
+        logger.warning("autofile: fixed-bug lookup failed for %r: %s", signature, exc)
+        return []
     ours, _theirs = _split_by_application(bugs, product)
+    out = []
     for bug in sorted((b for b in ours if b.get("id")), key=lambda b: b["id"]):
         if (bug.get("resolution") or "").upper() != "FIXED" or not _row_is_about(bug, sig):
             continue
-        resolved = sigage.to_datetime(bug.get("cf_last_resolved"))
-        if resolved is not None and resolved > build_dt:
-            return bug["id"]
+        out.append((bug, sigage.to_datetime(bug.get("cf_last_resolved"))))
+    if use_cache:
+        _FIXED_BUGS_CACHE[key] = out
+    return out
+
+
+# How far apart a signature's first appearance and its bug's filing may be and still count as
+# THAT BUG'S OWN signature. Not a tuned number and not read off the motivating case: it is the
+# same contemporaneity unit the stale-signature gate already uses for "did this land near when
+# the signature appeared". The prod panel's firing case is 0 days and its nearest miss is 28.
+_OWN_SIGNATURE_GRACE = timedelta(days=7)
+
+
+def _incomplete_fix_bug(signature, buildid, product, channel, first_seen=None):
+    """The bug whose FIX IS ALREADY IN THIS BUILD and whose crash is still happening — the
+    mirror of ``_fixed_after_build_bug`` across the same inequality. ``None``, or
+    ``{"id", "resolved", "node", "pushdate", "component", "assigned_to", "predates_days"}``.
+
+    In one line: somebody fixed this, the fix shipped, and it is still crashing — so there is
+    something to investigate whether or not we can name a changeset.
+
+    THREE CONDITIONS, and the third is what makes it a rule rather than a nuisance.
+
+    1. A bug on this signature is RESOLVED FIXED and its resolution predates this build
+       (``_fixed_bugs_about``).
+    2. Its fix actually LANDED on this channel before this build, from our own pushlog
+       (``models.Node.landing_for_bug``) — not inferred from ``cf_last_resolved``, which is the
+       resolution clock. Requiring the node is why this can say "the fix is in this build"
+       instead of "the bug was closed before it". It also bounds the rule to
+       ``Node.clean``'s 30-day retention, so an older fix answers ``None``: a conservative miss,
+       logged, never a false claim.
+    3. THE BUG OWNS THE SIGNATURE: the bug was filed within ``_OWN_SIGNATURE_GRACE`` of the
+       signature first appearing, so that bug exists BECAUSE this signature appeared, rather
+       than being one of several defects that happen to share a generic frame.
+
+       SYMMETRIC, and the second direction is not hypothetical. A signature predating its bug
+       is the reuse case below. A BUG predating its SIGNATURE by years is a triager adding a
+       new signature to an old bug — the same "these crash alike" judgement, and just as far
+       from "this bug is why that signature exists". One condition covers both.
+
+    Condition 3 is the whole rule, and dropping it is measurably wrong rather than merely
+    noisy. Over 21 days of prod, 26 (signature, FIXED bug) pairs pass conditions 1-2 across 22
+    signatures — about 1.2 a day. The counter-example that decides it is ``nsAtom::IsStatic``
+    (bug 2062219, fixed 2026-08-12): still crashing on post-fix builds, and the fix plainly
+    WORKED — 50 reports / 8 installations per build before, 1-2 / 1-2 after. Filing that is
+    filing a bug about a fixed crash. Its signature predates its bug by 3,073 days, so
+    condition 3 drops it. The rest of what condition 3 drops is the same shape:
+    ``mozilla::ipc::FatalError | IProtocol`` (1,030 d, 4-6 bugs), ``<unknown in ntdll.pdb>``
+    (5 bugs across 3 products), ``nsHttpChannel::OnStartRequest`` (26 bugs across 5 products).
+
+    It is also exactly the population ``_fixed_after_build_bug``'s docstring already warns must
+    not be eaten — "a post-fix crash on a REUSED signature": our 2064066 carries bug 2054485
+    FIXED 22.4 days BEFORE its build, plus 2048851 at -43.9 d, 1823765 at -1238 d and 1809003 at
+    -1310 d; 2063234 carries 1897201 at -808 d; 2060924 carries 1983101 at -334.7 d. All six
+    fail condition 3, so this gate cannot resurrect what that one is careful to allow through.
+
+    NO DAY COUNT WAS FITTED. The 12 pairs in that panel with a measurable first-seen predate
+    their bug by 0, 28, 162, 190, 1030, 1054, 1055, 1069, 3073, 4599, 4892 and 4906 days, so
+    condition 3 is deciding the SIGN of a gap with a 28-day nearest miss, not a threshold read
+    off the one case that motivated it (``libc.so.6 | cuEGLApiInit`` / bug 2063678, gap 0 — the
+    bug was filed the day the signature first appeared).
+
+    ``first_seen`` is a buildid or datetime the caller already has (the dossier records both
+    signature clocks); looked up only when absent. An UNKNOWN first-seen answers ``None`` —
+    ``SignatureFirstDate``'s cron has not minted a row for the newest signatures, which is this
+    rule's own target class, so a missing clock must never read as "brand new".
+
+    FAILS OPEN like its mirror: no bugs, no lookup, no node — no claim, and the ordinary
+    filing rules decide."""
+    sig = (signature or "").strip()
+    if not sig or buildid is None or buildid == "":
+        return None
+    from crashclouseau import sigage
+
+    build_dt = sigage.to_datetime(buildid if isinstance(buildid, datetime) else str(buildid))
+    if build_dt is None:
+        return None
+    seen_dt = sigage.to_datetime(first_seen) if first_seen else None
+    if seen_dt is None:
+        return None
+
+    for bug, resolved in _fixed_bugs_about(sig, product, use_cache=True):
+        if resolved is None or resolved >= build_dt:
+            continue
+        filed = sigage.to_datetime(bug.get("creation_time"))
+        if filed is None or abs(filed - seen_dt) > _OWN_SIGNATURE_GRACE:
+            continue                      # not contemporaneous: not this bug's own signature
+        landing = models.Node.landing_for_bug(bug["id"], channel)
+        if not landing or landing["pushdate"] >= build_dt:
+            logger.info("autofile: bug %s fixed %s owns %r but no landing of it is in our "
+                        "pushlog before build %s — not claiming the fix is in this build",
+                        bug["id"], (bug.get("cf_last_resolved") or "")[:10], sig, build_dt)
+            continue
+        return {
+            "id": bug["id"],
+            "resolved": bug.get("cf_last_resolved"),
+            "node": landing["node"],
+            "pushdate": landing["pushdate"],
+            "component": bug.get("component"),
+            "product": bug.get("product"),
+            "assigned_to": ((bug.get("assigned_to_detail") or {}).get("email") or ""),
+            "predates_days": max(0, (filed - seen_dt).days),
+        }
     return None
 
 
@@ -910,11 +1057,25 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             return {"filed": False, "channel": channel,
                     "skipped": "autofile held for channel {!r} (triage-only)".format(channel)}
         return {"filed": False, "skipped": "autofile disabled"}
-    if verdict not in cfg["verdicts"]:
-        return {"filed": False, "skipped": "verdict {} not fileable".format(verdict)}
-    if confidence is None or confidence < cfg["min_confidence"]:
-        return {"filed": False, "skipped": "confidence {} below {}".format(
-            confidence, cfg["min_confidence"])}
+    # TWO REASONS TO FILE, and the verdict is only the first. The second — a bug on this
+    # signature whose fix is already in this build — is checked LATER (it costs a BMO request),
+    # after every cheap gate below has had its chance to stop the run for free.
+    over_floor = confidence is not None and confidence >= cfg["min_confidence"]
+    fileable = bool(verdict in cfg["verdicts"] and over_floor)
+    # A DELIBERATE SUPPRESSION OUTRANKS THE SECOND REASON, and is checked before every other
+    # gate so its message is the one the reader gets. Each `suppression`-kind flag in
+    # `corroborations.REGISTRY` turned the verdict into an abstain for a reason about THIS
+    # CRASH rather than about the verdict's strength: a probable hardware bit flip, a
+    # misbehaving machine, a candidate that is a backout, a mechanism compiled out of this
+    # build. None of those become worth filing because a bug on the signature was fixed once.
+    # This is the one place a suppressed run could reach a Bugzilla write, because the second
+    # reason does not read the verdict at all.
+    if not fileable:
+        suppressed = sorted(k for k in corroborations.suppressions()
+                            if ((dossier or {}).get("corroborations") or {}).get(k))
+        if suppressed:
+            return {"filed": False,
+                    "skipped": "suppressed by {}".format(", ".join(suppressed))}
 
     # OFF-STACK OBSERVE-ONLY. `_apply_offstack_observe_only` empties `result.actions`
     # precisely to "SUPPRESS any outward action" while the off-stack canary's calibration is
@@ -955,6 +1116,27 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         return {"filed": False, "skipped": "no Bugzilla API token configured"}
 
     signature = (uuid_info.get("signature") or "").strip()
+
+    # THE SECOND REASON TO FILE. A verdict we cannot file on is the ordinary case (90% of runs
+    # abstain), so this is the last gate rather than an early one: everything above it is local
+    # and free, and this is one BMO request, cached per signature.
+    incomplete_fix = None
+    if not fileable:
+        corro = (dossier or {}).get("corroborations") or {}
+        first_seen = corro.get("signature_first_seen_ever") or corro.get(
+            "signature_first_seen_windowed")
+        incomplete_fix = _incomplete_fix_bug(
+            signature, uuid_info.get("buildid"), uuid_info.get("product"), channel,
+            first_seen=first_seen)
+        if not incomplete_fix:
+            if verdict not in cfg["verdicts"]:
+                return {"filed": False, "skipped": "verdict {} not fileable".format(verdict)}
+            return {"filed": False, "skipped": "confidence {} below {}".format(
+                confidence, cfg["min_confidence"])}
+        logger.info("autofile: %s — bug %s owns this signature, its fix %s landed %s and the "
+                    "crash is still here; filing on that rather than on the verdict (%s/%s)",
+                    uuid, incomplete_fix["id"], incomplete_fix["node"],
+                    incomplete_fix["pushdate"], verdict, confidence)
 
     # ONE BUG PER SIGNATURE PER CHANNEL, on a channel that never writes on existing bugs.
     # Consulted only when `mode != "comment"`, which is a derivation and not a new knob: a
@@ -1124,12 +1306,20 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             other_app_bugs=other_app if bug_id is None else None,
             meta_bugs=meta_bugs if bug_id is None else None,
             never_comment=never_comment,
+            incomplete_fix=incomplete_fix,
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
         return {"filed": False, "skipped": "preview failed: {}".format(exc)}
     if not preview:
         return {"filed": False, "skipped": "no candidate regressor to file against"}
+    if incomplete_fix:
+        # This bug exists because a shipped fix did not hold, so it must not also assert a
+        # regression: no `regression` keyword and no `regressed_by`. `build_bug_preview`
+        # already withholds both when there is no candidate; assert it here because this is
+        # the path where a stale candidate could smuggle one in.
+        preview["keywords"] = [k for k in preview.get("keywords") or [] if k != "regression"]
+        preview["regressed_by"] = []
     # ``resolve_product_component`` is best-effort and returns empty on a Bugzilla read
     # failure or an unreadable regressor bug. Filing then gets rejected outright
     # ("Bad argument param sent to Bugzilla::Product::new") — but the real reason to check

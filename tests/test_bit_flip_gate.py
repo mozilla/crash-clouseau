@@ -227,20 +227,47 @@ class TestGateRunsLast(unittest.TestCase):
         # The pre-gate snapshot still records what the model actually said.
         self.assertEqual(result.dossier.raw_verdict.decision, Decision.lead)
 
-    def test_an_abstained_verdict_is_never_filed(self):
-        # The whole point: `autofile_bug` refuses a verdict outside `cfg["verdicts"]`, so the
-        # abstain above is what stops the Bugzilla write. Asserted here rather than trusting it.
+    def _autofile(self, dossier):
         from crashclouseau import bugzilla_apply
 
         with mock.patch.object(bugzilla_apply.config, "get_agent_autofile", return_value={
                 "enabled": True, "min_confidence": 70, "verdicts": ["lead", "culprit"],
                 "needinfo": True, "daily_cap": 10, "comment_on_existing": True,
-                "comment_max_bug_age_days": 30}):
+                "comment_max_bug_age_days": 30}), \
+             mock.patch.object(bugzilla_apply, "_incomplete_fix_bug") as fix:
             res = bugzilla_apply.autofile_bug(
                 "u-1", {"uuid": "u-1", "signature": "S", "channel": "nightly"}, {},
-                {"candidate": {"node": "n"}}, "abstain", 70)
+                dossier, "abstain", 70)
+        return res, fix
+
+    def test_a_bit_flip_suppression_is_never_filed(self):
+        """The whole point of the gate: a probable hardware bit flip must not reach Bugzilla.
+
+        It used to be enough that `autofile_bug` refuses a verdict outside `cfg["verdicts"]`.
+        That is no longer the only door — an abstain can now be filed when a bug on the
+        signature was fixed and the fix is already in this build — so the suppression is
+        asserted directly, and `_incomplete_fix_bug` must not even be CONSULTED: a suppression
+        is about this crash, not about the verdict's strength."""
+        res, fix = self._autofile({"candidate": {"node": "n"},
+                                   "corroborations": {"possible_bit_flip_suppressed": True}})
         self.assertFalse(res["filed"])
-        self.assertIn("not fileable", res["skipped"])
+        self.assertIn("possible_bit_flip_suppressed", res["skipped"])
+        fix.assert_not_called()
+
+    def test_every_suppression_closes_that_door_not_just_this_one(self):
+        from crashclouseau import corroborations
+
+        for flag in sorted(corroborations.suppressions()):
+            res, fix = self._autofile({"candidate": {"node": "n"},
+                                       "corroborations": {flag: True}})
+            self.assertFalse(res["filed"], flag)
+            self.assertIn(flag, res["skipped"], flag)
+            fix.assert_not_called()
+
+    def test_an_unsuppressed_abstain_with_no_incomplete_fix_is_still_not_filed(self):
+        res, fix = self._autofile({"candidate": {"node": "n"}})
+        fix.return_value = None
+        self.assertFalse(res["filed"])
 
 
 class TestWindowMembership(unittest.TestCase):

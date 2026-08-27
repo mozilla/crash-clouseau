@@ -887,6 +887,7 @@ def build_bug_comment(
     version=None,
     needinfo=None,
     author_display=None,
+    incomplete_fix=None,
     related_bugs=None,
     landing_unresolved=False,
     other_app_bugs=None,
@@ -932,6 +933,9 @@ def build_bug_comment(
         build_stale_signature_note((dossier or {}).get("corroborations")),
         build_hardware_note((dossier or {}).get("corroborations"), channel),
         build_exposer_note((dossier or {}).get("corroborations")),
+        # ABOVE the analysis, because on this path it is the reason the bug exists at all and
+        # the analysis below it may be an abstain with nothing in it.
+        build_incomplete_fix_note(incomplete_fix, channel),
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,
             corroborations=(dossier or {}).get("corroborations"),
@@ -1562,6 +1566,41 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
     return "\n\n".join(lines) if lines else None
 
 
+def build_incomplete_fix_note(fix, channel=None):
+    """The paragraph for a crash whose signature's OWN bug is already FIXED and shipped.
+
+    This is the whole comment's reason to exist when there is no changeset to name, so it says
+    the three checkable things and stops: which bug, which changeset fixed it and when, and
+    that this crash's build is later than that. Everything else in the bug — the stack, the
+    volume, the crash reason — is the evidence the reader needs to work out WHY it did not hold,
+    and that is deliberately left to them: 15 of the 32 fixes among human-filed
+    existing-signature crash bugs named no regressor at all, so the observation IS the
+    deliverable (plan #19 step 2, spike/trend/REPORT.md section 12).
+
+    Says nothing about WHY. "The patch was wrong", "another path reaches the same crash" and
+    "a second syscall is missing" are all consistent with what we can see, and picking one
+    would be inventing a mechanism to go with a fact."""
+    fix = fix or {}
+    bug = fix.get("id")
+    node = fix.get("node")
+    if not bug or not node:
+        return None
+    landed = fix.get("pushdate")
+    when = landed.strftime("%Y-%m-%d") if hasattr(landed, "strftime") else str(landed or "")
+    return (
+        "**This crash was already fixed once, and it is still happening.** Bug {bug} was "
+        "resolved FIXED for this same signature, and its patch {link} landed on {chan} on "
+        "{when} — before the build this crash comes from. The fix is therefore present in "
+        "this build and the signature is still crashing.\n\n"
+        "Filed as a NEW bug rather than as a comment on bug {bug}, because it may not be the "
+        "same defect: the patch may be incomplete, or another path may reach the same crash. "
+        "Whichever it is, something here the earlier fix did not cover is worth a look. If it "
+        "belongs on bug {bug} after all, please close this as a duplicate and reopen that "
+        "one.".format(bug=bug, link=changeset_links(node, channel),
+                      chan=channel or "trunk", when=when)
+    )
+
+
 def _worth_phrase(verdict):
     """`` — N% worth investigating`` from the calibrated probability, or ``""``.
 
@@ -1998,6 +2037,23 @@ def _needinfo_person(candidate, channel):
             "account_name": account.get("real", "")}
 
 
+def _person_for_account(email):
+    """A ``_needinfo_person``-shaped dict for a Bugzilla LOGIN we already have — the assignee
+    of the bug whose fix did not hold. ``{}`` when there is no address or BMO refuses the ask.
+
+    No ladder to climb here: this address came off a bug's ``assigned_to``, so it IS an account
+    by construction. What still has to be asked is whether the flag can LAND (a departed or
+    away account takes the ask silently), and that is one cached ``_bugzilla_user``."""
+    email = (email or "").strip()
+    if not email or email.startswith("nobody@"):
+        return {}
+    user = _bugzilla_user(email)
+    if not _askable(user):
+        return {}
+    return {"nick": user.get("nick", ""), "name": "", "email": email,
+            "account": email, "account_name": user.get("real", "")}
+
+
 def _person_display(person):
     """How to NAME a human in the bug comment: their ``:nick``, else the Bugzilla account's
     display name, else the Mercurial name, else the address. ``""`` when we have nothing.
@@ -2047,7 +2103,8 @@ def _bug_version(channel):
 
 
 def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None,
-                      landing_unresolved=False, meta_bugs=None, never_comment=False):
+                      landing_unresolved=False, meta_bugs=None, never_comment=False,
+                      incomplete_fix=None):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -2089,13 +2146,27 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     excludes."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
-    if not candidate or not candidate.get("node"):
+    # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
+    # (``bugzilla_apply._incomplete_fix_bug``) is a bug whose fix is already in this build on a
+    # signature that bug owns, and the crash is still here — an OBSERVATION, with no changeset
+    # to defend. The pipeline was built to defend a changeset, which is why this needed a second
+    # entry point rather than a looser candidate: 15 of the 32 fixes among human-filed
+    # existing-signature crash bugs (47%) named no regressor at all.
+    if (not candidate or not candidate.get("node")) and not incomplete_fix:
         return None
     channel = uuid_info.get("channel")
     uuid = uuid_info.get("uuid", "")
-    product, component = resolve_product_component(
-        candidate, channel, uuid_info.get("product"))
-    person = _needinfo_person(candidate, channel)
+    if candidate and candidate.get("node"):
+        product, component = resolve_product_component(
+            candidate, channel, uuid_info.get("product"))
+        person = _needinfo_person(candidate, channel)
+    else:
+        # No changeset: the FIXED bug is the authority on both. Its component is where this
+        # crash belongs (it is the same defect), and its assignee is the person who fixed it —
+        # the one human who already knows why the fix did not hold.
+        product = incomplete_fix.get("product") or uuid_info.get("product") or "Core"
+        component = incomplete_fix.get("component") or "General"
+        person = _person_for_account(incomplete_fix.get("assigned_to"))
     # Version lives on the build row, not on the page's uuid_info; best-effort, and the
     # stats sentence simply omits it when unavailable.
     version = uuid_info.get("version")
@@ -2108,7 +2179,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
     # May the bug make a STRUCTURED claim about the regressor at all: a candidate from outside
     # this build's pushlog window is named in the prose and nowhere else.
-    link_regressor = bool(candidate.get("bug") and suspected_regression)
+    link_regressor = bool(candidate and candidate.get("bug") and suspected_regression)
     # Does the crash report itself prove a memory-safety fault? Read from the PERSISTED flag the
     # deterministic gate wrote (`sensitive.py`), never recomputed and never from the model's
     # `failure_class` -- that label fires on 43 of 500 runs and on 2 of 11 new-bug filings, and
@@ -2134,6 +2205,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             # Same resolved identity as the needinfo ask, so the "by X" attribution and the
             # "X, can you have a look please?" line can never name two different people.
             author_display=_person_display(person),
+            incomplete_fix=incomplete_fix,
             related_bugs=related_bugs,
             landing_unresolved=landing_unresolved,
             other_app_bugs=other_app_bugs,
@@ -2164,7 +2236,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # The regression relation BMO's own tooling reads, and the one a triager expects to find
         # on a regression bug. Gated on `link_regressor`, and a list because the field is one --
         # the pipeline only ever names a single changeset.
-        "regressed_by": [candidate["bug"]] if link_regressor else [],
+        "regressed_by": [candidate["bug"]] if link_regressor else [],  # noqa: E501 (candidate is set whenever link_regressor is)
         "needinfo": _needinfo_line(person),
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the
