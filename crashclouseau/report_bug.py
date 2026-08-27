@@ -886,6 +886,7 @@ def build_bug_comment(
     first=True,
     version=None,
     needinfo=None,
+    author_display=None,
     related_bugs=None,
     landing_unresolved=False,
     other_app_bugs=None,
@@ -934,6 +935,7 @@ def build_bug_comment(
         _explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,
             corroborations=(dossier or {}).get("corroborations"),
+            author_display=author_display,
         ),
         build_code_references((dossier or {}).get("verdict"), channel),
         build_skeptic_block(dossier),
@@ -1484,7 +1486,8 @@ def build_skeptic_block(dossier, max_items=_MAX_SKEPTIC_ITEMS):
             "succeeded, which is not always support for the conclusion):\n" + "\n".join(lines))
 
 
-def _explanation_comment(verdict, candidate, channel=None, corroborations=None):
+def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
+                         author_display=None):
     """The Clouseau analysis comment we'd post to the filed bug: the crash mechanism (and,
     when present, why it is consistent with the crash) plus the candidate changeset -- the
     latter carrying an hg and a GitHub link when ``channel`` tells us which repo it is in.
@@ -1516,7 +1519,16 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None):
         link = changeset_links(c["node"], channel, c.get("git_commit") or "")
         if c.get("bug"):
             link += " (bug {})".format(c["bug"])
-        author = (c.get("author") or "").strip()
+        # WHO WROTE IT, named the way the person names themselves today. `candidate["author"]`
+        # is the Mercurial string and is frozen at push time; when the ladder resolved a
+        # Bugzilla account for it, that account's nick/display name is the current identity and
+        # this line and the needinfo ask name the same person the same way. Falls back to the hg
+        # string when nothing resolved. See `_person_display`.
+        #
+        # PASSED IN, not resolved here: `build_bug_preview` already ran the ladder for the
+        # needinfo, and this function is on the crashstack page-view path -- re-running it would
+        # be a second `Node.authors_for` per render for a value that cannot differ.
+        author = (author_display or "").strip() or (c.get("author") or "").strip()
         if author:
             link += " by {}".format(author)
         if is_suspected_regression(corroborations):
@@ -1645,7 +1657,7 @@ def _bugzilla_user(email):
 
     Cached + best-effort (never raises)."""
     if not email:
-        return {"exists": False, "nick": "", "askable": False}
+        return {"exists": False, "nick": "", "real": "", "askable": False}
     if email in _USER_CACHE:
         return _USER_CACHE[email]
     try:
@@ -1658,7 +1670,7 @@ def _bugzilla_user(email):
             "{}/user".format(re.sub(r"/bug/?$", "", _bz_rest())),
             headers={"X-Bugzilla-API-Key": token} if token else None,
             params={"names": email, "permissive": 1,
-                    "include_fields": "name,nick,can_login,requests"},
+                    "include_fields": "name,nick,real_name,can_login,requests"},
             timeout=net.SERVICE_TIMEOUT,
         )
         r.raise_for_status()
@@ -1667,11 +1679,14 @@ def _bugzilla_user(email):
         # Could not ASK. Not the same as "no such user": leave the address usable and let
         # the create's own fallback carry the risk.
         logger.info("bug preview: bugzilla user lookup failed for %s: %s", email, exc)
-        return {"exists": True, "nick": "", "askable": True, "unverified": True}
+        return {"exists": True, "nick": "", "real": "", "askable": True, "unverified": True}
     user = users[0] if users else None
     blocked = (((user or {}).get("requests") or {}).get("needinfo") or {}).get("blocked")
     out = {"exists": user is not None,
            "nick": ((user or {}).get("nick") or "").strip(),
+           # The account's CURRENT display name. hg records the name the person had when they
+           # pushed and can never be corrected; Bugzilla is the one they maintain.
+           "real": ((user or {}).get("real_name") or "").strip(),
            "askable": bool(user) and user.get("can_login") is not False and blocked is not True}
     _USER_CACHE[email] = out
     return out
@@ -1683,18 +1698,23 @@ def _bug_people(bugids):
     exactly the "then try another one" signal.
 
     ``nobody@mozilla.org`` is skipped: it is the unassigned placeholder, not a person.
-    Shares ``_bug_meta``'s single fetch and cache; never raises."""
+    Shares ``_bug_meta``'s single fetch and cache; never raises.
+
+    ``role`` is ``"assignee"`` or ``"creator"``. Position used to carry that and cannot: on an
+    UNASSIGNED bug the first entry is the creator, so "people[0] is the assignee" is silently
+    false exactly where it matters. ``_sole_bug_person`` needs to tell them apart."""
     out = {}
     for bid, bug in _bug_meta(bugids).items():
         people = []
-        for key in ("assigned_to_detail", "creator_detail"):
+        for key, role in (("assigned_to_detail", "assignee"), ("creator_detail", "creator")):
             d = bug.get(key) or {}
             mail = (d.get("email") or d.get("name") or "").strip()
             if not mail or mail.startswith("nobody@"):
                 continue
             people.append({"email": mail,
                            "real": (d.get("real_name") or "").strip(),
-                           "nick": (d.get("nick") or "").strip()})
+                           "nick": (d.get("nick") or "").strip(),
+                           "role": role})
         out[bid] = people
     return out
 
@@ -1757,6 +1777,61 @@ def _match_author(people, name, email=""):
     return None
 
 
+def _sole_bug_person(people):
+    """The ONE non-bot human on a bug, or ``None`` when there are none or more than one.
+
+    Rung 2b of ``_needinfo_account``, and it exists because the strict keys in
+    ``_match_author`` fail on precisely the case where hg is least trustworthy: the person
+    changed their name, or never used their real name in hg at all. Bug 2067059 is the
+    motivating one -- ``Michael Layzell <michael@thelayzells.com>`` in a 2017 commit is
+    ``Nika Layzell [:nika] <nika@thelayzells.com>`` on Bugzilla, so key 1 (address), key 2
+    (display name) and key 3 (nick vs local part) all miss, no account resolved, no needinfo
+    flag was set at all, and the comment asked a name she does not use. hg history is
+    immutable; a Bugzilla account is the identity its owner maintains. When the two disagree
+    Bugzilla is right, and this rung is how we find out.
+
+    WHY "EXACTLY ONE" IS THE CONDITION, measured over prod's own data. Population: the 3,271
+    (hg author, bug) pairs in `nodes`/`hgauthors` whose hg address BMO says is not an account
+    at all (349 of 858 distinct authors, 40.7%), sampled at n=400. 47.8% of those bugs are
+    unreadable/unassigned/bot-only and 32.2% `_match_author` already resolves, leaving the
+    12.3% this rung fires on. Reading every one of the 49 by hand: 11 are ``Lando`` and
+    ``Updatebot``, which ``_needinfo_person`` drops as bots before this is reached; of the
+    remaining 39, **38 identify the same human** -- a handle (``alastor0325`` -> :alwu,
+    ``Mugurell`` -> :petru, ``pollymce`` -> :polly), a personal address (``ohai@6a68.net`` ->
+    :jhirsch, ``lissyx@lissyx.dyndns.org`` -> :gerard-majax) or a NAME CHANGE (this bug, and
+    ``Kagami Sascha Rosylight`` -> ``Kagami Rosylight [:saschanaz]``, which appears 3 times in
+    the sample). One is wrong: ``Sebastian Hengst``, a sheriff, landing on someone else's bug,
+    resolves to that bug's assignee. That residue is 1 of 39 (2.6%) and it is disclosed rather
+    than fixed -- the bug's assignee is still a defensible person to ask about their own bug,
+    which is not true of the two-people case below.
+
+    ADDING THE ASSIGNEE WHEN THE BUG HAS TWO PEOPLE was measured and REFUSED: it is a further
+    7.7% of the population and 1 in 8 of the ones read is the wrong human, against a module
+    rule that needinfo-ing the wrong human is worse than needinfo-ing nobody. With one person
+    the assignee and the creator are the same account, which is its own corroboration.
+
+    One more case in that sample was ``Treeherder Bug Filer`` -- a BMO-side bot that
+    ``experts._is_bot`` did not recognise, because its panel is mozilla-central author strings
+    and nothing on it ever has a ``@mozilla.bugs`` address. Fixed there, not here, and the 39
+    above are already net of it.
+
+    THE PERSON MUST BE THE ASSIGNEE. On an unassigned bug the sole person is whoever REPORTED
+    it, and "the reporter of the bug this patch landed for" is a much weaker inference than
+    "the person it is assigned to" -- often a triager or a fuzzer. It costs nothing to require:
+    39 of the 39 cases this rung fires on are assigned, so the condition is free and it closes
+    that hole before it opens."""
+    humans = {}
+    for p in people or []:
+        email = (p.get("email") or "").strip()
+        if not email or _is_bot(email, p.get("real") or "", p.get("nick") or ""):
+            continue
+        humans.setdefault(email.casefold(), p)
+    if len(humans) != 1:
+        return None
+    only = next(iter(humans.values()))
+    return only if only.get("role") == "assignee" else None
+
+
 def _needinfo_account(candidate, channel, email, name):
     """The Bugzilla LOGIN to put in the needinfo flag: ``{"email", "nick"}``, or ``{}``.
 
@@ -1769,6 +1844,8 @@ def _needinfo_account(candidate, channel, email, name):
        still be asked (the common case, one cheap lookup, and no bug read at all);
     2. the REGRESSOR bug's assignee or creator whose real name is the author's -- the bug the
        changeset landed for knows the person's account even when hg does not;
+    2b. the REGRESSOR bug's ONE person, when the hg address is not a Bugzilla account at all
+       and nobody on the bug matched by name. See ``_sole_bug_person``.
     3. the same over the author's other recent patches' bugs, which is what answers "and if
        the regressor bug is private, find one that isn't": a restricted bug just vanishes
        from a batched read, and the author's other landings are almost always public.
@@ -1776,6 +1853,10 @@ def _needinfo_account(candidate, channel, email, name):
        ``{"unaskable": True}`` when every account the ladder DID identify is one BMO refuses
        to needinfo (see ``_bugzilla_user``), which is the one case where the prose ask has to
        go too.
+
+    Every rung also returns ``real``, the ACCOUNT's Bugzilla display name, because the caller
+    has to be able to print the person's current name instead of the one frozen in the commit
+    (``_person_display``).
 
     Step 3 also runs when the regressor bug is perfectly readable but nobody on it matches
     (an unassigned bug filed by a triager is ordinary), which is a deliberate widening of
@@ -1793,7 +1874,7 @@ def _needinfo_account(candidate, channel, email, name):
         return {}
     user = _bugzilla_user(email)
     if user.get("exists") and not user.get("unverified") and _askable(user):
-        return {"email": email, "nick": user.get("nick", "")}
+        return {"email": email, "nick": user.get("nick", ""), "real": user.get("real", "")}
     # An account we FOUND and cannot ask is a different outcome from finding none, and the
     # caller has to be able to tell them apart: one means "no flag, but name the human in the
     # prose so a triager can set it in one click", the other means the ask cannot land at all.
@@ -1807,9 +1888,16 @@ def _needinfo_account(candidate, channel, email, name):
     except (TypeError, ValueError):
         bug = 0
     if bug > 0:
-        hit = _match_author(_bug_people([bug]).get(bug), name, email)
+        people = _bug_people([bug]).get(bug)
+        hit = _match_author(people, name, email)
+        if not hit and user.get("exists") is False:
+            # Rung 2b. The hg address is NOT a Bugzilla account -- BMO said so -- so there is no
+            # identity to preserve and the strict name keys have already failed. See
+            # `_sole_bug_person` for why exactly one person is the condition.
+            hit = _sole_bug_person(people)
         if hit and _askable(_bugzilla_user(hit["email"])):
-            return {"email": hit["email"], "nick": hit["nick"]}
+            return {"email": hit["email"], "nick": hit["nick"],
+                    "real": hit.get("real", "")}
         unaskable = unaskable or bool(hit)
 
     if email:
@@ -1829,14 +1917,15 @@ def _needinfo_account(candidate, channel, email, name):
                 # Worth carrying on past one: these are DIFFERENT addresses for the same human,
                 # so a departed work account can still be followed by a live personal one.
                 if _askable(_bugzilla_user(hit["email"])):
-                    return {"email": hit["email"], "nick": hit["nick"]}
+                    return {"email": hit["email"], "nick": hit["nick"],
+                            "real": hit.get("real", "")}
                 unaskable = True
     # Last: an address we could not CHECK (BMO would not answer the user lookup) beats no
     # needinfo at all, but only after the bug-verified rungs have had their turn -- a
     # name-matched account is better evidence than an unverified guess. If it turns out not
     # to be a login, `_create_bug_keeping_the_bug` drops the flag and still files the bug.
     if user.get("unverified") and email:
-        return {"email": email, "nick": ""}
+        return {"email": email, "nick": "", "real": ""}
     return {"unaskable": True} if unaskable else {}
 
 
@@ -1850,7 +1939,10 @@ def _needinfo_person(candidate, channel):
     thing and often a different address, and it is the only one of the two safe to put in a
     flag. ``nick`` is that account's Bugzilla handle, so a ``:nick`` needinfo reaches the
     right person; it is empty when no account resolved, and the prose then falls back to the
-    plain name."""
+    plain name.
+
+    ``account_name`` is that account's Bugzilla display name, and it OUTRANKS ``name``
+    everywhere a human is named -- see ``_person_display``."""
     c = candidate or {}
     email = name = ""
     node = c.get("node")
@@ -1902,25 +1994,46 @@ def _needinfo_person(candidate, channel):
         # branch and is what `_needinfo_line`'s docstring argues for.
         return {}
     return {"nick": account.get("nick", ""), "name": name, "email": email,
-            "account": account.get("email", "")}
+            "account": account.get("email", ""),
+            "account_name": account.get("real", "")}
+
+
+def _person_display(person):
+    """How to NAME a human in the bug comment: their ``:nick``, else the Bugzilla account's
+    display name, else the Mercurial name, else the address. ``""`` when we have nothing.
+
+    THE ORDER IS THE POINT, and the hg name is LAST of the three names on purpose. A commit's
+    author string is frozen at push time and can never be corrected; a Bugzilla account is the
+    identity its owner maintains. When they disagree the hg one is stale, and "stale" includes
+    a DEADNAME -- bug 2067059 opened with "Michael Layzell, can you have a look please?" for a
+    2017 changeset by the person Bugzilla calls ``Nika Layzell [:nika]``. That is not a
+    cosmetic defect and it is not rare: the 400-pair audit in ``_sole_bug_person`` turned up a
+    second name change (``Kagami Sascha Rosylight`` -> ``Kagami Rosylight [:saschanaz]``) three
+    times over.
+
+    The nick comes first for the older reason: ``:nick`` is what notifies on BMO, and it is
+    what a triager can act on in one click."""
+    person = person or {}
+    nick = (person.get("nick") or "").strip()
+    if nick:
+        return ":{}".format(nick)
+    for key in ("account_name", "name", "email"):
+        who = (person.get(key) or "").strip()
+        if who:
+            return who
+    return ""
 
 
 def _needinfo_line(person):
     """The needinfo we'd request -- ``:nick, can you have a look please?`` -- for ``person``
-    (a ``{nick, name, email, account}`` dict). Prefer the IRC nick, then the name, then the
-    email. ``None`` when no usable identity is available.
+    (a ``{nick, name, email, account, account_name}`` dict). ``None`` when no usable identity
+    is available.
 
     Deliberately still written when no ACCOUNT resolved and no flag will be set: naming the
     human in the prose is most of the value, and a triager who reads "Andreas Farre, can you
     have a look please?" can set the flag in one click. Silence would throw that away too."""
-    person = person or {}
-    nick = (person.get("nick") or "").strip()
-    if nick:
-        return ":{}, can you have a look please?".format(nick)
-    who = (person.get("name") or person.get("email") or "").strip()
-    if who:
-        return "{}, can you have a look please?".format(who)
-    return None
+    who = _person_display(person)
+    return "{}, can you have a look please?".format(who) if who else None
 
 
 def _bug_version(channel):
@@ -2018,6 +2131,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             first=first,
             version=version,
             needinfo=_needinfo_line(person),
+            # Same resolved identity as the needinfo ask, so the "by X" attribution and the
+            # "X, can you have a look please?" line can never name two different people.
+            author_display=_person_display(person),
             related_bugs=related_bugs,
             landing_unresolved=landing_unresolved,
             other_app_bugs=other_app_bugs,

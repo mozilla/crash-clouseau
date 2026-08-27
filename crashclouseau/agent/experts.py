@@ -21,7 +21,15 @@ import re
 # domains as a CLASS, not a roster of accounts; `.tld` is BMO's (update-bot@bmo.tld,
 # release-mgmt-account-bot@mozilla.tld are real logins) and is reachable only from the
 # filing path, which is why it scores 0 on the hg panel below and is still here.
+# ``mozilla.bugs`` is BMO's pseudo-domain for accounts that are not mailboxes, the same
+# category as ``.tld`` — and it only reaches this function from the BUG side, which is why a
+# panel of mozilla-central AUTHOR strings could never have found it. Measured over the people
+# on 1,200 recent prod bugs: exactly three accounts use it, in 382 appearances, and all three
+# are automation (``intermittent-bug-filer`` "Treeherder Bug Filer", ``telemetry-probes``,
+# ``wptsync``). The first two were being offered as needinfo requestees.
 _BOT_DOMAIN_SUFFIXES = (".moz.tools", ".gserviceaccount.com", ".tld", ".test")
+# Exact, not a suffix: there is one such domain and a suffix would also eat ``notmozilla.bugs``.
+_BOT_DOMAIN_EXACT = frozenset({"mozilla.bugs"})
 _BOT_LOCAL_SUFFIXES = ("bot", "bots", "bld", "bumper", "autoroller", "sync", "-ci")
 _BOT_LOCAL_EXACT = frozenset({"bot", "noreply", "no-reply", "nobody", "cron", "autoland"})
 # GitHub writes a user's privacy address as ``<numeric-id>+<login>@users.noreply.github.com``
@@ -108,7 +116,7 @@ def _is_bot(email: str, name: str = "", nick: str = "") -> bool:
     without one."""
     local, _, domain = (email or "").lower().partition("@")
     local = _GH_LOCAL_ID.sub("", local).replace("[bot]", "bot")
-    if domain.endswith(_BOT_DOMAIN_SUFFIXES):
+    if domain.endswith(_BOT_DOMAIN_SUFFIXES) or domain in _BOT_DOMAIN_EXACT:
         return True
     if local in _BOT_LOCAL_EXACT or local.startswith("release+"):
         return True

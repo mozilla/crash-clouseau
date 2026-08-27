@@ -2029,7 +2029,7 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch.object(report_bug.config, "get_bugzilla_token", return_value="KEY"):
             u = report_bug._bugzilla_user("stransky@x.com")
             u2 = report_bug._bugzilla_user("stransky@x.com")      # served from cache
-        self.assertEqual(u, {"exists": True, "nick": "stransky", "askable": True})
+        self.assertEqual(u, {"exists": True, "nick": "stransky", "real": "", "askable": True})
         self.assertEqual(u2, u)
         self.assertEqual(len(calls), 1)                           # cached: one lookup
         url, kw = calls[0]
@@ -2051,14 +2051,14 @@ class TestBugPreview(unittest.TestCase):
         reply["v"] = {"users": [], "faults": [{"name": "farre@mozilla.com", "error": True}]}
         with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("farre@mozilla.com"),
-                             {"exists": False, "nick": "", "askable": False})
+                             {"exists": False, "nick": "", "real": "", "askable": False})
 
         # A real account with NO nick still exists -- the old lookup could not tell these
         # apart, and conflating them is what would drop a usable needinfo.
         reply["v"] = {"users": [{"name": "nonick@x.com", "nick": ""}], "faults": []}
         with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("nonick@x.com"),
-                             {"exists": True, "nick": "", "askable": True})
+                             {"exists": True, "nick": "", "real": "", "askable": True})
 
         # No token -> no header at all (a BOGUS key is a hard 400/code 306), and the fields it
         # would have carried are simply absent, which must read as "askable" -- see below.
@@ -2070,7 +2070,7 @@ class TestBugPreview(unittest.TestCase):
         self.assertIsNone(calls[0][1]["headers"])
 
         self.assertEqual(report_bug._bugzilla_user(""),
-                         {"exists": False, "nick": "", "askable": False})
+                         {"exists": False, "nick": "", "real": "", "askable": False})
         report_bug._USER_CACHE.clear()
 
     def test_an_account_bmo_refuses_to_needinfo_is_not_askable(self):
@@ -2154,7 +2154,7 @@ class TestBugPreview(unittest.TestCase):
                     7: [{"email": "live@gmail.com", "real": "A Human", "nick": "live"}]}):
             acct = report_bug._needinfo_account({"bug": 7}, "nightly",
                                                 "gone@mozilla.com", "A Human")
-        self.assertEqual(acct, {"email": "live@gmail.com", "nick": "live"})
+        self.assertEqual(acct, {"email": "live@gmail.com", "nick": "live", "real": "A Human"})
 
     def test_bugzilla_user_lookup_failure_is_not_a_missing_user(self):
         """A transport failure must not be read as "no such account" -- that would silently
@@ -2318,8 +2318,8 @@ class TestNeedinfoAccount(unittest.TestCase):
         self.addCleanup(report_bug._BUG_CACHE.clear)
 
     @staticmethod
-    def _person(email, real, nick=""):
-        return {"email": email, "real": real, "nick": nick}
+    def _person(email, real, nick="", role="assignee"):
+        return {"email": email, "real": real, "nick": nick, "role": role}
 
     def _resolve(self, candidate, name, user=None, people=None, others=None):
         user = user if user is not None else {"exists": False, "nick": ""}
@@ -2335,11 +2335,13 @@ class TestNeedinfoAccount(unittest.TestCase):
     def test_the_hg_address_is_used_when_it_is_an_account(self):
         # The common case: one user lookup, no bug read at all.
         with mock.patch.object(report_bug, "_bugzilla_user",
-                               return_value={"exists": True, "nick": "jdm"}), \
+                               return_value={"exists": True, "nick": "jdm",
+                                             "real": "Jan de Mooij [:jdm]"}), \
                 mock.patch.object(report_bug, "_bug_people") as bp:
             got = report_bug._needinfo_account(
                 {"bug": 1, "node": "n"}, "nightly", "jdemooij@mozilla.com", "Jan de Mooij")
-        self.assertEqual(got, {"email": "jdemooij@mozilla.com", "nick": "jdm"})
+        self.assertEqual(got, {"email": "jdemooij@mozilla.com", "nick": "jdm",
+                               "real": "Jan de Mooij [:jdm]"})
         bp.assert_not_called()
 
     def test_the_regressor_bugs_assignee_answers_when_hg_does_not(self):
@@ -2350,7 +2352,8 @@ class TestNeedinfoAccount(unittest.TestCase):
             "Andreas Farre",
             people={2042379: [self._person("afarre@mozilla.com",
                                            "Andreas Farre [:farre]", "farre")]})
-        self.assertEqual(got, {"email": "afarre@mozilla.com", "nick": "farre"})
+        self.assertEqual(got, {"email": "afarre@mozilla.com", "nick": "farre",
+                               "real": "Andreas Farre [:farre]"})
 
     def test_a_private_regressor_bug_falls_back_to_another_one(self):
         # A restricted bug is simply ABSENT from a batched read -- here bug 7 returns no
@@ -2359,7 +2362,8 @@ class TestNeedinfoAccount(unittest.TestCase):
             {"bug": 7, "node": "n", "_email": "dev@x.com"}, "Some Dev",
             people={7: [], 9: [self._person("acct@x.com", "Some Dev [:sd]", "sd")]},
             others=[7, 9])
-        self.assertEqual(got, {"email": "acct@x.com", "nick": "sd"})
+        self.assertEqual(got, {"email": "acct@x.com", "nick": "sd",
+                               "real": "Some Dev [:sd]"})
 
     def test_the_newest_matching_bug_wins(self):
         # The stub deliberately answers in the WRONG order (8 before 9), the way a warm
@@ -2376,29 +2380,85 @@ class TestNeedinfoAccount(unittest.TestCase):
                 {"bug": 7, "node": "n"}, "nightly", "dev@x.com", "Some Dev")
         self.assertEqual(got["email"], "new@x.com")
 
-    def test_a_different_person_on_the_bug_is_never_used(self):
-        # The bug is readable and has a perfectly good assignee -- who is someone else.
-        # Needinfo-ing the wrong human is worse than needinfo-ing nobody.
+    def test_the_sole_assignee_of_the_changesets_own_bug_answers(self):
+        """Rung 2b, and it REPLACES a rule that used to read "a different person on the bug is
+        never used". Bug 2067059 is why: a 2017 changeset by ``Michael Layzell
+        <michael@thelayzells.com>`` is by the person Bugzilla calls ``Nika Layzell [:nika]
+        <nika@thelayzells.com>``, so all three keys in `_match_author` miss, no account
+        resolved, no needinfo was set, and the comment asked a name she does not use.
+
+        The old rule's premise -- needinfo-ing the wrong human is worse than needinfo-ing
+        nobody -- still holds and still guards rung 3 and the two-people case below. What
+        changed is the evidence for THIS rung: over prod's own 3,271 (author, bug) pairs whose
+        hg address is not a BMO account, sampled at 400, it fires 39 times and 38 name the same
+        human. See `report_bug._sole_bug_person`."""
+        got = self._resolve(
+            {"bug": 1367406, "node": "n", "_email": "michael@thelayzells.com"},
+            "Michael Layzell",
+            people={1367406: [self._person("nika@thelayzells.com",
+                                           "Nika Layzell [:nika]", "nika")]})
+        self.assertEqual(got, {"email": "nika@thelayzells.com", "nick": "nika",
+                               "real": "Nika Layzell [:nika]"})
+
+    def test_it_does_not_fire_when_the_hg_address_IS_an_account(self):
+        # The whole justification for 2b is that there is no identity to preserve. When BMO
+        # knows the hg address, that account wins and the bug is never consulted -- otherwise
+        # a patch landed on someone else's bug would be reattributed to its assignee.
         got = self._resolve(
             {"bug": 7, "node": "n", "_email": "dev@x.com"}, "Some Dev",
+            user={"exists": True, "nick": "sd", "real": "Some Dev [:sd]"},
             people={7: [self._person("triager@x.com", "A Triager")]})
+        self.assertEqual(got["email"], "dev@x.com")
+
+    def test_two_people_on_the_bug_still_resolves_nobody(self):
+        # Measured and refused: taking the assignee when the bug ALSO has a distinct creator is
+        # a further 7.7% of the population and 1 in 8 read is the wrong human. With one person
+        # the assignee and the creator are the same account, which is its own corroboration.
+        got = self._resolve(
+            {"bug": 7, "node": "n", "_email": "dev@x.com"}, "Some Dev",
+            people={7: [self._person("triager@x.com", "A Triager"),
+                        self._person("other@x.com", "Someone Else", role="creator")]})
+        self.assertEqual(got, {})
+
+    def test_an_unassigned_bugs_reporter_is_not_asked(self):
+        # The sole person on an UNASSIGNED bug is whoever reported it -- often a triager or a
+        # fuzzer, which is a much weaker inference than the assignee. Free to require: 39 of
+        # the 39 cases the rung fires on in the prod sample are assigned.
+        got = self._resolve(
+            {"bug": 7, "node": "n", "_email": "dev@x.com"}, "Some Dev",
+            people={7: [self._person("reporter@x.com", "A Reporter", role="creator")]})
+        self.assertEqual(got, {})
+
+    def test_a_different_person_on_ANOTHER_bug_is_never_used(self):
+        # Rung 3 is untouched by 2b and keeps the strict rule: across the author's OTHER
+        # landings the name match is the only thing tying an account to this human.
+        got = self._resolve(
+            {"bug": 7, "node": "n", "_email": "dev@x.com"}, "Some Dev",
+            people={7: [], 9: [self._person("triager@x.com", "A Triager")]},
+            others=[9])
         self.assertEqual(got, {})
 
     def test_two_people_who_share_a_surname_are_not_confused(self):
         # prod hgauthors really does hold farre@mozilla.com "Andreas Farre" AND
-        # sfarre@mozilla.com "Simon Farre".
-        got = self._resolve(
-            {"bug": 7, "node": "n", "_email": "sfarre@mozilla.com"}, "Simon Farre",
-            people={7: [self._person("afarre@mozilla.com", "Andreas Farre [:farre]")]})
-        self.assertEqual(got, {})
+        # sfarre@mozilla.com "Simon Farre". The guard lives in `_match_author`, which is what
+        # rung 3 leans on, and no surname key was ever added to it.
+        self.assertIsNone(report_bug._match_author(
+            [self._person("afarre@mozilla.com", "Andreas Farre [:farre]", "farre")],
+            "Simon Farre", "sfarre@mozilla.com"))
 
-    def test_no_author_name_means_no_guessing(self):
-        # Without a name there is nothing to match on, and an unverified assignee is a
-        # coin flip. 3 of 975 prod hgauthors have no real name.
+    def test_no_author_name_is_no_longer_a_reason_to_give_up(self):
+        # It used to be: with no name there was nothing for `_match_author` to compare. Rung 2b
+        # does not read the name at all -- it reads "this address is not an account" and "this
+        # bug has exactly one assignee" -- so the 3 of 975 prod hgauthors with no real name are
+        # resolvable now.
         got = self._resolve(
             {"bug": 7, "node": "n", "_email": "dev@x.com"}, "",
             people={7: [self._person("someone@x.com", "Someone Else")]})
-        self.assertEqual(got, {})
+        self.assertEqual(got["email"], "someone@x.com")
+
+    def test_nothing_to_go_on_at_all(self):
+        # No address and no name: `_needinfo_account` returns before any rung.
+        self.assertEqual(self._resolve({"bug": 7, "node": "n"}, ""), {})
 
     def test_an_unverifiable_address_yields_to_a_name_verified_account(self):
         """When BMO will not answer the user lookup we do not know whether the hg address is
@@ -2417,7 +2477,7 @@ class TestNeedinfoAccount(unittest.TestCase):
         got = self._resolve(
             {"bug": 7, "node": "n", "_email": "maybe@x.com"}, "Some Dev",
             user={"exists": True, "nick": "", "unverified": True})
-        self.assertEqual(got, {"email": "maybe@x.com", "nick": ""})
+        self.assertEqual(got, {"email": "maybe@x.com", "nick": "", "real": ""})
 
     def test_a_known_non_account_is_never_used_as_a_last_resort(self):
         # The difference that matters: BMO SAID this is nobody, so using it would cost the
@@ -2522,7 +2582,7 @@ class TestNeedinfoAccount(unittest.TestCase):
         with mock.patch.object(report_bug, "Bugzilla", FakeBZ):
             got = report_bug._bug_people([11])
         self.assertEqual(got[11], [{"email": "filer@x.com", "real": "The Filer",
-                                    "nick": "filer"}])
+                                    "nick": "filer", "role": "creator"}])
 
     def test_bug_people_caches_the_unreadable_answer_too(self):
         # A security bug never becomes readable; re-asking every preview buys nothing.
