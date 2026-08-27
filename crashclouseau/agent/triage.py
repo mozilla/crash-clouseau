@@ -1460,9 +1460,80 @@ def _user_prompt(crash: dict) -> str:
             if desc:
                 parts.append("| {}".format(desc))
             lines.append("- " + " ".join(parts))
+    # After the candidate list, because it is about what to do when that list does not
+    # answer the question the rate above just raised.
+    lines += _unexplained_rise_lines(crash)
     if extra:
         lines += ["", str(extra)]
     return "\n".join(lines)
+
+
+def _unexplained_rise_lines(crash: dict) -> list[str]:
+    """What to do when the RATE moved and the candidate set cannot explain it, or ``[]``.
+
+    TASK GUIDANCE, so it lives here and NOT in ``_crash_facts``: that function is shared
+    verbatim with the blind second opinion, where a fact both models are missing has to reach
+    both of them but a suggested direction must not prime the reviewer
+    (``_archetype_lines``' reasoning). The RATE ITSELF does go to both, via
+    ``_signature_trend_lines``; only the instruction below is triage-only.
+
+    THE FAILURE MODE THIS EXISTS TO STOP, measured on crash 84794f8d. The rate had risen, the
+    window contained nothing that explained it, and the agent reached for the closest thing
+    anyway — bug 2063678's own changeset, which was the FIX for the same signature and was
+    already in the build. The skeptic correctly failed the window claim, `schema` rule (1b)
+    read a failed claim on a lead as "noise", and a $1.39 run with a source-verified call path
+    published nothing. The prompt was part of that: it frames the deliverable as "a plausible
+    related changeset, or at least the right area" and tells the agent to reserve `abstain`
+    for when nothing is worth anyone's time, which leaves no way to say "here is what is
+    happening and no changeset explains it".
+
+    SCOPED TO A MEASURABLE RISE AND A WEAK CANDIDATE SET, because the population that looks
+    like this and SHOULD stay silent is far bigger than the one that should not. Over 1,646
+    model-authored abstains in 30 days of prod, recomputing the trend as-of each run from the
+    rollup: 80.7% sit on a signature whose rate is not measurable at all (``sigdaily`` is
+    filled from a COUNT-ordered facet page, so it holds only the loud signatures), 17.1% are
+    measurably NOT rising, and of the ~2% that are rising, 19 of 35 are third-party driver
+    code or memory exhaustion — correct abstains, every one. The target class is ~16 runs a
+    month before deduplication. This block is worth its bytes for what it stops the agent
+    DOING, not for how often it fires.
+
+    Which is also why the last paragraph is the longest. Turning those correct silences into
+    manufactured Firefox-side observations would be a far worse trade than the one bad abstain
+    this fixes."""
+    from crashclouseau import sigtrend
+
+    if not sigtrend.is_rising(crash.get("signature_trend") or {}):
+        return []
+    candidates = crash.get("candidates") or []
+    # A weak set: the undifferentiated pushlog window (off-stack), or nothing that scored onto
+    # a crash frame. With a real proximity score the ordinary hunt is the right one.
+    if not crash.get("is_offstack") and any(c.get("score") for c in candidates):
+        return []
+    return [
+        "",
+        "NO CHANGESET IS REQUIRED FOR THIS ONE. The rate above has moved and the candidate "
+        "list you were given cannot be scored against the crash, so it is entirely possible "
+        "that nothing in it explains the rise. If that is what you find, SAY SO — "
+        "\"this signature's rate rose Nx and nothing in the window I searched accounts for "
+        "it\" is a finding a triager can act on, and it is the honest one. Report it with "
+        "what you did check, so the next person does not repeat it.",
+        "  DO NOT REACH for the nearest plausible changeset to avoid an empty answer. A "
+        "candidate you cannot defend gets refuted by your own skeptic pass and the entire run "
+        "is then discarded — that is a real case, not a caution: on one crash the agent named "
+        "the changeset that FIXED the same signature, already present in the build, and a "
+        "verified call path was thrown away with it. An unnamed cause costs a reader nothing; "
+        "a wrong one costs them the whole analysis.",
+        "  WHAT IS WORTH WRITING when you have no changeset: what is failing and where "
+        "(component, subsystem, the crashing call path), what the rate did, what you searched "
+        "and ruled out, and what a person who owns that code should look at first.",
+        "  BUT AN EMPTY ANSWER IS STILL THE RIGHT ONE when the crash is not ours to fix. If "
+        "the fault is inside a third-party or closed-source module (a graphics driver, a CDM, "
+        "an OS library), or the stack is unsymbolicated vendor code, or this is memory "
+        "exhaustion rather than a defect, then abstaining IS the finding — say which and "
+        "stop. Do not manufacture a Firefox-side observation to fill the space; most crashes "
+        "that look like this genuinely are somebody else's, and a rate change does not make "
+        "them ours.",
+    ]
 
 
 def _crash_label(crash: dict) -> str:
