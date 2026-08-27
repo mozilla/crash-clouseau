@@ -1064,6 +1064,84 @@ _LIST_FIELDS: dict[str, type[BaseModel]] = {
 }
 
 
+def _blames_a_citation(exc: ValidationError) -> bool:
+    """Did this claim fail because a CITATION inside it is malformed, rather than because the
+    claim carries none? See ``_salvage_verdict`` for why the two are treated differently."""
+    return any("citations" in [str(p) for p in (err.get("loc") or ())]
+               for err in exc.errors())
+
+
+def _salvage_verdict(val):
+    """``Verdict.model_validate``, except that an unciteable OPTIONAL claim costs the CLAIM
+    and not the whole verdict. Returns ``(verdict_or_None, dropped)``.
+
+    THE SALVAGE CONTRACT, ONE LEVEL DEEPER. ``_salvage``'s own docstring already states the
+    rule — "nothing uncited SURVIVES ... while a single malformed optional field no longer
+    discards the whole (properly-cited) verdict" — and the verdict's own sub-claims were the
+    one place it was not applied: ``Verdict`` was validated atomically, so a ``consistency``
+    the model could not cite took a correctly-cited ``mechanism`` down with it.
+
+    IT IS THE DOMINANT FAILURE. Of the 45 dossiers prod lost to validation in 30 days, 37
+    (82%) name ``verdict.consistency`` and 14 name ``verdict.mechanism``. Eight are the bare
+    whole-object failure this fixes; the rest were ``...citations.N.diff_line.side``, which
+    ``_SIDE_FALLBACK`` now absorbs. Both live shapes reproduce exactly: a ``consistency`` with
+    an empty ``citations`` list ("Claim needs >= 1 citation(s), got 0") and a ``consistency``
+    written as a bare string instead of a claim object. In both, ``mechanism`` was properly
+    cited and the verdict was a ``lead``, so the run had a real answer and published nothing.
+    These are the expensive runs: mean $3.00 against a $1.99 fleet average, with the candidate,
+    hunks, call path and skeptic results all surviving salvage.
+
+    ``consistency`` is OPTIONAL for a lead -- only ``_consistency_rule``'s strong-evidence
+    branch requires it -- so dropping an uncitable one is the grounding rule being ENFORCED,
+    not relaxed: a claim without a citation is exactly what must not survive.
+
+    IT ONLY REPAIRS A CLAIM THE MODEL FAILED TO SUPPORT, NEVER ONE IT PRETENDED TO. An empty
+    ``citations`` list, or a claim written as a bare string, is the model admitting it has
+    nothing -- drop the claim, keep the verdict. A claim whose CITATION is itself malformed is
+    a different animal: ``{"kind": "stack_frame"}`` with every field defaulted would render as
+    "frame #0", the crashing frame, out of thin air, which is why ``_must_point_somewhere``
+    exists. That is a fact about the RUN rather than about the claim, and it still forces the
+    abstain it always did. Both live prod shapes are the first kind; the guards in
+    ``tests/test_agent_schema`` pin the second.
+
+    IT DOES NOT TOUCH A STRONG-EVIDENCE VERDICT AT ALL. That branch of ``_consistency_rule``
+    is the strictest gate in this file -- claim the strongest thing and fail to cite it and the
+    verdict is unusable -- and three tests in ``tests/test_agent_schema`` exist to keep it that
+    way, one of them explicitly a control against a vacuous suite. Repairing it would also be
+    unmeasurable: prod has emitted **0** strong-evidence verdicts in 2,560 done runs, so the
+    path cannot be validated against anything. Both live prod shapes are leads.
+
+    Nothing here can raise a rung, change a decision, add a citation, or turn an abstain into a
+    report. The only outcome is: a lead keeps its cited claims and loses its uncited one."""
+    try:
+        return Verdict.model_validate(val), []
+    except ValidationError:
+        pass
+    if not isinstance(val, dict):
+        return None, ["verdict"]
+    if val.get("decision") == Decision.strong_evidence.value:
+        return None, ["verdict"]
+    trimmed, dropped = dict(val), []
+    for claim in ("mechanism", "consistency"):
+        if trimmed.get(claim) is None:
+            continue
+        try:
+            Claim.model_validate(trimmed[claim])
+        except ValidationError as exc:
+            if _blames_a_citation(exc):
+                continue                      # a citation that points at nothing: not ours
+            trimmed.pop(claim)
+            dropped.append("verdict.{}".format(claim))
+    if not dropped:
+        # The verdict failed for something else entirely (a bad rung, a needinfo_draft on an
+        # abstain). Not ours to repair -- the caller abstains, as before.
+        return None, ["verdict"]
+    try:
+        return Verdict.model_validate(trimmed), dropped
+    except ValidationError:
+        return None, ["verdict"]
+
+
 def _salvage(obj: dict):
     """Best-effort per-field validation: keep the sub-objects (and per-item list
     entries / call-path edges) that validate, drop the ones that don't. Nothing
@@ -1078,6 +1156,12 @@ def _salvage(obj: dict):
     for name, model in _SINGLE_FIELDS.items():
         val = obj.get(name)
         if val is None:
+            continue
+        if name == "verdict":
+            verdict, lost = _salvage_verdict(val)
+            if verdict is not None:
+                kwargs[name] = verdict
+            dropped.extend(lost)
             continue
         try:
             kwargs[name] = model.model_validate(val)
