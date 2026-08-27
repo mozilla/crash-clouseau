@@ -267,11 +267,17 @@ class TestCitationNormalization(unittest.TestCase):
         self.assertEqual(obj["b"][1]["kind"], "searchfox")   # case-insensitive
         self.assertEqual(obj["c"]["phc_kind"], "stack-frame")  # left alone
 
-    def test_normalize_passes_through_unknown_and_canonical(self):
+    def test_normalize_passes_through_unknown_kind_but_defaults_unknown_side(self):
+        """The two maps are deliberately different. An unknown ``kind`` still falls through
+        and fails validation -- ``ref`` is a POINTER, and mapping every invented kind to it is
+        unmeasured (see ``RefCitation``). An unknown ``side`` becomes ``context``, the member
+        that asserts nothing, because otherwise one invented label destroys a whole dossier:
+        5 of the 14 verdicts prod still lost to validation in 30 days are this alone. See
+        ``_SIDE_FALLBACK`` and ``tests/test_side_is_total.py``."""
         obj = {"kind": "bogus", "side": "sideways"}
         _normalize_citations(obj)
         self.assertEqual(obj["kind"], "bogus")   # unknown -> unchanged (still invalid)
-        self.assertEqual(obj["side"], "sideways")
+        self.assertEqual(obj["side"], "context")
 
     def test_hyphen_stack_frame_citation_validates(self):
         adapter = TypeAdapter(Citation)

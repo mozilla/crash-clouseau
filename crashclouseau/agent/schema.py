@@ -857,21 +857,43 @@ _SIDE_ALIASES = {
     "history-blame": "context",
 }
 
+# THE SIDE MAP IS TOTAL; the kind map is not, and the difference is deliberate.
+#
+# ``side`` has a non-behaviour-asserting member, ``context``, and the two blocks above
+# already reach for it on exactly this reasoning: a hunk header and a blame line are both
+# "an existing line I am pointing at", and mapping them to `context` keeps a valid pointer
+# that cannot claim a line was CHANGED. Every remaining unknown has that same shape -- the
+# model invents a label for something it read -- so falling through to the raw string only
+# buys a `Literal` failure that destroys the whole dossier. Measured over 30 days of prod:
+# 14 runs still lose their verdict to salvage, and 5 of them are `diff_line.side` alone,
+# each an otherwise complete analysis at a mean $3.00.
+#
+# This is the ``FailureClass._missing_`` argument applied to the other finite list its own
+# docstring names: "``_KIND_ALIASES``/``_SIDE_ALIASES`` have each been extended several
+# times and still miss values". A total function stops the next invented label costing a
+# run, and `context` is the member that can assert nothing.
+#
+# ``kind`` gets no such default on purpose. Its weakest member, ``ref``, is a POINTER rather
+# than a non-assertion, and ``RefCitation``'s own note says mapping every unrecognized kind
+# to it "would make it total ... but that is unmeasured, so it is not what ships here".
+_SIDE_FALLBACK = "context"
+
 
 def _normalize_citations(obj):
     """Rewrite common citation spelling variants (``kind``/``side``) to the canonical
     enum tokens, recursively and in place. Keys strictly on the field names ``kind``
     and ``side``, which in this schema appear ONLY on citations, so no other field is
     touched (``phc_kind`` etc. are left alone). Case-insensitive; canonical values pass
-    through unchanged; an unrecognized value is left as-is (and will legitimately fail
-    validation). Returns ``obj`` for chaining."""
+    through unchanged. An unrecognized ``kind`` is left as-is and will legitimately fail
+    validation; an unrecognized ``side`` becomes ``context`` -- see ``_SIDE_FALLBACK`` for
+    why the two are treated differently. Returns ``obj`` for chaining."""
     if isinstance(obj, dict):
         k = obj.get("kind")
         if isinstance(k, str):
             obj["kind"] = _KIND_ALIASES.get(k.strip().lower(), k)
         s = obj.get("side")
         if isinstance(s, str):
-            obj["side"] = _SIDE_ALIASES.get(s.strip().lower(), s)
+            obj["side"] = _SIDE_ALIASES.get(s.strip().lower(), _SIDE_FALLBACK)
         for v in obj.values():
             _normalize_citations(v)
     elif isinstance(obj, list):
