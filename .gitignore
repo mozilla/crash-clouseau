@@ -30,3 +30,17 @@ spike/
 # Phase-2 calibration eval artifacts (regenerable via eval.study_corpus / eval.calibrate).
 corpus_*/
 metrics_*.json
+
+# Session working notes and handoffs. Deliberately untracked: they are scratch prose, not
+# project docs, and a blanket `git add -A` swept them in twice (6292eea, b116551).
+# This lived in .git/info/exclude, which is LOCAL-ONLY — a fresh clone lost the rule and the
+# next blanket add would sweep them again. Listed here so the rule travels with the repo.
+# Note this ignores them, it does not back them up: a handoff worth keeping must be
+# committed explicitly with `git add -f`.
+/clouseau_fenix.md
+/find_authors.md
+/jens_feedback_bug2065373.md
+/next_session.md
+/mccr8_reply_draft.md
+/plans/16-fenix-nightly-support.md
+/plans/17-dedup-beyond-the-signature.md
