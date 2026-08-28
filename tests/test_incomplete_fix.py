@@ -302,5 +302,150 @@ class TestTheBugItWouldFile(unittest.TestCase):
                         p["comment"].index("can you have a look"))
 
 
+class TestTheCandidateTheVerdictRejected(unittest.TestCase):
+    """The second reason files on a run the VERDICT could not file on -- and most of those runs
+    still carry the changeset the verdict declined to file on: 354 of the 455 rule-1b abstains
+    in the 30 days to 2026-08-28 (77.8%) have a candidate node, 61 of them in this build's
+    pushlog window. Nothing below CHANGES that behaviour; it pins it, because both halves were
+    untested. No test in this file had ever passed a candidate with a node, and replacing the
+    strip in ``autofile_bug``'s ``if incomplete_fix:`` block with ``pass`` left the whole suite
+    green -- a guard that cannot fail is not a guard.
+
+    The routing is pinned rather than "fixed" on purpose. ``build_bug_preview`` derives the
+    needinfo AND the comment's "by X" attribution from the same ``person`` so the ask and the
+    credit can never name two different people, so taking product/component from the FIXED bug
+    when a changeset IS named would also credit that bug's assignee with a changeset they did
+    not write. Measured against it: on the three prod runs where a candidate-bearing abstain
+    sits on a signature owned by a FIXED bug, the candidate's bug is in the SAME component as
+    the fix's, so the reroute buys nothing and costs an attribution.
+    """
+
+    FIX = {"id": 2063678, "node": "bbdaf4e3b2c2", "pushdate": LANDED,
+           "product": "Core", "component": "Audio/Video: Playback",
+           "assigned_to": "tboiko@nvidia.com", "resolved": "2026-08-19T21:27:05Z",
+           "predates_days": 0}
+    CAND = {"node": "221f70b5648a", "bug": 2043188, "author": "Hg Name <hg@example.com>"}
+    CAND_PERSON = {"nick": "candauthor", "account": "cand@example.com"}
+    UUID_INFO = {"uuid": "u-1", "signature": SIG, "channel": "nightly",
+                 "product": "Firefox", "buildid": BUILD, "version": "156.0a1"}
+    STACK = {"frames": [{"stackpos": 0, "function": "cuEGLApiInit", "filename": "", "line": 0}]}
+    CFG = {"enabled": True, "min_confidence": 70, "verdicts": ["lead", "culprit"],
+           "needinfo": True, "daily_cap": 10, "comment_on_existing": "comment",
+           "comment_max_bug_age_days": 30}
+
+    def _dossier(self, in_window):
+        return {"verdict": {"decision": "abstain", "confidence": "low"},
+                "candidate": dict(self.CAND),
+                "skeptic": [{"claim_ref": "candidate:221f70b5648a", "status": "fail",
+                             "note": "confirmed noise, not a defensible lead"}],
+                "corroborations": {"candidate_in_pushlog_window": in_window}}
+
+    def _preview(self, in_window=True):
+        with mock.patch.object(rb, "fetch_signature_stats", return_value=(True, "")), \
+             mock.patch.object(rb, "fetch_crash_reason", return_value={}), \
+             mock.patch.object(rb, "resolve_product_component",
+                               return_value=("Core", "Networking: HTTP")), \
+             mock.patch.object(rb, "_needinfo_person", return_value=dict(self.CAND_PERSON)), \
+             mock.patch.object(rb.models.UUID, "get_info", return_value={"version": "156.0a1"}):
+            return rb.build_bug_preview(self.UUID_INFO, self.STACK, self._dossier(in_window),
+                                        incomplete_fix=self.FIX)
+
+    def _autofile(self, preview, in_window=True):
+        from crashclouseau import report_bug
+        self.created, self.regressed = {}, None
+
+        def _create(payload, token):
+            self.created = payload
+            return 2099999, False
+
+        def _regress(bug, bugs, token):
+            self.regressed = list(bugs)
+            return list(bugs)
+
+        with mock.patch.object(ba.config, "get_agent_autofile", return_value=self.CFG), \
+             mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
+             mock.patch.object(ba, "_incomplete_fix_bug", return_value=self.FIX), \
+             mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
+             mock.patch.object(ba.models.Dossier, "already_commented", return_value=None), \
+             mock.patch.object(ba.models.Dossier, "filed_bugs_since", return_value=0), \
+             mock.patch.object(ba.models.Dossier, "record_filed_bug"), \
+             mock.patch.object(ba, "_open_bugs_for_signature", return_value=[]), \
+             mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \
+             mock.patch.object(ba, "_create_bug_keeping_the_bug", side_effect=_create), \
+             mock.patch.object(ba, "_link_blockers", return_value=[]), \
+             mock.patch.object(ba, "_link_regressed_by", side_effect=_regress), \
+             mock.patch.object(report_bug, "build_bug_preview", return_value=preview), \
+             mock.patch.object(ba.config, "get_bugzilla_token", return_value="tok"):
+            return ba.autofile_bug("u-1", self.UUID_INFO, self.STACK,
+                                   self._dossier(in_window), "abstain", 25)
+
+    def test_the_candidate_keeps_the_routing_and_the_ask_names_the_same_person(self):
+        p = self._preview()
+        self.assertEqual((p["product"], p["component"]), ("Core", "Networking: HTTP"))
+        self.assertEqual(p["needinfo_email"], "cand@example.com")
+        self.assertIn("221f70b5648a", p["comment"])
+        self.assertIn(":candauthor, can you have a look please?", p["comment"])
+        # The changeset is credited to the person the ask names, and to nobody else.
+        self.assertIn("by :candauthor", p["comment"])
+        self.assertNotIn("tboiko", p["comment"])
+        # ...and the reason the bug exists is still stated, above the analysis.
+        self.assertIn("already fixed once", p["comment"])
+        self.assertLess(p["comment"].index("already fixed once"),
+                        p["comment"].index("221f70b5648a"))
+
+    def test_the_skeptics_refusal_travels_with_the_changeset_it_refuses(self):
+        # The one thing that keeps this comment honest is in the comment: the named changeset
+        # and the note saying it was ruled out are in the same text. Suppressing the analysis
+        # on this path would delete the second and keep the first.
+        p = self._preview()
+        self.assertIn("confirmed noise, not a defensible lead", p["comment"])
+
+    def test_the_structured_regression_claim_never_reaches_bugzilla(self):
+        p = self._preview(in_window=True)
+        # `build_bug_preview` does not know why it is filing, so it asserts both...
+        self.assertEqual(p["keywords"], ["crash", "regression"])
+        self.assertEqual(p["regressed_by"], [self.CAND["bug"]])
+        res = self._autofile(p)
+        # ...and the filer takes both back before the create and before the regressed_by PUT.
+        self.assertTrue(res["filed"], res)
+        self.assertEqual(self.created["keywords"], ["crash"])
+        self.assertEqual(self.regressed, [])
+        self.assertEqual(res["regressed_by"], [])
+
+    def test_the_filing_row_records_which_reason_filed_it(self):
+        res = self._autofile(self._preview(in_window=False))
+        self.assertTrue(res["filed"], res)
+        self.assertEqual(res["incomplete_fix"],
+                         {"bug": 2063678, "node": "bbdaf4e3b2c2",
+                          "pushdate": LANDED.isoformat(), "predates_days": 0})
+
+    def test_a_verdict_path_filing_records_no_such_key(self):
+        # The key IS the discriminator, so it must be absent when the verdict filed the bug.
+        from crashclouseau import report_bug
+        with mock.patch.object(ba.config, "get_agent_autofile", return_value=self.CFG), \
+             mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
+             mock.patch.object(ba, "_incomplete_fix_bug", return_value=self.FIX) as det, \
+             mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
+             mock.patch.object(ba.models.Dossier, "already_commented", return_value=None), \
+             mock.patch.object(ba.models.Dossier, "filed_bugs_since", return_value=0), \
+             mock.patch.object(ba.models.Dossier, "record_filed_bug"), \
+             mock.patch.object(ba, "_open_bugs_for_signature", return_value=[]), \
+             mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \
+             mock.patch.object(ba, "_create_bug_keeping_the_bug",
+                               return_value=(2099998, False)), \
+             mock.patch.object(ba, "_link_blockers", return_value=[]), \
+             mock.patch.object(ba, "_link_regressed_by", side_effect=lambda b, x, t: list(x)), \
+             mock.patch.object(report_bug, "build_bug_preview",
+                               return_value=self._preview(in_window=True)), \
+             mock.patch.object(ba.config, "get_bugzilla_token", return_value="tok"):
+            res = ba.autofile_bug("u-2", self.UUID_INFO, self.STACK,
+                                  self._dossier(True), "lead", 70)
+        det.assert_not_called()
+        self.assertTrue(res["filed"], res)
+        self.assertNotIn("incomplete_fix", res)
+        # ...and the strip is scoped to the other reason: this bug keeps its regression claim.
+        self.assertEqual(res["regressed_by"], [self.CAND["bug"]])
+
+
 if __name__ == "__main__":
     unittest.main()

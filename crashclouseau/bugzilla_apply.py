@@ -1412,6 +1412,25 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                                            .get("memory_unsafe_signals") or [])
     if public_venue_declined is not None:
         result["public_venue_declined"] = public_venue_declined
+    if incomplete_fix:
+        # WHICH OF THE TWO REASONS FILED THIS, recorded rather than re-derived, for the same
+        # audit reason as ``predating_bugs`` below. Both re-derivations are lossy. "Not fileable
+        # on the verdict" needs a join on ``uuidid`` -- ``verdicts.dossierid`` is never
+        # populated, and joining on it silently counts every run as non-fileable, a mistake
+        # already made once while auditing this path. And ``node``/``pushdate`` come from
+        # ``models.Node.landing_for_bug``, whose rows ``Node.clean`` deletes after
+        # ``get_ndays_of_data()`` days, so a month later our own DB cannot say which landing
+        # was in the build. ``predates_days`` is the margin on condition 3's 7-day ownership
+        # window -- the sign test is a sign test because the panel had one case inside it, and
+        # this is the only place the next N cases get written down.
+        pushed = incomplete_fix.get("pushdate")
+        result["incomplete_fix"] = {
+            "bug": incomplete_fix.get("id"),
+            "node": incomplete_fix.get("node"),
+            "pushdate": pushed.isoformat() if hasattr(pushed, "isoformat") else (
+                str(pushed) if pushed else None),
+            "predates_days": incomplete_fix.get("predates_days"),
+        }
     try:
         if bug_id is not None:
             _post_comment(bug_id, preview["comment"], False, token)
