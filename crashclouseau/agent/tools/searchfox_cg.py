@@ -138,6 +138,45 @@ def _fmt_field_layout(fl: FieldLayout) -> str:
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------- #
+# An empty call graph is NOT a fact about the code
+# --------------------------------------------------------------------------- #
+# Bug 2067349 was filed INVALID on a mechanism asserting "invalidation wired only into
+# InsertChildToChildList/DisconnectChild, never into whole-parent-node destruction". The
+# component owner refuted it in one sentence by naming three callers, and
+# ``--calls-to 'nsINode::DisconnectChild'`` returns all three in its first two lines. But
+# ``--calls-to 'DisconnectChild'`` -- the exact spelling that mechanism used -- returns an
+# EMPTY graph, because ``searchfox._reduce_symbol`` only ever STRIPS qualification on retry,
+# never adds it. So the old message here, "No callers found for 'DisconnectChild'.", was a
+# false sentence, and it manufactured the very absence claim this tool exists to break.
+#
+# Measured 2026-08-28 over the 78 filings: 88 of 127 distinct backticked symbols in
+# ``mechanism`` are this under-qualified single-``::`` form. Reproduces off-case, so it is not
+# one bug's quirk: ``MatchClassList`` -> empty, ``mozilla::dom::ViewTransition::MatchClassList``
+# -> its one real caller (that one was bug 2066182, which was FIXED, because its skeptic
+# happened to qualify the name).
+#
+# ``NO_GRAPH_RESULT`` is exported so a reader can anchor on a GENERATED prefix instead of
+# matching model prose -- the discipline that two retracted measurements here were missing.
+# The same argument the repo already makes to the skeptic for ``field_layout``
+# (``roles.py``: "If field_layout returns nothing, you under-qualified the name ... do NOT
+# settle for `unverifiable`") applies to the whole call-graph family; it was simply never
+# said here.
+NO_GRAPH_RESULT = "No result"
+
+
+def _no_graph_result(what: str, subject: str, relation: str) -> str:
+    """The empty-graph answer, phrased as an UNANSWERED question rather than an absence."""
+    return (
+        "{} for {} {!r}: searchfox returned an empty graph. **This is not evidence that "
+        "nothing {}.** An under-qualified name returns empty here, so retry with the "
+        "FULLY-QUALIFIED symbol -- add every namespace and drop template `<...>` args "
+        "(`Type::method` is usually not enough; `ns::Type::method` is). If it is still empty, "
+        "the question is UNANSWERED: do not conclude an absence from it, and do not write "
+        "that you searched and found none."
+    ).format(NO_GRAPH_RESULT, what, subject, relation)
+
+
 @tool
 async def calls_from(
     ctx: SearchfoxCtx,
@@ -149,7 +188,7 @@ async def calls_from(
     try:
         graph = await asyncio.to_thread(ctx.client.calls_from, symbol, ctx.repo_or(repo), depth)
     except SearchfoxNoResult:
-        return f"No callees found for {symbol!r}."
+        return _no_graph_result("callees of", symbol, "is called by it")
     except SearchfoxError as exc:
         raise _sf_error(exc, "calls_from") from exc
     return _fmt_callgraph(graph)
@@ -166,7 +205,7 @@ async def calls_to(
     try:
         graph = await asyncio.to_thread(ctx.client.calls_to, symbol, ctx.repo_or(repo), depth)
     except SearchfoxNoResult:
-        return f"No callers found for {symbol!r}."
+        return _no_graph_result("callers of", symbol, "calls it")
     except SearchfoxError as exc:
         raise _sf_error(exc, "calls_to") from exc
     return _fmt_callgraph(graph)
@@ -186,7 +225,11 @@ async def calls_between(
             ctx.client.calls_between, source, target, ctx.repo_or(repo), depth
         )
     except SearchfoxNoResult:
-        return f"No path found between {source!r} and {target!r}."
+        # This one already documents its own scoping caveat on the tool description, but the
+        # under-qualification failure is identical, so it gets the identical answer.
+        return _no_graph_result(
+            "call paths between", "{} -> {}".format(source, target), "connects them"
+        )
     except SearchfoxError as exc:
         raise _sf_error(exc, "calls_between") from exc
     return _fmt_callgraph(graph)

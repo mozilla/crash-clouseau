@@ -110,7 +110,15 @@ class TestHandlers(unittest.TestCase):
 
     def test_no_result_is_abstain_string_not_error(self):
         out = asyncio.run(calls_to(self.ctx, "Nope"))
-        self.assertIn("No callers", out)
+        self.assertTrue(out.startswith(sfcg.NO_GRAPH_RESULT), out[:60])
+
+    def test_no_result_does_not_claim_the_absence(self):
+        """It used to answer "No callers found for 'Nope'.", which is false whenever the name
+        is under-qualified -- and that is how bug 2067349 was filed. See
+        tests/test_tool_provenance.py for the whole argument."""
+        out = asyncio.run(calls_to(self.ctx, "Nope")).lower()
+        self.assertNotIn("no callers found", out)
+        self.assertIn("not evidence", out)
 
     def test_hard_error_becomes_toolerror(self):
         with self.assertRaises(ToolError):

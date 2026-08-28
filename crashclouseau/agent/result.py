@@ -27,6 +27,13 @@ class CrashTriageResult(HackbotAgentResult):
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    # Which searchfox symbols this run actually asked about, and whether the answer was empty
+    # (``triage._RunTrace.provenance``). Persisted by #11 into ``Dossier.payload['tool_calls']``
+    # so "did the run enumerate the callers of the symbol its mechanism names?" is a query
+    # rather than a two-hour log window. NOT model-authored and nothing gates on it; the point
+    # is that a change to the call-graph tools or to the skeptic's enumeration duty can be told
+    # to have stopped working. Additive: an older persisted result reads as ``{}``.
+    tool_calls: dict = Field(default_factory=dict)
 
     @property
     def decision(self) -> Decision | None:

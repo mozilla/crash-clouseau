@@ -1544,7 +1544,39 @@ class _RunTrace:
     """Logs where a run's wall-time goes: each AI subagent (Task) with its
     description + elapsed time, plus a per-tool and per-model breakdown. Emitted via
     ``logger`` so it shows in worker logs and the offline harness without changing
-    the agent's behavior. Purely observational (helps decide what to trim)."""
+    the agent's behavior. Purely observational (helps decide what to trim).
+
+    ...AND, since 2026-08-28, the one part of it that is PERSISTED: which searchfox symbol
+    the run actually asked about, and whether the answer came back empty
+    (``provenance()`` -> ``Dossier.payload['tool_calls']``).
+
+    WHY THAT IS NOT OPTIONAL. This class already computed the symbol
+    (``_label`` -> ``"symbol=nsINode::DisconnectChild"``) and dropped it on the floor: the
+    per-tool aggregate keeps a count and a duration, ``summary`` logs one
+    ``mcp__searchfox__calls_to xN`` line, and the app has no log drain, so a
+    ``heroku logs -n 1500`` window is about two hours. The result was that "did the agent
+    enumerate the callers of the symbol its own mechanism names?" -- the question that
+    decides bug 2067349's class of error -- was unanswerable for every dossier ever written.
+
+    This is the repo's dominant failure mode, not a hypothetical: measured over the 78 filings
+    to 2026-08-28, ``archetypes`` non-empty fired 0/78 (the key is present on 57 rows and every
+    value is ``[]``), and so did ``compiled_out_suppressed``, ``skeptic_build_flag_unbound`` and
+    ``absent_named_threads``. A gate nobody can count is a gate nobody can tell has stopped
+    working, so any change to the call-graph tools or to the skeptic's enumeration duty has to
+    land with a counter or it lands unfalsifiable.
+
+    Deliberately NOT a behaviour change: nothing reads ``tool_calls``, no verdict moves, and
+    the field is additive JSONB so older dossiers read as absent rather than empty."""
+
+    # Only the searchfox family gets a per-CALL record. The empty-vs-non-empty distinction is
+    # what these are for (``tools/searchfox_cg.NO_GRAPH_RESULT``), the argument is a symbol
+    # rather than a whole prompt, and the volume is tens per run rather than hundreds -- which
+    # is what keeps this a few hundred bytes of payload instead of a few tens of KB. Everything
+    # else still lands in ``totals``.
+    _PROVENANCE_TOOL = "__searchfox__"
+    # Bound the payload. Exceeding it is COUNTED and logged, never silently truncated: a
+    # capped list that reads as complete is how a coverage number becomes a lie.
+    _PROVENANCE_MAX = 150
 
     def __init__(self):
         self._t0 = time.monotonic()
@@ -1552,6 +1584,8 @@ class _RunTrace:
         self._task_type = {}   # Task tool_use_id -> subagent_type
         self.tasks = []        # [(subagent_type, label, seconds)] in completion order
         self._tool = defaultdict(lambda: [0, 0.0])   # tool name -> [count, seconds]
+        self._calls = []       # [{tool, arg, empty, secs, by}] for the searchfox family
+        self._calls_dropped = 0
 
     def _clock(self):
         return time.monotonic() - self._t0
@@ -1569,7 +1603,11 @@ class _RunTrace:
             return str(inp.get("description") or inp.get("prompt") or "")[:100]
         if name == "Bash":
             return str(inp.get("command", ""))[:100]
-        for k in ("symbol", "caller", "callee", "file_path", "pattern", "path", "query"):
+        # `source`/`target` are `calls_between`'s argument names; without them its label fell
+        # through to a repr of the whole input dict, which is unreadable in a log and useless
+        # as provenance.
+        for k in ("symbol", "caller", "callee", "source", "target",
+                  "file_path", "pattern", "path", "query"):
             if inp.get(k):
                 return "{}={}".format(k, str(inp[k])[:80])
         return str(inp)[:80]
@@ -1602,6 +1640,67 @@ class _RunTrace:
                     else:
                         self._tool[name][0] += 1
                         self._tool[name][1] += dt
+                        if self._PROVENANCE_TOOL in name:
+                            self._record_call(name, label, dt, _issuer, b)
+
+    @staticmethod
+    def _result_text(block) -> str:
+        """The tool result as text, from any of the shapes the SDK uses for it.
+
+        Best-effort and never raises: this is instrumentation, and a shape we have not seen
+        must cost a provenance record, never a $2 run."""
+        content = getattr(block, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            out = []
+            for part in content:
+                if isinstance(part, str):
+                    out.append(part)
+                elif isinstance(part, dict):
+                    out.append(str(part.get("text") or ""))
+                else:
+                    out.append(str(getattr(part, "text", "") or ""))
+            return "\n".join(out)
+        return "" if content is None else str(content)
+
+    def _record_call(self, name, label, dt, issuer, block):
+        if len(self._calls) >= self._PROVENANCE_MAX:
+            self._calls_dropped += 1
+            return
+        try:
+            text = self._result_text(block)
+        except Exception:                                   # pragma: no cover - defensive
+            text = ""
+        self._calls.append({
+            "tool": name.rsplit("__", 1)[-1],
+            "arg": label,
+            # Anchored on the GENERATED prefix the tool emits, not on prose. An empty graph is
+            # the answer this whole field exists to make countable.
+            "empty": text.startswith(searchfox_cg.NO_GRAPH_RESULT),
+            "secs": round(dt, 2),
+            # Which role asked. `None` is the principal; the mechanism is written by
+            # patch-scout / data-flow-tracer, so "who enumerated" is the interesting half.
+            "by": issuer,
+        })
+
+    def provenance(self) -> dict:
+        """``payload['tool_calls']``: per-call searchfox records + a per-tool total.
+
+        Shaped so the two questions that motivated it are one query each: "was this symbol
+        enumerated?" (`calls`) and "how often does the tool answer nothing?"
+        (`empty`)."""
+        if self._calls_dropped:
+            logger.warning("agent: provenance capped at %d searchfox calls; %d not recorded",
+                           self._PROVENANCE_MAX, self._calls_dropped)
+        out = {
+            "calls": list(self._calls),
+            "totals": {n: {"n": c, "secs": round(secs, 1)}
+                       for n, (c, secs) in sorted(self._tool.items())},
+        }
+        if self._calls_dropped:
+            out["dropped"] = self._calls_dropped
+        return out
 
     def summary(self, result_msg):
         wall = (getattr(result_msg, "duration_ms", None) or 0) / 1000.0
@@ -1760,7 +1859,7 @@ def _sum_tokens(result_msg):
     return 0, 0, 0
 
 
-def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
+def build_result(result_msg, *, recorder=None, tool_calls=None) -> CrashTriageResult:
     """Fold a terminal ``ResultMessage`` into a typed ``CrashTriageResult``,
     best-effort parsing + #03-validating the trailing ```json handoff. Raises
     ``AgentError`` on a missing/errored result, and ``MissingHandoffError`` when the
@@ -1828,6 +1927,7 @@ def build_result(result_msg, *, recorder=None) -> CrashTriageResult:
         result=result_msg.result or "",
         dossier=dossier,
         actions=actions,
+        tool_calls=tool_calls or {},
         input_tokens=ti,
         output_tokens=to,
         cache_read_tokens=tc,
@@ -1895,4 +1995,4 @@ async def run_crash_triage(
                 if isinstance(msg, ResultMessage):
                     result_msg = msg
     trace.summary(result_msg)
-    return build_result(result_msg, recorder=recorder)
+    return build_result(result_msg, recorder=recorder, tool_calls=trace.provenance())
