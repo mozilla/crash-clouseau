@@ -232,6 +232,79 @@ class TestTheViewerGate(unittest.TestCase):
                         self.assertFalse(api.viewer_authorized())
 
 
+class TestTheWithheldPageStillRenders(unittest.TestCase):
+    """WITHHOLDING IS ONLY HALF THE JOB: the page has to say so.
+
+    `build_evidence` returns a deliberately partial dict for a withheld dossier, and on
+    2026-08-28 the first live poison crash to reach a route -- 2c6e9fcf, fault address
+    0xe5e5e5e5e5e5e615, verdict LEAD -- hit `evidence["ui"]` in `html.crashstack` and
+    500'd. Nothing leaked, and nothing rendered either: `crashstack.html` already carries an
+    "Analysis withheld" banner that no reader ever saw.
+
+    `TestEverySurfaceIsGated` could not catch it because it reads the SOURCE for the gate.
+    These drive the routes with the real partial dict instead, which is the only thing that
+    distinguishes "withholds" from "withholds and survives"."""
+
+    # The prod shape: a LEAD with a cited mechanism and a named regressor, flagged unsafe.
+    EV = {"uuid": "u-1", "status": "done", "verdict": "lead", "confidence": 70,
+          "rationale": "a stale, already-freed RefPtr<nsAtom> mLang",
+          "principal_model": "claude-opus-4-8", "effort": "high", "evidence": [],
+          "over_budget": False, "cost_usd": 2.5,
+          "actions": [{"type": "bugzilla.add_comment", "params": {}, "reasoning": "x"}],
+          "dossier": {"corroborations": {"memory_unsafe": True,
+                                         "memory_unsafe_signals":
+                                             ["fault address 0xe5e5e5e5e5e5e615 has a "
+                                              "4-byte poison prefix"]},
+                      "verdict": {"mechanism": {"statement": "use-after-free of mLang"}},
+                      "area_experts": [{"name": "someone", "email": "a@b.c"}],
+                      "candidate": {"node": "90d0043f91a1", "bug": 1234}}}
+    # Everything the banner must NOT contain, plus the two strings only the panel prints.
+    LEAKS = ("RefPtr", "mLang", "use-after-free", "90d0043f91a1", "claude-opus",
+             "someone", "a@b.c", "evidence-panel")
+
+    def setUp(self):
+        from crashclouseau import app
+        self.client = app.test_client()
+
+    def _real_withheld(self):
+        """Patch the RAW read, so the withheld dict is the one prod builds, not a fixture."""
+        return mock.patch.object(bugzilla_apply.models.Verdict, "get_evidence",
+                                 return_value=dict(self.EV))
+
+    def test_crashstack_renders_the_banner_instead_of_500ing(self):
+        from crashclouseau import population
+        from tests.test_product_wiring import _stack, _uuid_info
+        with self._real_withheld(), \
+                mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
+                           return_value=(_stack(), _uuid_info())), \
+                mock.patch.object(population, "for_crash", return_value=None):
+            rv = self.client.get("/crashstack.html?uuid=u-1")
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_data(as_text=True)
+        self.assertIn("Analysis withheld", body)
+        # the reason is public (it is the fault address, which crash-stats already shows)...
+        self.assertIn("poison prefix", body)
+        # ...and nothing the analysis concluded is.
+        for leak in self.LEAKS:
+            self.assertNotIn(leak, body, leak)
+
+    def test_codeview_renders_the_public_diff_with_no_highlighting(self):
+        """Same partial dict, second surface. `node` is omitted so no hg fetch is attempted."""
+        with self._real_withheld():
+            rv = self.client.get("/codeview.html?uuid=u-1&filename=dom/Foo.cpp&line=42")
+        self.assertEqual(rv.status_code, 200)
+        for leak in ("90d0043f91a1", "mLang", "use-after-free"):
+            self.assertNotIn(leak, rv.get_data(as_text=True), leak)
+
+    def test_the_api_serialises_it(self):
+        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}, clear=False), \
+                self._real_withheld():
+            rv = self.client.get("/api/evidence?uuid=u-1")
+        self.assertEqual(rv.status_code, 200)
+        self.assertTrue(rv.get_json()["withheld"])
+        self.assertIsNone(rv.get_json()["verdict"])
+
+
 class TestEverySurfaceIsGated(unittest.TestCase):
     """THE TEST THAT HAS TO SURVIVE. The predicate is easy; the failure mode is a fifth surface
     added later by someone who has never read `sensitive.py`."""

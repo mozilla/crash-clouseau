@@ -38,9 +38,18 @@ def crashstack():
         # Show the panel for strong-evidence (culprit) and lead verdicts, and whenever
         # area-experts were found (a knowledgeable person to surface, even on abstain);
         # for a bare ABSTAIN only when the UI is configured to surface them.
-        vt = evidence["verdict"] if evidence else None
-        ui = evidence["ui"] if evidence else {}
-        has_experts = bool((evidence.get("dossier") or {}).get("area_experts")) if evidence else False
+        # EVERY READ GOES THROUGH ``.get``, because a WITHHELD dossier is a deliberately
+        # partial dict -- ``build_evidence`` returns uuid/status/verdict/withheld/
+        # withheld_reasons and nothing else, on purpose, so that no field it forgot to
+        # strip can leak. ``evidence["ui"]`` therefore 500'd this page for the first live
+        # poison crash to reach it (2c6e9fcf, fault address 0xe5e5e5e5e5e5e615, a LEAD):
+        # the withholding worked and the render did not, so the "Analysis withheld" banner
+        # the template already carries never appeared and the page was simply broken.
+        # ``verdict`` survives to None here, which makes ``show_evidence`` False -- the
+        # panel stays hidden, which is what the withheld branch wants anyway.
+        vt = (evidence or {}).get("verdict")
+        ui = (evidence or {}).get("ui") or {}
+        has_experts = bool(((evidence or {}).get("dossier") or {}).get("area_experts"))
         show_evidence = bool(evidence and (
             vt == "culprit" or (vt == "lead" and ui.get("show_lead", True)) or (has_experts and ui.get("show_experts", True)) or (vt == "abstain" and ui.get("show_abstain"))
         ))
