@@ -214,6 +214,19 @@ def _link_blockers(bug_id, blockers, token):
     filings came back 200 with an empty blocks list. Only ``PUT {"blocks": {"add": [...]}}``
     works.
 
+    THE DOCUMENTATION SAYS OTHERWISE, so do not re-derive this from it. ``Bug.create`` at
+    https://bmo.readthedocs.io/en/latest/api/core/v1/bug.html#create-bug lists ``blocked``,
+    ``dependson`` and ``regressed_by`` as create parameters taking "one or more valid bug
+    ids", and documents error 116 for a create-time dependency loop. That page carries
+    UPSTREAM Bugzilla's contract; BMO does not implement it. Re-probed 2026-08-28 on allizom
+    with five creates — a valid numeric id, the ``blocks`` spelling, an alias string, an
+    INVALID id, and valid-plus-invalid together: **all five answered 200 and all five read
+    back empty**, and an invalid id is not even rejected, so create discards these fields
+    before it validates them. The probe is not measuring its own read: ``keywords``,
+    ``cf_crash_signature`` and ``see_also`` survived the same creates, and a ``PUT`` on one
+    of those very bugs, same account and session, set both fields. Bugs 1852371-1852376 on
+    allizom.
+
     The PUT is atomic and strict: one unknown id rejects the WHOLE list with code 101, so a bug
     that is restricted, wrong, or simply not visible to this account would otherwise also cost us
     the ``clouseau`` meta-bug link. Hence the retry with the aliases alone — dormant while the
@@ -244,7 +257,9 @@ def _link_regressed_by(bug_id, regressors, token):
     ``regressed_by`` exactly as silently as it discards ``blocks`` (probed on allizom: 200, and
     the field comes back empty), and the PUT is atomic ACROSS fields as well as within one --
     ``{"blocks": {"add": ["clouseau"]}, "regressed_by": {"add": [<unknown bug>]}}`` came back
-    404/code 101 with the perfectly good blocks add dropped too. A regressor bug we cannot read
+    404/code 101 with the perfectly good blocks add dropped too. Re-probed 2026-08-28: a
+    combined PUT with BOTH ids valid does work (200, both fields set), so the atomicity only
+    bites on a bad id — which is precisely the ordinary case here, hence still two PUTs. A regressor bug we cannot read
     is the ordinary case rather than the exotic one (BMO answers 102 for 2043188, which cost 2 of
     the first 3 filings their blocker link), so sharing one PUT would put the meta-bug link back
     at the mercy of the field likeliest to fail.
