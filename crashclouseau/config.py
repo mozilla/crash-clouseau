@@ -604,9 +604,24 @@ def autofile_channel_declared(channel):
 
     A SEPARATE PREDICATE FROM ``enabled``, because "somebody set this to false" and "nobody has
     thought about this channel" must not look the same from the filer. An overlay of
-    ``{"enabled": false}`` is a decision; a missing overlay is a gap, and the gap is what release
-    would fall into the moment ``INGEST_CHANNELS`` is cleared (``update_all``'s empty default is
-    ALL configured channels)."""
+    ``{"enabled": false}`` is a decision; a missing overlay is a gap.
+
+    RELEASE IS NOW DECLARED AND HELD (``enabled: false``, ``skip``, ``daily_cap: 2``), which
+    closes the gap this docstring used to describe. The only DANGEROUS overlay shape is one with
+    no explicit ``enabled`` key — a bare ``{}``, or beta's shape minus its ``false`` — because
+    ``get_agent_autofile``'s veto is ``over.get("enabled") is False`` and prod runs
+    ``AUTOFILE_BUGS=1``, so an overlay that merely names a channel ARMS it at the top-level
+    policy. Verified across five overlay shapes.
+
+    ``skip`` for release is the CONSERVATIVE default and it is not the measured answer, because
+    there is no measured answer. Release's venue rate at the SELECTION level (the population the
+    filer sees, not a top-N-by-volume panel) is 14/30 = 46.7%, Wilson 30.2-63.9% — an interval
+    that overlaps both nightly's 21.7% and beta's 50.6%. And a venue RATE does not decide the
+    mode: what decides it is how many of those venues are the RIGHT venue, which is 68% (15/22)
+    on production's real nightly filings but 15.4% (6/39) on beta's selection population, a 4.4x
+    swing across populations and unmeasured on release. ``skip`` writes on nobody's bug and
+    files no near-duplicate; ``file_new`` is roughly 2.0-2.2x the volume. Open question, and it
+    cannot be answered while filing is held."""
     a = get_agent().get("autofile", {})
     ch = (channel or "").lower()
     if not ch:
@@ -1119,11 +1134,27 @@ def get_agent_calibration(channel=None):
     # This module's own rule: a number a Bugzilla reviewer reads cannot be fit on the wrong arm.
     #
     # `channels: {"<ch>": {...}}` overrides per channel, INCLUDING with an explicit empty table.
-    # An absent channel key falls back to the top-level fit; a channel present with `{}` gets
-    # nothing. That asymmetry is the point: nightly must keep its table without naming itself.
-    over = (cal.get("channels") or {}).get((channel or "").lower())
+    #
+    # AN ABSENT CHANNEL KEY USED TO INHERIT THE FIT, AND THAT WAS THE BUG. Falling back to the
+    # top-level table for ANY channel with no entry meant `get_agent_calibration("release")` --
+    # or "esr", or any channel added later -- returned nightly's fitted `{25: 0.5, 50: 0.5714,
+    # 70: 0.7234, 85: 0.7234}` and published "72% worth investigating" from a fit on 90
+    # Firefox-nightly rows. That is exactly the rule three paragraphs up forbids, and it is a
+    # CLASS of defect rather than one instance: the next channel inherits it again.
+    #
+    # So the fallback is now EXPLICIT, following `sigage._population`'s shape verbatim: the
+    # top-level fit is returned only for a falsy channel (every no-argument caller is a nightly
+    # path) or for the channel the fit was actually measured on, named in
+    # `agent.calibration.fit_channel`. A NAMED channel with no entry gets `{}` and publishes no
+    # sentence at all. Nightly still keeps its table without naming itself in `channels`, which
+    # is the property the asymmetry existed to protect.
+    channels = cal.get("channels") or {}
+    ch = (channel or "").lower()
+    over = channels.get(ch)
     if over is not None:
         cal = over
+    elif ch and ch != (cal.get("fit_channel") or "nightly").lower():
+        return {}
     if cal.get("table") is not None:
         return _normalize_calibration_table(cal["table"])
     path = cal.get("path")

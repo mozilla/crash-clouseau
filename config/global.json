@@ -125,9 +125,11 @@
         "calibration":
         {
             "table": {"25": 0.5, "50": 0.5714, "70": 0.7234, "85": 0.7234},
+            "fit_channel": "nightly",
             "channels":
             {
-                "beta": {}
+                "beta": {},
+                "release": {}
             }
         },
         "offstack":
@@ -173,6 +175,12 @@
                     "enabled": false,
                     "comment_on_existing": "skip",
                     "daily_cap": 3
+                },
+                "release":
+                {
+                    "enabled": false,
+                    "comment_on_existing": "skip",
+                    "daily_cap": 2
                 }
             }
         },

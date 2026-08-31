@@ -160,9 +160,16 @@ class TestShippedAgentChannels(unittest.TestCase):
         self.assertIn("ingest_channels", doc)
         self.assertIn("fired in production", doc)
         # The containment, and the reason the accidental release ingest was not an incident: it
-        # is not triaged (no LLM spend) and not declared for filing (no Bugzilla write).
+        # is not triaged (no LLM spend), and its filing is now explicitly HELD rather than merely
+        # undeclared (the stronger state -- a decision, not a gap).
         self.assertNotIn("release", config.get_agent_channels())
-        self.assertFalse(config.autofile_channel_declared("release"))
+        self.assertTrue(config.autofile_channel_held("release"))
+        # Under prod's LIVE value. Asserting `enabled` with AUTOFILE_BUGS unset would pass
+        # trivially -- the global default is already False -- and would say nothing about the
+        # state production is in.
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            self.assertFalse(config.get_agent_autofile("release")["enabled"])
+            self.assertTrue(config.get_agent_autofile("nightly")["enabled"])
 
 
 class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
@@ -228,15 +235,29 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         one is silence — the shape of the four silent no-ops this codebase has already been
         bitten by (`done-is-not-triaged`). "Undeclared" and "declared and switched off" must
         stay different states: the first is a gap, the second is a decision, and plan #18's
-        Phase 4 (beta triaged, beta filing held) needs the second to exist."""
-        for channel in config.get_agent_channels():
+        Phase 4 (beta triaged, beta filing held) needs the second to exist.
+
+        ITERATES `get_channels()`, NOT `get_agent_channels()`, AND THAT IS THE WHOLE POINT.
+        `get_agent_channels()` reads the `AGENT_CHANNELS` ENVIRONMENT VARIABLE, so this loop
+        asserted nothing about the value production actually runs — and with `AGENT_CHANNELS=""`
+        (which used to mean "every channel", i.e. exactly the state where the guard was needed)
+        it iterated ZERO channels and passed vacuously. `get_channels()` is the list that defines
+        the `CHANNEL_TYPE` enum, i.e. every label `Build.channel` can ever hold, which is the
+        right universe for "must have a filing decision"."""
+        for channel in config.get_channels():
             with self.subTest(channel=channel):
-                self.assertTrue(config.autofile_channel_declared(channel))
-        self.assertFalse(config.autofile_channel_declared("release"))
+                self.assertTrue(
+                    config.autofile_channel_declared(channel),
+                    "{} can appear in Build.channel but nobody has decided about filing "
+                    "on it".format(channel))
+        # Release is DECLARED and HELD as of 2026-08-31 -- a decision, not a gap.
+        self.assertTrue(config.autofile_channel_declared("release"))
+        self.assertTrue(config.autofile_channel_held("release"))
         # Fails CLOSED, at the filer, before any BMO request: this is the hole that a
         # tasks.html retrigger (`enqueue_agent(..., force=True)`, which bypasses the channel
         # gate by design) would otherwise walk straight through with `AUTOFILE_BUGS=1` live.
-        for channel in ("release", None, "esr", "nightly-asan"):
+        # `esr` is the undeclared channel now that release is declared.
+        for channel in (None, "esr", "nightly-asan"):
             with self.subTest(channel=channel):
                 res = bugzilla_apply.autofile_bug(
                     "u-1", {"channel": channel, "signature": "Foo::Bar"},

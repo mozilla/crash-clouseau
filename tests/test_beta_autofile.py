@@ -348,19 +348,22 @@ class TestTheChannelGate(_BetaBase):
     variable to "turn beta on" turns release on too."""
 
     def test_an_undeclared_channel_files_nothing(self):
-        for channel in ("release", "esr", "aurora", "Beta ", "", None):
+        """`release` moved OUT of this list on 2026-08-31: it is now declared and HELD, which is
+        a different gate (`enabled: false`) reached later in the same function. An undeclared
+        channel is one nobody has decided about at all -- `esr` is the live example."""
+        for channel in ("esr", "aurora", "Beta ", "", None):
             with self.subTest(channel=channel):
                 self._reset()
                 res = self._file_beta(info={**_BETA_INFO, "channel": channel})
                 self.assertFalse(res["filed"])
                 self.assertIn("autofile configuration", res["skipped"])
                 self.assertEqual((self.created, self.comments, self.puts), ([], [], []))
-        # The two channels somebody HAS decided about are not caught by it — the gate must not
+        # The three channels somebody HAS decided about are not caught by it — the gate must not
         # be a global off switch.
-        for channel in ("nightly", "beta", "NIGHTLY"):
+        for channel in ("nightly", "beta", "release", "NIGHTLY"):
             with self.subTest(channel=channel):
                 self.assertTrue(cconfig.autofile_channel_declared(channel))
-        for channel in ("release", "esr", None, ""):
+        for channel in ("esr", None, ""):
             with self.subTest(channel=channel):
                 self.assertFalse(cconfig.autofile_channel_declared(channel))
 
