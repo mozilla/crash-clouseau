@@ -579,19 +579,33 @@ def _cpu_spread_line(noise: dict, crash: dict | None = None) -> str:
         "measured (the 32% figure this note quotes elsewhere is Firefox-nightly's), so treat "
         "the number above as unbenchmarked — do not read it as high or as low."
     )
+    # THE CLOSING CLAUSE NAMES ITS OWN SAMPLE. It used to say "in that same sample ... (9 of the
+    # 26 at 100%, against 118 of the 200 overall)" unconditionally -- so on a channel with no
+    # measured median it landed one sentence after "how concentrated a typical signature on this
+    # channel is has NOT been measured", leaving "that same sample" pointing at a sample the
+    # previous sentence had just disowned and two bare denominators ("the 26", "the 200") with
+    # nothing defining them. Live in 38 of 38 beta prompts, and in the blind second opinion's.
+    #
+    # Kept rather than dropped on the unmeasured channels, because it is an ANTI-support caveat
+    # (34.6% vs 59%: concentration is evidence AGAINST a bug, not for one), so quoting it errs
+    # toward abstaining; and the correlation is a different statistic from the median this
+    # function benchmarks against. Naming the population is what makes it honest on any channel.
+    concentration_caveat = (
+        "but concentration is not support for a bug either: in the Firefox-nightly sample of 200 "
+        "signatures (2026-08-21), the 26 that sit at 100% one model carry a known Firefox bug "
+        "LESS often than the rest — 9 of those 26, against 118 of the 200 overall"
+    )
     return (
         "CPU-MODEL SPREAD OF THIS SIGNATURE — a fact, not a verdict, and deliberately stated "
         "apart from the paragraph above. Of the {} reports that carry a cpu_info string, "
         "{:.0f}% are on {}{}.{} Read it as SCOPE and as evidence "
         "in NEITHER direction: when a signature is confined to one CPU model, one GPU driver "
         "or one distribution, naming which is worth more than calling the population small — "
-        "but concentration is not support for a bug either, since in that same sample the most "
-        "concentrated signatures carry a known Firefox bug LESS often than the rest (9 of the "
-        "26 at 100%, against 118 of the 200 overall).".format(
+        "{}.".format(
             seen, 100 * share, noise.get("top_cpu_term") or "one model",
             ", the only model seen" if terms == 1
             else ", one of {} models seen".format(terms),
-            background)
+            background, concentration_caveat)
     )
 
 

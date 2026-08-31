@@ -1019,6 +1019,41 @@ class TestCpuConcentrationIsReportedNeverGated(unittest.TestCase):
         self.assertIn("13% of them", spread[0])  # 26 of 200 sampled signatures
         self.assertIn("ORDINARY", spread[0])
 
+    def test_every_denominator_in_the_spread_names_its_own_sample(self):
+        """THE CLAUSE THAT DANGLED ON BETA, live in 38 of 38 beta dossiers.
+
+        The closing caveat said "in that same sample ... (9 of the 26 at 100%, against 118 of the
+        200 overall)" unconditionally — landing one sentence after the beta/release branch says
+        "how concentrated a typical signature on this channel is has NOT been measured". So
+        "that same sample" pointed at a sample the previous sentence had just disowned, and "the
+        26" and "the 200" had no antecedent at all.
+
+        The condition stays on `median is not None`, never on `channel == "nightly"`: an ABSENT
+        channel deliberately falls back to nightly (`sigage._population`), and gating on the
+        channel string would silently drop the background from every legacy no-channel caller."""
+        noise = _noise(reports=58, flip=0.0, cpu=0.0, terms=1, share=1.0,
+                       term="family 25 model 117 stepping 2")
+        for channel in ("nightly", "beta", "release", None):
+            with self.subTest(channel=channel):
+                crash = {"raw_crash": {}, "hardware_noise": noise}
+                if channel is not None:
+                    crash["channel"] = channel
+                spread = [ln for ln in triage._crash_facts(crash)
+                          if "CPU-MODEL SPREAD" in ln]
+                self.assertEqual(len(spread), 1)
+                self.assertNotIn("that same sample", spread[0])
+                # Wherever the 9/26/118/200 figures appear, the sample is named beside them.
+                self.assertIn("Firefox-nightly sample of 200 signatures", spread[0])
+        # The measured-median half is still channel-correct: only the channels with a measured
+        # median get the "the median X signature sits at N%" benchmark.
+        for channel, expected in (("nightly", True), ("beta", False), ("release", False)):
+            with self.subTest(median_for=channel):
+                spread = [ln for ln in triage._crash_facts(
+                    {"raw_crash": {}, "channel": channel, "hardware_noise": noise})
+                    if "CPU-MODEL SPREAD" in ln][0]
+                self.assertEqual("the median" in spread, expected)
+                self.assertEqual("has NOT been measured" in spread, not expected)
+
     def test_the_spread_is_outside_the_suppression_paragraph(self):
         # THE COUNTER-EXAMPLE AGAINST MY OWN REPORTING FIX. "One cpu_info value" folded into the
         # "the higher these are, the likelier a failing-hardware artefact" paragraph is the
