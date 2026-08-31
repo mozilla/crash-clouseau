@@ -427,8 +427,19 @@ class Changeset(db.Model):
             # `LastDate.update`, so a channel whose pushlog window happened to be empty kept
             # rows past the retention window until its next NON-empty tick — and `Node.clean`
             # does the `LastDate.update` itself, so this is strictly more work, not different
-            # work. Harmless on nightly (never empty) and a real gap on a slow channel: release
-            # ships every ~7 days, so most of its ticks are empty ones.
+            # work.
+            #
+            # IT IS NOT FREE, and the first version of this comment said "harmless on nightly
+            # (never empty)", which observation refuted within the hour: both nightly ticks after
+            # the deploy had an EMPTY pushlog window (quiet trunk), so this branch is the COMMON
+            # case, not the rare one. It turns a 0.015 s no-op into a measured 2.8 s cascading
+            # DELETE, now every 20 minutes per channel, on the single 512 MB `worker` dyno that
+            # also carries report scoring. That is still the right trade -- retention that only
+            # runs when a channel is busy is not retention -- but it is exactly the case
+            # `changesets(nodeid)`/`builds(nodeid)` would make ~130x cheaper (4,847 ms -> 37 ms
+            # measured on 5,130 rows), so it is now the strongest argument for those indexes.
+            # A slow channel is why it matters at all: release ships every ~7 days, so most of
+            # its ticks are empty ones.
             return Node.clean(date, channel)
 
         nodes = []

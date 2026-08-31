@@ -219,6 +219,37 @@ class TestADeclinedFilingLeavesARecord(unittest.TestCase):
         self.assertEqual(recorded["info"]["verdict"], "lead")
         self.assertEqual(recorded["info"]["confidence"], 70)
 
+    def test_the_buildid_is_recorded_and_is_jsonb_safe(self):
+        """IT WAS STRUCTURALLY ALWAYS NULL, and it shipped that way in `96801aa`.
+
+        `_autofile` read `res.get("buildid")`, but `autofile_bug` only puts `buildid` on the
+        WRITE path (`bugzilla_apply.py:1404`) -- not one of its ~25 skip returns carries the key.
+        Caught by verifying the live instrument: the first 2 rows in production both had
+        `buildid: null`. Every build-axis statistic in plan #20 keys on buildid, so the
+        instrument could not have answered the question it exists for.
+
+        `utils.get_buildid` is load-bearing rather than cosmetic: `uuid_info["buildid"]` is a
+        tz-aware `datetime` in production and jsonb cannot take one, so recording it raw would
+        have replaced a null with a serialisation error."""
+        from crashclouseau.agent import orchestrator as orch
+        from datetime import datetime, timezone
+        recorded = {}
+        info = {"channel": "beta", "signature": "Foo::Bar",
+                "buildid": datetime(2026, 8, 26, 9, 6, 9, tzinfo=timezone.utc)}
+        with mock.patch.object(models.CrashStack, "get_by_uuid",
+                               return_value=([], info)), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": False, "skipped": "held"}), \
+                mock.patch.object(models.Dossier, "record_filing_decline",
+                                  side_effect=lambda u, i, **kw: recorded.update(i) or True):
+            orch._autofile("u-1", {"dossier": {}},
+                           {"verdict": "lead", "confidence": 70})
+        self.assertEqual(recorded["buildid"], "20260826090609")
+        self.assertIsInstance(recorded["buildid"], str)
+        # jsonb round-trippability is the actual requirement.
+        import json
+        json.dumps(recorded)
+
     def test_a_successful_filing_records_no_decline(self):
         from crashclouseau.agent import orchestrator as orch
         with mock.patch.object(models.CrashStack, "get_by_uuid",

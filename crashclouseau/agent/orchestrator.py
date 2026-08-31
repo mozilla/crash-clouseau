@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from rq import Retry
 
-from crashclouseau import app, config, db, models, sensitive, worker
+from crashclouseau import app, config, db, models, sensitive, utils, worker
 from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
@@ -3741,7 +3741,14 @@ def _autofile(uuid, payload, row):
                 "at": datetime.now(timezone.utc).isoformat(),
                 "skipped": res.get("skipped"),
                 "channel": uuid_info.get("channel"),
-                "buildid": res.get("buildid"),
+                # From `uuid_info`, NOT from `res`. `autofile_bug` only ever puts `buildid` on
+                # the WRITE path (`bugzilla_apply.py:1404`); not one of its ~25 skip returns
+                # carries the key, so `res.get("buildid")` was structurally always None -- and
+                # every build-axis statistic in plan #20 keys on buildid, so the instrument
+                # could not have answered the question it exists for. `utils.get_buildid` is
+                # load-bearing, not cosmetic: the raw value is a tz-aware datetime and jsonb
+                # cannot take one.
+                "buildid": utils.get_buildid(uuid_info.get("buildid")),
                 "signature": uuid_info.get("signature"),
                 "verdict": row["verdict"],
                 "confidence": row["confidence"],
