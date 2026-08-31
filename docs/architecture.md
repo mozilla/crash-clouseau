@@ -97,8 +97,10 @@ flowchart TD
 ## Walkthrough
 
 1. **Ingest (clock → worker).** The `clock` dyno periodically runs
-   `update.update_all` scoped to the configured channels (`$INGEST_CHANNELS`,
-   default `nightly`). For each new crash `update.put_report` writes a `UUID`
+   `update.update_all` scoped to `$INGEST_CHANNELS` — which has **no default**: absent
+   or empty ingests nothing and logs a warning. (It used to fall back to every
+   configured channel, i.e. `config.get_channels()`, which is the list that defines the
+   `CHANNEL_TYPE` enum; that fired once and ingested release. `plans/20` §1.8.) For each new crash `update.put_report` writes a `UUID`
    row and `inspector` + `patch` score the candidate changesets (raw hg diffs,
    `git → hg` mapping via Lando), recording `max_score`.
 

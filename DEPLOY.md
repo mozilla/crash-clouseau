@@ -1,8 +1,16 @@
 # Deploying the agent-based Clouseau (Heroku)
 
-Checklist for standing up a fresh Heroku app running the evidence agent as a
-**nightly-only, observe-only** canary. Several things are automated by the repo now;
-the rest are one-time app setup.
+Checklist for standing up a fresh Heroku app running the evidence agent.
+
+**"Nightly-only, observe-only" is out of date and has been for weeks.** The deployment this
+document describes runs **nightly AND beta** triage (`AGENT_CHANNELS="nightly beta"`) and
+**files bugs unattended** on nightly (`AUTOFILE_BUGS=1`, `daily_cap` 10, `comment_on_existing:
+"comment"` — measured at 2.68 filings/day over 30 days). Beta is triaged with its filing
+**held** (`agent.autofile.channels.beta.enabled: false`); release is declared and held the same
+way and is **not ingested and not triaged** (`plans/20-release-channel-support.md`). Read
+"Cost controls" below as what bounds the spend, not as evidence that there is none.
+
+Several things are automated by the repo now; the rest are one-time app setup.
 
 ## Automated by the repo (no action needed)
 - **DB schema** — the `release:` phase runs `bin/release.py` on every deploy
@@ -66,17 +74,30 @@ heroku config:set INGEST_CHANNELS="nightly beta" AGENT_CHANNELS=nightly
 heroku config:set AGENT_CHANNELS="nightly beta"
 ```
 
-**Always set `INGEST_CHANNELS` explicitly.** `update_all` reads
-`os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()`, so *clearing* it
-does not mean "nightly" — it means every configured channel, **including release**,
-which nobody has measured or intended.
+**Set `INGEST_CHANNELS` and `AGENT_CHANNELS` explicitly, at app creation, BEFORE the first
+`bin/init.py`.** Both now FAIL CLOSED — absent or empty means *nothing*, and each logs a
+warning saying so — but the ordering still matters, because `bin/init.py` calls
+`update.update_all()` directly and does not wait for the clock.
+
+This used to be the most dangerous pair of variables in the deployment, and one of them fired.
+`update_all` read `os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()`, so
+*clearing* it — or never having set it — meant every configured channel, **including
+release**. On 2026-07-06 the app was created at 10:19 UTC, deployed at 12:27:47, and
+`INGEST_CHANNELS` was set at 12:45:03; the `release` `lastdate.maxdate` is 12:36:38, inside
+that 17-minute gap. It cost 7,267 `nodes` rows, 20,320 `changesets` rows (61% of the table)
+and 2,628 `releases/mozilla-release` patch fetches for a channel nothing could read. See
+`plans/20-release-channel-support.md` §1.8. `AGENT_CHANNELS=""` was the same shape on the
+money switch: it meant "no filter", i.e. triage every channel at ~$1-3 a crash, on the one
+variable an operator reaches for to stop spending.
+
+To restore the config-file value, **unset** `AGENT_CHANNELS`; do not empty it.
 
 The two levers are different kinds of thing, which is why they are separate:
 
 | lever | what it costs | how to change it |
 |---|---|---|
-| `INGEST_CHANNELS` | free (Socorro + hg reads) | env var, next tick |
-| `AGENT_CHANNELS` | ~$1-3 per crash | env var, next tick (it used to need a deploy, and a deploy kills in-flight runs at ~$3 each) |
+| `INGEST_CHANNELS` | free (Socorro + hg reads) | env var, next tick. Absent or empty = **ingest nothing** (logged) |
+| `AGENT_CHANNELS` | ~$1-3 per crash | env var, next tick (it used to need a deploy, and a deploy kills in-flight runs at ~$3 each). Absent = the config file's value; **empty = triage nothing** (logged) |
 | `AUTOFILE_BUGS` | Bugzilla writes, **global** | env var, immediate |
 
 `AUTOFILE_BUGS` is global on purpose (a kill switch that only stops one channel is not a
