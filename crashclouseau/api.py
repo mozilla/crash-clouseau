@@ -63,6 +63,33 @@ def viewer_authorized() -> bool:
     return False
 
 
+def _require_viewer():
+    """Gate a route that SPENDS MONEY or mutates state behind the viewer token.
+
+    ``/api/tasks/retrigger`` was ``@cross_origin()`` POST with no authorization of any kind.
+    Measured on the deployed app: one anonymous ``GET /tasks.html`` returns 500 real uuids with
+    ``retriggerTask('<uuid>')`` already wired, and 3,188 of the 3,488 rows in ``uuids`` have the
+    ``crashstack`` rows ``build_seed`` needs — so each was one unauthenticated POST away from a
+    full agent run, measured in production at a mean $1.70 and a maximum $8.49. There is no global
+    spend cap (``max_cost_usd_per_crash`` warns, it does not abort) and no rate limit, and per the
+    route's own docstring the re-run reaches ``_maybe_autofile`` like any other.
+
+    WHY THE VIEWER TOKEN AND NOT ``_require_write_token``. That one reads ONLY the
+    ``X-Clouseau-Token`` header, and ``static/clouseau.js``'s ``fetch`` sends no such header; the
+    operator cannot add one from a browser, and ``VIEW_COOKIE`` is ``httponly`` so script cannot
+    read the token to attach it. Gating on the write token would therefore have closed the hole and
+    silently broken the tasks-view button — the "fails by doing less, with no log line" shape this
+    repo keeps getting bitten by. ``viewer_authorized`` accepts the header OR ``?token=`` OR the
+    cookie, so one ``?token=`` visit keeps the UI working.
+
+    NOT the channel gate. ``bugzilla_apply.autofile_bug`` already fails closed on a channel with no
+    autofile configuration, and ``enqueue_agent``'s ``force=True`` bypass is the feature the
+    operator is asking for — neither is the thing to narrow here. The missing control was
+    authentication, and it belongs on the route."""
+    if not viewer_authorized():
+        abort(403, "invalid or missing token")
+
+
 def remember_viewer(response):
     """Persist a valid ``?token=`` as a cookie so it need not ride the URL again.
 
@@ -203,11 +230,25 @@ def retrigger():
     has already been filed, and ``Dossier._STICKY_PAYLOAD_KEYS`` keeps the ``filed_bug`` record
     across the reset so the idempotence keys still hold — but a crash that has NEVER filed (an
     abstain, or a create BMO rejected) will file on the re-run if the new verdict qualifies, which
-    is usually the point of retriggering it."""
+    is usually the point of retriggering it.
+
+    Requires the viewer token (``_require_viewer``): header, ``?token=`` or ``VIEW_COOKIE``. It was
+    open to anyone holding a uuid until 2026-08-31, and uuids are listed 500 at a time by
+    ``/tasks.html``."""
     from crashclouseau.agent import orchestrator
 
+    # BEFORE anything else, including the body parse. This route had no authorization at all
+    # (see `_require_viewer`), and it is the one route that spends money per call.
+    _require_viewer()
     data = request.get_json(silent=True) or {}
-    uuid = data.get("uuid") or request.args.get("uuid", "")
+    # The `request.args` fallback is deliberately GONE. A query-string uuid made this
+    # triggerable by a plain cross-site HTML form POST -- the one request shape that carries
+    # cookies without a preflight. `VIEW_COOKIE` is `samesite="Lax"` so a cross-site POST
+    # withholds it today, but that is CSRF closed by one keyword in an unrelated function.
+    # Requiring the uuid in a JSON body forces a preflight, which `@cross_origin()` can gate.
+    uuid = data.get("uuid") or ""
     if not uuid:
         abort(400, "No uuid provided")
+    if not models.UUID.exists(uuid):
+        abort(404, "Unknown uuid")
     return jsonify(orchestrator.retrigger_agent(uuid))

@@ -141,8 +141,13 @@ function draftBug(node) {
 }
 
 // Tasks view: re-run triage for one crash. A running task is cancelled first
-// (server-side) so we don't pay for two runs. Analysis only -- posts nothing to
-// Bugzilla.
+// (server-side) so we don't pay for two runs.
+//
+// IT CAN POST TO BUGZILLA. This comment used to say "Analysis only -- posts nothing to
+// Bugzilla", contradicting the route's own docstring: a re-run is an ordinary run and reaches
+// `_maybe_autofile`. The endpoint now requires the viewer token, which this fetch supplies as
+// the `clouseau_view` cookie (set once by any `?token=` visit) -- so a 403 here means this
+// browser has never presented the token, not that the run failed.
 function retriggerTask(uuid, btn) {
     if (!window.confirm(
         "Retrigger triage for " + uuid + "?\n"

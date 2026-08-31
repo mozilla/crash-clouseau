@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import app, html  # noqa: E402
+from crashclouseau import app, html, models  # noqa: E402
 
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
@@ -423,20 +423,36 @@ class TestTaskColumnWidths(unittest.TestCase):
 
 
 class TestRetriggerEndpoint(unittest.TestCase):
+    """These two tests USED TO PASS ANONYMOUSLY, which is how the route stayed unauthenticated
+    for its whole life: they asserted the happy path and the missing-uuid path, and a route that
+    spends $1.70 a call satisfied both without a token. The authorization arms live in
+    `tests/test_retrigger_auth.py`; what stays here is the plumbing."""
+
+    _TOKEN = "tasks-view-token"
+
     def setUp(self):
         self.client = app.test_client()
+        self.env = mock.patch.dict(
+            os.environ, {"API_WRITE_TOKEN": self._TOKEN}, clear=False)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def _headers(self):
+        return {"X-Clouseau-Token": self._TOKEN}
 
     def test_retrigger_posts_to_orchestrator(self):
         from crashclouseau.agent import orchestrator
         with mock.patch.object(orchestrator, "retrigger_agent",
-                               return_value={"uuid": "u-1", "cancelled": True}) as rt:
-            rv = self.client.post("/api/tasks/retrigger", json={"uuid": "u-1"})
+                               return_value={"uuid": "u-1", "cancelled": True}) as rt, \
+                mock.patch.object(models.UUID, "exists", return_value=True):
+            rv = self.client.post("/api/tasks/retrigger", json={"uuid": "u-1"},
+                                  headers=self._headers())
         self.assertEqual(rv.status_code, 200)
         rt.assert_called_once_with("u-1")
         self.assertEqual(rv.get_json(), {"uuid": "u-1", "cancelled": True})
 
     def test_retrigger_requires_uuid(self):
-        rv = self.client.post("/api/tasks/retrigger", json={})
+        rv = self.client.post("/api/tasks/retrigger", json={}, headers=self._headers())
         self.assertEqual(rv.status_code, 400)
 
 

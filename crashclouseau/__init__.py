@@ -29,7 +29,19 @@ if uri.startswith("postgres://"):
 app.config["SQLALCHEMY_DATABASE_URI"] = uri
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
-cors = CORS(app)
+# SCOPED, not app-wide. `CORS(app)` with no `resources` attaches a permissive
+# `Access-Control-Allow-Origin` to EVERY route, echoing whatever `Origin` it is sent (verified
+# against the deployed app at v139 with `Origin: https://evil.example`, on `/api/tasks/retrigger`
+# and on `/api/evidence`). The only cross-origin consumer this deployment has is the
+# webextension, and it calls exactly one endpoint (`webextension/content.js:10` ->
+# `/api/javast`). Everything else -- the tasks view, the evidence panel, the selection feed -- is
+# our own same-origin pages, which need no CORS header at all.
+#
+# `Access-Control-Allow-Credentials` is NOT enabled and must not be: it is what stops a browser
+# from attaching `VIEW_COOKIE` to a cross-site request, and it is half of why the retrigger route
+# is not CSRF-able (the other half is that the uuid must arrive in a JSON body, which forces a
+# preflight).
+cors = CORS(app, resources={r"/api/javast": {"origins": "*"}})
 app.config["CORS_HEADERS"] = "Content-Type"
 log = logging.getLogger(__name__)
 app.app_context().push()
@@ -257,8 +269,12 @@ def api_evidence_apply():
     return api.apply_actions()
 
 
+# NO `@cross_origin()` on this one. The bare decorator echoes whatever `Origin` it is sent
+# (verified against the deployed app: `Origin: https://evil.example` came back in
+# `Access-Control-Allow-Origin`), so any page could fire this cross-site and read the reply. This
+# route spends money per call and can reach Bugzilla; it is only ever called by our own
+# same-origin tasks view, which needs no CORS header at all.
 @app.route("/api/tasks/retrigger", methods=["POST"])
-@cross_origin()
 def api_tasks_retrigger():
     from crashclouseau import api
 

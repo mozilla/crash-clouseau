@@ -1825,7 +1825,25 @@ class UUID(db.Model):
 
     @staticmethod
     def get_id(uuid):
+        """The row id for *uuid*. RAISES ``TypeError`` if the uuid is unknown.
+
+        Deliberately not softened to return ``None``: twelve callers in this module do
+        ``uuidid = UUID.get_id(uuid)`` and then filter on it, and ``None`` would match no rows
+        instead of raising -- turning "that crash does not exist" into "that crash has no
+        dossier/verdict/score", which is the silent-no-op shape this file keeps getting bitten
+        by. A caller that legitimately does not know whether the uuid exists asks ``exists``."""
         return db.session.query(UUID.id).filter(UUID.uuid == uuid).first()[0]
+
+    @staticmethod
+    def exists(uuid):
+        """Is *uuid* ingested? For request handlers, which must answer 404 rather than 500.
+
+        ``/api/tasks/retrigger`` used to hand an arbitrary string to ``get_id`` and return a 500
+        from the resulting ``TypeError``. On a web dyno with one gunicorn worker and no ``-w``,
+        an unauthenticated 500 is a free way to burn request capacity."""
+        return (
+            db.session.query(UUID.id).filter(UUID.uuid == uuid).first() is not None
+        )
 
     @staticmethod
     def is_stackhash_existing(stackhash, buildid, channel, product, java):
