@@ -29,19 +29,24 @@ if uri.startswith("postgres://"):
 app.config["SQLALCHEMY_DATABASE_URI"] = uri
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
-# SCOPED, not app-wide. `CORS(app)` with no `resources` attaches a permissive
-# `Access-Control-Allow-Origin` to EVERY route, echoing whatever `Origin` it is sent (verified
-# against the deployed app at v139 with `Origin: https://evil.example`, on `/api/tasks/retrigger`
-# and on `/api/evidence`). The only cross-origin consumer this deployment has is the
-# webextension, and it calls exactly one endpoint (`webextension/content.js:10` ->
-# `/api/javast`). Everything else -- the tasks view, the evidence panel, the selection feed -- is
-# our own same-origin pages, which need no CORS header at all.
+# EMPTY, because the only cross-origin consumer is gone. It used to be scoped to
+# `/api/javast`, the single endpoint the webextension called; that endpoint could not execute
+# its query (it looked up product `FennecAndroid`, dropped from `config/global.json` in 2022 by
+# `a1888ce`, with a JSON-string buildid against a `timestamptz` column) and both it and
+# `webextension/` are now retired. Every remaining route is our own same-origin page.
+#
+# CAUTION, and this is NOT what the old comment here claimed: the app-level `resources` set is
+# not the only thing granting CORS. A bare `@cross_origin()` on a view grants it independently,
+# and six routes carry one. Measured with `Origin: https://evil.example` against the test
+# client: `/api/bugs` and `/api/selection` echo the attacker origin back in
+# `Access-Control-Allow-Origin` on their 200s. That is pre-existing and is left alone here so
+# retiring an endpoint does not quietly become a CORS change; it wants its own look.
 #
 # `Access-Control-Allow-Credentials` is NOT enabled and must not be: it is what stops a browser
 # from attaching `VIEW_COOKIE` to a cross-site request, and it is half of why the retrigger route
 # is not CSRF-able (the other half is that the uuid must arrive in a JSON body, which forces a
 # preflight).
-cors = CORS(app, resources={r"/api/javast": {"origins": "*"}})
+cors = CORS(app, resources={})
 app.config["CORS_HEADERS"] = "Content-Type"
 log = logging.getLogger(__name__)
 app.app_context().push()
@@ -219,14 +224,6 @@ def stop_js():
 @app.route("/clouseau.css")
 def stop_css():
     return send_from_directory("../static", "clouseau.css")
-
-
-@app.route("/api/javast", methods=["POST"])
-@cross_origin()
-def api_javast():
-    from crashclouseau import api
-
-    return api.javast()
 
 
 @app.route("/api/bugs", methods=["GET"])

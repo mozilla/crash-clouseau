@@ -7,7 +7,7 @@ import os
 
 from flask import request, jsonify, abort
 from crashclouseau import models
-from . import buginfo, java
+from . import buginfo
 
 
 def _require_write_token():
@@ -101,15 +101,6 @@ def remember_viewer(response):
         response.set_cookie(VIEW_COOKIE, request.args["token"],
                             httponly=True, samesite="Lax", secure=True, max_age=90 * 86400)
     return response
-
-
-def javast():
-    data = request.get_json()
-    channel = data["channel"]
-    buildid = data["buildid"]
-    stack = data["stack"]
-    data["stack"] = java.reformat_java_stacktrace(stack, channel, buildid)
-    return jsonify(data)
 
 
 def bugs():
@@ -250,9 +241,9 @@ def retrigger():
     # triggerable by a plain cross-site HTML form POST -- the one request shape that carries
     # cookies without a preflight. `VIEW_COOKIE` is `samesite="Lax"` so a cross-site POST
     # withholds it today, but that is CSRF closed by one keyword in an unrelated function.
-    # Requiring the uuid in a JSON body forces a preflight instead, and this route is no longer
-    # in the CORS resource set (`__init__.py` scopes it to `/api/javast`), so the preflight has
-    # nothing to approve it with.
+    # Requiring the uuid in a JSON body forces a preflight instead, and this route carries no
+    # `@cross_origin()` and is in no CORS resource set (`__init__.py`'s set is now empty), so the
+    # preflight has nothing to approve it with.
     uuid = data.get("uuid") or ""
     if not uuid:
         abort(400, "No uuid provided")
