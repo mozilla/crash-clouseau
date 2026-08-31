@@ -250,7 +250,9 @@ def retrigger():
     # triggerable by a plain cross-site HTML form POST -- the one request shape that carries
     # cookies without a preflight. `VIEW_COOKIE` is `samesite="Lax"` so a cross-site POST
     # withholds it today, but that is CSRF closed by one keyword in an unrelated function.
-    # Requiring the uuid in a JSON body forces a preflight, which `@cross_origin()` can gate.
+    # Requiring the uuid in a JSON body forces a preflight instead, and this route is no longer
+    # in the CORS resource set (`__init__.py` scopes it to `/api/javast`), so the preflight has
+    # nothing to approve it with.
     uuid = data.get("uuid") or ""
     if not uuid:
         abort(400, "No uuid provided")
