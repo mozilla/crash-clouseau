@@ -423,16 +423,24 @@ class TestAgentChannelsEnvOverride(unittest.TestCase):
         # Space-separated, same shape as INGEST_CHANNELS — including a value a human typed.
         self.assertEqual(self._channels("  nightly   beta  "), ["nightly", "beta"])
 
-    def test_an_empty_override_means_no_filter_not_no_triage(self):
-        # Matching the config's own empty-list semantics. The other reading — "" meaning "unset",
-        # or "" meaning "no channel at all" — would make this a foot-gun in opposite directions:
-        # silently ignoring the operator, or silently stopping ALL triage while
-        # `get_agent_enabled()` still says the agent is on.
+    def test_an_empty_override_means_no_triage_not_no_filter(self):
+        """INVERTED 2026-08-31, and this is the direction that was the foot-gun.
+
+        It used to mean "no channel filter" — matching the config's own empty-list semantics —
+        so `AGENT_CHANNELS=""` armed triage on EVERY channel, release included, at $1-3 a crash.
+        That is the one variable an operator reaches for to stop spending, and emptying it
+        instead of unsetting it did the opposite of what they asked. Nothing in the repo has ever
+        set `agent.channels: []`, so the capability had no user.
+
+        The other objection the old comment raised — that this "silently stops ALL triage while
+        `get_agent_enabled()` still says the agent is on" — is answered by a warning in
+        `config.get_agent_channels`, not by leaving it armed. Unsetting the variable is how you
+        restore the config's value."""
         self.assertEqual(self._channels(""), [])
         for channel in ("nightly", "beta", "release"):
-            self.assertTrue(
+            self.assertFalse(
                 self._enqueues(channel, {"AGENT_CHANNELS": ""}),
-                "an empty AGENT_CHANNELS must not filter {} out".format(channel),
+                "an empty AGENT_CHANNELS must filter {} out".format(channel),
             )
 
     def test_the_override_can_stop_beta_without_stopping_nightly(self):

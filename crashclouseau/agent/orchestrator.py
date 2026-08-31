@@ -4100,8 +4100,13 @@ def enqueue_agent(uuid, channel=None, force=False):
     if not config.get_agent_enabled():
         return
     if not force:
+        # NO `channels and` here. An EMPTY channel list now means "no channel", not "every
+        # channel": `AGENT_CHANNELS=""` used to arm triage on everything at $1-3 a crash, on
+        # the one variable an operator reaches for to turn spending OFF. Nothing in the repo
+        # ever sets `agent.channels: []`, so the old "empty means no filter" reading had no
+        # user. `channel is not None` STAYS -- a caller with no channel must not be filtered.
         channels = config.get_agent_channels()
-        if channel is not None and channels and channel not in channels:
+        if channel is not None and channel not in channels:
             return
         if config.get_agent_skip_if_existing() and _proto_already_triaged(uuid):
             logger.info("agent: proto-signature already triaged for %s; not enqueuing", uuid)

@@ -96,11 +96,14 @@ class TestShippedAgentChannels(unittest.TestCase):
         ~20-minute run at ~$3 each. `AUTOFILE_BUGS=0` was no substitute: it is global, so the
         only way to stop beta was to stop nightly too.
 
-        The empty-string case is the one to read twice: an explicitly EMPTY value means "no
-        channel filter" (i.e. EVERY channel, release included — `enqueue_agent`'s gate is
-        `if channel is not None and channels and channel not in channels`), matching the
-        config's own empty-list semantics. That is the same shape as `INGEST_CHANNELS`'s
-        foot-gun below: clearing the variable is not disabling the feature."""
+        The empty-string case USED TO BE THE FOOT-GUN and is now the safe direction. An
+        explicitly EMPTY value meant "no channel filter" — i.e. EVERY channel, release included,
+        at $1-3 a crash — because `enqueue_agent`'s gate read `if channel is not None and
+        channels and channel not in channels` and `UUID.untriaged`'s read `if channels:`, both of
+        which treat `[]` as "no filter". So the one variable an operator reaches for to stop
+        spending armed everything if they emptied it instead of unsetting it. It now means NO
+        channel, at both readers; unsetting it still falls back to the config file, which is the
+        way to restore the shipped value."""
         for value, expected in (("nightly", ["nightly"]),
                                 ("nightly beta", ["nightly", "beta"]),
                                 ("  beta ", ["beta"]),
@@ -115,31 +118,37 @@ class TestShippedAgentChannels(unittest.TestCase):
             self.assertEqual(config.get_agent_channels(), ["nightly", "beta"])
 
     def test_ingest_channels_must_always_be_set_explicitly(self):
-        """CLEARING `INGEST_CHANNELS` TURNS RELEASE ON. `update_all`'s default is not "nothing".
+        """CLEARING `INGEST_CHANNELS` USED TO TURN RELEASE ON, AND IT DID.
 
-        `os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()` — the `or` makes an
-        empty value fall through to ALL configured channels, so `heroku config:unset
-        INGEST_CHANNELS` (the instinctive way to undo `INGEST_CHANNELS="nightly beta"`) starts
-        ingesting release on the next 20-minute tick, with no deploy and no log line saying so.
-        Prod has `INGEST_CHANNELS=nightly` today (plan #18 preamble, `heroku config`
-        re-verified 2026-08-25); this test exists so that the day it becomes `"nightly beta"`
-        the reader knows the variable must never be cleared, only rewritten.
+        The default was `os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()`, and
+        the `or` made an absent OR empty value fall through to ALL configured channels — so
+        `heroku config:unset INGEST_CHANNELS`, the instinctive way to undo
+        `INGEST_CHANNELS="nightly beta"`, started ingesting release on the next 20-minute tick
+        with no deploy and no log line. THIS IS NOT HYPOTHETICAL: the variable was first set at
+        Heroku release v9, and production still carries the residue of the ticks before that —
+        7,267 `nodes` rows for channel=release on one contiguous id block (12936..20202, i.e.
+        exactly one `Changeset.add` batch), 20,320 `changesets` rows = 61.3% of that table, a
+        `lastdate` row frozen at 2026-07-06, and 2,628 mozilla-release raw-revs fetched and
+        parsed off hg by the serial patch chain for a channel nobody had turned on.
 
-        Ingestion itself is free — the containment is that the money and the Bugzilla writes are
-        gated elsewhere, which is asserted at the end and is the only reason this is a foot-gun
-        and not an incident."""
+        The default is now CLOSED: absent or empty ingests nothing and logs a warning saying so.
+        The containment below is still asserted, because it is what made the incident survivable
+        rather than expensive — an accidentally-ingested channel is not triaged (no LLM spend)
+        and not declared for filing (no Bugzilla write)."""
         for value in ("", "   "):
             with self.subTest(INGEST_CHANNELS=value), \
                     mock.patch.dict(os.environ, {"INGEST_CHANNELS": value}), \
                     mock.patch.object(update, "update_in_queue") as enq:
                 update.update_all(products=["Firefox"])
-                self.assertEqual([c.args[0] for c in enq.call_args_list],
-                                 ["nightly", "beta", "release"])
+                self.assertEqual([c.args[0] for c in enq.call_args_list], [],
+                                 "an empty INGEST_CHANNELS must ingest NOTHING")
         env = {k: v for k, v in os.environ.items() if k != "INGEST_CHANNELS"}
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(update, "update_in_queue") as enq:
             update.update_all(products=["Firefox"])
-        self.assertIn("release", [c.args[0] for c in enq.call_args_list])
+        self.assertEqual([c.args[0] for c in enq.call_args_list], [],
+                         "an UNSET INGEST_CHANNELS must ingest NOTHING -- this is the state "
+                         "that ingested release in production")
         # Set explicitly, it is exactly what it says — and nothing else.
         with mock.patch.dict(os.environ, {"INGEST_CHANNELS": "nightly beta"}), \
                 mock.patch.object(update, "update_in_queue") as enq:
@@ -149,9 +158,9 @@ class TestShippedAgentChannels(unittest.TestCase):
         # is where somebody stands when they decide to unset it.
         doc = (update.update_all.__doc__ or "").lower()
         self.assertIn("ingest_channels", doc)
-        self.assertIn("all configured channels", doc)
-        # The containment, and the reason an accidental release ingest is not an incident: it is
-        # not triaged (no LLM spend) and not declared for filing (no Bugzilla write).
+        self.assertIn("fired in production", doc)
+        # The containment, and the reason the accidental release ingest was not an incident: it
+        # is not triaged (no LLM spend) and not declared for filing (no Bugzilla write).
         self.assertNotIn("release", config.get_agent_channels())
         self.assertFalse(config.autofile_channel_declared("release"))
 

@@ -7,6 +7,8 @@ import os
 
 import libmozdata.config
 
+from .logger import logger
+
 
 __GLOBAL = None
 __EXTS = None
@@ -432,12 +434,34 @@ def get_agent_channels():
 
     Distinct from ``INGEST_CHANNELS``, which decides what gets INGESTED (free); this decides what
     gets ANALYSED (~$1-3 a crash). Ingest-only is the cheap canary, and it is the combination
-    ``INGEST_CHANNELS="nightly beta"`` + ``AGENT_CHANNELS=nightly`` expresses."""
+    ``INGEST_CHANNELS="nightly beta"`` + ``AGENT_CHANNELS=nightly`` expresses.
+
+    AN EMPTY VALUE NOW MEANS "NO CHANNEL", NOT "EVERY CHANNEL". It used to mean the latter: the
+    readers are ``if channel is not None and channels and channel not in channels``
+    (``orchestrator.enqueue_agent``) and ``if channels:`` (``models.UUID.untriaged``), both of
+    which treat ``[]`` as *no filter*. So ``AGENT_CHANNELS=""`` — set, but empty — armed triage on
+    every channel at $1-3 a crash, on the one variable an operator reaches for to turn spending
+    OFF. Nothing in the repo has ever set ``agent.channels: []``, so the "no filter" capability had
+    no user, while the state it enabled was the expensive one.
+
+    Inverted here rather than at the two readers, deliberately: their ``channels and`` / ``if
+    channels`` shape is also what keeps every no-channel legacy caller working, and changing it
+    would have needed both sites to move in lockstep or the SWEEP would have stayed wide open.
+    One reader of the variable, one place to get it wrong.
+
+    Note the asymmetry with ``INGEST_CHANNELS``, which is now also closed: that one had TWO
+    dangerous states (unset AND empty, both meaning "every configured channel", and it fired —
+    see ``update.update_all``), this one had one and it takes a deliberate ``=""`` to reach."""
     env = os.getenv("AGENT_CHANNELS")
     if env is not None:
-        # An explicitly EMPTY value means "no filter" (every channel), matching the config's
-        # own empty-list semantics rather than silently meaning "unset".
-        return env.split()
+        channels = env.split()
+        if not channels:
+            logger.warning(
+                "AGENT_CHANNELS is set but empty, so NO channel will be triaged. It no "
+                "longer means 'every channel' -- unset the variable to fall back to "
+                "agent.channels in the config."
+            )
+        return channels
     return get_agent().get("channels", ["nightly"])
 
 

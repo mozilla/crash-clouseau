@@ -297,14 +297,43 @@ def update_in_queue(channel, product, date=None):
 
 
 def update_all(products=None, channels=None, date=None):
-    """Update all. Channels default to $INGEST_CHANNELS (space-separated) when set,
-    else all configured channels — lets a canary ingest nightly-only
-    (`heroku config:set INGEST_CHANNELS=nightly`) without touching the shared config
-    (which also defines the CHANNEL_TYPE enum, so it must keep every channel)."""
+    """Update all. Channels come from $INGEST_CHANNELS (space-separated).
+
+    THE EMPTY DEFAULT FAILED OPEN, AND IT FIRED IN PRODUCTION. This used to read
+    ``os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()`` — so an ABSENT or EMPTY
+    variable meant *every configured channel*, i.e. nightly + beta + RELEASE. The variable was
+    first set at Heroku release v9; before that, one tick ingested release, and the residue is
+    still there: 7,267 ``nodes`` rows on a perfectly contiguous id block (12936..20202, so
+    exactly one ``Changeset.add`` batch, ever), 20,320 ``changesets`` rows = 61.3% of that table,
+    and a ``lastdate`` row for ``release`` frozen at 2026-07-06. 19,527 of those changesets are
+    ``analyzed=true``, meaning the serial patch chain fetched and parsed 2,628 mozilla-release
+    raw-revs off hg for a channel nobody had turned on.
+
+    So the default is now CLOSED: an absent or empty variable ingests NOTHING and says so. That
+    inverts the usual reflex — ``heroku config:unset INGEST_CHANNELS`` used to be the most
+    dangerous command in the deployment and is now merely a full stop — and it costs nothing,
+    because every environment that wants ingestion already sets the variable (prod at v9/v122,
+    ``docker-compose`` through ``bin/init.py``, and the tests pass ``channels=`` explicitly).
+
+    Still not a kill switch for SPEND: ``INGEST_CHANNELS`` decides what is ingested (free);
+    ``AGENT_CHANNELS`` decides what is analysed (~$1-3 a crash). See
+    ``config.get_agent_channels``."""
     if products is None:
         products = config.get_products()
     if channels is None:
-        channels = os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()
+        channels = os.getenv("INGEST_CHANNELS", "").split()
+        if not channels:
+            # Loud, because the failure this replaces was silent in BOTH directions: an
+            # unset variable quietly ingested release for a month, and a closed default
+            # would otherwise quietly ingest nothing at all.
+            logger.warning(
+                "update_all: INGEST_CHANNELS is unset or empty, so nothing will be "
+                "ingested. Set it explicitly (e.g. INGEST_CHANNELS=\"nightly beta\"); it is "
+                "NOT defaulted to config.channels, because that list also defines the "
+                "CHANNEL_TYPE enum and therefore contains every channel that has ever been "
+                "contemplated."
+            )
+            return
     for product in products:
         for channel in channels:
             update_in_queue(channel, product)

@@ -1604,7 +1604,12 @@ class UUID(db.Model):
                 .exists(),
             )
         )
-        if channels:
+        # `None` is "caller did not ask" (the tests, and any legacy caller); an empty LIST is
+        # "no channel" and matches nothing. This used to be `if channels:`, which collapsed the
+        # two -- so `AGENT_CHANNELS=""` left the sweep wide open even once `enqueue_agent`'s gate
+        # was closed. Both readers have to move together or the inversion is half-done;
+        # `config.get_agent_channels` is the one place that decides what the list means.
+        if channels is not None:
             rows = rows.filter(Build.channel.in_(list(channels)))
         rows = rows.order_by(UUID.id).limit(limit).all()
         return [(r.id, r.uuid, r.channel) for r in rows]
