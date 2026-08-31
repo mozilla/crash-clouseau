@@ -5,6 +5,20 @@ services:
       - "8081:8081"
     volumes:
       - .:/code
+    # EXPLICIT, because `update.update_all` no longer defaults to anything: an absent or empty
+    # `INGEST_CHANNELS` ingests NOTHING and logs a warning. It used to fall back to every
+    # configured channel, which is how a local run silently exercised release — and, on
+    # production, how release actually got ingested (`plans/20-release-channel-support.md`
+    # §1.8). `bin/init.py` calls `update_all()` directly and does not wait for the clock, so
+    # without this line a local `docker-compose up` would come up with an empty database and
+    # no error, which is the same silent no-op with the opposite sign.
+    #
+    # Set to the two channels production runs. To smoke-test the release ingestion path
+    # locally — the release Buildhub regexp, `put_filelog` against `releases/mozilla-release`,
+    # the merge suppression on a real beta->release merge — add `release` HERE, never in
+    # production.
+    environment:
+      - INGEST_CHANNELS=nightly beta
     command: >
       bash -c "python bin/init.py &&
                honcho -d . -f /Procfile start"
