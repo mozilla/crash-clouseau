@@ -594,6 +594,61 @@ class TestSignatureIsMostlyHardware(unittest.TestCase):
         self.assertIn("mostly hardware error", d.verdict.abstain_reason)
         self.assertIsNone(d.verdict.needinfo_draft)
 
+    def test_an_unmeasured_rate_drops_its_clause_instead_of_printing_zero(self):
+        """THE ABSTAIN REASON MUST NOT INVENT A NUMBER, and it used to invent four.
+
+        `sigage.hardware_noise` returns None for a rate it could not measure (an absent
+        `cpu_info` facet) and 0.0 for one it measured at zero. The gate fires on
+        `flip_rate >= 0.2` OR `cpu_rate >= 0.7`, so the OTHER rate can legitimately be
+        unknown — and the reason string read `100 * (cpu_rate or 0)`, publishing "0% come from a
+        known-defective Raptor Lake CPU" for a share nobody knows, as the stated reason for
+        throwing a lead away, on the anonymously-readable crashstack page.
+
+        0 firings in 2,706 production dossiers, so this is latent — which is exactly why it
+        needed a test rather than an incident."""
+        d = _lead()
+        orch._apply_bit_flip_gate(
+            d, _seed(confidence=None, reports=6,
+                     hardware_noise=_noise(cpu=None), cpu="family 6 model 167 stepping 1"))
+        reason = d.verdict.abstain_reason
+        self.assertIn("bit-flip annotation", reason)
+        self.assertNotIn("Raptor Lake", reason)
+        # Not a bare `assertNotIn("0%")`: "50%" contains it. The claim is that no clause
+        # states a zero SHARE for the rate that was never measured.
+        self.assertNotIn(" 0% ", reason)
+        self.assertNotIn(", 0%", reason)
+
+    def test_a_rate_measured_at_zero_still_prints(self):
+        """The other direction, and the reason the fix is a droppable CLAUSE rather than
+        `is not None else 0`: 0.0 is a measurement and must survive."""
+        d = _lead()
+        orch._apply_bit_flip_gate(
+            d, _seed(confidence=None, reports=6,
+                     hardware_noise=_noise(flip=0.5, cpu=0.0),
+                     cpu="family 6 model 167 stepping 1"))
+        reason = d.verdict.abstain_reason
+        self.assertIn("0% come from a known-defective Raptor Lake CPU", reason)
+
+    def test_an_unmeasured_population_drops_the_background_never_calls_it_zero(self):
+        """A 50% share against a "0% background" reads as infinitely anomalous — the
+        `hardware-noise-denominator` mistake in the direction that looks like evidence. Release
+        has no `sigage._POPULATION_RATES` arm on purpose, so the comparison is DROPPED, not
+        borrowed from nightly."""
+        d = _lead()
+        orch._apply_bit_flip_gate(
+            d, _seed(confidence=None, reports=6, channel="release",
+                     hardware_noise=_noise(), cpu="family 6 model 167 stepping 1"))
+        reason = d.verdict.abstain_reason
+        self.assertIn("mostly hardware error", reason)
+        self.assertNotIn("background", reason)
+        self.assertNotIn("Firefox-nightly", reason)
+        # ...and the channel that HAS a measured population still states it.
+        d2 = _lead()
+        orch._apply_bit_flip_gate(
+            d2, _seed(confidence=None, reports=6, channel="beta",
+                      hardware_noise=_noise(), cpu="family 6 model 167 stepping 1"))
+        self.assertIn("Firefox-beta background", d2.verdict.abstain_reason)
+
     def test_the_thresholds_are_bugbots(self):
         # mozilla/bugbot skips a signature at >= 0.2 bit flips or >= 0.7 broken CPU
         # (bugbot/crash/analyzer.py). Either alone is enough; just under either is not.

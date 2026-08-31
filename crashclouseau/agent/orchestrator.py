@@ -2836,21 +2836,77 @@ def _apply_bit_flip_gate(dossier, seed):
     elif _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
         suppressed = {"hardware_noise_signature_suppressed": True}
         # The background rates are the CRASH'S OWN CHANNEL'S, and the word "nightly" was
-        # hardcoded here -- in a string that reaches the filed bug and the UI. Beta's
-        # backgrounds are 2.6x and 1.4x nightly's, so on beta this sentence quoted a
-        # denominator that makes an ordinary signature look like an outlier.
+        # hardcoded here. Beta's backgrounds are 2.6x and 1.4x nightly's, so on beta this
+        # sentence quoted a denominator that makes an ordinary signature look like an outlier.
+        #
+        # WHERE THIS STRING ACTUALLY GOES: the crashstack page and the stored payload, and
+        # NOWHERE ELSE. This comment used to say "in a string that reaches the filed bug and the
+        # UI", and plan #18 item 24 says the same; both are wrong.
+        # `hardware_noise_signature_suppressed` is in `corroborations.suppressions()`, and
+        # `bugzilla_apply.py:1088-1093` returns `{"filed": False, "skipped": "suppressed by
+        # ..."}` before any BMO request -- including before `_incomplete_fix_bug`, the one
+        # no-changeset path an abstain could otherwise take. `report_bug.build_bug_comment`
+        # never reads `abstain_reason` at all. So the blast radius is one anonymous web page,
+        # not a bug comment. Worth being exact about: a comment that names a Bugzilla consumer
+        # which does not exist is how the next reader over-rates this.
+        #
+        # ALL FOUR NUMBERS ARE NOW DROPPABLE CLAUSES, because all four had an `or 0` /
+        # `else 0` fallback and every one of them fabricated a figure:
+        #
+        #  * `100 * (cpu_rate or 0)` was the LIVE half. `sigage.hardware_noise` returns None for
+        #    a rate it could not measure (an absent `cpu_info` facet) and 0.0 for one it measured
+        #    at zero -- and the gate above fires on `flip_rate >= 0.2` OR `cpu_rate >= 0.7`, so
+        #    the OTHER rate can legitimately be unknown. The sentence then read "0% come from a
+        #    known-defective Raptor Lake CPU" for a share nobody knows, as the stated reason for
+        #    throwing a lead away, on the anonymously-readable crashstack page. It needs
+        #    cpu-facet-absent AND flip >= 0.2 AND sample >= 5 at once, which has happened 0 times
+        #    in 2,706 dossiers -- latent, not an incident, and the four real firings all quote a
+        #    correct 2%/4%.
+        #  * The two population slots fabricated a 0% BACKGROUND for a channel `sigage`
+        #    deliberately declined to measure, which is worse than borrowing nightly's: a 50%
+        #    share against a 0% population reads as infinitely anomalous. That is the
+        #    `hardware-noise-denominator` mistake in the direction that looks like evidence.
+        #
+        # Do NOT "fix" this with `is not None else 0`: 0.0 is a measurement and None is not, and
+        # the sentence has to distinguish them, so the clause must be omissible. Do not fall back
+        # to nightly's rates either -- `sigage._population` makes the absent-vs-unmeasured split
+        # on purpose, and both prose siblings (`triage._hardware_noise_lines`,
+        # `report_bug._cpu_spread_note`) already drop rather than borrow.
+        #
+        # The clause also has to name WHICH arm fired, or a reader of a suppression whose other
+        # rate is unknown cannot see why it was suppressed.
         pop_flip = sigage.population_bit_flip_rate(channel)
         pop_cpu = sigage.population_broken_cpu_rate(channel)
+        pop_name = sigage.population_label(channel)
+
+        def _share(rate, what, pop, extra=""):
+            """One clause, or None when the rate was never measured.
+
+            The population goes INSIDE the clause's own parenthesis rather than after it, so
+            the Raptor Lake arm reads "(meta bug 1975808; Firefox-nightly background 4%)"
+            instead of two adjacent brackets."""
+            if rate is None:
+                return None
+            inner = "; ".join(
+                p for p in (extra,
+                            None if pop is None
+                            else "{} background {:.0f}%".format(pop_name, 100 * pop))
+                if p)
+            return "{:.0f}% {}{}".format(
+                100 * rate, what, " ({})".format(inner) if inner else "")
+
+        bits = [
+            b for b in (
+                _share(flip_rate, "carry a Socorro bit-flip annotation", pop_flip),
+                _share(cpu_rate, "come from a known-defective Raptor Lake CPU", pop_cpu,
+                       extra="meta bug 1975808"),
+            ) if b is not None
+        ]
         reason = (
             "this SIGNATURE is mostly hardware error, whatever this particular report looks "
-            "like: of its {} reports on this channel, {:.0f}% carry a Socorro bit-flip "
-            "annotation ({} background {:.0f}%) and {:.0f}% come from a known-defective "
-            "Raptor Lake CPU (background {:.0f}%, meta bug 1975808). mozilla/bugbot declines to "
-            "file past these same thresholds; suppressed rather than reported".format(
-                sample, 100 * (flip_rate or 0), sigage.population_label(channel),
-                100 * (pop_flip if pop_flip is not None else 0),
-                100 * (cpu_rate or 0),
-                100 * (pop_cpu if pop_cpu is not None else 0),
+            "like: of its {} reports on this channel, {}. mozilla/bugbot declines to file past "
+            "these same thresholds; suppressed rather than reported".format(
+                sample, " and ".join(bits)
             )
         )
     if suppressed is None:

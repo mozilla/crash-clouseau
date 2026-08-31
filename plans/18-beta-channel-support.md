@@ -851,8 +851,17 @@ flag must be added to `TestWriteOnlyFlagsAreADecision.EXPECTED`
 `POPULATION_BROKEN_CPU_RATE`; measure `POPULATION_TOP_CPU_SHARE_MEDIAN`.**
 Files: `crashclouseau/sigage.py:379-391`; consumers `agent/triage.py:585-606`
 (`_hardware_noise_lines`), `:526-540` (`_cpu_spread_line`),
-`agent/orchestrator.py:2547-2557` (the abstain reason, which reaches the **filed bug** and
-the UI, and hardcodes the word "nightly" at `:2553`).
+`agent/orchestrator.py:2547-2557` (the abstain reason, ~~which reaches the **filed bug** and
+the UI~~, and hardcodes the word "nightly" at `:2553`).
+> **Correction, 2026-08-31.** The abstain reason CANNOT reach a filed bug on any channel.
+> `hardware_noise_signature_suppressed` is in `corroborations.suppressions()` and
+> `bugzilla_apply.py:1088-1093` returns `{"filed": False, "skipped": "suppressed by …"}`
+> before any BMO request — including before `_incomplete_fix_bug`, the only no-changeset path
+> an abstain could otherwise take — and `report_bug.build_bug_comment` never reads
+> `abstain_reason`. The consumer is the anonymous crashstack page and the stored payload. The
+> rest of the item stands, and the release round found the same line fabricating a **share**
+> as well as a denominator (`100 * (cpu_rate or 0)`); both are fixed by building the sentence
+> from droppable clauses. See `plans/20-release-channel-support.md`.
 The shipped 0.025 / 0.041 **reproduce exactly** on Firefox nightly over 364 days (2.55% /
 4.15%, n=692,770, against the docstring's 696,901 over the same shape), and **beta over
 364 days reads 0.0675 / 0.0582 (n=269,501)** — 2.6x and 1.4x. Shipping them unchanged
