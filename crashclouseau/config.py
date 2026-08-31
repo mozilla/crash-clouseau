@@ -379,7 +379,21 @@ _SPIKE_DEFAULTS = {
 def get_spike(typ, product, channel):
     """Spike-detection knob ``typ`` (``"floor"`` | ``"ratio"``) for a product/channel.
     ``floor`` = minimum crashes on the spike day; ``ratio`` = minimum multiple over the
-    loudest of the preceding days. See ``utils.is_spike``."""
+    loudest of the preceding days. See ``utils.is_spike``.
+
+    A ``floor`` AT OR BELOW THE CHANNEL'S INSTALL THRESHOLD CANNOT BIND, and release ships in
+    exactly that state (``floor`` 50 == ``thresholds.installs`` 50). ``utils.evaluate_days``
+    computes ``spiked`` and does ``if not spiked: continue`` BEFORE the install test, so the
+    floor looks like the first gate — but a day's ``count`` is the SUM over that day's buildids
+    of each buildid's report count, and for a given buildid reports >= distinct installations by
+    construction (``datacollector`` coerces a 0 cardinality to 1). So a day that fails
+    ``floor <= installs`` could never have passed ``installs >= threshold`` either. Verified
+    empirically on release: floor 1, 3, 10, 20 and 50 all give exactly 329 selected pairs over
+    133 replayed run-days, and the first value that changes anything is 100.
+    Nobody has measured release's floor and nobody needs to: it is not a lever. If a future
+    change makes the floor bind, it will be because the install threshold moved, not the floor.
+    ``tests/test_selection_log`` pins the beta side of the same relation (there the floor, 10,
+    genuinely sits ABOVE the threshold, 6, and does bind)."""
     return (
         _get_global()
         .get("spike", {})
@@ -582,9 +596,33 @@ def _env_bool(name, default):
 #              tests pin that meaning by name.
 #   file_new   never comment; file a new bug, naming the open bugs we chose not to comment on.
 #
-# `skip` is STRICTER than "file only new bugs", measurably so: 58-59% of beta signatures carry an
-# open same-application non-meta bug (58/98 = 59.2%, Wilson 49.3-68.4%; 45/77 = 58%; 43/67 = 64%
-# at selection level) against a 23% nightly control, and `_split_by_application` rescues 0 of 58.
+# `skip` is STRICTER than "file only new bugs", measurably so -- but two of the three figures this
+# comment used to give were wrong, in ways worth naming because the conclusion survives both.
+#
+# CORRECTED 2026-08-31. Measured with THIS function's own chain (`_open_bugs_for_signature` ->
+# `_split_by_application` -> `_split_out_metas`, which is all `bugzilla_apply`'s `skip` branch
+# ever sees) on the signatures BETA'S OWN SELECTOR picks: 39/77 = 50.6% (Wilson 39.7-61.5)
+# carry an open same-application non-meta bug, 36/67 = 53.7% per selection, against 26/120 =
+# 21.7% (15.2-29.9) on a matched nightly selector sample -- z = 4.22, p = 2.4e-5. So beta really
+# is ~2.3x nightly on the population its own selector produces, `skip` suppresses about HALF of
+# beta's candidate filings, and `file_new` restores them at ~2.0-2.2x (not the ~2.4x quoted
+# elsewhere).
+#
+# The two errors: (1) the "58/98 = 59.2%" that used to lead is a TOP-100-BY-INSTALLS PANEL, and
+# that instrument does not discriminate channels at all -- on it nightly is 63%, release 64% and
+# beta 59% (z = -0.58, p = 0.56 nightly vs beta). Never quote a volume panel here; it measures
+# signature volume, not channel. (2) the 58% and 64% figures were raw
+# `_open_bugs_for_signature` counts that never went through `_split_out_metas`, even though the
+# sentence says "non-meta". And it credited the wrong split: `_split_out_metas` is what moves
+# beta's number (6 of 45, whose only open bugs are trackers 1472062 and 1588498), while
+# `_split_by_application` moves 0.
+#
+# A VENUE RATE DOES NOT ACTUALLY DECIDE THE MODE, and this is the number to get next: of the
+# venues the FILER sees, how many are the RIGHT venue. On production's 83 real nightly filings
+# it is 15/22 = 68% (Wilson 47-84); on beta's selection population only 6/39 = 15.4% would be
+# accepted by `_bug_for_this_regression` (median venue-bug age 995 days). A 4.4x swing across
+# populations, and on the filer-visible one it argues FOR `skip`, since `file_new` would file a
+# near-duplicate of a bug genuinely about this crash about two thirds of the time.
 COMMENT_ON_EXISTING = ("comment", "skip", "file_new")
 
 
@@ -661,7 +699,7 @@ def autofile_channel_held(channel):
     is the silent-no-op shape this codebase keeps being bitten by. Note the log line is not the
     durable record — Heroku keeps ~2h and there is no drain — so the number to count over a week
     is beta dossiers whose verdict reached the filing rung. That is an UPPER bound: the gates
-    after this one (an open bug on the signature, which is 58-59% of beta signatures; the daily
+    after this one (an open bug on the signature, which is ~51% of beta's selected signatures; the daily
     cap; product/component resolution) never run, so they cannot subtract."""
     over = (get_agent().get("autofile", {}).get("channels") or {}).get((channel or "").lower())
     return bool(over) and over.get("enabled") is False

@@ -17,12 +17,17 @@
 #
 # THE NUMBERS THIS FILE PINS, WITH THEIR DENOMINATORS (plan #18 §2.3 and §3 items 17-22):
 #
-#   * An open bug on the signature is beta's MAJORITY path, not its edge. 58 of 98 = 59.2%
-#     (Wilson 49.3-68.4%) of the top 100 Firefox beta+aurora signatures of 2026-08-15..25 by
-#     `_cardinality.install_time` have >=1 open same-application non-meta bug; 45 of 77 = 58%
-#     of the signatures behind the emulated selections, and 43 of 67 = 64% at the selection
-#     level. NIGHTLY CONTROL: 28 of 120 = 23%. `_split_by_application` rescues 0 of 58 and
-#     0 of 45 — so "comment there instead" is what beta would do most of the time.
+#   * An open bug on the signature is beta's MAJORITY path, not its edge -- but the numbers
+#     here were wrong twice over. CORRECTED 2026-08-31, through the filer's own chain
+#     (`_open_bugs_for_signature` -> `_split_by_application` -> `_split_out_metas`) on the
+#     signatures beta's own selector picks: 39 of 77 = 50.6% (Wilson 39.7-61.5) carry an open
+#     same-application non-meta bug, 36 of 67 = 53.7% at the selection level, against a matched
+#     NIGHTLY CONTROL of 26 of 120 = 21.7% (15.2-29.9) -- z = 4.22, p = 2.4e-5. About half, not
+#     58-59%, and still ~2.3x nightly, so "comment there instead" remains what beta would do
+#     about half the time. The old "58 of 98 = 59.2%" was a top-100-BY-INSTALLS panel, which
+#     does not discriminate channels at all (nightly 63%, release 64%, beta 59%); and 58%/64%
+#     skipped `_split_out_metas` despite the words "non-meta". `_split_out_metas` is the split
+#     that moves it (6 of 45, trackers 1472062/1588498); `_split_by_application` moves 0.
 #
 #   * Filing a SECOND bug on a signature we already filed is a 22.2% risk, not a theoretical
 #     one. Of the 58 parseable signatures behind the 60 bugs the canary filed since
@@ -154,7 +159,7 @@ class TestTheOverlayCannotMoveNightly(unittest.TestCase):
                          {k: v for k, v in nightly.items() if k not in overlay},
                          "the beta overlay moved a knob it does not name")
         # THE REQUIREMENT ITSELF, on the shipped file: whatever the value is spelled as, beta's
-        # mode is never `comment`. 58-59% of beta signatures have an open same-application
+        # mode is never `comment`. ~51% of beta's SELECTED signatures have an open same-application
         # non-meta bug, so `comment` here means most beta filings become a comment on somebody
         # else's bug. (What the filer then DOES is
         # `TestBetaNeverCommentsOnSomebodyElsesBug`'s.)
@@ -400,9 +405,11 @@ class TestTheChannelGate(_BetaBase):
 
 
 class TestBetaNeverCommentsOnSomebodyElsesBug(_BetaBase):
-    """58-59% of beta signatures already have an open same-application non-meta bug, against a
-    23% nightly control, and `_split_by_application` rescues 0 of 58 — so this is the majority
-    path on beta, and the requirement is that none of it becomes a comment."""
+    """About half of beta's selected signatures already have an open same-application non-meta
+    bug — 39/77 = 50.6% against a matched nightly control of 26/120 = 21.7% (p = 2.4e-5) — so
+    this is a majority-ish path on beta, and the requirement is that none of it becomes a
+    comment. `_split_out_metas` is the split that moves that number, not
+    `_split_by_application`, which moves 0."""
 
     def test_beta_never_comments_on_an_existing_bug(self):
         # (That the SHIPPED beta config is not `comment` is asserted against config/global.json

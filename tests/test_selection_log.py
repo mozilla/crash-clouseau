@@ -45,6 +45,23 @@ class TestConfigWiring(unittest.TestCase):
             "if this ever stops holding, re-check whether the floor half is still unsafe",
         )
 
+    def test_a_floor_at_or_below_the_install_threshold_cannot_bind(self):
+        """RELEASE SHIPS IN EXACTLY THAT STATE (floor 50 == installs 50), so its floor is not a
+        lever and must not be "tuned".
+
+        `evaluate_days` computes `spiked` and continues before the install test, so the floor
+        LOOKS like the first gate. But a day's `count` sums each buildid's report count, and
+        reports >= distinct installations for a given buildid by construction, so a day failing
+        `floor <= threshold` could never have passed `installs >= threshold`. Measured on
+        release: floor 1/3/10/20/50 all give exactly 329 pairs over 133 run-days; 100 is the
+        first value that changes anything."""
+        self.assertLessEqual(
+            config.get_spike("floor", "Firefox", "release"),
+            config.get_threshold("installs", "Firefox", "release"),
+            "release's floor has risen above its install threshold, so it now BINDS and the "
+            "docstring in config.get_spike calling it inert is out of date",
+        )
+
 
 # 2026-07-31 build, first crashes seen on the 2026-08-07 run.
 INCIDENT_BUILD_AGE_DAYS = 7

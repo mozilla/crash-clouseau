@@ -19,7 +19,13 @@ One Socorro lookup answers it. Four gotchas, all learned the hard way and all en
 
   * The `build_id` FACET is ordered by COUNT, so truncating it silently drops the oldest build —
     the one value we need. Sort ASCENDING by `build_id` and take one row instead.
-  * `_facets_size=10000` is rejected outright (HTTP 400).
+  * `_facets_size` is CAPPED at 10000, not rejected at it: 10000 is accepted on every query
+    shape tried and 10001 is the first HTTP 400. This line used to say "10000 is rejected
+    outright", which is false and was cited by three separate measurements as a reason a facet
+    could not be widened -- while `config.facets_limit` has been 10000 and in production on
+    every 20-minute tick the whole time (`datacollector.py`, `get_new_signatures` /
+    `get_proto_small`). The note also outlived its subject: `signature_history` below passes no
+    `_facets_size` at all now, so it describes the `build_id`-facet shape it replaced.
   * A date range of exactly 365 days is rejected too ("Date range is bigger than 365 days"),
     because the implicit upper bound is *now*. Clamp to 364.
   * `date` filters the crash REPORT date, not the build date, so even a short window surfaces

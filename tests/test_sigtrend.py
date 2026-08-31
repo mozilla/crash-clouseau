@@ -169,7 +169,25 @@ class TestTheCollectorRefusesRatherThanTruncates(unittest.TestCase):
         up.assert_not_called()
         rec.assert_not_called()
 
+    def test_the_facet_page_is_above_the_refusal_threshold(self):
+        """MAX_SIGNATURES IS A MARGIN, NOT A TRUNCATION GUARD, and the two constants are adjacent
+        so it is easy to raise one and assume the other followed.
+
+        `len(rows) == FACETS_SIZE` is the only truncation signal Socorro gives, so the check has
+        to stay `>=` with headroom: setting them equal would make a genuinely-truncated day
+        indistinguishable from a full one. Setting MAX above FACETS would make the check
+        unreachable and store truncated days as fact. The gap is a real 1500-1999 false-refusal
+        band, which is occupied by no channel today (nightly 276, beta 401, release >= 2,403) --
+        which is exactly why nothing would notice if it drifted."""
+        self.assertLessEqual(sigtrend.MAX_SIGNATURES, sigtrend.FACETS_SIZE)
+        self.assertLess(sigtrend.MAX_SIGNATURES, sigtrend.FACETS_SIZE,
+                        "equal leaves no margin: a truncated day would read as a full one")
+
     def test_release_is_skipped_without_a_single_query(self):
+        """And raising the facet alone would NOT admit it: at FACETS_SIZE=2000 a release day
+        returns exactly 2,000 terms and 2,000 >= MAX_SIGNATURES, so `collect_day` refuses every
+        day regardless. Admitting release is three constants and a homogeneous accept class, not
+        one number -- see the `SUPPORTED_CHANNELS` comment for why it should stay out."""
         with mock.patch("crashclouseau.sigtrend.socorro.SuperSearch") as ss:
             self.assertEqual(sigtrend.backfill("Firefox", "release"), 0)
         ss.assert_not_called()

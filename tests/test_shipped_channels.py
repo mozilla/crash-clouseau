@@ -189,13 +189,20 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
 
         `skip` is the LITERAL reading of "file only crashes that have no bug in Bugzilla": an
         open bug on the signature means we write nothing at all. It is measurably STRICTER than
-        "file only new bugs" — 58-59% of beta signatures carry an open same-application
-        non-meta bug (three instruments: 58/98 = 59.2%, Wilson 49.3-68.4%; 45/77 = 58%; 43/67 =
-        64% at selection level) against a 23% nightly control (28/120), and
-        `_split_by_application` rescues 0 of 58 — so `skip` suppresses ~58-59% of beta
-        filings. `file_new` is the measured alternative at ~2.4x the volume and is a separate,
-        later decision (plan #18 Phase 6), so if this value changes to `file_new` the volume
-        claim above is what has to be re-read."""
+        "file only new bugs" — CORRECTED 2026-08-31: run through the filer's own chain
+        (`_open_bugs_for_signature` -> `_split_by_application` -> `_split_out_metas`) on the
+        signatures BETA'S OWN SELECTOR picks, 39/77 = 50.6% (Wilson 39.7-61.5) carry an open
+        same-application non-meta bug, 36/67 = 53.7% per selection, against 26/120 = 21.7%
+        (15.2-29.9) on a matched nightly selector sample (z = 4.22, p = 2.4e-5). So `skip`
+        suppresses about HALF of beta's candidate filings and `file_new` restores them at
+        ~2.0-2.2x, a separate and later decision (plan #18 Phase 6).
+
+        Two figures were wrong before: the leading "58/98 = 59.2%" was a top-100-by-installs
+        PANEL, an instrument that does not discriminate channels at all (nightly 63%, release
+        64%, beta 59%), and the 58%/64% never went through `_split_out_metas` despite the
+        sentence saying "non-meta". `_split_out_metas` is the split that moves beta's number
+        (6 of 45, trackers 1472062/1588498); `_split_by_application` moves 0. Nothing in CI
+        could catch that: this test asserts the VALUE (`"skip"`), never the prose."""
         nightly = config.get_agent_autofile("nightly")
         beta = config.get_agent_autofile("beta")
         self.assertEqual(nightly["comment_on_existing"], "comment")

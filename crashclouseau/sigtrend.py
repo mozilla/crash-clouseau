@@ -118,18 +118,59 @@ WORDING_MIN_INSTALLS = 5
 BACKFILL_DAYS = WINDOW_DAYS + BASELINE_DAYS + 7
 
 # Socorro's terms facets are COUNT-ordered and truncate silently, so this has to sit above the
-# distinct-signature count of the busiest channel-day. Nightly runs ~250-300 and beta ~290-450;
-# release runs ~3,200, which is why `collect_day` refuses a channel it cannot cover.
+# distinct-signature count of the busiest channel-day. Nightly runs ~250-300 and beta ~290-450.
+#
+# MAX_SIGNATURES MUST STAY <= FACETS_SIZE, and it is a MARGIN, not a truncation guard.
+# `len(rows) == FACETS_SIZE` is the only truncation signal Socorro gives, so the check has to
+# remain `>=` with headroom; do not "tidy" this by setting the two equal. The 1500-1999 band is
+# occupied by no channel (nightly 276, beta 401, release >= 2,403 on every day measured), so the
+# margin costs nothing today -- but with the two adjacent it is easy to raise one and assume the
+# other followed. `test_sigtrend` pins the ordering.
 FACETS_SIZE = 2000
 MAX_SIGNATURES = 1500
 
-# Channels this collector can actually cover, and the reason is arithmetic rather than policy.
-# A day's per-signature facet has to fit in one COUNT-ordered page or its quietest signatures --
-# the only ones this module is for -- vanish silently. Distinct signatures per day, measured over
-# 206 days: nightly 250-300, beta 290-450, **release ~3,200**. Release is also 10% sampled in
-# Socorro, so its install counts are not comparable with the other two anyway. An unsupported
-# channel is skipped cheaply instead of failing the MAX_SIGNATURES check on ~70 days of backfill
-# every single run.
+# Channels this collector can actually cover. Two reasons, and NEITHER of them is the one this
+# comment used to give first.
+#
+# NOT the sampling, at least not the way it was stated. "Release is 10% sampled so its install
+# counts are not comparable with the other two" is a non-reason for THIS module: the statistic is
+# `w_ins / (b_ins * w_exp / b_exp)`, all four terms per-day sums for ONE channel, and no consumer
+# compares channels -- so a UNIFORM sample cancels to first order. (Only to first order:
+# simulating a true 3.0x rise, s=1.0 gives mean 2.98 / sd 0.37 and s=0.1 gives mean 3.30 / sd
+# 1.08, because install cardinality is sublinear in the sample rate. A +10% median bias and 2.9x
+# the spread, i.e. more false rises, not incomparable numbers.)
+#
+# REASON 1, and the one that decides it: on release the accept rate is CLASS-DEPENDENT, so a
+# signature's own class MIX shift manufactures a rise out of nothing. `antenna`'s `MOZILLA_RULES`
+# puts `throttleable_0`, `has_comments`, `has_phc` and `is_background{gpu,plugin,rdd,socket,
+# utility}` at 100% ACCEPT *before* `is_firefox_desktop`'s `(10, ACCEPT, REJECT)` -- so the
+# operative range on release is 10% to 100% within one channel. Replayed on one release run-day,
+# the two loudest of 129 rising signatures are collection artifacts: `EMPTY: no frame data
+# available; EmptyMinidump` corrects 3.942 -> 1.483 and `OOM | large | EMPTY...` 3.867 -> 1.373,
+# both under MIN_INTERESTING_RATIO, and those two hold 47.7% of the rising set's install mass.
+# Across all 129 the manufactured factor is median 0.93, above 1.5x on 7 (5.4%), and 6 (4.7%)
+# lose the >=3x sentence entirely. So admitting release would put two false sentences at the head
+# of the ordering this module exists to produce.
+#
+# REASON 2: MIN_INSTALLS=3, WORDING_MIN_INSTALLS=5 and MIN_INTERESTING_RATIO=3 are calibrated on
+# 1,052 active NIGHTLY signatures. At a 10% accept rate, 3 OBSERVED installs needs ~25 true ones,
+# so the floors do not transfer even where the ratio does.
+#
+# COST IS NOT THE REASON EITHER, and that is worth writing down so it is not re-litigated as one:
+# the complete release facet closes at 3,218 terms in 0.59 s and 410 KB per day (91/91 days
+# complete), a 70-day cold backfill is 56 s, and the rollup measures +105.7 MB on a database at
+# 204 MB of 10 GB. `SignatureDaily.prune(days=90)` runs every tick, so the steady state is a
+# rolling ~268k release rows, not the 1.1M/year a throughput figure suggests.
+#
+# IF RELEASE IS EVER ADMITTED, the narrowest correct fix is a HOMOGENEOUS accept class on BOTH
+# sides -- the signature series AND the `ChannelDaily` exposure -- after which the per-signature
+# distortion collapses to a constant 0.917 exposure factor. Two traps: `throttleable=T` alone is
+# not enough (`has_comments`/`has_phc` are also 100%-accept and both fields are protected for our
+# token, so they stay mixed in), and it must NOT be applied to nightly or beta, where everything
+# is accepted and the filter would delete the whole gpu/rdd population for nothing.
+#
+# An unsupported channel is skipped cheaply instead of failing the MAX_SIGNATURES check on ~70
+# days of backfill every single run.
 SUPPORTED_CHANNELS = ("nightly", "beta")
 
 
