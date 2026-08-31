@@ -1,0 +1,44 @@
+denominator: top 350 release signatures by 30-day distinct install_time, window ending 2026-08-31
+queries issued this run: 88 (cached: 0), wall 62s
+build_id sub-facet truncation: 3 of 700 signature-channel pairs
+
+  top 100 (>= 473 release installs/30d):
+     P_floor      neither upstream FLOOR branch can fire    8/100 =  8.0%
+     P_beta_never beta install threshold unreachable        7/100 =  7.0%
+     P_strict     not even nightly's from-zero can fire     0/100 =  0.0%
+
+  top 200 (>= 219 release installs/30d):
+     P_floor      neither upstream FLOOR branch can fire   51/200 = 25.5%
+     P_beta_never beta install threshold unreachable       51/200 = 25.5%
+     P_strict     not even nightly's from-zero can fire     6/200 =  3.0%
+
+  top 350 (>= 101 release installs/30d):
+     P_floor      neither upstream FLOOR branch can fire  148/350 = 42.3%
+     P_beta_never beta install threshold unreachable      156/350 = 44.6%
+     P_strict     not even nightly's from-zero can fire    24/350 =  6.9%
+
+P_strict members (the airtight 'nightly and beta could NEVER have selected it' set):
+      327 rel installs/30d  nTot=0    bMaxBid=5    mozilla::Maybe<T>::value | mozilla::ContentSubtreeIterator::DetermineFirst
+      276 rel installs/30d  nTot=0    bMaxBid=5    stackoverflow | nsIFrame::GetOffsetToCrossDoc
+      276 rel installs/30d  nTot=0    bMaxBid=3    shutdownhang | mozilla::net::SSLTokensCache::CollectSnapshotLocked
+      267 rel installs/30d  nTot=0    bMaxBid=0    @0x0 | neqo_udp::recv_inner
+      242 rel installs/30d  nTot=0    bMaxBid=0    AsyncShutdownTimeout | quit-application | Extension startup: addons-search
+      228 rel installs/30d  nTot=0    bMaxBid=4    shutdownhang | ZwCreateUserProcess
+      212 rel installs/30d  nTot=0    bMaxBid=3    mozilla::dom::OptionalServiceWorkerData::AssertSanity
+      202 rel installs/30d  nTot=0    bMaxBid=3    shutdownhang | mozilla::LazyIdleThreadShutdown
+      201 rel installs/30d  nTot=0    bMaxBid=2    IPC::MessageReader::FatalError | IPC::ParamTraits<mozilla::ipc::BigBuffer>
+      166 rel installs/30d  nTot=0    bMaxBid=5    std::vector<T>::size
+      153 rel installs/30d  nTot=0    bMaxBid=0    arise_dri.so
+      152 rel installs/30d  nTot=0    bMaxBid=2    libc.so.6 | libc.so.6 | libc.so.6 | libc.mo
+      151 rel installs/30d  nTot=0    bMaxBid=3    OOM | large | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::Ap
+      143 rel installs/30d  nTot=0    bMaxBid=2    js::frontend::ParseNodeVisitor<T>::visit
+      140 rel installs/30d  nTot=0    bMaxBid=2    js::frontend::ParseNode::isKind
+      139 rel installs/30d  nTot=0    bMaxBid=5    OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | mozilla::Vector
+      125 rel installs/30d  nTot=0    bMaxBid=2    mozilla::dom::Event::WidgetEventPtr
+      122 rel installs/30d  nTot=0    bMaxBid=0    astmcwebextension3.dll | RtlAllocateHeap | astmcwebextension3.dll | RtlpAl
+      118 rel installs/30d  nTot=0    bMaxBid=4    libxul.so | MozFormatCodeAddressDetails
+      116 rel installs/30d  nTot=0    bMaxBid=0    cx4_dri.so
+      114 rel installs/30d  nTot=0    bMaxBid=1    RtlAllocateHeap | astmcwebextension3.dll | RtlpxVirtualUnwind | astmcwebex
+      104 rel installs/30d  nTot=0    bMaxBid=2    RtlFreeHeap | GlobalFree
+      102 rel installs/30d  nTot=0    bMaxBid=0    cf2_buf_readByte
+      102 rel installs/30d  nTot=0    bMaxBid=3    RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | RtlpUnwindPro

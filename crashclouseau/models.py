@@ -1241,8 +1241,12 @@ class Selection(db.Model):
         The truncation made it visible: the 14-day window holds 2,930 rows and the feed returns
         500 ordered by ``build_day DESC``, so beta got 10% of the feed against 35% of the log —
         not because of the limit but because nightly ships daily and beta does not. Filtering is
-        the fix; raising the limit is not, and would make one gunicorn worker on a single-worker
-        web dyno serialize a bigger JSON."""
+        the fix; raising the limit is not, and would make a gunicorn worker on a 2-worker web
+        dyno serialize a bigger JSON. (The dyno runs TWO workers, not one: there is no ``-w`` and
+        no ``WEB_CONCURRENCY`` in ``heroku config``, but the Python buildpack sets it at boot and
+        logs ``Defaulting WEB_CONCURRENCY to 2 based on the available memory`` -- verified at the
+        v141 boot, pids 9 and 10 under arbiter pid 2. Absence from ``heroku config`` is what made
+        the earlier "single-worker" reading look confirmed.)"""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
         query = db.session.query(Selection).filter(Selection.build_day >= cutoff)
         if outcome is not None:

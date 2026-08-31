@@ -1,0 +1,735 @@
+[
+ {
+  "sig": "OOM | small",
+  "rel_inst": 69713,
+  "n_open_venues": 10,
+  "all": [
+   683271,
+   1034254,
+   1053934,
+   1056230,
+   1057869,
+   1058567,
+   1059563,
+   1060268,
+   1060581,
+   1081790,
+   1089682,
+   1096831,
+   1115929,
+   1126895,
+   1127554,
+   1153515,
+   1177086,
+   1194060,
+   1205110,
+   1205771,
+   1206482,
+   1209673,
+   1215181,
+   1234842,
+   1310134,
+   1310175,
+   1314779,
+   1318272,
+   1328542,
+   1328545,
+   1328555,
+   1333070,
+   1341573,
+   1341744,
+   1342017,
+   1353762,
+   1357359,
+   1361354,
+   1384026,
+   1421345,
+   1428612,
+   1433816,
+   1442965,
+   1458221,
+   1505094,
+   1519123,
+   1519129,
+   1525078,
+   1541092,
+   1547102,
+   1549181,
+   1555858,
+   1565970,
+   1575950,
+   1578224,
+   1595460,
+   1599887,
+   1616720,
+   1647269,
+   1649023,
+   1660777,
+   1673426,
+   1673778,
+   1677956,
+   1679597,
+   1684472,
+   1684473,
+   1685096,
+   1688271,
+   1690193,
+   1690723,
+   1695132,
+   1695134,
+   1695136,
+   1695138,
+   1698279,
+   1699340,
+   1699589,
+   1707159,
+   1712262,
+   1715186,
+   1720338,
+   1720339,
+   1721164,
+   1737495,
+   1749192,
+   1764356,
+   1772253,
+   1772254,
+   1772255,
+   1772256,
+   1772258,
+   1772259,
+   1784233,
+   1806202,
+   1895113,
+   2016952,
+   2018453,
+   2031161
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-win"
+  ],
+  "tc26": [],
+  "cs26": [
+   2031161
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+  "rel_inst": 25060,
+  "n_open_venues": 0,
+  "all": [
+   1472062,
+   1969401
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+  "rel_inst": 24174,
+  "n_open_venues": 0,
+  "all": [
+   1472062
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+  "rel_inst": 20528,
+  "n_open_venues": 1,
+  "all": [
+   1505660
+  ],
+  "tckw": [
+   "topcrash-thunderbird"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+  "rel_inst": 17631,
+  "n_open_venues": 1,
+  "all": [
+   1828066,
+   2065113
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup",
+   "topcrash-thunderbird"
+  ],
+  "tc26": [
+   2065113
+  ],
+  "cs26": [
+   2065113
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "js::gc::HeaderWord::get",
+  "rel_inst": 14205,
+  "n_open_venues": 5,
+  "all": [
+   1799300,
+   1800984,
+   1846645,
+   1863306,
+   1863599,
+   1863600,
+   1889049,
+   1948635,
+   1958112,
+   1991268,
+   1993404,
+   2061080
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup"
+  ],
+  "tc26": [
+   2061080
+  ],
+  "cs26": [
+   2061080
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "js::gc::detail::ChunkPtrHasStoreBuffer",
+  "rel_inst": 11168,
+  "n_open_venues": 3,
+  "all": [
+   1541905,
+   1940438,
+   1974171,
+   1980548,
+   2067511
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup"
+  ],
+  "tc26": [],
+  "cs26": [
+   2067511
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "EMPTY: no frame data available; EmptyMinidump",
+  "rel_inst": 9429,
+  "n_open_venues": 4,
+  "all": [
+   1245570,
+   1360392,
+   1644486,
+   1955996,
+   1960108
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+  "rel_inst": 9217,
+  "n_open_venues": 1,
+  "all": [
+   1991490,
+   1992135,
+   2016420,
+   2016440,
+   2034710
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [
+   2016440,
+   2034710
+  ],
+  "cs26": [
+   2016420,
+   2016440,
+   2034710
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+  "rel_inst": 9169,
+  "n_open_venues": 1,
+  "all": [
+   2018640
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [
+   2018640
+  ],
+  "cs26": [
+   2018640
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "EnterJit",
+  "rel_inst": 7410,
+  "n_open_venues": 4,
+  "all": [
+   858032,
+   1034706,
+   1408766,
+   1414545,
+   1425132,
+   1447333,
+   1451720,
+   1453671,
+   1461480,
+   1461724,
+   1500285,
+   1517317,
+   1665432,
+   1665579,
+   1817825,
+   1818164,
+   1848391,
+   1848584,
+   1904173,
+   1999843
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup",
+   "topcrash-win"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "mozilla::dom::quota::QuotaManager::Shutdown::<T>::operator()",
+  "rel_inst": 7359,
+  "n_open_venues": 0,
+  "all": [
+   1588498,
+   1758303,
+   1872960,
+   1957726
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | Sqlite.sys.mjs shutdown blocker",
+  "rel_inst": 6757,
+  "n_open_venues": 1,
+  "all": [
+   2009476,
+   2066466
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup"
+  ],
+  "tc26": [
+   2009476,
+   2066466
+  ],
+  "cs26": [
+   2009476,
+   2066466
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::Nursery::maybeMoveRawBufferOnPromotion",
+  "rel_inst": 5234,
+  "n_open_venues": 0,
+  "all": [
+   1472062
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "shutdownhang | ZwUserMsgWaitForMultipleObjectsEx | mozilla::widget::WinUtils::WaitForMessage | nsAppShell::ProcessNextNativeEvent",
+  "rel_inst": 5026,
+  "n_open_venues": 0,
+  "all": [],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "js::gc::ChunkMarkBitmap::markIfUnmarkedThreadSafe",
+  "rel_inst": 4911,
+  "n_open_venues": 1,
+  "all": [
+   1917738,
+   1974595
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::ContentChild::RecvConstructBrowser",
+  "rel_inst": 4667,
+  "n_open_venues": 1,
+  "all": [
+   2022780
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [
+   2022780
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+  "rel_inst": 4471,
+  "n_open_venues": 1,
+  "all": [
+   1404105,
+   1426941,
+   1507171,
+   1524200,
+   1578273
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | large | alloc::raw_vec::handle_error",
+  "rel_inst": 4317,
+  "n_open_venues": 0,
+  "all": [
+   1906769
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "mozilla::MediaChangeMonitor::DecodeFirstSample::<T>::operator()",
+  "rel_inst": 4045,
+  "n_open_venues": 0,
+  "all": [
+   1916625,
+   1976929
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::Promise::CreateInfallible | mozilla::dom::ReadableStreamDefaultReader::Read",
+  "rel_inst": 3926,
+  "n_open_venues": 1,
+  "all": [
+   2015430
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [
+   2015430
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | AddonManager: Waiting to start provider shutdown. | AddonRepository Background Updater",
+  "rel_inst": 3596,
+  "n_open_venues": 1,
+  "all": [
+   1841444
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-thunderbird"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "stackoverflow | style::values::specified::calc::impl$10::parse::closure$0::closure$3",
+  "rel_inst": 3361,
+  "n_open_venues": 0,
+  "all": [
+   1973126,
+   2028900
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [
+   2028900
+  ],
+  "cs26": [
+   2028900
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "stackoverflow | cssparser::parser::parse_nested_block",
+  "rel_inst": 3205,
+  "n_open_venues": 0,
+  "all": [
+   1971774
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "IPCError-browser | GPUProcessKill",
+  "rel_inst": 2910,
+  "n_open_venues": 2,
+  "all": [
+   1897636,
+   1908798,
+   1996653
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "shutdownhang | google_breakpad::ExceptionHandler::WriteMinidumpOnHandlerThread",
+  "rel_inst": 2710,
+  "n_open_venues": 2,
+  "all": [
+   1726517,
+   1852842
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "XREMain::XRE_main",
+  "rel_inst": 2579,
+  "n_open_venues": 2,
+  "all": [
+   800840,
+   932646,
+   981681,
+   1345438,
+   1501362,
+   1793867,
+   1909700
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "mozilla::LinkedListElement<T>::setPreviousUnsafe",
+  "rel_inst": 2350,
+  "n_open_venues": 1,
+  "all": [
+   1816848,
+   1822907,
+   1892983,
+   1973865,
+   1991250,
+   1998653
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | AddonManager: shutting down.",
+  "rel_inst": 2307,
+  "n_open_venues": 1,
+  "all": [
+   1664392,
+   2066463
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [
+   2066463
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | large | NS_ABORT_OOM | nsTSubstring<T>::AllocFailed | AppendUTF16toUTF8 | NS_ConvertUTF16toUTF8::NS_ConvertUTF16toUTF8 | mozilla::dom::serviceWorkerScriptCache::(anonymous namespace)::CompareManager::WriteToCache",
+  "rel_inst": 2115,
+  "n_open_venues": 1,
+  "all": [
+   2037258
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [
+   2037258
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "nsThreadPool::PutEvent",
+  "rel_inst": 2107,
+  "n_open_venues": 1,
+  "all": [
+   1617176,
+   2015433
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [
+   2015433
+  ],
+  "cs26": [
+   2015433
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::BufferAllocator::allocSmall",
+  "rel_inst": 1988,
+  "n_open_venues": 0,
+  "all": [],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "shutdownhang | mozilla::SpinEventLoopUntil | nsThreadPool::ShutdownWithTimeout",
+  "rel_inst": 1974,
+  "n_open_venues": 0,
+  "all": [
+   1866944,
+   1895110,
+   1897967,
+   1970349
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "stackoverflow | Mutex::Lock",
+  "rel_inst": 1913,
+  "n_open_venues": 1,
+  "all": [
+   1944809,
+   2045194
+  ],
+  "tckw": [
+   "topcrash"
+  ],
+  "tc26": [
+   2045194
+  ],
+  "cs26": [
+   2045194
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "js::GCData<T>::get",
+  "rel_inst": 1906,
+  "n_open_venues": 1,
+  "all": [
+   2050826
+  ],
+  "tckw": [],
+  "tc26": [],
+  "cs26": [
+   2050826
+  ],
+  "bot26": []
+ },
+ {
+  "sig": "shutdownhang | mozilla::SpinEventLoopUntil | nsThread::WaitForAllAsynchronousShutdowns | nsThreadManager::ShutdownNonMainThreads",
+  "rel_inst": 1853,
+  "n_open_venues": 1,
+  "all": [
+   1505660
+  ],
+  "tckw": [
+   "topcrash-thunderbird"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ },
+ {
+  "sig": "js::frontend::ParseNode::getKind",
+  "rel_inst": 1817,
+  "n_open_venues": 1,
+  "all": [
+   972961,
+   1130604,
+   1515051,
+   1550628,
+   1801916,
+   1853224
+  ],
+  "tckw": [
+   "topcrash",
+   "topcrash-startup"
+  ],
+  "tc26": [],
+  "cs26": [],
+  "bot26": []
+ }
+]

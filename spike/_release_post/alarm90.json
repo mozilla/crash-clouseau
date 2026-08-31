@@ -1,0 +1,151 @@
+[
+ {
+  "sig": "stackoverflow | nsIFrame::GetOffsetToCrossDoc",
+  "rel_inst": 364,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.026415094339622643,
+  "tc26": [],
+  "windows": [
+   "0727",
+   "0831"
+  ]
+ },
+ {
+  "sig": "@0x0 | libMangoHud_opengl.so",
+  "rel_inst": 359,
+  "venues": [],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.04236006051437216,
+  "tc26": [],
+  "windows": [
+   "0627",
+   "0727"
+  ]
+ },
+ {
+  "sig": "mozilla::Maybe<T>::value | mozilla::ContentSubtreeIterator::DetermineFirstContent",
+  "rel_inst": 327,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.01567398119122257,
+  "tc26": [],
+  "windows": [
+   "0727",
+   "0831"
+  ]
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | Extension startup: addons-search-detection@mozilla.com,Extension startup: formautofill@mozilla.org,Extension startup: ipp-activator@mozilla.com,Extension startup: pictureinpicture@mozilla.org,Extension startup:...",
+  "rel_inst": 315,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.006369426751592357,
+  "tc26": [],
+  "windows": [
+   "0627"
+  ]
+ },
+ {
+  "sig": "<name omitted> | HandleGLibMessage",
+  "rel_inst": 286,
+  "venues": [],
+  "klass": "redacted",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.03236514522821577,
+  "tc26": [],
+  "windows": [
+   "0627",
+   "0727"
+  ]
+ },
+ {
+  "sig": "shutdownhang | mozilla::net::SSLTokensCache::CollectSnapshotLocked",
+  "rel_inst": 276,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.0,
+  "tc26": [],
+  "windows": [
+   "0831"
+  ]
+ },
+ {
+  "sig": "@0x0 | neqo_udp::recv_inner",
+  "rel_inst": 267,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "flip": 0.01680672268907563,
+  "cpu": 0.0,
+  "tc26": [],
+  "windows": [
+   "0831"
+  ]
+ },
+ {
+  "sig": "stackoverflow | cssparser::tokenizer::Tokenizer::current_source_location",
+  "rel_inst": 265,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.03627760252365931,
+  "tc26": [],
+  "windows": [
+   "0627"
+  ]
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-change-teardown | Places Clients shutdown",
+  "rel_inst": 260,
+  "venues": [
+   1617559
+  ],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.0013550135501355014,
+  "tc26": [],
+  "windows": [
+   "0627"
+  ]
+ },
+ {
+  "sig": "shutdownhang | ZwCreateUserProcess",
+  "rel_inst": 252,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.0007052186177715092,
+  "tc26": [],
+  "windows": [
+   "0831"
+  ]
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | Extension startup: addons-search-detection@mozilla.com,Extension startup: formautofill@mozilla.org,Extension startup: pictureinpicture@mozilla.org,Extension startup: webcompat@mozilla.org,XPIProvider shutdown",
+  "rel_inst": 242,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "flip": 0.0,
+  "cpu": 0.0,
+  "tc26": [],
+  "windows": [
+   "0831"
+  ]
+ }
+]

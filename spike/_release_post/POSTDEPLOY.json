@@ -1,0 +1,503 @@
+{
+ "cost": {
+  "question": "Plan #20 \u00a710 Q4: settle release's UUIDs/day offline \u2014 reproduce the production `get_proto_small`/`get_proto_big` query shape, replay it over the full 329-pair set at the deployed cadence, measure the per-tick lifetime UNION factor properly, convert to $/month, and answer the \u226410 / \u226540 tripwire.",
+  "answer": "The instrument disagreement is CLOSED and the window disagreement is NOT. Replaying the exact production proto query over all 329 pairs gives **14.31 kept protos/pair** (median 20, 55.0% capped at 20) = **35.39 single-tick UUIDs/day** over 133 run-days \u2014 1.56x the 61-day shape (22.69/day) and 8.9x the no-date/7-day shape (3.98/day), and 22% above the n=30 figure the plan quotes (11.7/pair). The lifetime union factor, measured properly (72 ticks/day \u00d7 every one of a pair's mean 4.45 picked run-days, 5,621 live queries), is **1.35-1.47x population-weighted** \u2014 not the 1.2-2.2x guess, and it is exactly 1.000x on the 45% of pairs that never reach the cap (analytic: if card \u2264 20 every proto is kept at every tick). That puts release at **47.9-51.9 UUIDs/day at the long-run rate** \u21d2 **$1,377-2,086/month**, i.e. the **\u226540/day tripwire FIRES** \u2014 but that is 41-45% of nightly's 116.1 uuid rows/day and $1.4-2.1k against nightly's $3,339-4,476/month, so \"a second nightly-sized bill\" overstates it. The residual band is 7.1x wide and it is entirely the WINDOW: the same production instrument reads 4.97 single-tick UUIDs/day (\u21d2 6.7-7.3 UUIDs/day, \u226410 fires) over the last 36 run-days and 35.39 over 133. Neither published projection was right: $207-740 describes only the quietest month, and $960-4,050 brackets the long-run answer but its top half is unreachable at any window I measured.",
+  "numbers": [
+   {
+    "claim": "Kept protos per selected (signature, buildid) pair, PRODUCTION query shape evaluated as-of the run-day",
+    "value": "mean 14.31, median 20, p90 20, 4,707 kept in total; 181/329 (55.0%) capped at thresholds.protos.Firefox.release=20",
+    "denominator": "all 329 distinct (signature, buildid) pairs the production selector picks over 133 run-days, 2026-04-20..2026-08-30 (no sampling: 329 of 329 measured live, 0 errors)",
+    "instrument": "SuperSearch params product=Firefox, release_channel=utils.get_search_channel(\"release\"), date=['>='+oldest build-DAY of Build.get_last_versions(n=3), '<'+run-day+1], build_id=<bid>, signature='='+sig, _aggs.proto_signature='uuid', _results_number=0, _facets=['_cardinality.proto_signature','_cardinality.install_time'], _facets_size=config.get_threshold('protos','Firefox','release')=20 \u2014 /home/calixte/dev/mozilla/crash-clouseau/spike/_release_post/p02_prod329.py then p03_analyse.py"
+   },
+   {
+    "claim": "Single-tick UUID rows/day (kept protos \u00f7 run-days), production shape, full window",
+    "value": "35.39/day (4,707 over 133 run-days); 2.47 pairs/run-day",
+    "denominator": "133 run-days 2026-04-20..08-30 at the deployed once-per-day-per-pair first-pick attribution",
+    "instrument": "spike/_release_post/p03_analyse.py over prod329.json + spike/_release_recon/plan_long.json"
+   },
+   {
+    "claim": "Diff against the two wrong shapes over the SAME 329 pairs \u2014 and the 61-day shape's error CHANGES SIGN with pair age",
+    "value": "PRODUCTION 14.31 kept/pair (35.39 UUIDs/day) | sel_18 date='>=2026-07-01' 9.17 (22.69/day, \u221236%, 13 pairs return ZERO reports) | v19 no `date` key 1.61 (3.98/day, \u221289%, 0 protos on 159/329 = 48%). On resolve_03's recent 27-pair overlap the 61-day shape OVERSTATES (12.33 vs 10.56)",
+    "denominator": "the same 329 pairs; 658 extra live queries",
+    "instrument": "spike/_release_post/p11_wrongshapes.py (identical params minus `date`, or `date='>=2026-07-01'`), analysed inline"
+   },
+   {
+    "claim": "Cross-validation of my instrument against the plan's published n=30 figure",
+    "value": "on the 27 of resolve_03's 30 pairs present in the 329 set: prod 10.56 / d61 12.33 / d7 5.93 kept-mean, against its published 11.7 / 13.0 / 6.3; reports returned == the replay's own selection count on 329/329 pairs; facet length == min(card,20) on 329/329",
+    "denominator": "27 overlapping pairs (the other 3 come from spike/_release_recon/v11_sel.json, a different selector replay, not from sel_13_replay.py's 329)",
+    "instrument": "spike/_release_post/p03_analyse.py validity block + p11 analysis; retention re-check reproduces spike/_release_recon/cache/20260415192539_2026-04-21.json exactly (p01_probe.py)"
+   },
+   {
+    "claim": "TRUE per-pair lifetime UNION factor, CAPPED pairs \u2014 72 ticks/day \u00d7 every run-day the pair stays selected",
+    "value": "x1.415 direct (566 distinct protohashes vs 400 single-tick), mean 1.415 median 1.33 p75 1.60 max 2.70 min 1.00; scaled estimator x1.560",
+    "denominator": "20 capped pairs stratified by report volume (51..3,300 reports), 97 pick-days, 5,621 live queries",
+    "instrument": "spike/_release_post/p10_full_lifetime.py \u2014 same production params, only the `<` bound moved to each 20-minute tick (bin/schedule.py `@scheduled(minutes=20)` = 72 ticks/day); analysed inline"
+   },
+   {
+    "claim": "Lifetime UNION factor, UNCAPPED pairs (card \u2264 20) \u2014 the analytic case",
+    "value": "x1.000 intra-day on 15/15 (proof: if card \u2264 20 every proto is kept at every tick, so the union IS the end-of-day set); x1.149 across the pair's whole picked lifetime, 1 of 15 reaches the cap on a later day",
+    "denominator": "15 randomly sampled uncapped pairs of the 148 in the 329 set",
+    "instrument": "spike/_release_post/p05_ticks.py + p06_union.py (72-tick) and p08_lifetime.py (all pick-days)"
+   },
+   {
+    "claim": "Population-weighted lifetime UNION multiplier",
+    "value": "x1.353 to x1.465 = (3,620 capped kept \u00d7 1.415-1.560 + 1,087 uncapped kept \u00d7 1.149) / 4,707",
+    "denominator": "the 4,707 kept protos of the 329-pair set, split 3,620 capped / 1,087 uncapped",
+    "instrument": "inline weighting in the final script (output /tmp/final.txt); UUID.add dedup on (signatureid, protohash, buildid) VERIFIED at crashclouseau/models.py:1496-1523"
+   },
+   {
+    "claim": "UUIDs/day, production shape \u00d7 the measured union factor, by window",
+    "value": "full 133 run-days 47.9-51.9/day | 126 non-burst run-days 20.3-22.0/day | last 90 42.6-46.1/day | last 60 17.1-18.5/day | last 36 (\"quiet month\") 6.7-7.3/day",
+    "denominator": "same 329-pair set re-cut by run-day window; 7 burst run-days (\u226510 new pairs: 05-26/27/28, 06-23, 06-30, 07-01, 07-02) carry 192 of 329 pairs and 2,814 of 4,707 kept protos (59.8%)",
+    "instrument": "final script over rows329.json + plan_long.json (output /tmp/final.txt)"
+   },
+   {
+    "claim": "$/month, using production's own cost per dossier and its own UUID\u2192dossier funnel",
+    "value": "long-run $1,377-2,086/mo | non-burst $585-885/mo | last-36-run-day rate $194-293/mo. Nightly for comparison: $4,476/mo at its 31-day mean, $3,339/mo at its marginal cost",
+    "denominator": "UUIDs/day \u00d7 0.774 (nightly UUID\u2192dossier funnel) \u00d7 30.4 days \u00d7 $1.2217 (marginal) to $1.7088 (31-day mean)",
+    "instrument": "final script; cost read-only from prod: `SELECT count(*), avg/percentile_cont(0.5)/max(cost_usd) FROM dossiers JOIN uuids JOIN builds GROUP BY channel` via `heroku pg:psql -a crash-clouseau-augmented` with SET default_transaction_read_only=on (/tmp/q2.sql, /tmp/q3.sql)"
+   },
+   {
+    "claim": "Production cost per dossier re-confirmed, and it is FALLING",
+    "value": "nightly 2,676 dossiers / 31 days / $4,564.33, mean $1.7088 median $1.5023 max $8.4867 (5 NULL); marginal last 7 full days (08-24..08-30) 712 dossiers $868.65, mean $1.2217 median $1.1102; beta 38 dossiers $42.68 mean $1.1231",
+    "denominator": "every dossier row in prod, 2026-08-01..08-31",
+    "instrument": "/tmp/q2.sql and /tmp/q3.sql via read-only `heroku pg:psql -a crash-clouseau-augmented`"
+   },
+   {
+    "claim": "UUID rows \u2192 paid dossiers funnel, measured on nightly (the ratio my $ conversion uses)",
+    "value": "3,367 uuid rows \u2192 2,607 dossiers = 0.774 (116.1 \u2192 89.9 per day); `useless` (is_stackhash_existing) fires on 340/3,367 = 10.1%",
+    "denominator": "nightly, uuid-creation days 2026-08-02..08-30 (29 days where both tables are complete; uuids is pruned to 30 days so 08-01 is partial)",
+    "instrument": "/tmp/q3.sql: uuids LEFT JOIN dossiers grouped by date_trunc('day', u.created), channel='nightly'"
+   },
+   {
+    "claim": "Why the top-20 churns at all: the cap lands inside a count-1 tie group",
+    "value": "the 20th (last kept) proto has count == 1 on 157/181 capped pairs (87%), \u22642 on 165/181; median 1, max 66",
+    "denominator": "the 181 capped pairs of the 329 set",
+    "instrument": "spike/_release_post/p04_strat.py reading the count-ordered facet terms from prod329.json"
+   },
+   {
+    "claim": "The 72\u00d7/day SELECTOR cadence adds ZERO pairs \u2014 the 329-pair denominator is not understated",
+    "value": "2026-06-30: picks grow 9\u219239 through the day, union over 8 ticks = 39 = end-of-day (x1.00). 2026-08-20: 4\u21926, union = 6 (x1.00)",
+    "denominator": "2 run-days (one burst, one quiet), 8 three-hourly ticks each, 48 live per-build facet queries",
+    "instrument": "spike/_release_post/p09_selector_ticks.py \u2014 the real utils.evaluate_days / dc.find_no_user_days / get_maturity_bar / get_no_user_build_floor on facets refetched as-of each tick"
+   },
+   {
+    "claim": "A measured release-specific discount on dossiers that UUID rows do not show",
+    "value": "556 of 4,707 kept protos (11.8%) are cross-build duplicates \u2014 16.9% of the kept protos of the 92 signatures selected on more than one buildid \u2014 so UUID.add writes the row but orchestrator._proto_already_triaged would refuse the dossier",
+    "denominator": "4,707 kept protos / 218 pairs on 92 multi-buildid signatures / 203 distinct signatures",
+    "instrument": "spike/_release_post/p04_strat.py, set intersection of the count-ordered top-20 term lists per signature across buildids"
+   },
+   {
+    "claim": "The plan's \"0.75-0.97 pairs/day quiet steady state\" is a switch-on artefact",
+    "value": "the standalone 36-day replay gives 27 pairs = 0.75/day (reproduced exactly), but under continuous 133-day first-pick attribution only 15 of them FIRST appear in those 36 days = 0.42/day; the other 12 were already selected before the window opened",
+    "denominator": "the last 36 of 133 run-days, both attributions",
+    "instrument": "spike/_release_post/p07_replay_picks.py (sel_13_replay.py re-run against plan.json and plan_long.json) + p03_analyse.py window cuts"
+   }
+  ],
+  "method": "(a) Read `datacollector.get_builds` (line 18; the non-nightly branch sets `search_date = \">=\" + get_date_str(min_date)` at :53, min_date = build date of the OLDEST of `Build.get_last_versions(date, channel, product, n=3)`), `get_proto_small` (:390) and `get_proto_big` (:456), `config.get_threshold(\"protos\",\"Firefox\",\"release\") = 20` and `config.get_limit_facets() = 10000` from `config/global.json`. Both proto paths keep min(distinct protos, 20) \u2014 big asks Socorro for 20 facets, small asks 10,000 for a chunk of 5 signatures and truncates in its handler at `len(protos) < threshold` \u2014 so I used the big form plus `_cardinality.proto_signature`, with `date` upper-bounded at run-day+1 to make production's implicit \"now\" an as-of. I checked the small path's chunk-level 10,000 can never bind on release: worst 5-signature chunk over 133 run-days = 845 distinct protos (8.5% of the cap), because every count\u2265500 signature takes the big path instead. (b) Rebuilt the 329-pair set with each pair's first-pick run-day and that day's window from `spike/_release_recon/replay_release_long.json` + `plan_long.json` (2.47/run-day reproduced), then ran all 329 live \u2014 no sampling needed. Validity: returned report totals equal the replay's own selection counts on 329/329, and a re-run of a cached April query reproduces exactly, so Socorro retention covers the whole window. (c) Verified `UUID.add` dedups on `(signatureid, protohash, buildid)` at `models.py:1496-1523` and the clock's 20-minute interval at `bin/schedule.py:55`. Proved the factor is exactly 1.000 for uncapped pairs, then measured capped pairs empirically: 75 pairs \u00d7 73 as-of bounds for the intra-day union (5,475 queries), and 20 capped pairs \u00d7 72 ticks \u00d7 every one of their 97 picked run-days for the true lifetime union (5,621 queries), stratified by report volume in equal-sized terciles with a seeded sample. Re-derived the pairs' picked-day lists by re-running the production selector on the existing offline facet cache. (d) Read cost per dossier and the UUID\u2192dossier funnel straight out of prod with read-only SELECTs. Everything live went through `crashclouseau.net`/libmozdata (allowlisted UA); no writes anywhere; scratch in `spike/_release_post/` (p00\u2013p11).",
+  "caveats": [
+   "It does NOT establish release's own cost per dossier. The $ column applies NIGHTLY's $1.2217-1.7088; beta's measured mean is $1.1231 (n=38), 34% under nightly's month mean, so a release run's price is a third unmeasured factor, not a rounding error.",
+   "It does NOT establish release's own UUID\u2192dossier funnel. The 0.774 is nightly's. `is_stackhash_existing` (the `useless` gate, 10.1% on nightly) has never run on a release stack, and release's boilerplate hang stacks could move it a long way in either direction.",
+   "It does NOT close the window question, and that is not a measurement defect: the same instrument reads 4.97 and 35.39 single-tick UUIDs/day depending on whether the 4.3-month window includes the 7 burst run-days that carry 59.8% of the protos. Which regime the next month is in is a build-cadence question (the plan's dot-release-within-4-days configuration, 8 of 82 builds).",
+   "It does NOT validate the ratio-branch burst mechanism or the 2.47 vs 0.75 pairs/day figures beyond reproducing them \u2014 I re-derived both from the plan's own cache and did not re-litigate them, per the brief.",
+   "It does NOT price the sweep (`sweep_untriaged_crashes`, 6-hourly, ~$3/crash) or the per-crash cost cap that already fires on 25.6% of nightly dossiers; neither is in this arithmetic.",
+   "The mean/median `card` figures (118.7 / 29) are ES `_cardinality` HLL estimates and are approximate above ~3,000. The cost driver \u2014 KEPT = min(card, 20) \u2014 is EXACT: facet length equalled min(card, 20) on 329/329.",
+   "4.3 months is not 12. The plan's own \u00a77.1 asks any re-measurement to span \u226512 months, and Socorro caps a `date` range at 365 days, so a 12-month replay needs stitched sub-ranges."
+  ],
+  "unmeasured": [
+   "Release's own cost per dossier. Would need one held ingest-and-triage cycle, or a corpus replay of the agent on release crashes \u2014 the one thing an offline replay cannot buy.",
+   "Release's own `useless` (stackhash-collision) rate. Measurable offline: `inspector.get_crash_data` + `CrashStack` frame hashing over the ~4,700 kept protos' uuids, no LLM, ~4,700 ProcessedCrash fetches.",
+   "The release culprit rate (plan \u00a710 Q1(b)), which is the OTHER measurement the plan says would change the decision. Nothing here touches it and it needs paid runs.",
+   "The intra-day union on a pair's LATER days for the 55 capped pairs outside the 20-pair lifetime subsample \u2014 I have their day-1 72-tick union and their per-day end-of-day sets, which is why the population factor is quoted as a 1.353-1.465 interval rather than a point.",
+   "Whether a release pair whose build ages past the `uuids`/`builds` 30-day prune mid-lifetime loses rows (and therefore cost). Measurable with `models.UUID`/`Build` prune windows against the 11-day max picked lifetime.",
+   "The dossier count actually reachable per UUID row once `_proto_already_triaged` sees protos triaged from OUTSIDE the 329-pair set. My 11.8% cross-build duplicate share is a within-set lower bound only."
+  ],
+  "decision_implication": "Rewrite \u00a710 Q4's tripwire row and delete the 9.4x band from \u00a71.5 and \u00a77.3. The plan should now say: the UUID rate has been settled OFFLINE and Phase 3 is not needed to buy it \u2014 production shape = 14.31 kept protos/pair over the full 329 (not 11.7 on 30), lifetime union factor = 1.35-1.47x (not 1.2-2.2x on n=4), so release is 47.9-51.9 UUIDs/day = $1,377-2,086/month at the long-run rate and 6.7-7.3/day = $194-293/month at the last-36-run-day rate. State the verdict as: the \u226540/day tripwire FIRES on the 4.3-month rate, so the $207-740 projection is refuted except in the quietest month; but \"a second nightly-sized bill\" should be struck and replaced with \"41-45% of nightly's UUID rate and 31-47% of its bill\", and the $2,100-4,050 top half of the other projection should be marked unreachable. Because \u00a710 Q1 offered \"\u226410/day makes release arguable\" and the answer is 48-52/day at the expected rate, Q1's recommendation (do not arm release triage) stands on cost as written \u2014 but the residual disagreement should be re-labelled a WINDOW/build-cadence question, not an instrument one, and it is a 7.1x spread that a single held cycle would sample only once and could easily sample from the quiet regime, which is a further argument against buying Phase 3 for this. Add to \u00a713: a fixed-lower-bound `date` is not merely wrong, its error CHANGES SIGN with the age of the row it measures (the 61-day shape overstates by 17% on a recent 27-pair sample and understates by 36% over 133 run-days), and a shape with no as-of anchor at all cannot be replayed \u2014 the no-`date` query returns zero protos on 48% of the population when re-run later. Also record, so it is not rebuilt: the 72\u00d7/day cadence adds ZERO pairs to the selector (x1.00 on both a burst and a quiet day), the union factor is exactly 1.000 for the 45% of pairs that never reach the cap, `get_proto_small`'s 10,000 chunk facet never binds on release (worst chunk 845), and the plan's \"0.75/day quiet steady state\" is a switch-on artefact worth 0.42/day under continuous attribution."
+ },
+ "product": {
+  "question": "Plan #20 \u00a710 Q2: is the below-both-upstream-floors release-only crash population a real product, or is it already covered by existing triage? The deciding number: how many of the 37 have no open bug.",
+  "answer": "It is a real, un-covered population, but it is roughly a third the size the plan claims and its exemplar list is half wrong. The deciding number came out strongly pro-product: 29 of the 37 (78.4%) have NO open same-application non-meta bug through the repo's own venue chain, 18 of 37 (48.6%) have no same-application bug at all in any status, and 0 of 37 carry a `topcrash*` keyword \u2014 against 26 of 37 (70.3%) on a control of the 37 loudest release signatures (Fisher p=2.6e-11). Neither the 97-bug 2026 `topcrash` population, nor `release-mgmt-account-bot` (whose own 60 signatures have a median of 2 release installs and 23 of 60 at zero), nor aryx's 109 is on any of them. But the supply is overstated: b1 forgot `utils.get_search_channel`, so 10/200 and 37/350 become 6/200 and 23/350 with `aurora` included, and re-measured in the gate's own unit (max upstream build-DAY report count, plus the from-zero branch `is_spike` does not floor-gate) the airtight \"nightly and beta could never have selected it\" set is 0 of the top 100, 6 of 200 (3.0%) and 24 of 350 (6.9%). Of the plan's five named \"Firefox code\" exemplars only two survive: `LdrLoadDll` is an OS-loader frame at bit_flip_rate 0.695, `GMPChild::RecvPreloadLibs` has 1,075 nightly reports on one build (the \"1\" was an install cardinality), and `MediaChangeMonitor::DecodeFirstSample` clears no floor but nightly's from-zero branch could have fired on its single report. RECOMMEND: ship the narrow signature-level alarm \u2014 ~140 HTTP calls, 2-4 minutes, zero model tokens \u2014 which over the last 90 days would have emitted 14.7 signatures/month raw, 77% un-bugged, 3.0/month that are un-bugged Firefox/Gecko code and hardware-clean.",
+  "numbers": [
+   {
+    "claim": "THE DECISION NUMBER \u2014 of the 37 below-both-floors release signatures, how many have no open same-application non-meta bug",
+    "value": "29 (78.4%, Wilson 95% CI 62.8-88.6%); 0 fail-closed lookup errors",
+    "denominator": "37 = the b1 bar reproduced exactly (top 350 release signatures by 30-day distinct install_time, window 2026-07-28..08-27, that are below nightly floor 3 and beta-only floor 10 on a 90-day install cardinality)",
+    "instrument": "bugzilla_apply._open_bugs_for_signature -> _split_by_application(bugs, \"Firefox\") -> _split_out_metas, called directly, unauthenticated; spike/_release_post/q3_venues.py"
+   },
+   {
+    "claim": "Of the same 37, how many have NO same-application bug at all, any status, all time",
+    "value": "18 (48.6%, CI 33.4-64.1%)",
+    "denominator": "37 (same set)",
+    "instrument": "BMO REST, same OR shape as _open_bugs_for_signature but with the `resolution: \"---\"` filter removed, rows kept by bugzilla_apply._row_is_about; spike/_release_post/q4_covered.py"
+   },
+   {
+    "claim": "Already covered by topcrash triage? \u2014 topcrash* keyword rate on the 37 vs a control of the 37 loudest release signatures",
+    "value": "0/37 = 0.0% (CI 0-9.4%) vs control 26/37 = 70.3%; Fisher p=2.59e-11",
+    "denominator": "37 test / 37 control (release install-ranks 1-37 in the same window)",
+    "instrument": "keywords from the all-status BMO query, filtered to k.startswith(\"topcrash\"), after _split_by_application; spike/_release_post/q4_covered.py + q5_control.py + q6_stats.py"
+   },
+   {
+    "claim": "In the 2026 topcrash population (97 bugs, 12.1/month) / the 2026 non-TB crash-signature population (673)",
+    "value": "topcrash 0/37 (control 8/37, p=0.005); crash-signature 2/37 = 5.4% (control 15/37, p=0.0006)",
+    "denominator": "97 and 673 bugs created >=2026-01-01, from the recon's own pull",
+    "instrument": "offline cross of spike/_release_recon/v15.json against each signature with bugzilla_apply._row_is_about; spike/_release_post/q4_covered.py"
+   },
+   {
+    "claim": "release-mgmt-account-bot is not serving this population \u2014 its own filings are not release-volume",
+    "value": "0 of 37 are bot bugs; of the bot's 60 distinct 2026 signatures, median release installs/30d = 2, 23/60 = 0 installs, only 3/60 in the top-350 release panel, 10/60 below both upstream floors",
+    "denominator": "59 bot bugs of 2026 -> 60 distinct signatures parsed from cf_crash_signature",
+    "instrument": "SuperSearch _aggs.signature=[_cardinality.install_time] per channel over the bot's signatures with signature=[\"=s\"]; spike/_release_post/q7_bot_overlap.py"
+   },
+   {
+    "claim": "b1's instrument bug: beta queried as release_channel=\"beta\" instead of utils.get_search_channel(\"beta\") = [\"beta\",\"aurora\"]",
+    "value": "reproduces b1 exactly (10/200 = 5.0%, 37/350 = 10.6%); with aurora it is 6/200 = 3.0% and 23/350 = 6.6% \u2014 a 38-40% overstatement",
+    "denominator": "top 200 / top 350 release signatures by 30-day distinct install_time",
+    "instrument": "spike/_release_post/q1_rebuild.py, bars A_b1exact_installs_betaonly vs A_fixed_installs_beta+aurora; four window-ends (06-27, 07-27, 08-27, 08-31) give 9-10/200 vs 3-6/200"
+   },
+   {
+    "claim": "The gate's own unit: max upstream build-DAY report count over 90 days vs spike.floor (nightly 3, beta 10 REPORTS, not installs)",
+    "value": "P_floor (neither floor branch can fire): 8/100, 51/200 = 25.5%, 148/350 = 42.3% \u2014 LARGER than b1's bar",
+    "denominator": "top 100/200/350 release signatures by 30-day distinct install_time, window ending 2026-08-31",
+    "instrument": "SuperSearch _aggs.signature=[\"build_id\"] with signature=[\"=s\"], day = sum over that day's buildids exactly as datacollector.get_crash_numbers does; floors from config.get_spike; spike/_release_post/q14_full350.py"
+   },
+   {
+    "claim": "The AIRTIGHT bar \u2014 nightly 90-day reports == 0 AND max beta+aurora per-BUILDID reports < 6 (beta's install threshold; reports >= distinct installs), because is_spike's from-zero branch (n>=1) is NOT floor-gated and nightly's install threshold is 1",
+    "value": "0/100, 6/200 = 3.0% (CI 1.4-6.4%), 24/350 = 6.9% (CI 4.7-10.0%); stable at 0 / 4-6 / 16-26 across three window-ends",
+    "denominator": "top 100/200/350 release by 30-day distinct install_time",
+    "instrument": "same build_id facet; config.get_threshold(\"installs\",\"Firefox\",\"beta\")=6; spike/_release_post/q14_full350.py (P_strict)"
+   },
+   {
+    "claim": "Un-bugged rate on the correctly-measured airtight set",
+    "value": "P_strict 24: 17/24 = 70.8% no open bug, 11/24 = 45.8% no bug at all, 1/24 topcrash keyword, 0/24 in the 2026 topcrash population. P_strict within top 200 (6): 6/6 no open bug. 90-day P_strict union (44): 34/44 = 77.3% un-bugged, 0/44 topcrash-tracked",
+    "denominator": "24 / 6 / 44",
+    "instrument": "same venue chain + offline v15 cross; spike/_release_post/q15_gateunit_venues.py, q16_covered2.py, q18_alarm350.py"
+   },
+   {
+    "claim": "Classification of the 90-day P_strict union",
+    "value": "boilerplate (OOM/shutdownhang/AsyncShutdownTimeout/stackoverflow) 16/44 = 36%, Firefox/Gecko code 14/44 = 32%, third-party module/driver 8, OS loader/ntdll 3, bundled third-party 1, unsymbolised libxul 1, redacted `<name omitted>` 1",
+    "denominator": "44 = union of P_strict over three window-ends",
+    "instrument": "explicit auditable regex classifier (module-filename / ntdll-symbol / boilerplate-prefix), printed per signature for hand audit; spike/_release_post/q18_alarm350.py"
+   },
+   {
+    "claim": "Hardware artefacts among the b1 37, via the repo's own detector at the crash's OWN product and channel",
+    "value": "7/37 flagged (6 at bit_flip_rate >= 0.2, 1 at broken_cpu_rate >= 0.7), 1 more at 0.699 broken_cpu; 0/37 unmeasurable. LdrLoadDll flip 0.695, cx4_dri.so 0.510, js::frontend::ParseNode::isKind 0.495, libkeinterface_zx.so.0 0.493, walTryBeginRead 0.383, RtlpUnwindPrologue 0.203, mozilla::dom::Event::WidgetEventPtr broken_cpu 0.876",
+    "denominator": "37",
+    "instrument": "sigage.hardware_noise(sig, product=\"Firefox\", channel=\"release\", days=364), bugbot's own 0.2/0.7 thresholds; spike/_release_post/q8_classify.py"
+   },
+   {
+    "claim": "The plan's five named 'Firefox code' exemplars, re-checked with direct single-signature queries",
+    "value": "2 of 5 survive the airtight bar. ContentSubtreeIterator::DetermineFirstContent: nightly 0 reports/90d, beta+aurora max build-day 4 and max buildid 5, 327 release installs, no open bug. neqo_udp::recv_inner: nightly 0, beta 0, 267 installs, no open bug. MediaChangeMonitor::DecodeFirstSample::$::operator(): nightly 1 report (from-zero branch could fire), 1,350 installs/2,431 reports, no open bug, no topcrash keyword. LdrLoadDll: nightly max build-day 4 >= floor 3, OS loader frame, flip 0.695. GMPChild::RecvPreloadLibs: 1,075 nightly reports on ONE build from ONE install",
+    "denominator": "5",
+    "instrument": "per-signature SuperSearch with signature=\"=<sig>\" and _aggs.signature=[\"build_id\",\"_cardinality.install_time\"]; exactness of the `=` operator verified (LdrLoadDll 494 exact vs 504 substring, 1 facet term vs 2); spike/_release_post/q19_verify.py"
+   },
+   {
+    "claim": "The top-350 rank cut is itself noisy \u2014 churn is mostly panel, not floor",
+    "value": "over window-ends 4 days apart (08-27 vs 08-31) the aurora-fixed set moved 23->24 with 5 losses and 6 gains, of which 3 losses and 4 gains left/entered the RANK panel without crossing a floor. Rank-free: at >=250 release installs/30d only 5-6 of ~175 (2.9-3.3%) are below both floors on the install unit, and at >=1000 exactly 1 of ~60",
+    "denominator": "top 350 / the >=K-installs slices of it",
+    "instrument": "spike/_release_post/q10_churn_cause.py, q9_churn.py"
+   },
+   {
+    "claim": "Facet-truncation control (the trap the last round hit)",
+    "value": "the 10,000-deep release facet saturates (tail report count 2, min installs 0); 0 of the top 350 by installs would be missed by a 2,000-deep count-ordered facet; the install-hit share ladder reproduces (500->92.3%, 1,000->88.0%, 2,000->84.6%, 5,000->81.4%, 10,000->79.5%); build_id sub-facet truncated on 3 of 700 signature-channel pairs, all far above the floors and none in P_floor or P_strict",
+    "denominator": "10,000-deep facet / 700 signature-channel pairs",
+    "instrument": "spike/_release_post/q1_rebuild.py (saturation + ladder) and q14_full350.py (sum_bids vs total check)"
+   },
+   {
+    "claim": "(e) cost of the narrow alarm",
+    "value": "1 release facet query + 88 upstream queries (350 signatures / 8 per chunk x 2 channels) = 89 SuperSearch calls, 38-62 s wall measured; plus ~24-50 BMO venue reads and ~24-50 hardware_noise reads on survivors only. ~140 HTTP calls, 2-4 min, ZERO model tokens",
+    "denominator": "one run over the top-350 panel; nightly's comparison is 2,665 runs / $4,552 per 30 days",
+    "instrument": "wall-clock and query counter inside spike/_release_post/q14_full350.py; venue/hw call counts from q15/q18"
+   },
+   {
+    "claim": "(e) what the narrow alarm would have surfaced over the last 90 days",
+    "value": "44 distinct signatures = 14.7/month raw; 34/44 (77%) un-bugged; 12 of those Firefox/Gecko code; 9 also hardware-clean = 3.0/month; 0/44 in the 2026 topcrash population. Restricted to the top 200 it is 11 raw (3.7/month) -> 10 un-bugged -> 2 Firefox-code-and-clean (0.7/month)",
+    "denominator": "union of P_strict over three window-ends (2026-06-27, 07-27, 08-31), top-350 and top-200 panels",
+    "instrument": "spike/_release_post/q17_alarm90.py (top 200) and q18_alarm350.py (top 350); survivors listed in spike/_release_post/alarm350.json"
+   }
+  ],
+  "method": "Everything is at /home/calixte/dev/mozilla/crash-clouseau/spike/_release_post/ (gitignored); the repo was not modified and nothing was written externally. (a) Rebuilt b1's instrument from scratch through libmozdata's `socorro.SuperSearch` (the client `datacollector` uses, token from ~/.mozdata.ini) rather than b1's hand-rolled `net.get`: `product=Firefox, release_channel=release, date=[\">=END-30\",\"<END\"], _aggs.signature=[\"_cardinality.install_time\"], _facets_size=10000`, ranked by cardinality, top 350; then upstream reads chunked 20 or 8 signatures at a time with `signature=[\"=s\",...]` and an explicit `date` on every call. Four window-ends (2026-06-27, 07-27, 08-27, 08-31) so no number rests on one month. Five bars measured side by side: b1's exact bar, the same with `utils.get_search_channel(\"beta\")` = [\"beta\",\"aurora\"], a 90-day-report-total bar, a zero-upstream-report bar, and then the gate's own unit. For the gate's unit I read `_aggs.signature=[\"build_id\"]` and summed per-buildid counts into build-DAYS exactly as `datacollector.get_crash_numbers` does, because `utils.evaluate_days` applies `spike.floor` to a build-day's REPORT count; and because `utils.is_spike`'s from-zero branch (`n >= 1` when `max(before) == 0`) is NOT floor-gated and nightly's install threshold is 1, I added an airtight predicate (nightly 90-day reports == 0 AND max beta+aurora per-BUILDID reports < 6, using reports >= distinct installs). (b) Called `bugzilla_apply._open_bugs_for_signature` -> `_split_by_application(bugs,\"Firefox\")` -> `_split_out_metas` directly, one signature at a time, unauthenticated. (c) Two instruments: an offline cross of the recon's own `spike/_release_recon/v15.json` (97 topcrash bugs and 673 non-TB crash-signature bugs of 2026) using `_row_is_about`, and a live all-status BMO query per signature; then a falsification pass running the identical instrument on a CONTROL of the 37 loudest release signatures, plus a check of whether `release-mgmt-account-bot`'s own filings are release-volume at all. (d) An explicit printed-per-row regex classifier plus `sigage.hardware_noise(product=\"Firefox\", channel=\"release\", days=364)`. (e) The union of the airtight set across three window-ends, run through the same venue/class/hardware funnel, with the query count and wall clock recorded.",
+  "caveats": [
+   "Release Socorro counts are throttled class-dependently 10%-100% (antenna MOZILLA_RULES), so every release install/report figure here is a lower bound on the real population by a factor between 1 and 10 \u2014 an interval, not a point. Nightly and beta are unthrottled, which is why the 'never selectable upstream' side is a census and the conclusion is not weakened.",
+   "`_cardinality.install_time` over 30 or 90 days is neither installations nor install-days \u2014 install_time resets on update, so it is a ceiling. I used it only for RANKING the release panel and, for the airtight bar, only through the exact direction `reports >= distinct installs on a given buildid`.",
+   "P_strict models `spike.floor`, `is_spike`'s two branches and beta's install threshold. It does NOT model nightly's 21-day build window, the `ndays=3` untestable prefix, `mature_after_days=5`/`mature_installs=4`, or `min_build_installs`. Every one of those makes selection harder, so P_strict is a LOWER bound on 'could never have selected'.",
+   "A 90-day total >= floor does NOT prove a build-day reached the floor, so the 90-day-report bar (18/350) is sufficient-not-necessary and I replaced it with the build-day measurement rather than quoting it as the answer.",
+   "The venue chain is unauthenticated by design, so a security-restricted bug is ABSENT, not an error: 'no open bug' could be wrong for a sec-restricted bug. None of the 44 is a poison-address signature, but the hole is real.",
+   "`_row_is_about` matches `cf_crash_signature` by case-insensitive SUBSTRING, so a bug about `LdrLoadDll | x` counts as a venue for `LdrLoadDll`. That biases the un-bugged rate DOWN \u2014 78.4% is conservative.",
+   "The top-N-by-installs denominator is a PANEL, not the population a gate sees; ~60-70% of its 4-day churn is rank-boundary movement, not floor crossing. That is why I also report the rank-free >=K-installs slices.",
+   "This says nothing about whether any of these crashes is a real, fixable defect, and nothing about a regressor: these signatures predate every candidate window, so `regressed_by` is meaningless and no LLM run was made.",
+   "ESR is not measured here at all, and it is 39.4% of Firefox crash reports. A 'release-only' label is release-vs-nightly-vs-beta only."
+  ],
+  "unmeasured": [
+   "Precision/yield: how many of the ~3 Firefox-code items per month a human would actually file. The emission rate is measured, the acceptance rate is not, and it would need a real list put in front of release management for one cycle.",
+   "The policy behind `release-mgmt-account-bot` and bugbot's crash rules. I measured the bot's OUTPUT (60 signatures, median 2 release installs, 23 at zero) but not its thresholds, so I cannot prove it will never reach this population \u2014 only that over 2026 it did not.",
+   "Whether the 9 survivors are one defect or nine: `mozilla::MediaChangeMonitor::DecodeFirstSample::$::operator()` (1,350 installs, no open bug) and `mozilla::MediaChangeMonitor::DecodeFirstSample::<T>::operator()` (release rank 20, 4,045 installs, 0 open venues, no topcrash keyword) are the same function under two signature spellings \u2014 ~5,400 release installs untracked. A signature-clustering pass would measure how much of the list collapses this way; I only noticed the one pair by eye.",
+   "ESR visibility of these 44 signatures. ESR is unsampled and would be the highest-resolution instrument for whether these are old-codebase crashes; nobody has run it.",
+   "Whether these crashes are reachable at all on nightly/beta code (a release-only crash can be already-fixed-upstream rather than release-specific). That needs a per-signature first/last-seen buildid read across channels, which `sigage.first_seen_any` could answer for free but I did not run."
+  ],
+  "decision_implication": "Change \u00a710 Q2 from \"measure first, build nothing yet\" to \"BUILD THE ALARM \u2014 a page, not a filer\", and correct \u00a71.7's numbers in the same edit. Concretely: (1) Replace \"10 of the top 200 (5.0%) and 37 of the top 350 (10.6%)\" with the three-line ladder, because the single number is unit-ambiguous \u2014 b1's own bar reproduces exactly but forgot `utils.get_search_channel` (6/200, 23/350 with aurora), and in the gate's own unit it is P_floor 51/200 = 25.5% and 148/350 = 42.3% but the airtight bar is 0/100, 6/200 = 3.0%, 24/350 = 6.9%. Quote the airtight bar as \"could never have selected\", and note that `is_spike`'s from-zero branch is not floor-gated so \"below nightly's floor\" is not \"never selectable\". (2) Delete `LdrLoadDll` and `mozilla::gmp::GMPChild::RecvPreloadLibs` from the five named Firefox-code exemplars: the first is an OS-loader frame at bit_flip_rate 0.695 whose nightly max build-day is 4 >= floor 3, the second has 1,075 nightly reports on one build (the quoted \"1\" was an install cardinality). Keep `mozilla::Maybe<T>::value | mozilla::ContentSubtreeIterator::DetermineFirstContent` and `@0x0 | neqo_udp::recv_inner`, which are airtight; keep `MediaChangeMonitor::DecodeFirstSample` with the caveat that nightly's from-zero branch could have fired on its one report. (3) Record the decision number: 29/37 = 78.4% un-bugged, 18/37 = 48.6% with no bug at all, and 0/37 topcrash-keyworded against 70.3% on a control (p=2.6e-11) \u2014 the \"redundant with topcrash triage\" hypothesis is REFUTED, and so is redundancy with `release-mgmt-account-bot`, whose own signatures have a median of 2 release installs. (4) Spec the alarm as: denominator = release signatures with >= ~100 distinct install_time in 30 days (rank-free, so the output does not churn on the panel edge); predicate = nightly 90-day reports == 0 AND max beta+aurora per-buildid reports < 6, via `utils.get_search_channel`; enrich-do-not-drop with `_open_bugs_for_signature -> _split_by_application -> _split_out_metas`, `sigage.hardware_noise(product=\"Firefox\", channel=\"release\")` and a class label; output = a sorted HTML list. No LLM run, no `regressed_by`, no Bugzilla write, weekly cron. Cost: ~140 HTTP calls, 2-4 minutes, zero model tokens; 14.7 lines/month raw and ~3/month after labels. (5) Note that this requires NO release ingestion, NO `CHANNEL_TYPE` enum value and NO pushlog work \u2014 it is pure SuperSearch plus the existing venue chain \u2014 so it is independent of Q1 (which stays NO) and of Q4's Phase 3. (6) Separately and by hand, file the `mozilla::MediaChangeMonitor::DecodeFirstSample` pair: two signature spellings, ~5,400 release installs over 30 days, zero open bugs, zero topcrash keywords, and release rank 20 for the larger of the two."
+ },
+ "instrument": {
+  "question": "Did the thirteen commits in Heroku release v140 (`1298551`, deployed 2026-08-31 11:05:50Z to `crash-clouseau-augmented`) actually work in production, and does the new `payload[\"filing_declined\"]` instrument write?",
+  "answer": "Four of the five named items are CONFIRMED and one is only half-observable. (1) Ingestion survived the fail-closed inversion: v140's own `update_all` fired at 11:26:11Z and enqueued exactly two jobs \u2014 nightly and beta, zero release \u2014 and both channels' `lastdate.maxdate` and `uuids.created` clocks advanced under the v140 slug; both new warning strings are absent from two log captures and I verified locally that they are emittable, so the grep is a real test. (2) `payload[\"filing_declined\"]` WRITES: 0 rows before the deploy, 2 rows now, the first at 11:09:34.189502Z \u2014 3m44s after the deploy \u2014 each matching its `not filed \u2014` log line to the microsecond; 92 runs reached the rung in the last 24h so expect ~90-100 rows/day. (3) `Changeset.to_analyze`'s scoping is CONFIRMED for the release half (19,527/793 byte-identical across the deploy and a tick) but the nightly/beta half is NOT OBSERVABLE and the fix is currently a no-op: all 1,127 unanalysed changesets sit on `merge=true` nodes, which the query excludes, so both the scoped and unscoped forms return zero rows today. (4) The `put_filelog` clamp is silent on both channels, and (5) the release residue is unchanged to the row. The deploy destroyed ZERO agent runs ($0 lost \u2014 all three agentworkers were idle at SIGTERM, so `bin/predeploy.py` would have exited 0 whether or not it was run); it killed one ingestion job, which the 11:26 tick self-healed. Two real defects found: the new decline record's `buildid` is structurally always null (2/2 rows), and `9463641`'s \"Harmless on nightly (never empty)\" is contradicted by observation.",
+  "numbers": [
+   {
+    "claim": "v140's update_all enqueued exactly the two configured channels and no release job",
+    "value": "2 jobs: update(None,'nightly','Firefox') at 11:26:11.745Z, update(None,'beta','Firefox') at 11:27:04.453Z; 0 release",
+    "denominator": "1 clock tick of timed_job under v140 (11:26:11.721Z, the first since the 11:06:11 clock boot)",
+    "instrument": "grep 'app\\[worker.1\\]' + 'app\\[clock.1\\]' over /home/calixte/dev/mozilla/crash-clouseau/spike/_release_post/logs_tick.txt"
+   },
+   {
+    "claim": "nightly and beta ingest clocks advanced under v140; release frozen",
+    "value": "lastdate.maxdate nightly 11:05:16.645379 -> 11:26:11.821235; beta 11:06:08.709935 -> 11:27:04.536836; release 2026-07-06 12:36:38.061871 unchanged",
+    "denominator": "3 rows of the lastdate table (all configured channels)",
+    "instrument": "`select * from lastdate order by 1` \u2014 spike/_release_post/q1.sql and q10.sql"
+   },
+   {
+    "claim": "the beta write at 11:06:08 is attributable to the v140 slug, not to v139",
+    "value": "lastdate.maxdate = 11:06:08.709935 vs the v140 worker's 'Update data: started' log at 11:06:08.709918 (17us apart); that worker booted 11:06:08.411",
+    "denominator": "1 job (466e0f00), the first job the post-restart worker picked up",
+    "instrument": "cross-match of q1.sql lastdate against logs_web.txt lines 1317-1343"
+   },
+   {
+    "claim": "new uuids written for both channels post-tick",
+    "value": "nightly last_uuid_row 11:05:59.823655 -> 11:27:04.370139; beta 2026-08-31 05:06:05.976666 -> 11:27:07.229786 (beta uuids 45 -> 46)",
+    "denominator": "3,391 nightly + 46 beta uuids surviving retention",
+    "instrument": "`select b.channel, count(*), max(u.created) from uuids u join builds b ...` \u2014 q2.sql then q10.sql"
+   },
+   {
+    "claim": "the two new fail-closed warning strings never fired in prod",
+    "value": "0 and 0",
+    "denominator": "two log captures totalling 09:15:44Z-11:27:09Z (3,011 lines), including one full v140 update_all execution",
+    "instrument": "grep -c 'INGEST_CHANNELS is unset or empty' / 'AGENT_CHANNELS is set but empty' over logs_web.txt and logs_tick.txt"
+   },
+   {
+    "claim": "both warning strings are actually emittable (so the zero above is a test, not a tautology)",
+    "value": "2 of 2 emitted verbatim",
+    "denominator": "2 warning sites (update.update_all, config.get_agent_channels)",
+    "instrument": "local run: DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 INGEST_CHANNELS=\"\" AGENT_CHANNELS=\"\" uv run python -c '... update.update_all(products=[\"Firefox\"])' with a logging.StreamHandler capture"
+   },
+   {
+    "claim": "payload['filing_declined'] is being written",
+    "value": "2 rows (at 2026-08-31T11:09:34.189502Z and 11:18:20.820135Z); 0 before the deploy",
+    "denominator": "2,660 dossiers; 92 runs reached the filing rung in the last 24h (85 nightly + 7 beta)",
+    "instrument": "`select count(*) filter (where payload ? 'filing_declined') from dossiers` and the join in q11.sql / q12.sql"
+   },
+   {
+    "claim": "each decline row matches its log line, proving the write is on the observed code path",
+    "value": "DB at=11:09:34.189502 vs log 11:09:34.189513; DB at=11:18:20.820135 vs log 11:18:20.820152",
+    "denominator": "2 of 2 decline rows",
+    "instrument": "q11.sql payload->'filing_declined'->>'at' cross-matched against grep '01325dd6|b92bbae7' logs_tick.txt"
+   },
+   {
+    "claim": "expected steady-state decline rate",
+    "value": "~90-100 rows/day (~1 every 15 min), capped at a 30-day window by the dossier prune",
+    "denominator": "92 done runs in 24h minus 1 filing; 14-day nightly dossier range 30-168/day",
+    "instrument": "q12.sql (done runs by channel, 24h) and q7.sql (14-day per-day counts)"
+   },
+   {
+    "claim": "DEFECT: the decline record's buildid is structurally always null",
+    "value": "2 of 2 rows null; 0 of the ~25 skip returns in autofile_bug carry a 'buildid' key",
+    "denominator": "all skip-return sites in bugzilla_apply.autofile_bug; the only return carrying buildid is bugzilla_apply.py:1404, reached only on the write path",
+    "instrument": "q11.sql payload->'filing_declined'->>'buildid'; plus `awk '/^def autofile_bug/,/^def [a-z_]+\\(/' crashclouseau/bugzilla_apply.py | grep -nE 'return (result|\\{)'`"
+   },
+   {
+    "claim": "no release changeset was touched; the release half of the to_analyze scoping is confirmed",
+    "value": "19,527 analyzed=true / 793 analyzed=false, identical pre-deploy, at 11:12Z and at 11:29Z",
+    "denominator": "20,320 release changeset rows on 2,635 distinct nodes (2,628 of them analysed)",
+    "instrument": "`select n.channel, c.analyzed, count(*) from changesets c join nodes n ...` \u2014 q2.sql, q5.sql, q10.sql"
+   },
+   {
+    "claim": "the to_analyze scoping is a no-op in prod today: the query has nothing to pick in EITHER form",
+    "value": "0 rows scoped, 0 rows unscoped; 1,127 of 1,127 unanalysed changesets are on merge=true nodes",
+    "denominator": "334 nightly + 793 release unanalysed changeset rows",
+    "instrument": "hand-rolled DISTINCT ON replication of Changeset.to_analyze (stated as hand-rolled) in q3.sql, plus the channel x merge breakdown in the same file"
+   },
+   {
+    "claim": "the put_filelog retention clamp stayed silent, and could not have fired",
+    "value": "0 warnings; derived start dates 08:59:38Z (nightly) and 09:05:33Z (beta) against a floor of now-30d = 2026-08-01 11:26Z",
+    "denominator": "4 derived-start put_filelog calls under v140 (nightly and beta x 2 ticks); config max_ndays = 30",
+    "instrument": "grep -c 'put_filelog:' / 'clamping the pushlog request' over both log captures; window bounds read from the 'Get pushlog data for ...' lines"
+   },
+   {
+    "claim": "release residue unchanged, with the exact id block the cleanup transaction needs",
+    "value": "nodes 7,267 (id 12936..20202, 0 non-release ids in that range); changesets 20,320 (61.30%); scores 0; builds 0; lastdate 1 row 2026-06-07 18:10:51 -> 2026-07-06 12:36:38",
+    "denominator": "33,147 changesets total (pre-tick), 24,069 files, 22,780 nodes",
+    "instrument": "q4.sql (id block + exclusivity) and q9.sql (full cascade footprint)"
+   },
+   {
+    "claim": "NEW NUMBER for plan item 18: files rows reachable only through release changesets",
+    "value": "6,986 of 24,069 (29.0%)",
+    "denominator": "24,069 rows in files; the FK is changesets.fileid -> files ON DELETE CASCADE, which cascades the wrong way, so these become orphans",
+    "instrument": "`select count(*) from (select c.fileid from changesets c join nodes n on n.id=c.nodeid group by c.fileid having bool_and(n.channel='release')) x` \u2014 q9.sql"
+   },
+   {
+    "claim": "the deploy destroyed zero agent runs",
+    "value": "0 killed; 1 work-horse kill total, and it was the ingestion job 3e3caad9",
+    "denominator": "3 agentworker dynos; last pre-deploy agent job finished 10:43:48Z, next started 11:06:13Z, SIGTERM at 11:06:01Z",
+    "instrument": "grep 'Work horse killed|warm shut down requested|Successfully completed' over logs_web.txt lines 1242-1275; no RQ job-failed warning on any agentworker"
+   },
+   {
+    "claim": "agent spend thrown away by the deploy",
+    "value": "$0.00",
+    "denominator": "mean completed run $1.09 today (58.72+2.52 over 53 dossiers); a 20-min run costs up to $8.49 historically",
+    "instrument": "derived from the log gap above plus q7.sql per-day cost; predeploy.py's in_flight_runs would have returned []"
+   },
+   {
+    "claim": "CONTRADICTED CLAIM: 9463641's 'Harmless on nightly (never empty)' \u2014 the empty branch fires on nightly and now does real work",
+    "value": "v139 empty tick 0.0154s and no prune (11:05:17.295->11:05:17.310); v140 empty tick 2.828s and pruned 241 nodes (11:26:12.479->11:26:15.308)",
+    "denominator": "2 nightly ticks, both with an empty pushlog window; cascade was 241 nodes -> 64 uuids -> 54 dossiers, 1 of them carrying a filed_bug",
+    "instrument": "'Get pushlog data: retrieved'/'finished' deltas in logs_web.txt vs logs_tick.txt, cross-checked against nodes 6,329->6,088 and lastdate.mindate 2026-08-01 09:49:16 -> 21:12:58 (q2.sql vs q10.sql)"
+   },
+   {
+    "claim": "retrigger authentication is live in prod (observed, not POSTed by me)",
+    "value": "1 anonymous POST /api/tasks/retrigger -> 403 at 11:07:27Z",
+    "denominator": "6 non-200 requests in the window (3x405, 2x400, 1x403), all from Calixte's own smoke-test IP",
+    "instrument": "grep -E 'status=(400|403|405)' spike/_release_post/logs_web.txt"
+   },
+   {
+    "claim": "/api/selection now honours ?channel= (it returned byte-identical bodies on v139)",
+    "value": "3 distinct sha256 prefixes: beta 7541aa3d44a1 (500 rows, all beta), nightly f9ffa16192d5 (500 rows, all nightly), unfiltered 6a53c72fc7c4 (both); ?channel=bogus -> 400",
+    "denominator": "3 GET requests at days=14 plus 1 negative control",
+    "instrument": "curl GET https://crash-clouseau-augmented-2d0335d53b8d.herokuapp.com/api/selection?days=14&channel=... piped through python json/hashlib (read-only GETs only)"
+   },
+   {
+    "claim": "dossier throughput is at baseline, no useless spike, no new error class",
+    "value": "85 nightly + 7 beta done runs in 24h; useless 4.8% today vs a 1.9-15.6% 7-day band; 0 tracebacks, 0 at=error, 0 R14, 0 5xx",
+    "denominator": "14-day nightly range 30-168 dossiers/day against the ~85-120/day baseline; 3,011 log lines over 09:15:44Z-11:27:09Z",
+    "instrument": "q12.sql, q5.sql (useless by day), q7.sql (14-day), and grep -cE ' - (WARNING|ERROR|CRITICAL) - |Traceback' over both captures"
+   },
+   {
+    "claim": "filing-gate config resolves correctly per channel after 446a8b8",
+    "value": "nightly declared/not-held/enabled; beta declared+HELD; release declared+HELD; undeclared (None, esr) declared=False",
+    "denominator": "5 channel values probed",
+    "instrument": "local: AUTOFILE_BUGS=1 INGEST_CHANNELS='nightly beta' AGENT_CHANNELS='nightly beta' uv run python -c 'config.autofile_channel_declared/held + get_agent_autofile'"
+   }
+  ],
+  "method": "Grabbed `heroku logs -n 1500` twice (11:12Z covering 09:15:44-11:10:16, and 11:27Z covering 09:28:40-11:27:09) into `/home/calixte/dev/mozilla/crash-clouseau/spike/_release_post/logs_web.txt` and `logs_tick.txt`, because there is no drain and the window is ~2h. Established the cadence first: `bin/schedule.py` registers `timed_job` on a 20-minute APScheduler interval with no `start_date`, and the clock dyno rebooted at 11:06:09Z, so v140's own `update_all` could not run before ~11:26:11Z \u2014 I waited for that tick rather than reporting the deploy at t+6min. Read the twelve commit diffs to locate each writer by symbol, then measured prod with twelve read-only `heroku pg:psql -f` scripts (`spike/_release_post/q1.sql`..`q12.sql`), snapshotting before and after the 11:26 tick so every \"advanced\" claim is a delta and not a level. Used the honest two-clock rule from the ingestion-stall note but had to add a third: `max(nodes.pushdate)` did NOT move on either channel, and the reason is upstream quiet, not our failure \u2014 the pushlog window starts at `last node + 1s`, so any changeset the request returned would carry a later pushdate and would have been inserted, and none exists; `lastdate.maxdate` and `uuids.created` are the clocks that discriminate. Attributed the beta write at 11:06:08 to the v140 slug by matching `lastdate.maxdate` (11:06:08.709935) to the post-restart worker's `Update data: started` log line (11:06:08.709918). Verified the two new warning strings are emittable by running `update_all` locally with both variables empty and capturing the logger, so the prod grep is a real negative rather than a grep for a string that cannot exist. Hand-rolled the `Changeset.to_analyze` DISTINCT-ON query rather than pointing repo code at the prod DB, and say so. Wrote nothing: no INSERT/UPDATE/DELETE, no `heroku config:set`, no Bugzilla call, no POST to the app \u2014 the retrigger 403 is Calixte's own smoke test read out of the router log, and the only requests I issued were GETs to `/api/selection`.",
+  "caveats": [
+   "v140 is 23 minutes old. Everything here is a first-tick result: two ingest ticks, two agent runs, two decline rows. It does NOT establish that the instrument keeps writing, that the rate holds, or that nothing breaks on a build transition, a non-empty pushlog window, or a beta build arriving.",
+   "The nightly/beta half of item 3 is untested by construction, not merely too early: the non-merge patch backlog is empty, so `analyze_one_patch` has had nothing to pick since before the deploy. The scoping change is a guard against a future release ingest, not a live cost saving \u2014 the 2,628 release raw-revs were already fetched and the 793 survivors are all merges.",
+   "No release-channel code path was exercised at all. Release is declared+held and ingested nowhere, so `put_filelog` against `releases/mozilla-release`, the release Buildhub regexp, the merge suppression and the clamp's fire path remain measured only offline. The clamp's silence proves the predicate evaluates, not that its warning branch works in prod.",
+   "`filing_declined` was only ever exercised by ONE skip string (`verdict abstain not fileable`, 2 of 2 rows). The other ~24 skip paths are unexercised, including beta's `autofile held for channel 'beta' (triage-only)` \u2014 no beta run has reached the rung since 05:23Z. `record_filing_decline` also returns False silently if the dossier or payload is missing, so a future failure would be invisible except by counting.",
+   "The prune I observed at 11:26 is a cadence change, NOT new data loss: the 30-day retention window is unchanged, and the 241 nodes / 54 dossiers / 1 `filed_bug` that aged out would have aged out at the next non-empty nightly tick under v139 anyway, within hours. I did not measure the steady-state per-tick DELETE cost, only the 2.828s catch-up after a ~2.4h quiet stretch.",
+   "The `?channel=` bodies I compared are 500-row truncated at `days=14`, so `channels=['beta']` proves the filter is applied but not that the counts are complete.",
+   "`heroku logs` is a ~2h window with no drain. Any log-derived count here (warning strings, tracebacks, 5xx, work-horse kills) is bounded by 09:15:44Z-11:27:09Z and cannot speak to the deploy's later behaviour or to anything before 09:15Z."
+  ],
+  "unmeasured": [
+   "Whether the killed ingestion job `3e3caad9` left a stranded entry in RQ's FailedJobRegistry. I inferred self-healing from the consequence (the 11:26 tick re-ran the same window and both clocks advanced, 0 stuck dossiers), not from Redis. A human should run `heroku redis:cli -a crash-clouseau-augmented` and inspect `rq:failed:low` / `rq:scheduled:low` \u2014 I did not, because that connection is write-capable.",
+   "Whether the tasks.html retrigger button works for Calixte now. `_require_viewer` accepts `X-Clouseau-Token`, `?token=` or the `clouseau_view` cookie; until a browser presents the token once, the button 403s (the JS alerts `Retrigger failed: Error: HTTP 403`, so it is loud, not silent). Verifying needs a POST, which is forbidden here. A human should visit `https://crash-clouseau-augmented-2d0335d53b8d.herokuapp.com/tasks.html?token=$(heroku config:get API_WRITE_TOKEN -a crash-clouseau-augmented)` once, then click retrigger on any row.",
+   "Whether `bin/predeploy.py` was actually run before the deploy. It is moot \u2014 reconstructing its input from the log (no agent job between 10:43:48Z and 11:06:13Z) shows `in_flight_runs` would have been empty and it would have exited 0 \u2014 but the fact itself is only in Calixte's shell history.",
+   "The steady-state cost of the new empty-window prune. Run `select count(*) from nodes where channel='nightly' and pushdate <= now() - interval '30 days'` at two consecutive 20-minute ticks to size the per-tick DELETE, and watch the `Get pushlog data: retrieved -> finished` delta on a quiet stretch.",
+   "Whether the second warning string's reader is reachable in prod at all: `AGENT_CHANNELS` is read by `config.get_agent_channels`, which is called by `enqueue_agent` and `sweep_untriaged_crashes`. The 6-hourly sweep has not run since the 11:06 clock boot (first tick due ~17:06Z), so only the `enqueue_agent` reader has been exercised.",
+   "Whether the 24 stale `error` dossiers (oldest 2026-08-08, newest 2026-08-28) are recoverable or permanently closed. None is post-deploy and none is today, so this is pre-existing, but nobody has classified them."
+  ],
+  "decision_implication": "Treat v140 as verified-working and do not roll back; then fix two things and correct three sentences. (1) `payload[\"filing_declined\"][\"buildid\"]` is dead on arrival \u2014 `_autofile` reads `res.get(\"buildid\")` but no skip return in `autofile_bug` carries that key (only `bugzilla_apply.py:1404`, on the write path). Change it to `utils.get_buildid(uuid_info.get(\"buildid\"))` \u2014 `uuid_info` is already in scope and already supplies `channel` and `signature`, and the raw value is a tz-aware datetime that jsonb cannot take, so the `utils.get_buildid` wrapper is load-bearing. Without this the instrument cannot answer plan #20's own question (\"what would a held channel have filed, on which build\"), because every build-axis statistic in that plan keys on buildid. (2) Amend `9463641`'s docstring: \"Harmless on nightly (never empty)\" is false \u2014 both observed nightly ticks had an empty pushlog window, and the new branch turns a 0.0154s no-op into a 2.828s cascading DELETE on the single 512 MB `worker` dyno that also carries nightly and beta scoring. It is not a bug, but the cost claim is wrong and the prune cadence is now every 20 minutes. (3) Plan #20's own \"Prod facts\" line and the new `Selection.recent` docstring both say the web dyno has one gunicorn worker with no `-w`; the buildpack sets `WEB_CONCURRENCY=2` and prod boots two workers (pids 9 and 10) \u2014 correct this before anyone sizes a page against it, and correct the same claim in the `web-dyno-one-worker-and-log-window` note. For plan item 18, the cleanup transaction is unblocked and the current numbers are: 7,267 `nodes` on the contiguous exclusive id block 12936..20202, 20,320 `changesets`, 0 `scores`, 0 `builds`, 1 `lastdate` row \u2014 plus a number nobody had: 6,986 of 24,069 `files` rows (29.0%) are reachable only through release changesets and will be left orphaned, because `changesets.fileid -> files ON DELETE CASCADE` cascades the wrong way. Do NOT claim item 3 saved anything: it is currently a no-op, because `to_analyze` returns zero rows in both the scoped and unscoped forms. Re-run `select count(*) filter (where payload ? 'filing_declined') from dossiers` in ~6 hours; it should read 25-30, and if it is still 2 the write has stopped."
+ },
+ "cross": {
+  "verdict": "Far cleaner than the previous round. Every headline number I could re-derive from the committed scratch data reproduced EXACTLY: 14.31 kept protos/pair and 4,707/133 = 35.39 single-tick UUIDs/day; the 9.17/1.61 wrong-shape means and the -36%/-89%/8.9x diffs; 13 zero-report d61 pairs and 159/329 = 48.3% zero-proto d7 pairs; 181 capped, 157/181 = 87% last-kept-count-1, 556/4,707 = 11.8% cross-build dups; the 7 burst run-days / 192 pairs / 59.8% of protos and all five window cuts; b1's 10/200 and 37/350 and the aurora-corrected 6/200 and 23/350 across four window-ends; P_floor 8/51/148 and P_strict 0/6/24; 29/37, 18/37, 0/37, 17/24, 11/24, 34/44 and all three Fisher p-values to 3 s.f.; the nightly funnel 0.774 and the marginal $1.22/dossier straight out of prod; the release residue to the row and the FK direction; buildid null on 3/3 decline rows.\n\nTHREE conclusions outrun their evidence. (1) The union factor: the granularity error IS genuinely fixed (20-min ticks x every pick-day, not n=4 at daily grain), but the stated band 1.353-1.465x is biased LOW and its top lies below what its own larger sample supports \u2014 on all 60 capped pairs the day-1-ticks-plus-every-pick-day union is already 1.5492x, a strict LOWER bound, while the 20-pair subsample used for the \"direct\" end is unrepresentative of the 60 it was drawn from (day-1 1.2025 vs 1.3875 on the other 40). Corrected population factor x1.478 (bootstrap 95% 1.367-1.608) => 52.3 UUIDs/day (48-57), $1,390-2,290/mo. (2) \"The >=40/day tripwire FIRES\" is not established: 7 burst run-days is a Poisson count whose exact 95% CI is [2.81, 14.42], putting the long-run rate at 33.6-85.5 UUIDs/day \u2014 straddling 40 \u2014 and the verdict is additionally conditional on NOT applying the burst fix the plan itself measured in \u00a711 (ratio 3->5, 329->117 pairs). Both directions of the same coin: the report's own \"the top half of $960-4,050 is unreachable\" is refuted by the upper burst rate ($2,457-3,436). (3) Q2's advertised decision number, 29/37 = 78.4%, sits on the denominator the same report refutes two paragraphs earlier, and its topcrash control is volume-confounded to the point of tautology (test median 153 release installs, control median 4,317, zero overlap, 28x apart; topcrash keywords are assigned by volume).\n\nThe deploy-health report is the strongest of the three. I re-verified it at +60 min (three ingest ticks, 3 decline rows through TWO distinct skip paths, 3 running dossiers at 12:07Z, 0 5xx/H12/R14), and its log window genuinely covers a full post-deploy update_all, so its CONFIRMED / NOT-OBSERVABLE split is right. Its one measurement error I closed with a fresh log read: the empty-window prune is 17.4 ms in the steady state (11:46 tick), not 2.828 s \u2014 that was a one-time catch-up, so only the \"(never empty)\" half of the docstring is false, not the \"harmless\" half. Its WEB_CONCURRENCY=2 correction is verbatim in the log, and the plan's header (and my own memory note) are wrong.\n\nNet: the instrument disagreement on cost IS closed; the cost BAND is still open for three named reasons (window regime, burst-count sampling, and release's own $/dossier + useless rate) \u2014 none of which is the union factor any more.",
+  "errors": [
+   {
+    "quote": "The lifetime union factor, measured properly (72 ticks/day x every one of a pair's mean 4.45 picked run-days, 5,621 live queries), is 1.35-1.47x population-weighted",
+    "why_wrong": "The low end comes from a 20-pair subsample that is demonstrably unrepresentative of the 60 capped pairs it was drawn from. Recomputed from the raw tick data (spike/_release_post/ticks.json + lifetime.json + full_life.json): on all 60 capped pairs the day-1 72-tick factor is 1.3258, but on the 20-pair subsample it is only 1.2025 and on the other 40 it is 1.3875; the partial-lifetime factor (day-1 ticks UNION every pick-day's end-of-day set) is 1.5492 on the 60 vs 1.3900 on the 20 and 1.6287 on the other 40. That 1.5492 is a STRICT LOWER BOUND on the true lifetime union, because it omits intra-day ticks on days 2+. So the stated band's low end (1.353) is below the floor the report's own larger sample supports, and its top (1.465) is below the point estimate. The factor also rises with report volume (terciles 1.378 / 1.628 / 1.643), which is the mechanism of the bias.",
+    "correct_form": "Capped lifetime factor = 1.577x (n=60 partial 1.5492 x the n=20 true/partial uplift 1.0180); uncapped 1.1485x; POPULATION factor x1.478, bootstrap 95% [1.367, 1.608]. The 60-pair sample's report-volume distribution does match the 181-pair capped population (37.6/29.8/32.6% vs 35.0/33.3/31.7%), so the ratio-of-sums over the 60 is a fair population estimator. Long-run 52.3 UUIDs/day (95% 48.4-56.9) = $1,390-2,290/mo; quiet-36-day 7.3/day (6.8-8.0) = $195-320/mo. Say the numbers move ~9% and neither tripwire verdict changes direction."
+   },
+   {
+    "quote": "That puts release at 47.9-51.9 UUIDs/day at the long-run rate ... i.e. the >=40/day tripwire FIRES",
+    "why_wrong": "Seven burst run-days in 133 is a Poisson count, and the whole long-run rate hangs on it: those 7 days carry 2,814 of the 4,707 kept protos (59.8%). The exact Poisson 95% CI for k=7 is [2.81, 14.42] burst run-days per 133, which moves the single-tick rate from 22.74 to 57.83/day and the UUID rate (at the corrected x1.478) from 33.6 to 85.5/day. The lower bound is BELOW the >=40 tripwire. The tripwire is therefore not crossed by the evidence, only by the point estimate.",
+    "correct_form": "State the long-run rate as 52.3 UUIDs/day but add the burst-frequency interval: 33.6-85.5 UUIDs/day, $966-3,436/mo, from a Poisson CI on 7 burst run-days. Verdict: the >=40 tripwire is crossed by the central estimate and NOT resolved at 95%. This also refutes the report's own 'the $2,100-4,050 top half is unreachable at any window I measured' \u2014 at the upper burst rate it is $2,457-3,436/mo."
+   },
+   {
+    "quote": "Q1's recommendation (do not arm release triage) stands on cost as written",
+    "why_wrong": "Circular. The 133-day rate is measured with `spike.ratio.Firefox.release` = 3, and the plan's own \u00a711 records the measured burst fix (ratio 3->5: 329 -> 117 pairs, worst run 35 -> 11) as out of scope BECAUSE release is not selected. If release were armed, that fix would be part of arming it. The 7 burst run-days the fix targets carry 59.8% of the kept protos, so removing most of them drops the rate toward the non-burst 15.02 single-tick/day = ~22 UUIDs/day \u2014 below the tripwire. The cost argument for 'do not arm' depends on not applying a fix that arming would trigger.",
+    "correct_form": "Record the conditionality: 'the >=40/day figure is measured at the DEPLOYED release spike config; \u00a711's measured ratio 3->5 cuts 329 pairs to 117 and would put the rate below 40. The proto-level effect of that fix is UNMEASURED (only its pair count is).' Then rest Q1's NO on \u00a71.1-1.4 and \u00a71.6 (supply, 2 desktop-native bugs in 20 months, 73% empty candidate windows, parity on speed) rather than on cost."
+   },
+   {
+    "quote": "Rewrite \u00a710 Q4's tripwire row and delete the 9.4x band from \u00a71.5 and \u00a77.3",
+    "why_wrong": "As written this reads as if the range collapsed. It did not: the report's own window cuts span 7.3 to 52.3 UUIDs/day = 7.2x, and adding burst-count sampling widens it again. What changed is the CAUSE of the width (window/build cadence, not instrument), not the width.",
+    "correct_form": "'Delete the 9.4x band and replace it with a 7.2x WINDOW band, and say the width was re-labelled, not narrowed: the instrument question is closed (one shape, 329/329 pairs, 0 errors), the regime question is not.'"
+   },
+   {
+    "quote": "orchestrator._proto_already_triaged would refuse the dossier",
+    "why_wrong": "That symbol does not exist anywhere in the repo (grep over all .py: no matches). The real predicate is `models.UUID.proto_already_analyzed` (crashclouseau/models.py:1526), whose docstring says it 'Deliberately ignores buildid (dedup across builds)'. The plan's own \u00a713 discipline is that a citation must point at something.",
+    "correct_form": "Cite `models.UUID.proto_already_analyzed` (models.py:1526), and add the second-order point the report misses: nightly's 0.774 UUID->dossier funnel ALREADY embeds nightly's own cross-build proto dedup through that same predicate, so the release-specific 11.8% cross-build duplicate share is NOT additive to 0.774. Quote them together only with that warning, or the plan will double-count the discount."
+   },
+   {
+    "quote": "on the 27 of resolve_03's 30 pairs present in the 329 set: prod 10.56 / d61 12.33 / d7 5.93 kept-mean, against its published 11.7 / 13.0 / 6.3",
+    "why_wrong": "Denominator mismatch inside a validation block: 11.7 / 13.0 / 6.3 are 30-pair means (they reproduce exactly from spike/_release_recon/resolve_03.json) while 10.56 / 12.33 / 5.93 are 27-pair means. On the same 27 pairs resolve_03's own values are 11.04 / 12.30 / 6.00.",
+    "correct_form": "Quote the same-denominator comparison \u2014 10.56 vs 11.04 (prod), 12.33 vs 12.30 (d61), 5.93 vs 6.00 (d7) on 27 pairs \u2014 and state the far stronger validation that is actually in the data: kept is BYTE-IDENTICAL on the 20 of 27 pairs whose first-pick run-day equals resolve_03's as-of day, and strictly lower on exactly the 7 whose first pick is earlier. That isolates the as-of shift as the only difference."
+   },
+   {
+    "quote": "THE DECISION NUMBER - of the 37 below-both-floors release signatures, how many have no open same-application non-meta bug = 29 (78.4%",
+    "why_wrong": "The 37 is b1's bar, which this same report shows is wrong twice over (it omits `utils.get_search_channel`, so it should be 23, and it uses a 90-day install cardinality where the gate reads a build-day report count). Recording 29/37 as 'the decision number' re-imports the denominator error the report just found. On the airtight population the same instrument gives materially different figures, including a non-zero topcrash rate.",
+    "correct_form": "Decision numbers on the airtight P_strict set: 17/24 = 70.8% no open same-app non-meta bug, 11/24 = 45.8% no bug at all, 1/24 = 4.2% carries a topcrash* keyword, 0/24 in the 2026 topcrash population, 0/24 bot-filed; on the 90-day P_strict union of 44, 34/44 = 77.3% un-bugged and 0/44 topcrash-tracked; P_strict within the top 200 (n=6) 6/6 no open bug. Keep 29/37 = 78.4% only labelled 'on b1's superseded install-unit bar'."
+   },
+   {
+    "quote": "against 26 of 37 (70.3%) on a control of the 37 loudest release signatures (Fisher p=2.6e-11)",
+    "why_wrong": "The control is confounded by the very variable topcrash keywords are assigned on. Test set: median 153 release installs/30d, max 1,484. Control (release install-ranks 1-37): median 4,317, MINIMUM 1,817. The two populations do not overlap at all and are 28x apart at the median, so p=2.6e-11 restates the panel design ('rank 200-350 signatures are not the loudest'), not coverage. Two further defects: 18 of the test 37 have no bug at all and therefore cannot carry a keyword (the honest denominator is 0 of the 19 that DO have one), and 2 of the control's 26 carry only `topcrash-thunderbird` \u2014 the cross-application signature trap.",
+    "correct_form": "Drop the control from the argument, or replace it with a volume-matched one (release signatures at 100-1,500 installs/30d that are ABOVE at least one upstream floor) and mark that as unmeasured. The load-bearing, control-free facts are: 0 of 44 in the 2026 topcrash population (97 bugs), 0 of 44 filed by release-mgmt-account-bot, 1 of 24 carrying any topcrash* keyword, and the bot's own 60 signatures having a median of 2 release installs with 23 at zero."
+   },
+   {
+    "quote": "It is a real, un-covered population, but it is roughly a third the size the plan claims",
+    "why_wrong": "No same-denominator comparison in the report supports 'a third'. At top-200 it is 6 vs the plan's 10 (60%); at top-350 it is 23-24 vs 37 (62-65%). 'A third' can only be obtained by comparing 3.0% (a top-200 rate) against 10.6% (a top-350 rate) \u2014 a cross-denominator ratio, which is the exact error class the campaign is trying to stop.",
+    "correct_form": "'~60-65% of the plan's count at the same rank cut (6 vs 10 at top-200; 23-24 vs 37 at top-350), and a different UNIT below that.'"
+   },
+   {
+    "quote": "ContentSubtreeIterator::DetermineFirstContent: nightly 0 reports/90d, beta+aurora max build-day 4 and max buildid 5",
+    "why_wrong": "Arithmetically impossible and contradicted by the report's own log. A build-DAY count is the sum over that day's buildids, so max_day >= max_bid always. spike/_release_post/q19.log reads maxBuildDay=5 and maxBuildid=5 for this signature.",
+    "correct_form": "'beta+aurora max build-day 5, max buildid 5' \u2014 still below beta's floor of 10 and below its install threshold of 6, so the airtight conclusion is unaffected."
+   },
+   {
+    "quote": "LdrLoadDll: nightly max build-day 4 >= floor 3, OS loader frame, flip 0.695",
+    "why_wrong": "The selection half of that justification does not hold on its own. Nightly's 4 reports come from ONE distinct install (q19.log: installs(card)=1), and `utils.evaluate_days` requires `installs[bid] >= max(threshold, mature_installs)` = max(1, 4) = 4 for any build-day older than `mature_after_days` = 5 (utils.py:330-341 against config/global.json). So nightly could NOT have selected it on a mature build-day. The removal survives on the independent hardware ground.",
+    "correct_form": "'LdrLoadDll: an OS-loader frame at bit_flip_rate 0.695 (bugbot's own 0.2 threshold) \u2014 delete it on that ground. Nightly has 4 reports on one build-day from ONE install, which clears the floor but not `mature_installs` = 4, so whether nightly could have selected it is build-age dependent.'"
+   },
+   {
+    "quote": "over the last 90 days would have emitted 14.7 signatures/month raw, 77% un-bugged, 3.0/month that are un-bugged Firefox/Gecko code and hardware-clean",
+    "why_wrong": "Both figures are a UNION over three monthly snapshots divided by 3 (44/3 and 9/3), which is neither the per-run list length nor an arrival rate as derived; it lands near the arrival rate by luck. The per-window sizes are 16 / 26 / 24 (mean 22 raw, 4 / 6 / 5 survivors), and the churn is severe: 27 of the 44 appear in exactly ONE of the three windows and only 5 appear in all three. A weekly cron re-emits the whole list every week, so 'what a human reads' is the list length, not 14.7.",
+    "correct_form": "'Steady-state list per run: ~22 raw (16 / 26 / 24 across three window-ends), of which ~5 survive the un-bugged + Firefox-code + hardware-clean labels. NEW signatures: 13 then 15 => ~14/month raw and ~2.5/month survivors. 27 of the 44 appear in only one of three monthly windows.' Credit where due: the recommended rank-free denominator (>=100 distinct install_time/30d) is 352 signatures against the 350-signature panel actually measured, so the yield DOES transfer to the spec."
+   },
+   {
+    "quote": "the new branch turns a 0.0154s no-op into a 2.828s cascading DELETE on the single 512 MB worker dyno ... and the prune cadence is now every 20 minutes",
+    "why_wrong": "Measured wrong in the steady state, and I closed it with a fresh log read. The very NEXT nightly empty-window tick (11:46:11.860 -> 11:46:12.465, heroku logs at 12:05Z) took 17.4 ms \u2014 indistinguishable from the v139 no-op. The 2.828 s at 11:26 was a one-time catch-up of 241 nodes accumulated over a ~2.4 h quiet stretch. The report's own caveat conceded it had not measured the steady state; the IMPLICATION states it as fact anyway.",
+    "correct_form": "Amend only the parenthetical: '(never empty)' is false \u2014 nightly's pushlog window was empty on 4 of 4 observed ticks (its lower bound stayed pinned at 2026-08-31 08:59:38 across 10:45, 11:05, 11:26 and 11:46). 'Harmless' survives: one 2.828 s catch-up, then 17 ms per empty tick. Do not tell the plan the prune is a recurring 2.8 s cost."
+   },
+   {
+    "quote": "NEW NUMBER for plan item 18: files rows reachable only through release changesets = 6,986 of 24,069 (29.0%)",
+    "why_wrong": "It is not a constant. Re-read read-only at 12:05Z: 6,995 of 24,069. The count RISES as nightly/beta nodes are pruned and their changesets stop co-owning a `files` row. Hard-coding it into a cleanup-transaction spec makes the spec wrong by the time anyone runs it.",
+    "correct_form": "'~7,000 of 24,069 `files` rows (6,986 at 11:30Z, 6,995 at 12:05Z, and rising as nightly/beta nodes prune) are reachable only through release changesets and will be orphaned, because `changesets.fileid -> files.id ON DELETE CASCADE` (models.py:341) cascades from files to changesets, not the other way. Recompute the count inside the transaction.'"
+   },
+   {
+    "quote": "92 runs reached the filing rung in the last 24h so expect ~90-100 rows/day",
+    "why_wrong": "Two things. (a) 92 is a count of DONE dossiers, not of runs that reached the rung \u2014 a substitution (benign, because `_autofile` is called unconditionally after every done run at agent/orchestrator.py:3964, but say which you counted). (b) The projection is high: at 12:05Z the count is 3 rows, the third at 11:49:05Z \u2014 3 rows in 58 minutes = ~74/day, implying ~20 at the report's +6 h re-check, not the 25-30 it predicts.",
+    "correct_form": "'~74-90 rows/day, from 3 rows in the first 58 minutes and 90 done runs in 24 h of which 1 filed. The +6 h tripwire should be \"non-zero and monotonically growing\", not a point estimate.' Also update the caveat: `filing_declined` has now been exercised by TWO distinct skip paths \u2014 the third row at 11:49:05Z reads `suppressed by broken_cpu_suppressed` (bugzilla_apply.py:1093), not `verdict abstain not fileable`."
+   },
+   {
+    "quote": "0 and 0 | denom: two log captures totalling 09:15:44Z-11:27:09Z (3,011 lines)",
+    "why_wrong": "The two captures OVERLAP: logs_web.txt spans 09:15:44-11:10:16 and logs_tick.txt spans 09:28:40-11:27:09, so 09:28:40-11:10:16 is counted twice. 3,011 is the sum of two file lengths, not a count of distinct log lines in the window.",
+    "correct_form": "'a window of 09:15:44Z-11:27:09Z assembled from two overlapping 1,500-line captures (distinct lines not counted)'. The substantive claim is untouched \u2014 the window does contain one complete v140 `update_all`, at 11:26:11-11:27:09."
+   }
+  ],
+  "plan_edits": [
+   "\u00a71.5 (cost bullet) \u2014 replace 'UUIDs/day is unresolved between 6 and 58 (9.4x)' with: the INSTRUMENT question is closed (one production shape, 329/329 pairs, 0 errors, facet length == min(card,20) on 329/329): 14.31 kept protos/pair (median 20, 55% capped) = 35.39 single-tick UUID rows/day over 133 run-days. Replace '1.2-2.2x on n=4 pairs at DAILY granularity' with: lifetime union factor x1.478 (bootstrap 95% 1.367-1.608), measured at the 20-minute tick cadence over every pick-day on 60 capped + 15 uncapped pairs (5,475 + 5,621 live queries), and exactly x1.000 intra-day for the 45% of pairs that never reach the cap (analytic: within a day the lower `date` bound is fixed, so the kept set only grows). => 52.3 UUIDs/day (48-57) at the 133-run-day mean, 7.3/day (6.8-8.0) over the last 36 run-days. Say the band was RE-LABELLED (window/build-cadence, 7.2x), not narrowed.",
+   "\u00a71.5 \u2014 reconcile or drop 'four ratio-branch bursts of 90-110 pairs': it contradicts \u00a711's own 'worst run 35' and exceeds the 329-pair total. Under first-pick attribution the bursts are 7 run-days (2026-05-26/27/28, 06-23, 06-30, 07-01, 07-02) carrying 192 of 329 pairs and 2,814 of 4,707 kept protos (59.8%). Also record that the window's own switch-on artefact is negligible \u2014 only 7 pairs / 137 protos (2.9%) are attributed to the first run-day \u2014 so the long-run rate is not inflated by it.",
+   "\u00a77.3 ('Protos per pair, and the whole cost model?') \u2014 change 'Production shape = 11.7/pair' to 14.31/pair over all 329 pairs (11.7 was 30 pairs, and reproduces exactly from spike/_release_recon/resolve_03.json). Add the sign-change rule: the 61-day fixed floor OVERSTATES by 17% on a recent 27-pair sample and UNDERSTATES by 36% over 133 run-days; the no-`date` shape cannot be replayed at all \u2014 re-run later it returns zero protos on 159 of 329 pairs (48%).",
+   "\u00a710 Q4 \u2014 flip the recommendation from 'YES, once' to 'NO \u2014 the UUID rate has been settled offline'. State 52.3 UUIDs/day (95% 48-57) = $1,390-2,290/mo at the 133-run-day mean; 7.3/day = $195-320/mo over the last 36 run-days; 22.2/day over the 126 non-burst run-days. Keep the other things Phase 3 would have exercised (put_filelog against releases/mozilla-release, the release Buildhub regexp, the merge suppression, Build.put_data) as the ONLY remaining argument for it, and note that a single held cycle samples the 7.2x window spread exactly once.",
+   "\u00a710 Q1(a) \u2014 rewrite the tripwire row with THREE reasons the >=40 verdict is not settled, in this order: (i) 7 burst run-days in 133 is a Poisson count, exact 95% CI [2.81, 14.42], which puts the long-run rate at 33.6-85.5 UUIDs/day and $966-3,436/mo \u2014 straddling 40; (ii) the same instrument reads 7.3/day over the last 36 run-days, so which side of the tripwire you land on is a build-cadence question; (iii) the figure is measured at the deployed `spike.ratio.Firefox.release` = 3, and \u00a711's measured fix (3->5: 329 -> 117 pairs) would move it below 40 \u2014 the proto-level effect of that fix is UNMEASURED. Strike 'a second nightly-sized bill' and write '42-49% of nightly's 116.1 UUID rows/day and 31-51% of its $4,476/mo at the mean; 6.3% of its rate in the quietest month'. Mark the $207-740 projection as describing the quiet regime only (measured $195-320), and do NOT mark the $2,100-4,050 top half unreachable \u2014 it is reached at the upper burst rate.",
+   "\u00a710 Q4 / \u00a71.5 \u2014 record the three factors that keep the $ band open now that the union factor does not: release's own cost per dossier is UNMEASURED (the $ column applies nightly's $1.2217 marginal / $1.7088 31-day mean; beta's measured mean is $1.1231, 34% lower, n=38); release's own UUID->dossier funnel is UNMEASURED (0.774 is nightly's; `is_stackhash_existing` has never run on a release stack); and 4.3 months is not the >=12 \u00a77.1 demands (Socorro caps `date` at 365 days, so a 12-month replay needs stitched sub-ranges).",
+   "\u00a710 Q4 \u2014 add the measurable-offline residue so it is not lost: release's `useless` rate is obtainable with `inspector.get_crash_data` + `CrashStack` frame hashing over the ~4,700 kept protos' uuids, no LLM; and whether a release pair whose build ages past the 30-day `uuids`/`builds` prune mid-lifetime loses rows (max picked lifetime 11 days) is checkable against the prune windows.",
+   "\u00a710 Q2 \u2014 change 'measure first, build nothing yet' to 'BUILD THE ALARM - a page, not a filer', and record the decision numbers on the AIRTIGHT set, not b1's: 17/24 = 70.8% no open same-app non-meta bug, 11/24 = 45.8% no bug at all, 1/24 topcrash keyword, 0/24 in the 2026 topcrash population, 0/24 bot-filed; on the 90-day union of 44, 34/44 = 77.3% un-bugged, 0/44 topcrash-tracked. Keep 29/37 = 78.4% labelled 'b1's superseded install-unit bar'. Do NOT cite the 37-loudest control: it is volume-confounded (median 153 vs 4,317 release installs, zero overlap), 18 of the 37 have no bug at all so cannot carry a keyword, and 2 of the control's 26 keywords are `topcrash-thunderbird`.",
+   "\u00a710 Q2 / \u00a71.7 \u2014 replace '10 of the top 200 (5.0%) and 37 of the top 350 (10.6%)' with the three-line ladder: b1's bar reproduces exactly (10/200, 37/350) but omits `utils.get_search_channel`, so it is 6/200 and 23/350 with `aurora` (stable at 9-10 vs 3-6 per 200 across four window-ends); in the gate's own unit P_floor is 8/100, 51/200, 148/350; the AIRTIGHT bar is 0/100, 6/200, 24/350. Quote only the airtight bar as 'could never have selected'. Add the two code facts that make it airtight: `is_spike`'s from-zero branch is `n >= 1` and is NOT floor-gated (utils.py:216-219), and the install threshold is applied PER BUILDID, not per build-day (utils.py:330-341) \u2014 which is why the predicate is 'nightly 90-day reports == 0 AND max beta+aurora per-BUILDID reports < 6'.",
+   "\u00a71.7 \u2014 fix the exemplars: DELETE `LdrLoadDll` (OS-loader frame, bit_flip_rate 0.695) and `mozilla::gmp::GMPChild::RecvPreloadLibs` (1,075 nightly REPORTS on one build from ONE install \u2014 the plan's '1' was an install cardinality, violating its own \u00a713.4). KEEP `mozilla::Maybe<T>::value | mozilla::ContentSubtreeIterator::DetermineFirstContent` (nightly 0 reports/90d; beta+aurora max build-day 5, max buildid 5) and `@0x0 | neqo_udp::recv_inner` (nightly 0, beta 0). KEEP `mozilla::MediaChangeMonitor::DecodeFirstSample` with the caveat that nightly's un-floor-gated from-zero branch could have fired on its single report. Say '~60-65% of the plan's count', never 'a third'.",
+   "\u00a710 Q2 \u2014 spec the alarm and quote its yield in BOTH units. Denominator: release signatures with >= ~100 distinct install_time in 30 days \u2014 measured at 352 signatures against the 350-signature panel the yield was taken on, so the number transfers. Predicate: nightly 90-day reports == 0 AND max beta+aurora per-buildid reports < 6, through `utils.get_search_channel`. Enrich-do-not-drop with `_open_bugs_for_signature -> _split_by_application -> _split_out_metas`, `sigage.hardware_noise(product='Firefox', channel='release')` and a class label. Yield: ~22 raw lines per run (16/26/24 across three window-ends), ~5 surviving the labels; ~14 new signatures/month raw and ~2.5 new survivors/month; 27 of 44 appear in only one of three monthly windows. Cost ~140 HTTP calls, 2-4 min, zero model tokens. Needs no release ingestion, no CHANNEL_TYPE enum value and no pushlog work.",
+   "\u00a710 Q2 \u2014 record that precision is unmeasured and say what would measure it (one real list in front of release management for one cycle), and that the 9 survivors may collapse: `mozilla::MediaChangeMonitor::DecodeFirstSample::$::operator()` (1,350 installs) and `...::<T>::operator()` (release rank 20, 4,045 installs) are the same function under two signature spellings, ~5,400 release installs with 0 open venues and no topcrash keyword.",
+   "Header 'Prod facts' \u2014 'web 1x Standard-1X (one gunicorn worker, no -w)' is FALSE. spike/_release_post/logs_tick.txt:1044-1051 reads 'Python buildpack: Defaulting WEB_CONCURRENCY to 2 based on the available memory' and boots two sync workers (pids 9 and 10) at 11:06:07Z. Correct it here, in the new `Selection.recent` docstring, and in the `web-dyno-one-worker-and-log-window` memory note before anyone sizes a page against one worker. Also update 'Deployed release is v139 = 3a584d8' to v140 = 1298551 (2026-08-31 11:05:50Z) and delete the 'none of them is deployed' table.",
+   "\u00a72.4 / \u00a73 item 18 \u2014 refresh the residue block from a 12:05Z read-only read: 7,267 release `nodes` on the contiguous exclusive id block 12936..20202, 20,320 release `changesets` (19,527 analyzed / 793 not), 0 release `scores`, 0 release `builds`, 1 `lastdate` row (2026-06-07 18:10:51 -> 2026-07-06 12:36:38.061871). Add: ~7,000 of 24,069 `files` rows are reachable only through release changesets and will be orphaned because `changesets.fileid -> files.id ON DELETE CASCADE` (models.py:341) cascades the wrong way \u2014 recompute inside the transaction, the count rises as nightly/beta nodes prune (6,986 at 11:30Z, 6,995 at 12:05Z).",
+   "\u00a712 ('Already true - verified live') \u2014 add a v140 block: `update_all` enqueued exactly nightly and beta and zero release on three ticks (11:06, 11:26, 11:46); both channels' `lastdate.maxdate` advanced to 11:46:11.817659 / 11:46:58.630002 while release stayed frozen; both new fail-closed warning strings are absent from a window containing a complete `update_all` AND were shown emittable locally; `payload['filing_declined']` writes (3 rows by 11:49:05Z through TWO skip paths, each matching its log line to the microsecond); the `put_filelog` clamp stayed silent and could not have fired (derived starts 08:59:38Z / 09:05:33Z against a floor of now-30d); 3 running dossiers at 12:07Z, 0 tracebacks, 0 5xx, 0 R14, 0 H12; `/api/selection?channel=` now filters (beta 500/500 beta, nightly 500/500 nightly, release `{\"rows\": []}`, bogus 400). Say explicitly that item 3 (`Changeset.to_analyze` scoping) has saved NOTHING yet: all 1,127 unanalysed changesets (334 nightly + 793 release) sit on `merge=true` nodes and the no-channel form filters `Node.merge.is_(False)` (models.py:397), so it returns 0 rows in both the scoped and unscoped forms.",
+   "\u00a73 (new item, or fold into the `96801aa` follow-up) \u2014 `payload['filing_declined']['buildid']` is dead on arrival: `_autofile` reads `res.get('buildid')` (agent/orchestrator.py:3745) and the ONLY `return` in `autofile_bug` carrying a `buildid` key is the write-path `result` built at bugzilla_apply.py:1403-1405; no path sets `result['skipped']`, so every one of the ~24 skip returns lacks it. Verified null on 3/3 prod rows. Fix to `utils.get_buildid(uuid_info.get('buildid'))` \u2014 `uuid_info` is already in scope and already supplies `channel` and `signature`, and the raw value is a tz-aware datetime jsonb cannot take, so the wrapper is load-bearing. Without it the instrument cannot answer this plan's own 'what would a held channel have filed, on which build', because every build-axis statistic keys on buildid.",
+   "\u00a73 item 19 / `9463641` docstring \u2014 amend ONLY the parenthetical: '(never empty)' is false (nightly's pushlog window was empty on 4 of 4 observed ticks; its lower bound stayed pinned at 2026-08-31 08:59:38 across 10:45, 11:05, 11:26 and 11:46). Keep 'Harmless': the empty branch cost 2.828 s once, as a catch-up prune of 241 nodes after ~2.4 h, and 17.4 ms on the next empty tick. Do not write that the prune is a recurring 2.8 s cost every 20 minutes.",
+   "\u00a713 \u2014 add six instrument rules: (11) a fixed-lower-bound `date` errs with a SIGN that flips with the age of the row it measures (+17% on a recent 27-pair sample, -36% over 133 run-days), and a shape with no as-of anchor cannot be replayed at all (0 protos on 48% of the population when re-run later). (12) A dedup/union factor must be measured at the CADENCE that writes the row (20 min) over the whole LIFETIME the row can be rewritten, AND reported with a sampling interval \u2014 a subsample drawn from a sample can be biased against its own parent (day-1 factor 1.2025 on 20 pairs vs 1.3875 on the other 40 of the same 60), and here the quantity correlates with volume (terciles 1.378 / 1.628 / 1.643). (13) A union over k snapshots divided by k months is neither a list length nor an arrival rate; report both. (14) A control matched on nothing is not a control: contrasting a below-floors set (median 153 installs) against the loudest signatures (median 4,317, no overlap) measures volume, not coverage \u2014 and a keyword denominator must exclude the rows that have no bug to carry it. (15) A rare-event count is a Poisson count: 7 burst run-days in 133 carries a 95% rate CI of [2.81, 14.42], a 2.5x spread on any total it dominates \u2014 a tripwire crossed only by a point estimate built on 7 events is not crossed. (16) Two `heroku logs` grabs OVERLAP; do not add their line counts.",
+   "\u00a78 (kill list) \u2014 record four measured-dead items so they are not rebuilt: the 72x/day SELECTOR cadence adds ZERO pairs (x1.00 on both a burst and a quiet day, and near-analytic, because within a day the pick set is monotone non-decreasing); the per-pair union factor is exactly x1.000 for the 45% of pairs whose distinct-proto count never reaches 20; `get_proto_small`'s 10,000-deep chunk facet can never bind on release (worst 5-signature chunk 845, because `big = count >= 500` at utils.py:327-328 routes every loud signature to `get_proto_big`); and the '0.75-0.97 pairs/day quiet steady state' is a switch-on artefact worth 0.42/day under continuous first-pick attribution (15 of its 27 pairs first appear in the window; the other 12 were already selected).",
+   "Citations \u2014 re-anchor two that no longer point at anything: `UUID.add`'s dedup on (signatureid, protohash, buildid) is at models.py ~1494-1523 (the plan says 1454-1481), and the cross-build dossier suppressor is `models.UUID.proto_already_analyzed` (models.py:1526, 'Deliberately ignores buildid'), not any `orchestrator._proto_already_triaged`. Add the warning that nightly's 0.774 UUID->dossier funnel already embeds that dedup, so release's measured 11.8% cross-build duplicate share is NOT additive to it."
+  ]
+ }
+}

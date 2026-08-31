@@ -1,0 +1,29 @@
+
+mozilla::Maybe<T>::value | mozilla::ContentSubtreeIterator::DetermineFirstContent
+   release  total=338    exactrow reports=338    installs(card)=327    nbuilds=26   maxBuildDay=114   maxBuildid=114
+   nightly  total=0      (no exact facet row)
+   beta     total=22     exactrow reports=22     installs(card)=21     nbuilds=11   maxBuildDay=5     maxBuildid=5
+
+@0x0 | neqo_udp::recv_inner
+   release  total=290    exactrow reports=290    installs(card)=267    nbuilds=6    maxBuildDay=96    maxBuildid=96
+   nightly  total=0      (no exact facet row)
+   beta     total=0      (no exact facet row)
+
+mozilla::MediaChangeMonitor::DecodeFirstSample::$::operator()
+   release  total=2431   exactrow reports=2431   installs(card)=1350   nbuilds=82   maxBuildDay=1146  maxBuildid=1146
+   nightly  total=1      exactrow reports=1      installs(card)=1      nbuilds=1    maxBuildDay=1     maxBuildid=1
+   beta     total=14     exactrow reports=14     installs(card)=9      nbuilds=9    maxBuildDay=4     maxBuildid=4
+
+LdrLoadDll
+   release  total=494    exactrow reports=494    installs(card)=437    nbuilds=55   maxBuildDay=49    maxBuildid=49
+   nightly  total=4      exactrow reports=4      installs(card)=1      nbuilds=1    maxBuildDay=4     maxBuildid=4
+   beta     total=6      exactrow reports=6      installs(card)=2      nbuilds=2    maxBuildDay=5     maxBuildid=5
+
+mozilla::gmp::GMPChild::RecvPreloadLibs
+   release  total=516    exactrow reports=516    installs(card)=268    nbuilds=27   maxBuildDay=176   maxBuildid=176
+   nightly  total=1075   exactrow reports=1075   installs(card)=1      nbuilds=1    maxBuildDay=1075  maxBuildid=1075
+   beta     total=26     exactrow reports=26     installs(card)=9      nbuilds=8    maxBuildDay=11    maxBuildid=11
+
+EXACTNESS CHECK: 'LdrLoadDll' with and without the '=' prefix, release 30 d
+   exact=True   total=494     distinct facet terms returned=1
+   exact=False  total=504     distinct facet terms returned=2

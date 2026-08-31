@@ -1,0 +1,374 @@
+[
+ {
+  "sig": "shutdownhang | mozilla::LazyIdleThreadShutdown",
+  "rel_inst": 872,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "mozJSModuleLoader::InitSharedGlobal",
+  "rel_inst": 377,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "mozilla::dom::Event::WidgetEventPtr",
+  "rel_inst": 370,
+  "venues": [
+   1973138
+  ],
+  "klass": "Firefox/Gecko code",
+  "hwflag": true,
+  "tc26": []
+ },
+ {
+  "sig": "stackoverflow | nsIFrame::GetOffsetToCrossDoc",
+  "rel_inst": 364,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "@0x0 | libMangoHud_opengl.so",
+  "rel_inst": 359,
+  "venues": [],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "mozilla::Maybe<T>::value | mozilla::ContentSubtreeIterator::DetermineFirstContent",
+  "rel_inst": 327,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | Extension startup: addons-search-detection@mozilla.com,Extension startup: formautofill@mozilla.org,Extension startup: ipp-activator@mozilla.com,Extension startup: pictureinpicture@mozilla.org,Extension startup:...",
+  "rel_inst": 315,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "<name omitted> | HandleGLibMessage",
+  "rel_inst": 286,
+  "venues": [],
+  "klass": "redacted",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "shutdownhang | mozilla::net::SSLTokensCache::CollectSnapshotLocked",
+  "rel_inst": 276,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "@0x0 | neqo_udp::recv_inner",
+  "rel_inst": 267,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "stackoverflow | cssparser::tokenizer::Tokenizer::current_source_location",
+  "rel_inst": 265,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-change-teardown | Places Clients shutdown",
+  "rel_inst": 260,
+  "venues": [
+   1617559
+  ],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "shutdownhang | ZwCreateUserProcess",
+  "rel_inst": 252,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | Extension startup: addons-search-detection@mozilla.com,Extension startup: formautofill@mozilla.org,Extension startup: pictureinpicture@mozilla.org,Extension startup: webcompat@mozilla.org,XPIProvider shutdown",
+  "rel_inst": 242,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "mozilla::detail::nsTStringLengthStorage<T>::operator unsigned long long | nsTSubstring<T>::Assign | nsTSubstring<T>::Assign | nsTSubstring<T>::operator= | mozilla::dom::Attr::GetName",
+  "rel_inst": 241,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": true,
+  "tc26": []
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | mozilla::Variant<T>::as | mozilla::Variant<T>::~Variant | mozilla::Variant<T>::operator= | js::frontend::InputScope::operator=",
+  "rel_inst": 218,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "mozilla::dom::OptionalServiceWorkerData::AssertSanity",
+  "rel_inst": 212,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | quit-application | Extension startup: addons-search-detection@mozilla.com,Extension startup: formautofill@mozilla.org,Extension startup: newtab@mozilla.org,Extension startup: pictureinpicture@mozilla.org,Extension startup: webcom...",
+  "rel_inst": 211,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | AddonManager: Waiting to start provider shutdown. | Update add-on blocklist state into add-on DB",
+  "rel_inst": 210,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "stackoverflow | nsWindow::WindowProcInternal",
+  "rel_inst": 209,
+  "venues": [
+   2023251
+  ],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "RtlAllocateHeap | astmcwebextension3.dll | RtlpxVirtualUnwind | astmcwebextension3.dll | kfapi::CFolderDefinitionStorage::_LoadRegistry",
+  "rel_inst": 207,
+  "venues": [
+   1984400
+  ],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "IPC::MessageReader::FatalError | IPC::ParamTraits<mozilla::ipc::BigBuffer>::Read | IPC::ParamTraits<mozilla::dom::IPCImage>::Read | IPC::ParamTraits<mozilla::Maybe<T> >::Read | IPC::ParamTraits<mozilla::dom::MediaImageData>::Read | IPC::ReadSequencePar...",
+  "rel_inst": 201,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "OOM | large | nsTArray_Impl<T>::AppendElementInternal<T> | nsTArray<T>::AppendElement | mozilla::MediaTrackDemuxer::SamplesHolder::AppendSample",
+  "rel_inst": 189,
+  "venues": [
+   1851054
+  ],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "nsCharTraits<T>::eq",
+  "rel_inst": 183,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "gtk_drag_abort_timeout | gdk_threads_dispatch",
+  "rel_inst": 170,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "js::frontend::ParseNodeVisitor<T>::visit",
+  "rel_inst": 169,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "std::vector<T>::size",
+  "rel_inst": 166,
+  "venues": [
+   1816229
+  ],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes",
+  "rel_inst": 163,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "alloc::alloc::realloc",
+  "rel_inst": 162,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": true,
+  "tc26": []
+ },
+ {
+  "sig": "arise_dri.so",
+  "rel_inst": 153,
+  "venues": [],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "libc.so.6 | libc.so.6 | libc.so.6 | libc.mo",
+  "rel_inst": 152,
+  "venues": [],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "@0x0 | sc2wsp.dll | quinn_udp::imp::UdpSocketState::recv",
+  "rel_inst": 150,
+  "venues": [],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "js::frontend::ParseNode::isKind",
+  "rel_inst": 140,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": true,
+  "tc26": []
+ },
+ {
+  "sig": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | mozilla::Vector<T>::operator[] | v8::base::SmallVector<T>::operator[]",
+  "rel_inst": 139,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "astmcwebextension3.dll | SHGetSpecialFolderLocation",
+  "rel_inst": 136,
+  "venues": [
+   1984400
+  ],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "astmcwebextension3.dll | RtlAllocateHeap | astmcwebextension3.dll | RtlpAllocateNTHeapInternal",
+  "rel_inst": 122,
+  "venues": [
+   1984400
+  ],
+  "klass": "third-party module/driver",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "libxul.so | MozFormatCodeAddressDetails",
+  "rel_inst": 118,
+  "venues": [],
+  "klass": "unsymbolised libxul",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "RtlpWaitOnCriticalSection | RtlpEnterCriticalSectionContended | RtlEnterCriticalSection | winmm_refill_stream",
+  "rel_inst": 117,
+  "venues": [],
+  "klass": "OS loader/ntdll",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "cx4_dri.so",
+  "rel_inst": 116,
+  "venues": [],
+  "klass": "third-party module/driver",
+  "hwflag": true,
+  "tc26": []
+ },
+ {
+  "sig": "shutdownhang | NtCreateUserProcess",
+  "rel_inst": 114,
+  "venues": [],
+  "klass": "boilerplate",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "(anonymous namespace)::ChildImpl::ThreadInfoWrapper::InitStarter",
+  "rel_inst": 114,
+  "venues": [],
+  "klass": "Firefox/Gecko code",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "cf2_buf_readByte",
+  "rel_inst": 113,
+  "venues": [
+   1869079
+  ],
+  "klass": "bundled third-party",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "RtlFreeHeap | GlobalFree",
+  "rel_inst": 104,
+  "venues": [],
+  "klass": "OS loader/ntdll",
+  "hwflag": false,
+  "tc26": []
+ },
+ {
+  "sig": "RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | RtlpUnwindPrologue | RtlpxVirtualUnwind | RtlVirtualUnwind | RtlpUnwi...",
+  "rel_inst": 102,
+  "venues": [
+   1913267
+  ],
+  "klass": "OS loader/ntdll",
+  "hwflag": true,
+  "tc26": []
+ }
+]
