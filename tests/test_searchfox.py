@@ -59,6 +59,25 @@ class ParserTest(unittest.TestCase):
         # Acceptance criterion: the adapter pulls in no LLM/dossier deps.
         self.assertNotIn("anthropic", sys.modules)
 
+    def test_demangle_nested(self):
+        # the namespace is ONLY recoverable from the mangled id
+        self.assertEqual(
+            sf._demangle_nested("_ZN2js2gc10ArenaLists25refillFreeListAndAllocateENS0_9AllocKindE"),
+            "js::gc::ArenaLists::refillFreeListAndAllocate",
+        )
+        self.assertEqual(
+            sf._demangle_nested("_ZN7mozilla3dom8Document18DisconnectNodeTreeEv"),
+            "mozilla::dom::Document::DisconnectNodeTree",
+        )
+        self.assertEqual(
+            sf._demangle_nested("_ZN7nsINode15DisconnectChildEP10nsIContent"),
+            "nsINode::DisconnectChild",
+        )
+
+    def test_demangle_nested_declines_what_it_cannot_read(self):
+        for bad in ("", "not_mangled", "_Z3foov", "_ZN", "_ZN99xE"):
+            self.assertIsNone(sf._demangle_nested(bad), bad)
+
     def test_calls_from(self):
         g = sf._parse_call_graph(load("calls_from"), self.R, rev_label="rev12")
         self.assertEqual(g.direction, "from")
@@ -433,11 +452,79 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(len(g.edges), 2)
 
     def test_calls_from_no_result(self):
-        # 2-part symbol: reduce == symbol, so only one invocation, then NoResult
-        client, fake = self.make_client([_proc(0, load("empty_calls_from"))])
+        # 2-part symbol, and `--id` finds nothing to re-qualify with: still NoResult.
+        # `_reduce_symbol` is a no-op here (len(parts) > 2 is False), so the only extra
+        # invocation is the single `--id` probe.
+        client, fake = self.make_client(
+            [_proc(0, load("empty_calls_from")), _proc(0, "Total matches: 0\n")]
+        )
         with self.assertRaises(sf.SearchfoxNoResult):
             client.calls_from("Foo::Bar")
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIn("--id", fake.calls[1])
+
+    # -- re-qualification: the mirror of the reduce fallback -----------------
+
+    def test_fully_qualified_symbol_is_unchanged(self):
+        """THE NEGATIVE ARM. A name that already resolves must cost exactly one
+        invocation -- no `--id`, no `--function-at`, no second graph."""
+        client, fake = self.make_client([_proc(0, load("calls_from"))])
+        g = client.calls_from("mozilla::dom::AudioContext::CreateGain")
+        self.assertEqual(len(g.edges), 2)
         self.assertEqual(len(fake.calls), 1)
+        flat = " ".join(fake.calls[0])
+        self.assertNotIn("--id", flat)
+        self.assertNotIn("--function-at", flat)
+
+    def test_calls_to_requalifies_a_missing_namespace(self):
+        # `ArenaLists::refillFreeListAndAllocate` -> empty; the mangled id behind
+        # `--function-at` supplies the `js::gc` that `--id` alone cannot.
+        client, fake = self.make_client(
+            [
+                _proc(0, load("empty_calls_from")),   # the under-qualified attempt
+                _proc(0, load("id_hits")),            # --id refillFreeListAndAllocate
+                _proc(0, load("function_at")),        # --function-at <def site>
+                _proc(0, load("calls_from")),         # the re-qualified attempt
+            ]
+        )
+        g = client.calls_to("ArenaLists::refillFreeListAndAllocate")
+        self.assertEqual(len(g.edges), 2)
+        self.assertEqual(len(fake.calls), 4)
+        self.assertIn(
+            "js::gc::ArenaLists::refillFreeListAndAllocate", fake.calls[3]
+        )
+
+    def test_requalification_refuses_a_different_function(self):
+        """`--id` matches on the trailing identifier alone, so it offers
+        `mozilla::dom::MessageEventRunnable::DispatchDOMEvent` for a query about
+        `EventDispatcher::DispatchDOMEvent`. Answering with another function's callers
+        is worse than answering nothing, so the suffix test must reject it -- and no
+        fourth call-graph invocation may happen."""
+        client, fake = self.make_client(
+            [
+                _proc(0, load("empty_calls_from")),
+                _proc(0, load("id_hits_other_class")),
+                _proc(0, load("function_at_other_class")),
+            ]
+        )
+        with self.assertRaises(sf.SearchfoxNoResult):
+            client.calls_to("EventDispatcher::DispatchDOMEvent")
+        self.assertEqual(len(fake.calls), 3)
+        self.assertNotIn("--calls-to", " ".join(fake.calls[2]))
+
+    def test_requalification_is_bounded(self):
+        # at most _MAX_QUALIFY_SITES `--function-at` probes, whatever `--id` returns
+        many = "\n".join(
+            "js/src/gc/F{}.cpp:{}: void C::refillFreeListAndAllocate(".format(i, i)
+            for i in range(20)
+        )
+        responses = [_proc(0, load("empty_calls_from")), _proc(0, many)]
+        responses += [_proc(0, "no mangled id here\n")] * 20
+        client, fake = self.make_client(responses)
+        with self.assertRaises(sf.SearchfoxNoResult):
+            client.calls_to("C::refillFreeListAndAllocate")
+        at = [c for c in fake.calls if "--function-at" in c]
+        self.assertEqual(len(at), sf.SearchfoxClient._MAX_QUALIFY_SITES)
 
     def test_calls_from_reduce_fallback(self):
         # full crate path returns empty; reduced Type::method returns edges

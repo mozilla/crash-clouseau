@@ -180,7 +180,7 @@ def _no_graph_result(what: str, subject: str, relation: str) -> str:
 @tool
 async def calls_from(
     ctx: SearchfoxCtx,
-    symbol: Annotated[str, Field(description="Mangled or demangled symbol to expand outward.")],
+    symbol: Annotated[str, Field(description="Symbol to expand outward. Pass it FULLY QUALIFIED -- every namespace, no template `<...>` args (`js::gc::ArenaLists::refillFreeListAndAllocate`, NOT `ArenaLists::refillFreeListAndAllocate`). The crash signature/frames carry the full qualification; copy it from there. An under-qualified name returns an EMPTY graph, not an error. A mangled id from an earlier call-graph result also resolves.")],
     repo: Annotated[str | None, Field(description="searchfox repo token (default: THIS CRASH'S OWN repo -- mozilla-central for a nightly crash, mozilla-beta for a beta/DevEdition one). Pass mozilla-central explicitly to look at where a beta regressor originally landed. No autoland.")] = None,
     depth: Annotated[int, Field(description="Call-graph depth; 1 = direct callees.")] = 1,
 ) -> str:
@@ -197,7 +197,7 @@ async def calls_from(
 @tool
 async def calls_to(
     ctx: SearchfoxCtx,
-    symbol: Annotated[str, Field(description="Mangled or demangled symbol whose callers to find.")],
+    symbol: Annotated[str, Field(description="Symbol whose callers to find. Pass it FULLY QUALIFIED -- every namespace, no template `<...>` args (`js::gc::ArenaLists::refillFreeListAndAllocate`, NOT `ArenaLists::refillFreeListAndAllocate`). The crash signature/frames carry the full qualification; copy it from there. An under-qualified name returns an EMPTY graph, not an error. A mangled id from an earlier call-graph result also resolves.")],
     repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
     depth: Annotated[int, Field(description="Call-graph depth; 1 = direct callers.")] = 1,
 ) -> str:
@@ -214,8 +214,8 @@ async def calls_to(
 @tool
 async def calls_between(
     ctx: SearchfoxCtx,
-    source: Annotated[str, Field(description="Source symbol/class scope.")],
-    target: Annotated[str, Field(description="Target symbol/class scope.")],
+    source: Annotated[str, Field(description="Source symbol/class scope, FULLY QUALIFIED with every namespace and no template `<...>` args -- an under-qualified name returns an empty graph.")],
+    target: Annotated[str, Field(description="Target symbol/class scope, FULLY QUALIFIED with every namespace and no template `<...>` args -- an under-qualified name returns an empty graph.")],
     repo: Annotated[str | None, Field(description="searchfox repo token (default: this crash's own repo; pass mozilla-central to look at trunk even for a beta crash). No autoland.")] = None,
     depth: Annotated[int, Field(description="Path depth to search.")] = 2,
 ) -> str:

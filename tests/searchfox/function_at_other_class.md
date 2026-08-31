@@ -1,0 +1,3 @@
+dom/events/EventDispatcher.cpp:100
+in _ZN7mozilla3dom20MessageEventRunnable16DispatchDOMEventEv
+  void MessageEventRunnable::DispatchDOMEvent(

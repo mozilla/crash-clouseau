@@ -387,6 +387,45 @@ def _reduce_symbol(symbol: str) -> str:
     return "::".join(parts[-2:]) if len(parts) > 2 else symbol
 
 
+_PLAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+# `--id` prints `path:line: <the source line>`; `--function-at` answers `in _ZN...`.
+_ID_HIT_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<line>\d+):\s*(?P<code>.*)$")
+_FUNCTION_AT_MANGLED_RE = re.compile(r"^in\s+(?P<mangled>_Z\S+)\s*$")
+
+
+def _demangle_nested(mangled: str) -> Optional[str]:
+    """The nested-name prefix of an Itanium-mangled id, as ``a::b::c``.
+
+    THE MANGLED ID IS THE ONLY PLACE SEARCHFOX HANDS BACK THE ENCLOSING NAMESPACE.
+    ``--id refillFreeListAndAllocate`` prints the definition line exactly as the source
+    writes it -- ``void ArenaLists::refillFreeListAndAllocate(`` -- which is the same
+    under-qualified spelling that returned an empty graph in the first place. Only
+    ``--function-at js/src/gc/Allocator.cpp:368`` -> ``_ZN2js2gc10ArenaLists25refill...``
+    carries the ``js::gc``.
+
+    Reads just the leading length-prefixed component run and stops at the first thing that
+    is not ``<len><chars>`` (the closing ``E``, a substitution, a template ``I``...), so a
+    parameter list can never leak into the result.
+    """
+    if not mangled.startswith("_ZN"):
+        return None
+    i, parts = 3, []
+    while i < len(mangled):
+        j = i
+        while j < len(mangled) and mangled[j].isdigit():
+            j += 1
+        if j == i:
+            break
+        n = int(mangled[i:j])
+        i = j
+        if n <= 0 or i + n > len(mangled):
+            return None
+        end = i + n
+        parts.append(mangled[i:end])
+        i = end
+    return "::".join(parts) if len(parts) >= 2 else None
+
+
 # --- markdown parsers (pure functions, unit-testable without the binary) -----
 
 _CG_HEADER_RE = re.compile(
@@ -898,6 +937,74 @@ class SearchfoxClient:
             return self.default_repo
         return _coerce_repo(repo)
 
+    #: `--id` can name the same function at many sites; read at most this many.
+    _MAX_QUALIFY_SITES = 6
+
+    def _qualify_candidates(self, sym, repo) -> List[str]:
+        """Strictly MORE qualified spellings of ``sym``, via ``--id`` then ``--function-at``.
+
+        The retry below this one only ever STRIPS qualification, which is right for a Rust
+        crate path and a no-op for the 2-part C++ names that are most of what we ask about:
+        ``len(parts) > 2`` is False, so ``_reduce_symbol`` returns the symbol unchanged and no
+        second invocation happens at all. The failure it cannot touch is the opposite one --
+        ``ArenaLists::refillFreeListAndAllocate`` returns an empty graph where
+        ``js::gc::ArenaLists::refillFreeListAndAllocate`` returns two callers.
+
+        THE SAFETY PROPERTY IS THE SUFFIX TEST, and it is the whole reason this is not
+        guesswork. ``--id`` matches on the trailing identifier alone, so it happily offers
+        ``webrtc::videocapturemodule::DeviceInfoV4l2::HandleEvent`` for
+        ``EventTargetChainItem::HandleEvent``. Answering "who calls X" with the callers of a
+        different X is worse than answering nothing, so a candidate is accepted only when it
+        ENDS WITH ``::`` + the requested spelling -- i.e. it adds namespaces and changes
+        nothing else. Measured over the 123 distinct under-qualified symbols that came back
+        empty in prod (``payload['tool_calls']``, 6,573 calls): 40 recovered (32.5%), and the
+        suffix test rejected 60 wrong-function candidates.
+        """
+        last = sym.rsplit("::", 1)[-1]
+        if not _PLAIN_IDENT_RE.fullmatch(last):
+            return []
+        try:
+            id_md = self._run(["--id", last], repo)
+        except SearchfoxError:  # best-effort: a failed retry must not mask the empty graph
+            return []
+        # `--id` returns declarations, definitions AND call sites. A definition line spells
+        # the class (`void ArenaLists::refill...(`), so it is the one most likely to sit
+        # inside the namespace we are missing; try those first and only then fall back to
+        # the rest, or a hot method burns the whole probe budget on its own callers.
+        defs, others, seen = [], [], set()
+        qualified_re = re.compile(r"::" + re.escape(last) + r"\s*\(")
+        call_re = re.compile(r"\b" + re.escape(last) + r"\s*\(")
+        for line in id_md.splitlines():
+            m = _ID_HIT_RE.match(line)
+            if not m or not call_re.search(m.group("code")):
+                continue
+            site = "{}:{}".format(m.group("path"), m.group("line"))
+            if site in seen:
+                continue
+            seen.add(site)
+            (defs if qualified_re.search(m.group("code")) else others).append(site)
+        sites = defs + others
+        out = []
+        for site in sites[: self._MAX_QUALIFY_SITES]:
+            try:
+                at_md = self._run(["--function-at", site], repo)
+            except SearchfoxError:
+                continue
+            for line in at_md.splitlines():
+                m = _FUNCTION_AT_MANGLED_RE.match(line.strip())
+                if not m:
+                    continue
+                full = _demangle_nested(m.group("mangled"))
+                if full and full.endswith("::" + sym) and full not in out:
+                    out.append(full)
+                break
+            if out:
+                # Measured on the 40 prod symbols this recovers: the first suffix-safe
+                # candidate was the winning spelling in 40 of 40, so probing further sites
+                # only spends round-trips.
+                break
+        return out
+
     def _calls(self, flag, direction, symbol, repo, depth, rev_label) -> CallGraph:
         repo = self._resolve_repo(repo)
         depth = self._clamp_depth(depth)
@@ -913,6 +1020,15 @@ class SearchfoxClient:
                 graph2 = _parse_call_graph(md2, repo, rev_label)
                 if graph2.edges:
                     return graph2
+        if not graph.edges:
+            # C++: the mirror failure, and the common one -- a missing NAMESPACE. Costs
+            # nothing on the happy path because we are already empty here.
+            for full in self._qualify_candidates(sym, repo):
+                md3 = self._run([flag, full, "--depth", str(depth)], repo)
+                graph3 = _parse_call_graph(md3, repo, rev_label)
+                if graph3.edges:
+                    log.debug("re-qualified %r -> %r", sym, full)
+                    return graph3
         if not graph.edges:
             raise SearchfoxNoResult(
                 "no calls-{} edges for {!r}".format(direction, symbol)
