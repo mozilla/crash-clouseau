@@ -1217,13 +1217,29 @@ class Selection(db.Model):
         return [row.to_dict() for row in rows]
 
     @staticmethod
-    def recent(outcome=None, days=14, limit=500):
+    def recent(outcome=None, days=14, limit=500, product=None, channel=None):
         """Recent decisions, optionally of one outcome — ``untestable_prefix`` is the
-        blind-spot feed, ``immature`` is what the maturity bar is costing."""
+        blind-spot feed, ``immature`` is what the maturity bar is costing.
+
+        FILTERS BY CHANNEL. ``/api/selection`` validated its ``?channel=`` against the enum,
+        rejected a bogus value with a 400, and then never passed it here — so
+        ``?channel=beta``, ``?channel=nightly`` and ``?channel=release`` returned three
+        byte-identical bodies (verified against prod v139: same sha256, 500 rows, 450 nightly +
+        50 beta). Validate-then-ignore is worse than no parameter at all: the caller has every
+        reason to believe the answer is filtered.
+        The truncation made it visible: the 14-day window holds 2,930 rows and the feed returns
+        500 ordered by ``build_day DESC``, so beta got 10% of the feed against 35% of the log —
+        not because of the limit but because nightly ships daily and beta does not. Filtering is
+        the fix; raising the limit is not, and would make one gunicorn worker on a single-worker
+        web dyno serialize a bigger JSON."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
         query = db.session.query(Selection).filter(Selection.build_day >= cutoff)
         if outcome is not None:
             query = query.filter(Selection.outcome == outcome)
+        if product is not None:
+            query = query.filter(Selection.product == product)
+        if channel is not None:
+            query = query.filter(Selection.channel == channel)
         rows = (
             query.order_by(Selection.build_day.desc(), Selection.number.desc())
             .limit(limit)
@@ -1232,15 +1248,22 @@ class Selection(db.Model):
         return [row.to_dict() for row in rows]
 
     @staticmethod
-    def summary(days=14):
-        """``{outcome: count}`` over the last ``days`` build-days."""
+    def summary(days=14, product=None, channel=None):
+        """``{outcome: count}`` over the last ``days`` build-days, for one product/channel.
+
+        Same validate-then-ignore defect as ``recent``: the summary a caller reads next to a
+        filtered row list has to be filtered the same way, or the two disagree about the same
+        rows."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
-        rows = (
+        query = (
             db.session.query(Selection.outcome, func.count(Selection.id))
             .filter(Selection.build_day >= cutoff)
-            .group_by(Selection.outcome)
-            .all()
         )
+        if product is not None:
+            query = query.filter(Selection.product == product)
+        if channel is not None:
+            query = query.filter(Selection.channel == channel)
+        rows = query.group_by(Selection.outcome).all()
         return {outcome: count for outcome, count in rows}
 
     def to_dict(self):

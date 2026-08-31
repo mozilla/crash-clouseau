@@ -275,6 +275,49 @@ class TestRoundTrip(unittest.TestCase):
         record["signature"] = self.SIGNATURE
         return record
 
+    def test_the_feed_and_the_summary_honour_the_channel(self):
+        """`/api/selection` VALIDATED `?channel=` AND THEN IGNORED IT.
+
+        Verified against prod v139: `?channel=nightly`, `?channel=beta` and
+        `?channel=release` returned three byte-identical bodies -- same sha256 over `rows`,
+        274,827 bytes each, 500 rows of 450 nightly + 50 beta -- while `?channel=bogus`
+        correctly 400'd. Validate-then-ignore is worse than having no parameter: a 400 on a bad
+        value tells the caller the good value was honoured.
+
+        `html.selection()` read neither arg, so the page and the API disagreed about the same
+        rows even in the signature branch, which the API alone filtered."""
+        run = datetime(2026, 8, 7, tzinfo=timezone.utc)
+        models.Selection.record_many([self._record()], "Firefox", "nightly", run)
+        models.Selection.record_many([self._record()], "Firefox", "beta", run)
+
+        # `days` is explicit: `_record`'s build_day is fixed at 2026-07-31, so the default
+        # 14-day window would exclude the fixture and every assertion below would pass on an
+        # empty list -- the shape this whole test exists to catch.
+        days = 3650
+        for channel in ("nightly", "beta"):
+            with self.subTest(channel=channel):
+                rows = models.Selection.recent(days=days, channel=channel)
+                mine = [r for r in rows if r["signature"] == self.SIGNATURE]
+                self.assertEqual([r["channel"] for r in mine], [channel])
+
+        # A channel with no rows answers empty rather than answering another channel's. That
+        # is the correct answer for release under INGEST_CHANNELS="nightly beta".
+        rows = models.Selection.recent(days=days, channel="release")
+        self.assertEqual([r for r in rows if r["signature"] == self.SIGNATURE], [])
+
+        # The summary must filter the same way, or it describes a different population than
+        # the rows printed beside it.
+        both = models.Selection.summary(days=days)
+        one = models.Selection.summary(days=days, channel="beta")
+        self.assertGreaterEqual(sum(both.values()), sum(one.values()))
+        self.assertEqual(
+            models.Selection.summary(days=days, channel="release").get(utils.SELECTED, 0), 0)
+
+        # ...and no filter still means every channel, for the unfiltered page.
+        unfiltered = [r for r in models.Selection.recent(days=days)
+                      if r["signature"] == self.SIGNATURE]
+        self.assertEqual(sorted(r["channel"] for r in unfiltered), ["beta", "nightly"])
+
     def test_insert_then_upsert_keeps_one_row(self):
         run = datetime(2026, 8, 7, tzinfo=timezone.utc)
         self.assertEqual(

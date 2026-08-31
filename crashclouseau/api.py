@@ -166,9 +166,14 @@ def selection():
     days = max(1, min(days, 90))
     return jsonify(
         {
-            "summary": models.Selection.summary(days),
+            # `product`/`channel` are validated 20 lines up and were then DROPPED, so
+            # `?channel=release` returned nightly's rows with a 200. See `Selection.recent`.
+            # A channel with no ingested rows now correctly answers `{"rows": []}` -- that is
+            # the right answer for release under `INGEST_CHANNELS="nightly beta"`, not an outage.
+            "summary": models.Selection.summary(days, product, channel),
             "days": days,
-            "rows": models.Selection.recent(outcome, days),
+            "rows": models.Selection.recent(outcome, days, product=product,
+                                            channel=channel),
         }
     )
 

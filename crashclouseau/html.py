@@ -302,17 +302,31 @@ def selection():
         outcome = request.args.get("outcome", "").strip() or None
         if outcome is not None and outcome not in models.SELECTION_OUTCOMES:
             outcome = None
+        # HONOURED HERE TOO, or the page and `/api/selection` disagree about the same rows.
+        # The page read neither, while the API validated both and then dropped them -- so the
+        # API's signature branch was filtered and its feed branch was not, and the page was
+        # filtered nowhere. Silently ignored rather than 400'd, matching how `outcome` is
+        # treated here: a bad query arg on an HTML page should not be a 404.
+        product = request.args.get("product") or None
+        channel = request.args.get("channel") or None
+        if product is not None and product not in models.PRODUCT_TYPE.enums:
+            product = None
+        if channel is not None and channel not in models.CHANNEL_TYPE.enums:
+            channel = None
         if sgn:
-            rows = models.Selection.for_signature(sgn)
+            rows = models.Selection.for_signature(sgn, product, channel)
             summary = None
         else:
-            rows = models.Selection.recent(outcome)
-            summary = sorted(models.Selection.summary().items())
+            rows = models.Selection.recent(outcome, product=product, channel=channel)
+            summary = sorted(
+                models.Selection.summary(product=product, channel=channel).items())
         return render_template(
             "selection.html",
             signature=sgn,
             outcome=outcome,
             outcomes=sorted(models.SELECTION_OUTCOMES),
+            product=product,
+            channel=channel,
             rows=rows,
             summary=summary,
         )
