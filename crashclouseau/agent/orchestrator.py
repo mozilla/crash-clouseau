@@ -20,7 +20,7 @@ import asyncio
 import re
 import threading
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from rq import Retry
 
@@ -3729,6 +3729,23 @@ def _autofile(uuid, payload, row):
             logger.info("agent: %s filed bug %s (%s)", uuid, res["bug"], res["mode"])
         elif res.get("skipped") not in (None, "autofile disabled"):
             logger.info("agent: %s not filed — %s", uuid, res["skipped"])
+            # PERSISTED, not just logged. This is the one choke point every one of
+            # `autofile_bug`'s ~25 skip paths flows through, and until now a decline reached
+            # `logger.info` and nothing else -- on an app with no log drain and a ~1h40m log
+            # window. 34 nightly runs reached the filing rung with no record of why they were
+            # declined. It is also the instrument a triaged-but-held channel needs: without it,
+            # "run the channel for a cycle and count what it would have filed" is not
+            # obtainable after the fact. See `Dossier.record_filing_decline` for why this must
+            # NOT go under `filed_bug`.
+            models.Dossier.record_filing_decline(uuid, {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "skipped": res.get("skipped"),
+                "channel": uuid_info.get("channel"),
+                "buildid": res.get("buildid"),
+                "signature": uuid_info.get("signature"),
+                "verdict": row["verdict"],
+                "confidence": row["confidence"],
+            })
     except Exception:                                    # pragma: no cover - defensive
         logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)
 

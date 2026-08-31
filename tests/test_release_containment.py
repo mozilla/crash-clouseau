@@ -182,3 +182,118 @@ class TestRetentionIsNotCoupledToABusyChannel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestADeclinedFilingLeavesARecord(unittest.TestCase):
+    """A HOLD THAT LEAVES NO TRACE CANNOT SAY WHAT IT WOULD HAVE FILED.
+
+    `autofile_bug` has ~25 `return {"filed": False, "skipped": ...}` sites and none of them
+    wrote anything: its only two DB writes are `record_filed_bug` (success) and
+    `record_filing_error` (BMO rejection), so a decline reached `logger.info` and stopped there
+    -- on an app with `heroku drains` EMPTY and a ~1h40m log window.
+
+    Measured cost, read-only on prod 2026-08-31: 34 NIGHTLY runs reached the filing rung and
+    left no record of why they were declined (27 post-arming, status=done, 2026-08-05..08-26).
+    Beta's cost is zero -- 0 of its 38 dossiers reached the rung at all (37 abstain + 1 lead at
+    confidence 25 against `min_confidence` 70) -- so the instrument that plan #18 Phase 4 rests
+    on has not been needed YET, and plan #20 Phase 4 would need it from day one.
+    """
+
+    def test_the_decline_is_persisted_under_its_own_key(self):
+        from crashclouseau.agent import orchestrator as orch
+        recorded = {}
+        with mock.patch.object(models.CrashStack, "get_by_uuid",
+                               return_value=([], {"channel": "beta",
+                                                  "signature": "Foo::Bar"})), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": False,
+                                         "skipped": "channel 'beta' filing is held"}), \
+                mock.patch.object(models.Dossier, "record_filing_decline",
+                                  side_effect=lambda u, i, **kw: recorded.update(
+                                      uuid=u, info=i) or True):
+            orch._autofile("u-1", {"dossier": {}},
+                           {"verdict": "lead", "confidence": 70})
+        self.assertEqual(recorded["uuid"], "u-1")
+        self.assertEqual(recorded["info"]["skipped"], "channel 'beta' filing is held")
+        self.assertEqual(recorded["info"]["channel"], "beta")
+        self.assertEqual(recorded["info"]["verdict"], "lead")
+        self.assertEqual(recorded["info"]["confidence"], 70)
+
+    def test_a_successful_filing_records_no_decline(self):
+        from crashclouseau.agent import orchestrator as orch
+        with mock.patch.object(models.CrashStack, "get_by_uuid",
+                               return_value=([], {"channel": "nightly",
+                                                  "signature": "Foo::Bar"})), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": True, "bug": 123, "mode": "new_bug"}), \
+                mock.patch.object(models.Dossier, "record_filing_decline") as rec:
+            orch._autofile("u-1", {"dossier": {}},
+                           {"verdict": "lead", "confidence": 70})
+        rec.assert_not_called()
+
+    def test_the_global_off_switch_is_not_a_decline(self):
+        """`autofile disabled` is every run on every channel when `AUTOFILE_BUGS=0`. Recording
+        it would write a row per run and drown the signal the key exists to carry."""
+        from crashclouseau.agent import orchestrator as orch
+        with mock.patch.object(models.CrashStack, "get_by_uuid",
+                               return_value=([], {"channel": "nightly",
+                                                  "signature": "Foo::Bar"})), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": False, "skipped": "autofile disabled"}), \
+                mock.patch.object(models.Dossier, "record_filing_decline") as rec:
+            orch._autofile("u-1", {"dossier": {}},
+                           {"verdict": "lead", "confidence": 70})
+        rec.assert_not_called()
+
+    def test_it_is_not_under_filed_bug_and_is_not_sticky(self):
+        """THE TRAP, and the reason this is a new key rather than a field on `filed_bug`.
+
+        `already_filed` returns any truthy `filed_bug` with NO `filed` test, and `filed_bug` is
+        in `_STICKY_PAYLOAD_KEYS` -- so a decline recorded there would survive every retrigger
+        and read as "already filed" forever, permanently closing a crash whose bug was never
+        created. Three more readers would mis-render it: `list_tasks` plucks `filed_bug.bug`
+        unconditionally, `html._task_view` counts any truthy `filed_bug` as filed, and
+        `retrigger_agent` would warn "ALREADY went to bugzilla".
+
+        And it must NOT be sticky, mirroring `filing_error`: stickiness is only correct for a
+        fact about the outside world, and a decline is undone by re-running."""
+        self.assertNotIn("filing_declined", models.Dossier._STICKY_PAYLOAD_KEYS)
+        self.assertIn("filed_bug", models.Dossier._STICKY_PAYLOAD_KEYS)
+        import inspect
+        src = inspect.getsource(models.Dossier.record_filing_decline)
+        self.assertIn('payload["filing_declined"]', src)
+        self.assertNotIn('payload["filed_bug"]', src)
+
+    @unittest.skipUnless(_PG, "needs Postgres: jsonb payload round-trip")
+    def test_it_round_trips_and_does_not_read_as_filed(self):
+        """The real reason this needs a DB: `already_filed` must stay False.
+
+        `channel` lives on `builds`, not on `uuids`, so the fixture needs a real `builds`
+        parent -- the same shape `tests/test_persistence` uses, and the shape production has
+        (`update.put_crashes` skips a crash whose buildid has no row)."""
+        from crashclouseau import utils as cutils
+        models.db.create_all()
+        uuid = "decline-round-trip-0001"
+        build = models.Build(
+            cutils.get_build_date("20260826090609"), "Firefox", "beta", "155.0b3", None)
+        models.db.session.add(build)
+        models.db.session.commit()
+        models.db.session.add(models.UUID(uuid, None, "protoDecline", build.id))
+        models.db.session.commit()
+        try:
+            models.Dossier.upsert(uuid, payload={"dossier": {}}, status="done")
+            self.assertTrue(models.Dossier.record_filing_decline(
+                uuid, {"skipped": "channel 'beta' filing is held"}))
+            row = models.Dossier.get_by_uuid(uuid)
+            self.assertEqual(row.payload["filing_declined"]["skipped"],
+                             "channel 'beta' filing is held")
+            # The whole point: a decline is not a filing.
+            self.assertFalse(models.Dossier.already_filed(uuid))
+            self.assertNotIn("filed_bug", row.payload)
+        finally:
+            models.db.session.rollback()
+            models.db.session.query(models.UUID).filter(
+                models.UUID.uuid == uuid).delete()
+            models.db.session.query(models.Build).filter(
+                models.Build.id == build.id).delete()
+            models.db.session.commit()

@@ -2809,6 +2809,47 @@ class Dossier(db.Model):
         return True
 
     @staticmethod
+    def record_filing_decline(uuid, info, commit=True):
+        """Stamp ``payload["filing_declined"]`` with the gate that refused to file.
+
+        A HOLD THAT LEAVES NO TRACE CANNOT TELL ANYONE WHAT IT WOULD HAVE FILED, and that is the
+        whole instrument of running a channel triaged with its filing held. ``autofile_bug`` has
+        ~25 ``return {"filed": False, "skipped": ...}`` sites and NONE of them wrote anything:
+        the only two DB writes in that function are ``record_filed_bug`` (success) and
+        ``record_filing_error`` (BMO rejection), so a decline reached ``logger.info`` and nothing
+        else — on an app with no log drain and a ~1h40m ``heroku logs`` window.
+
+        The measured cost is on NIGHTLY, not on the held channel: 34 nightly runs reached the
+        filing rung and left no record of why they were declined (27 of them post-arming,
+        ``status=done``, 2026-08-05..08-26), while beta's cost is exactly zero because 0 of its
+        38 dossiers reached the rung at all (37 abstain + 1 lead at confidence 25, against
+        ``min_confidence`` 70).
+
+        NOT UNDER ``filed_bug``, and this is the trap. That key is the per-uuid idempotence key
+        (``already_filed``, which returns any truthy ``filed_bug`` with no ``filed`` test) AND it
+        is in ``_STICKY_PAYLOAD_KEYS`` — so a decline recorded there would survive every
+        retrigger and read as "already filed" forever, permanently closing a crash whose bug was
+        never created. Three more readers would mis-render it: ``list_tasks`` plucks
+        ``filed_bug.bug`` unconditionally and four skip paths do carry a ``bug`` key,
+        ``html._task_view`` counts any truthy ``filed_bug`` as filed, and ``retrigger_agent``
+        would warn "ALREADY went to bugzilla".
+
+        Deliberately absent from ``_STICKY_PAYLOAD_KEYS``, mirroring ``filing_error``: stickiness
+        is only correct for a fact about the OUTSIDE WORLD, and a decline is undone by re-running.
+        The cost is that only the latest attempt's decline is kept, which is the right trade for
+        a counting instrument."""
+        d = Dossier.get_by_uuid(uuid)
+        if d is None or not d.payload:
+            return False
+        payload = dict(d.payload)
+        payload["filing_declined"] = info
+        d.payload = payload
+        db.session.add(d)
+        if commit:
+            db.session.commit()
+        return True
+
+    @staticmethod
     def already_filed(uuid):
         """The recorded ``filed_bug`` for this crash, or ``None``. Fails CLOSED (returns a
         truthy sentinel) on a DB error so a lookup failure can never authorise a re-file."""
