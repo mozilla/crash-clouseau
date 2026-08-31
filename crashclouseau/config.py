@@ -421,6 +421,21 @@ def get_agent_enabled():
     return get_agent().get("enabled", True)
 
 
+def get_ingest_channels():
+    """Channels to INGEST (free), from ``INGEST_CHANNELS`` (space-separated).
+
+    THE SINGLE READER. It used to be parsed inline in ``update.update_all`` with an ``or
+    config.get_channels()`` fallback, and that fallback fired: an unset variable meant every
+    configured channel, so one tick ingested release and left 7,267 ``nodes`` rows, 20,320
+    ``changesets`` rows and 2,628 wasted hg fetches behind it. ``config.get_channels()`` is the
+    list that defines the ``CHANNEL_TYPE`` enum — every channel ever contemplated — and is
+    therefore the wrong list to default an ACTION to.
+
+    Absent or empty returns ``[]``, and every caller must read that as "nothing", not "all".
+    Distinct from ``get_agent_channels``, which decides what gets ANALYSED (~$1-3 a crash)."""
+    return os.getenv("INGEST_CHANNELS", "").split()
+
+
 def get_agent_channels():
     """Channels the evidence agent runs on. Empty list means "no channel filter" (all).
 

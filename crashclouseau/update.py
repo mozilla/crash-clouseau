@@ -23,7 +23,29 @@ def put_build(buildid, product, channel, version, node=None):
 
 
 def put_filelog(channel, start_date=None, end_date=None):
-    """Get and put the filelog in the database"""
+    """Get and put the filelog in the database.
+
+    THE DERIVED START DATE IS CLAMPED to the retention window, and only the derived one. Both
+    derived branches read a clock that a switched-off channel freezes: production's
+    ``lastdate`` row for ``release`` still says 2026-07-06, so the first tick after a release
+    switch-on asked hg for 56 days — 30.4 MB, 20,094 changesets, three cycle merges — and then
+    spent ~80,500 SQL statements and ~20,100 commits inserting nodes, ~7,050 of which
+    ``Node.clean`` deletes in the same call. Measured at 276 s against a local Postgres, so
+    ~335 s on RDS, during which the single 512 MB ``worker`` dyno is not draining the queue that
+    also carries nightly and beta scoring. The gap grows a day per day, in steps at each cycle
+    merge.
+
+    The clamp is LOSSLESS because ``Node.clean`` prunes at exactly this window anyway — a node
+    older than ``ndays_of_data`` is deleted in the same call that inserted it. It is not the
+    performance fix (30 days is still 13,041 changesets, 65% of the 56-day payload); it bounds
+    growth. The real cost is ``HGAuthor._get_or_create_id`` committing per node, which is a
+    separate change.
+
+    An EXPLICIT ``start_date`` is deliberately not clamped: ``bin/create.py`` passes exactly
+    ``date - get_ndays_of_data()``, and silently truncating a hand-run backfill would be the
+    "fails by doing less, with no log line" shape this file keeps getting bitten by. The clamp
+    logs when it fires, because that line is the only thing that would ever tell an operator a
+    channel had been dark for more than the retention window."""
     if not end_date:
         end_date = pytz.utc.localize(datetime.utcnow())
     if not start_date:
@@ -39,6 +61,16 @@ def put_filelog(channel, start_date=None, end_date=None):
                 start_date += relativedelta(seconds=1)
         else:
             start_date += relativedelta(seconds=1)
+        floor = end_date - relativedelta(days=config.get_ndays_of_data())
+        if start_date < floor:
+            logger.warning(
+                "put_filelog: %s was last ingested at %s, %d day(s) before the %d-day "
+                "retention window; clamping the pushlog request to %s. Everything older "
+                "would have been pruned by Node.clean in this same call.",
+                channel, start_date, (floor - start_date).days,
+                config.get_ndays_of_data(), floor,
+            )
+            start_date = floor
 
     logger.info(
         "Get pushlog data for {} ({} to {}): started".format(
@@ -185,8 +217,16 @@ def analyze_reports():
 
 
 def analyze_one_patch():
-    """Get a non-analyzed patch in the database and analyze it"""
-    nodeid, node, channel = models.Changeset.to_analyze()
+    """Get a non-analyzed patch in the database and analyze it.
+
+    SCOPED TO THE INGESTED CHANNELS. Unscoped, this is how a channel nobody turned on still
+    costs hg fetches: `to_analyze()` had no channel filter, so 19,527 `release` rows from one
+    accidental ingest pulled 2,628 `releases/mozilla-release` raw-revs through the serial patch
+    chain, for scores `Changeset.find` could never return (it filters `Node.channel ==
+    channel`). With `INGEST_CHANNELS` now failing closed, the residue of a channel that is
+    switched off stops being work."""
+    nodeid, node, channel = models.Changeset.to_analyze(
+        channels=config.get_ingest_channels())
     if node:
         try:
             data = patch.parse(node, channel=channel)
@@ -321,7 +361,7 @@ def update_all(products=None, channels=None, date=None):
     if products is None:
         products = config.get_products()
     if channels is None:
-        channels = os.getenv("INGEST_CHANNELS", "").split()
+        channels = config.get_ingest_channels()
         if not channels:
             # Loud, because the failure this replaces was silent in BOTH directions: an
             # unset variable quietly ingested release for a month, and a closed default

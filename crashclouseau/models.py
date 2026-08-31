@@ -374,18 +374,30 @@ class Changeset(db.Model):
         db.session.commit()
 
     @staticmethod
-    def to_analyze(chgsets=[], channel=""):
+    def to_analyze(chgsets=[], channel="", channels=None):
+        """Next unanalysed changeset, or the subset of *chgsets* needing analysis.
+
+        THE NO-CHANNEL FORM WAS THE ONE CHANNEL-BLIND PATH IN THE REPO, and it cost real money.
+        ``update.analyze_one_patch`` calls it with no argument to pull the next patch off the
+        serial chain, and it had no channel filter — so it happily picked up the 19,527
+        ``release`` rows a single accidental ingest left behind (see ``update.update_all``) and
+        fetched 2,628 ``releases/mozilla-release`` raw-revs off hg.mozilla.org, at the 3.45-6.51 s
+        a fetch this repo measures, for a channel nobody had turned on and which nothing could
+        read: ``Changeset.find`` filters ``Node.channel == channel``, so those scores were
+        unreachable by construction.
+
+        *channels* restricts it to the channels actually being ingested. ``None`` keeps the old
+        unfiltered behaviour for callers that genuinely want any channel."""
         if not channel:
             fl = (
                 db.session.query(Changeset.nodeid, Node.node, Node.channel)
                 .select_from(Changeset)
                 .join(Node)
             )
-            fl = (
-                fl.filter(Node.merge.is_(False), Changeset.analyzed.is_(False))
-                .distinct(Node.id)
-                .first()
-            )
+            fl = fl.filter(Node.merge.is_(False), Changeset.analyzed.is_(False))
+            if channels is not None:
+                fl = fl.filter(Node.channel.in_(list(channels)))
+            fl = fl.distinct(Node.id).first()
 
             return (fl.nodeid, fl.node, fl.channel) if fl else (None, None, None)
 
@@ -411,7 +423,13 @@ class Changeset(db.Model):
     @staticmethod
     def add(chgsets, date, channel):
         if not chgsets:
-            return LastDate.update(Node.get_min_date(channel), date, channel)
+            # STILL PRUNE, via the same call the non-empty path ends on. This used to be a bare
+            # `LastDate.update`, so a channel whose pushlog window happened to be empty kept
+            # rows past the retention window until its next NON-empty tick — and `Node.clean`
+            # does the `LastDate.update` itself, so this is strictly more work, not different
+            # work. Harmless on nightly (never empty) and a real gap on a slow channel: release
+            # ships every ~7 days, so most of its ticks are empty ones.
+            return Node.clean(date, channel)
 
         nodes = []
         files = set()
