@@ -485,7 +485,7 @@ def _open_bugs_for_signature(signature):
     sig = signature.strip()
     params = {
         "include_fields": "id,summary,status,resolution,creation_time,product,keywords,"
-                          "cf_crash_signature",
+                          "cf_crash_signature,regressed_by",
         "j_top": "OR",
         "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
         "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
@@ -500,9 +500,12 @@ def _open_bugs_for_signature(signature):
         # duplicate. A missed filing is recoverable; a duplicate on BMO is not.
         logger.warning("autofile: signature bug lookup failed for %r: %s", signature, exc)
         return None
+    # ``regressed_by`` rides along because it decides whether a venue wants our comment at
+    # all — see the gate in ``autofile_bug``. Free: same request, one more field.
     return [
         {"id": b["id"], "creation_time": b.get("creation_time"),
-         "product": b.get("product"), "keywords": b.get("keywords") or []}
+         "product": b.get("product"), "keywords": b.get("keywords") or [],
+         "regressed_by": b.get("regressed_by") or []}
         for b in sorted(bugs, key=lambda b: b.get("id", 0))
         if b.get("id") and _row_is_about(b, sig)
     ]
@@ -1355,6 +1358,37 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             return {"filed": False, "bug": fixed_by,
                     "skipped": "already fixed by bug {} (the fix postdates build {})".format(
                         fixed_by, bid)}
+
+    # ALREADY HAS A REGRESSOR, so there is nothing for us to say. Our comment makes ONE claim
+    # -- this changeset caused it -- and a venue whose `regressed_by` is already set has
+    # answered that question. Bug 2068006, 2026-09-01: yjuglaret set `regressed_by = 2056841`
+    # at 09:19, read off a three-thread ABBA deadlock cycle in the stacks, and release
+    # management had needinfo'd the regressor's author by 09:43. We commented at 10:27 naming a
+    # DIFFERENT bug at 72% -- noise laid over a solved question, on a bug somebody was already
+    # driving. It is the same failure the `regressed_by` PUT is already withheld for ("on
+    # somebody else's open bug the field is often already curated", and on bug 2057980 ours
+    # would have contradicted it); the comment is the louder half of it, and was ungated.
+    #
+    # THE FIELD, NOT THE `regression` KEYWORD. The keyword says a regression happened, which is
+    # the question we answer; `regressed_by` says somebody has answered it. Gating on the
+    # keyword would silence us on every bug bugbot has ever touched.
+    #
+    # Two exemptions, both because the comment is then not the claim this gate is about:
+    #
+    # * `incomplete_fix` -- that comment says a shipped fix did not hold and the crash is still
+    #   arriving, which is news to whoever named the original cause. The new-bug half of that
+    #   path strips `regression`/`regressed_by` from its payload for the same reason.
+    # * `withheld` -- a memory-safety crash does not comment here at all; the security branch
+    #   below declines the public venue and files a RESTRICTED bug. Skipping first would
+    #   produce nothing, which is the regression the carve-out above this was written to stop.
+    venue = next((b for b in existing if b["id"] == bug_id), {}) if bug_id is not None else {}
+    named = venue.get("regressed_by") or []
+    if named and not incomplete_fix and not withheld:
+        logger.info("autofile: bug %s already names its regressor (%s) — %s has nothing to add",
+                    bug_id, named, uuid)
+        return {"filed": False, "bug": bug_id, "regressor_already_named": named,
+                "skipped": "bug {} already names its regressor ({})".format(
+                    bug_id, ", ".join("bug {}".format(b) for b in named))}
 
     # Said it once already. `already_filed` above is keyed on the UUID, which is the wrong
     # grain: one (signature, build) splits into one cluster per distinct stack, each analysed

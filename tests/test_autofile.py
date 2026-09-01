@@ -65,15 +65,17 @@ def _cfg(**over):
     return base
 
 
-def _bug(bid, created=_RECENT, product="Core", keywords=()):
+def _bug(bid, created=_RECENT, product="Core", keywords=(), regressed_by=()):
     """One row of what `_open_bugs_for_signature` returns. A Firefox-side product by default:
     the age tests are about dates, and a bug in somebody else's product never reaches them.
 
     Created six days before `_LANDED` by default, i.e. INSIDE the 30-day window, so a test that
     is not about timing exercises the real age path rather than one of its fail-open branches.
-    No keywords: a `[meta]` tracker is not a venue (`_split_out_metas`)."""
+    No keywords: a `[meta]` tracker is not a venue (`_split_out_metas`). No `regressed_by`:
+    nobody has named this crash's cause yet, or we would have nothing to comment (see
+    `TestABugThatAlreadyNamesItsRegressor`)."""
     return {"id": bid, "creation_time": created, "product": product,
-            "keywords": list(keywords)}
+            "keywords": list(keywords), "regressed_by": list(regressed_by)}
 
 
 class _Base(unittest.TestCase):
@@ -505,8 +507,10 @@ class TestMetaBugsAreNotVenues(_Base):
 
 
 class TestTheLookupCarriesTheProduct(unittest.TestCase):
-    """The venue filter is blind unless BMO is asked for the product and the keywords, and that
-    request is the one place they can be lost."""
+    """The venue filter is blind unless BMO is asked for the product, the keywords and the
+    regressor, and that request is the one place they can be lost. A field the search does not
+    request comes back absent and its rule becomes a silent no-op — which is how ``blocks`` and
+    ``regressed_by`` were dead for weeks on the write side."""
 
     def test_the_search_asks_for_it_and_the_rows_carry_it(self):
         params = []
@@ -530,11 +534,29 @@ class TestTheLookupCarriesTheProduct(unittest.TestCase):
 
         with mock.patch.object(bugzilla_apply.net, "get", side_effect=fake_get):
             rows = bugzilla_apply._open_bugs_for_signature("mozilla::ipc::FatalError | Foo::Bar")
-        for field in ("product", "keywords", "cf_crash_signature"):
+        for field in ("product", "keywords", "cf_crash_signature", "regressed_by"):
             self.assertIn(field, params[0]["include_fields"])
+        # `regressed_by` absent from the answer is an empty list, not a `None`: the gate reads
+        # it as "nobody has named a cause", which is what an absent field means here.
         self.assertEqual(rows, [{"id": 2057980, "product": "MailNews Core",
-                                 "keywords": ["crash", "meta"],
+                                 "keywords": ["crash", "meta"], "regressed_by": [],
                                  "creation_time": "2026-07-27T07:40:41Z"}])
+
+    def test_a_named_regressor_reaches_the_row(self):
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"bugs": [{"id": 2068006, "product": "Core",
+                                  "cf_crash_signature": "[@ sig]",
+                                  "regressed_by": [2056841]}]}
+
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=lambda u, **kw: _Resp()):
+            rows = bugzilla_apply._open_bugs_for_signature("sig")
+        self.assertEqual(rows[0]["regressed_by"], [2056841])
 
     def test_the_summary_clause_is_ungated_and_asks_for_the_bracketed_form(self):
         # No `_is_specific_signature` any more: `memcpy` gets a summary clause too, and it is
@@ -1451,6 +1473,69 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         self.assertEqual(len(self.filed), 1)                  # recorded => no second comment
 
 
+class TestABugThatAlreadyNamesItsRegressor(_Base):
+    """Bug 2068006, 2026-09-01. `regressed_by = 2056841` was set at 09:19 off a three-thread
+    ABBA deadlock cycle read from the stacks; we commented at 10:27 naming a different bug at
+    72%. The venue had already answered the only question our comment asks."""
+
+    def test_no_comment_when_the_venue_already_has_a_regressor(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(4242, regressed_by=[2056841])]
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["bug"], 4242)
+        self.assertEqual(res["regressor_already_named"], [2056841])
+        self.assertIn("already names its regressor (bug 2056841)", res["skipped"])
+        self.assertEqual((self.comments, self.puts, self.created), ([], [], []))
+
+    def test_it_does_not_fall_through_to_a_NEW_bug(self):
+        # The gate has to SKIP, not decline the venue. Dropping 4242 from the venue list would
+        # send this straight down the file-a-new-bug branch and put a duplicate on BMO -- the
+        # one outcome the whole venue search exists to avoid.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(4242, regressed_by=[2056841])]
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.filed, [])
+        self._file()
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.filed, [])
+
+    def test_an_empty_regressed_by_still_comments(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(4242, regressed_by=[])]
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (4242, "comment_on_existing"))
+        self.assertEqual(len(self.comments), 1)
+
+    def test_the_regression_KEYWORD_alone_is_not_an_answer(self):
+        # "A regression happened" is the question we answer; `regressed_by` is the answer.
+        # Gating on the keyword would silence us on every bug bugbot has ever touched.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(4242, keywords=["crash", "regression"])]
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_a_NEW_bug_is_unaffected(self):
+        # No venue, no gate: `regressed_by` on some bug we are not writing in decides nothing.
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        self.assertEqual(self._file()["mode"], "new_bug")
+
+    def test_an_incomplete_fix_still_comments(self):
+        """That comment makes no causal claim — it says a shipped fix did not hold and the
+        crash is still arriving, which is news to whoever named the original cause. Reached on
+        an ABSTAIN, i.e. the branch where the verdict could not file at all."""
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(4242, regressed_by=[2056841])]
+        # A COPY of the preview: this branch asserts "no regression claim" by writing through
+        # the dict it was handed, and `_PREVIEW` is shared by every test in this module.
+        with mock.patch.object(bugzilla_apply, "_incomplete_fix_bug",
+                               return_value={"id": 2063862, "node": "abc",
+                                             "pushdate": _RECENT, "predates_days": 3}), \
+             mock.patch("crashclouseau.report_bug.build_bug_preview",
+                        return_value=dict(_PREVIEW)):
+            res = self._file(verdict="abstain", confidence=25)
+        self.assertEqual((res["bug"], res["mode"]), (4242, "comment_on_existing"))
+        self.assertEqual(len(self.comments), 1)
+
+
 class TestTheNeedinfoNeverTakesSomebodyElses(_Base):
     """Bug 2068006, 2026-09-01. release-mgmt-account-bot needinfo'd jjalkanen at 09:43 to review
     the regressor and set severity; our comment-on-existing PUT at 10:27 sent
@@ -1622,6 +1707,21 @@ class TestTheSecurityVenue(_Base):
         self.assertIn("security group", res["skipped"])
         self.assertEqual(self.created, [])
         self.assertEqual(self.comments, [])
+
+    def test_a_named_regressor_on_the_public_bug_does_not_swallow_the_restricted_filing(self):
+        """The regressor gate must not fire ahead of this branch. Skipping there would produce
+        NOTHING for a memory-safety crash — no restricted bug, no comment, no record — which is
+        the regression the `mode == "skip"` carve-out above it was written to stop."""
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[{"id": 2064600, "creation_time": _RECENT,
+                                              "product": "Core", "keywords": [],
+                                              "regressed_by": [2056841]}]):
+            res = self._file_unsafe()
+        self.assertEqual(self.comments, [], "must not comment on the public bug")
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "new_bug")
+        self.assertEqual(res["public_venue_declined"], 2064600)
+        self.assertEqual(self.created[0]["groups"], ["core-security"])
 
     def test_the_public_venue_is_declined_and_a_restricted_bug_filed_instead(self):
         """`_open_bugs_for_signature` is unauthenticated by design, so an existing venue is
