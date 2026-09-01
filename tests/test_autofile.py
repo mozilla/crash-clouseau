@@ -117,6 +117,9 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply, "_candidate_landed", return_value=_LANDED),
             # Never reopened, unless a test says otherwise (it is a Bugzilla request).
             mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None),
+            # Read before the needinfo PUT on the comment-on-existing branch, and it is a
+            # Bugzilla request: nobody is needinfo'd on the venue unless a test says so.
+            mock.patch.object(bugzilla_apply, "_existing_needinfos", return_value=set()),
             mock.patch.object(bugzilla_apply, "_create_bug",
                               side_effect=lambda p, t: self.created.append(p) or 999),
             mock.patch.object(bugzilla_apply, "_post_comment",
@@ -1446,6 +1449,121 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         self.assertEqual(res["needinfo_failed"], "dev@moz.example")
         self.assertEqual(len(self.comments), 1)
         self.assertEqual(len(self.filed), 1)                  # recorded => no second comment
+
+
+class TestTheNeedinfoNeverTakesSomebodyElses(_Base):
+    """Bug 2068006, 2026-09-01. release-mgmt-account-bot needinfo'd jjalkanen at 09:43 to review
+    the regressor and set severity; our comment-on-existing PUT at 10:27 sent
+    ``{"name": "needinfo", "requestee": jstutte}`` and BMO, matching by flag TYPE, MOVED the
+    existing flag — jjalkanen's question vanished and jstutte cleared ours 50 minutes later.
+
+    Two rules come out of it: never overwrite (``new: true``), and never ask the same person
+    twice (read the flags first)."""
+
+    def setUp(self):
+        super().setUp()
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(4242)]
+
+    def test_the_flag_is_added_not_reassigned(self):
+        res = self._file()
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+        self.assertEqual(self.puts, [(4242, {"flags": [{"name": "needinfo", "status": "?",
+                                                        "requestee": "dev@moz.example",
+                                                        "new": True}]})])
+
+    def test_somebody_elses_pending_needinfo_does_not_stop_ours(self):
+        # The rule is per-PERSON, not per-bug: a triage question already asked of someone else
+        # is exactly the case `new: true` exists for, and it must not silence our ask.
+        bugzilla_apply._existing_needinfos.return_value = {"someone@moz.example"}
+        res = self._file()
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+        self.assertEqual(len(self.puts), 1)
+        self.assertNotIn("needinfo_already_set", res)
+
+    def test_a_pending_needinfo_on_our_own_requestee_is_not_asked_twice(self):
+        bugzilla_apply._existing_needinfos.return_value = {"dev@moz.example"}
+        res = self._file()
+        self.assertEqual(self.puts, [])                        # no flag write at all
+        self.assertEqual(res["needinfo_already_set"], "dev@moz.example")
+        self.assertEqual(res["needinfo"], "dev@moz.example")   # they are still on the hook
+        self.assertNotIn("needinfo_failed", res)
+        self.assertEqual(len(self.comments), 1)                # the analysis is posted anyway
+        self.assertEqual(len(self.filed), 1)
+
+    def test_the_match_ignores_address_case(self):
+        bugzilla_apply._existing_needinfos.return_value = {"dev@moz.example"}
+        preview = dict(_PREVIEW, needinfo_email="Dev@Moz.Example")
+        with mock.patch("crashclouseau.report_bug.build_bug_preview", return_value=preview):
+            res = self._file()
+        self.assertEqual(res["needinfo_already_set"], "Dev@Moz.Example")
+        self.assertEqual(self.puts, [])
+
+    def test_an_unreadable_flag_list_skips_the_needinfo_and_keeps_the_comment(self):
+        # Fail CLOSED: with no flag list there is no evidence the person is not already
+        # needinfo'd. The comment is already posted, so this must be recorded, not raised.
+        bugzilla_apply._existing_needinfos.return_value = None
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(self.puts, [])
+        self.assertIsNone(res["needinfo"])
+        self.assertEqual(res["needinfo_failed"], "dev@moz.example")
+        self.assertEqual(len(self.filed), 1)
+
+    def test_a_new_bug_is_never_flag_checked(self):
+        # A bug that does not exist yet has no flags to collide with, and `new` is not a
+        # create-time key. One request, and the created payload keeps its plain flag.
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        res = self._file()
+        self.assertEqual(res["mode"], "new_bug")
+        bugzilla_apply._existing_needinfos.assert_not_called()
+        self.assertEqual(self.created[0]["flags"],
+                         [{"name": "needinfo", "status": "?", "requestee": "dev@moz.example"}])
+
+
+class TestTheFlagLookup(unittest.TestCase):
+    """``_existing_needinfos`` itself — the read the duplicate rule rests on."""
+
+    def _flags(self, flags, status=200):
+        class _Resp:
+            status_code = status
+
+            def raise_for_status(self):
+                if status >= 400:
+                    raise RuntimeError("boom")
+
+            def json(self):
+                return {"bugs": [{"id": 4242, "flags": flags}]}
+
+        self.calls = []
+
+        def fake_get(url, **kw):
+            self.calls.append((url, kw))
+            return _Resp()
+
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=fake_get):
+            return bugzilla_apply._existing_needinfos(4242, "tok")
+
+    def test_only_pending_needinfos_count(self):
+        # A granted/denied needinfo and another flag type are not pending questions: `+`/`-`
+        # is an ANSWERED one, and re-asking is the whole point of the comment.
+        got = self._flags([
+            {"name": "needinfo", "status": "?", "requestee": "Pending@moz.example"},
+            {"name": "needinfo", "status": "+", "requestee": "answered@moz.example"},
+            {"name": "needinfo", "status": "?"},                       # no requestee
+            {"name": "in-testsuite", "status": "?", "requestee": "other@moz.example"},
+        ])
+        self.assertEqual(got, {"pending@moz.example"})
+
+    def test_the_read_is_authenticated(self):
+        # Logged out, BMO masks the requestee login, and a masked address matches nobody --
+        # every needinfo would read as somebody else's and we would ask again.
+        self._flags([])
+        self.assertEqual(self.calls[0][1]["headers"]["X-Bugzilla-API-Key"], "tok")
+
+    def test_a_failure_is_none_not_an_empty_set(self):
+        # `set()` means "nobody is needinfo'd" and would let the PUT through; the caller has
+        # to be able to tell that apart from "BMO did not answer".
+        self.assertIsNone(self._flags([], status=500))
 
 
 _UNSAFE = {"candidate": {"node": "n"},

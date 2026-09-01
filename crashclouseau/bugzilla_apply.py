@@ -323,10 +323,58 @@ def _create_bug_keeping_the_bug(payload, token):
             raise exc
 
 
+def _existing_needinfos(bug_id, token):
+    """The logins that already have a pending ``needinfo?`` on *bug_id*, lowercased, or
+    ``None`` when BMO could not be read.
+
+    Authenticated, unlike the other reads here: to a logged-out client Bugzilla hides the
+    requestee behind a masked login, and a masked address matches nobody, so an anonymous
+    read would report every needinfo as somebody else's."""
+    try:
+        r = net.get(
+            "{}/{}".format(_bz_rest(), bug_id),
+            headers={"X-Bugzilla-API-Key": token},
+            params={"include_fields": "flags"},
+            timeout=_HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: flag lookup failed for bug %s: %s", bug_id, exc)
+        return None
+    return {
+        f["requestee"].lower()
+        for f in ((bugs[0] if bugs else {}).get("flags") or [])
+        if f.get("name") == "needinfo" and f.get("status") == "?" and f.get("requestee")
+    }
+
+
+_NEEDINFO_ALREADY = "already_set"
+
+
 def _set_needinfo(bug_id, email, token):
-    """Set the needinfo flag on an existing bug. Returns the exception on failure, ``None``
-    on success — it never raises, because every caller has already made a write it must not
-    lose."""
+    """Ask *email* for information on an existing bug, unless somebody already has.
+
+    Returns ``None`` when we set the flag, ``_NEEDINFO_ALREADY`` when *email* was already on
+    the hook, and the exception on failure — it never raises, because every caller has
+    already made a write it must not lose.
+
+    Two people needinfo'd on one bug is normal and ``_needinfo_changes`` now adds rather than
+    replaces, so the only thing left to avoid is asking the SAME person twice: our comment
+    would put a second ``needinfo?(x)`` under a question x has not answered yet, which reads
+    as a nag and tells them nothing new. The pending flag they already have covers our ask.
+
+    Fails CLOSED when the flags cannot be read. ``new: true`` would keep the write safe for
+    everyone else, but the point of the read is the duplicate, and there is no evidence for
+    "not asked yet" if BMO would not say. A skipped needinfo is recorded and recoverable; the
+    comment naming the regressor is posted either way."""
+    existing = _existing_needinfos(bug_id, token)
+    if existing is None:
+        return RuntimeError("could not read the flags on bug {}".format(bug_id))
+    if email.lower() in existing:
+        logger.info("autofile: bug %s already has a needinfo on %s; not asking twice",
+                    bug_id, email)
+        return _NEEDINFO_ALREADY
     try:
         _put_bug(bug_id, _needinfo_changes(email), token)
         return None
@@ -1008,8 +1056,20 @@ def _is_unsymbolicated(signature):
 
 
 def _needinfo_changes(email):
-    """The PUT body that sets a needinfo flag on an existing bug."""
-    return {"flags": [{"name": "needinfo", "status": "?", "requestee": email}]}
+    """The PUT body that ADDS a needinfo flag to an existing bug.
+
+    ``new`` is the whole point, and it cost a bug. A flag change identified only by ``name``
+    is an UPDATE: BMO looks for a flag of that type already on the bug and rewrites it, so
+    ``{"name": "needinfo", "requestee": <us>}`` silently reassigns somebody else's pending
+    question instead of asking our own. On bug 2068006 (2026-09-01) release-mgmt-account-bot
+    needinfo'd jjalkanen at 09:43 to review the regressor and set severity; our comment's PUT
+    at 10:27 moved that flag to jstutte, who cleared it 50 minutes later — the release ask was
+    gone, and nothing in our result dict knew it had ever existed. ``new: true`` makes it an
+    addition, which is what we always meant.
+
+    Not used on the create path: a bug that does not exist yet has no flag to collide with,
+    and create validates its ``flags`` differently."""
+    return {"flags": [{"name": "needinfo", "status": "?", "requestee": email, "new": True}]}
 
 
 def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
@@ -1437,11 +1497,18 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             # The comment is already posted, so a failing needinfo must not escape: it would
             # skip ``record_filed_bug`` below and the next run would comment a second time on
             # the same bug. Lose the flag, keep the filing.
-            failed = _set_needinfo(bug_id, email, token) if email else None
+            outcome = _set_needinfo(bug_id, email, token) if email else None
+            failed = isinstance(outcome, Exception)
             result.update({"filed": True, "bug": bug_id, "mode": "comment_on_existing",
                            "needinfo": None if failed else (email or None)})
             if failed:
                 result["needinfo_failed"] = email
+            elif outcome == _NEEDINFO_ALREADY:
+                # ``needinfo`` above still names them — they ARE on the hook, which is what
+                # the feedback loop reads it for — but WE did not put them there, and that
+                # difference is the only way to tell a quiet no-op from a working ask when
+                # this rule is next audited.
+                result["needinfo_already_set"] = email
         else:
             # `groups` and `cc` are in this tuple, and a test asserts they reach the POSTED
             # BODY rather than merely the preview. A key the preview sets and this filter drops
