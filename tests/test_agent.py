@@ -154,6 +154,20 @@ class TestBuildOptions(unittest.TestCase):
         self.assertIn("mcp__patch__diff", o.agents["data-flow-tracer"].tools)
         self.assertIn("mcp__patch__diff", o.agents["skeptic"].tools)
 
+    def test_call_graph_trio_reaches_the_mechanism_writers(self):
+        """patch-scout and data-flow-tracer write the mechanism; until 2026-09-02 they could
+        `define`/`search`/`field_layout` but never ask who calls a symbol. The TRIO only:
+        `lookup` stays with the explorer and the skeptic."""
+        o = self._opts()
+        trio = {"mcp__searchfox__calls_from", "mcp__searchfox__calls_to",
+                "mcp__searchfox__calls_between"}
+        for role in ("patch-scout", "data-flow-tracer"):
+            tools = set(o.agents[role].tools)
+            self.assertTrue(trio <= tools, (role, sorted(tools)))
+            self.assertNotIn("mcp__searchfox__lookup", tools, role)
+            self.assertIn("mcp__searchfox__field_layout", tools, role)
+            self.assertIn("FULLY QUALIFIED", o.agents[role].prompt, role)
+
     def test_user_prompt_lists_candidates(self):
         crash = dict(_CRASH, candidates=[
             {"node": "abc123def456", "score": 9, "bug": 111, "backedout": False},

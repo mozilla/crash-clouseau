@@ -22,6 +22,12 @@ _SEARCHFOX = [
     for name in ("calls_from", "calls_to", "calls_between", "define", "lookup",
                  "search", "field_layout")
 ]
+# The call-graph trio on its own, for the two roles that WRITE the mechanism (patch-scout,
+# data-flow-tracer). They had define/search/field_layout but no way to ask "who calls this";
+# the tracer's own prompt says "read the path bodies" with nothing to establish the path.
+# Granted 2026-09-02, after c171585's re-qualification retry had been read in prod
+# (calls_to 29.1% -> 13.5% empty, calls_from 30.2% -> 5.8%). `lookup` stays withheld.
+_CALLGRAPH = [f"mcp__searchfox__{name}" for name in ("calls_from", "calls_to", "calls_between")]
 # Deterministic #14 patch-extraction, exposed as a tool so patch-scout /
 # data-flow / skeptic read a candidate's diff in one fast call instead of
 # shelling out.
@@ -221,7 +227,10 @@ _ROLES: dict[str, dict] = {
         "the likely regressor use `mcp__history__file_history` (recent changes to the "
         "crashing file/area) and `mcp__history__changeset` to inspect a candidate; "
         "`mcp__history__blame` blames the crashing line. Do NOT shell out with "
-        "git/hg/curl. Match changed functions to the neighborhood and write a one-line, "
+        "git/hg/curl. Where a changed function is missing from the neighborhood, `calls_to`/"
+        "`calls_from` bridge it to a crash frame — pass symbols FULLY QUALIFIED (every "
+        "namespace, no template `<...>` args); an EMPTY graph is an unanswered question, not "
+        "proof that nothing calls it. Match changed functions to the neighborhood and write a one-line, "
         "fully-cited semantic summary per candidate (cite the diff line and the "
         "searchfox symbol). Treat the provided seed list as a priority queue, not as "
         "proof that no off-stack candidate exists: if neighborhood files/functions "
@@ -241,14 +250,17 @@ _ROLES: dict[str, dict] = {
         "\"content\":\"exact tool line\"}]}]." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY, *_SOURCE,
                   "mcp__searchfox__define", "mcp__searchfox__search",
-                  "mcp__searchfox__field_layout"],
+                  "mcp__searchfox__field_layout", *_CALLGRAPH],
     },
     "data-flow-tracer": {
         "description": "Read the function bodies along a call path and decide whether "
         "a change can free/mutate/null/overrun the crashing value.",
         "prompt": "You are the data-flow tracer. For a (candidate patch, crash frame) "
-        "pair, read the changed lines with `mcp__patch__diff` and the path bodies with "
-        "define, then reason about whether the change can free/mutate/null/overrun the "
+        "pair, read the changed lines with `mcp__patch__diff`; when the neighborhood does not "
+        "already give the path from the changed function to the crash frame, establish it with "
+        "`calls_to`/`calls_from`/`calls_between` (symbols FULLY QUALIFIED — every namespace, no "
+        "template `<...>` args; an EMPTY graph is unanswered, not an absence); read the path "
+        "bodies with define, then reason about whether the change can free/mutate/null/overrun the "
         "value the crash site dereferences. For a null_deref (or any small faulting "
         "address 0xN), CONFIRM the fault: call `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (copy the namespaces from the crash signature/"
@@ -273,7 +285,7 @@ _ROLES: dict[str, dict] = {
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY, *_SOURCE,
                   "mcp__searchfox__define", "mcp__searchfox__search",
-                  "mcp__searchfox__field_layout"],
+                  "mcp__searchfox__field_layout", *_CALLGRAPH],
     },
     "skeptic": {
         "description": "Trust guardrail: catch NOISE — a coincidental or innocent "
