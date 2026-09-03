@@ -324,6 +324,12 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # against production's 5 of 20) and these two are how the DEPLOYED rate gets read off the
         # persisted dossiers instead. Nothing may gate on them until that read exists.
         "candidate_window_hours", "candidate_window_widened",
+        # Why the age gate recorded staleness but did not clamp (`rate` / `watchdog`). Write-only
+        # until its firing rate has been read off the persisted dossiers: the waiver was
+        # motivated by one confirmed case (bug 2063892), and how often it spares a lead the age
+        # argument would have been RIGHT about is the number that decides whether a surface
+        # should say so.
+        "stale_signature_waived",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

@@ -1975,6 +1975,29 @@ _STALE_SIGNATURE_CLAMP = {
 }
 
 
+def _frequency_regression_reasons(seed):
+    """Why the signature's AGE says nothing about this crash's candidate, as a list of tags --
+    ``rate`` when the rollup shows its exposure-normalised rate rising (``sigtrend.is_rising``),
+    ``watchdog`` when nothing faulted and a timeout killed the process
+    (``utils.is_watchdog_crash``). Empty for an ordinary fault, where the age gate's premise
+    holds. Read off the seed only: no lookup, never raises."""
+    from crashclouseau import sigtrend
+
+    seed = seed or {}
+    reasons = []
+    if sigtrend.is_rising(seed.get("signature_trend") or {}):
+        reasons.append("rate")
+    raw = seed.get("raw_crash") or {}
+    dump = raw.get("json_dump") or {}
+    if utils.is_watchdog_crash(
+        seed.get("signature") or raw.get("signature"),
+        raw.get("report_type"),
+        raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+    ):
+        reasons.append("watchdog")
+    return reasons
+
+
 def _apply_signature_age_gate(dossier, seed):
     """DOWNWEIGHT a lead whose CANDIDATE landed after the crash already existed.
 
@@ -2054,6 +2077,24 @@ def _apply_signature_age_gate(dossier, seed):
         "candidate_landed_after_first_seen_days": landed_after,
         "signature_first_seen_buildid": first_seen,
     }
+    waived = _frequency_regression_reasons(seed)
+    if waived:
+        # THE GATE'S PREMISE DOES NOT HOLD, so record the timing and move nothing. "Landing late
+        # disproves ORIGIN" is only a downweight when origin is the question. It is not the
+        # question for a signature whose RATE is rising (the crash existed; something made it
+        # frequent) nor for a hang / timeout crash (the watchdog fires whenever the awaited work
+        # exceeds its budget, and a change that adds work regresses it without introducing it).
+        # 2026-08-15: a `shutdownhang | ... QuotaManager::Observer::Observe` lead named the
+        # nightly-only rescan of bug 2058982; the age argument refuted it; the module owner
+        # confirmed the same change as the regressor the next day (bug 2063892).
+        flags["stale_signature_waived"] = ",".join(waived)
+        dossier.corroborations = {**(dossier.corroborations or {}), **flags}
+        logger.info(
+            "agent: candidate %s landed %.1fd AFTER this signature was first seen (%s) but "
+            "the age gate is waived (%s) for %s",
+            cand.node, landed_after, first_seen, ",".join(waived), (seed or {}).get("uuid"),
+        )
+        return
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
     if v.decision != Decision.lead:
         # strong-evidence / abstain: record the fact, do not move the band (see the docstring).

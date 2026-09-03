@@ -108,12 +108,18 @@ def _beta(crash, ages=False):
 # saying `abstain` is "ONLY for genuine noise" -- measurably false, 71% of abstains are
 # model-authored conclusions -- with eight words and a clause each. The first draft cost 1,715
 # and this ledger is what sent it back to be halved.
+#
+# 2026-09-03, the two HANG rows +607 (1901 -> 2508, 2675 -> 3285), faults untouched: the
+# `_watchdog_lines` block, three sentences saying what a timeout crash is. It buys back the two
+# arguments that refuted a confirmed regressor on 2026-08-15 -- "touches no code on the stack"
+# and "the signature predates the change" -- both of which are right for a fault and inverted
+# for a watchdog. The first draft was 700; this ledger sent it back.
 _MEASURED = {
     "system.md": (17115, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
-    "crash facts, 40-thread parent hang": (1901, 200),
-    "user prompt, 40-thread parent hang": (2675, 300),
+    "crash facts, 40-thread parent hang": (2508, 200),
+    "user prompt, 40-thread parent hang": (3285, 300),
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.

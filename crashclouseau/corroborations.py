@@ -143,6 +143,14 @@ REGISTRY = {
         "independent blind agreement is about the MECHANISM. Both surfaces now say so — that "
         "round trip was invisible until 2026-08-21."),
     "signature_report_count": ("evidence", ("agent/orchestrator.py",), ""),
+    "stale_signature_waived": (
+        "diagnostic", (),
+        "Why the age gate recorded `stale_signature` but did NOT clamp: `rate` (the rollup says "
+        "the signature's exposure-normalised rate is rising) and/or `watchdog` (a hang or "
+        "timeout crash, which fires whenever the awaited work exceeds its budget). For either, a "
+        "candidate landing after the signature's first appearance disproves nothing -- on "
+        "2026-08-15 that argument refuted the lead the module owner confirmed the next day (bug "
+        "2063892). Write-only until the waiver's rate is read off the persisted dossiers."),
 
     # -- signature crash RATE (`sigtrend.trend_facts`) -----------------------------------------
     # The quantity the build-day spike rule structurally cannot compute, and the reason bug

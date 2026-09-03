@@ -67,7 +67,12 @@ _SYSTEM = (
     "- crash-stats (mcp__socorro__crash_stats): this signature's occurrence breakdown — the "
     "buildid it was FIRST seen in (searched over a year of crash reports, so it may predate "
     "this build by months) and the OS/CPU/process-type/channel/moz_crash_reason facets; a "
-    "lopsided facet narrows the likely change.\n\n"
+    "lopsided facet narrows the likely change. An old first-seen build is NOT by itself a "
+    "refutation: a change can make an existing crash FREQUENT without introducing it, and a "
+    "hang or timeout signature fires whenever the awaited work exceeds its budget. For a crash "
+    "whose rate has risen, or a shutdownhang / AsyncShutdownTimeout / watchdog crash, judge "
+    "whether the change adds work, I/O or blocking to the path being waited on -- even when it "
+    "touches no code on the stack -- and say so rather than arguing from the signature's age.\n\n"
     "End your reply with EXACTLY one fenced block:\n"
     "```json\n"
     '{"corroborates": true|false|null, "confidence": "low|medium|high", '

@@ -34,7 +34,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from crashclouseau import config, sigage
+from crashclouseau import config, sigage, utils
 from crashclouseau.agent import roles
 from crashclouseau.logger import logger
 from crashclouseau.agent.errors import MissingHandoffError
@@ -654,7 +654,42 @@ def _signature_trend_lines(crash: dict) -> list[str]:
         "failure: on a rise like this the crash stack typically does not change at all. Treat it "
         "as a reason to look for something that made this code path more likely to fail — a "
         "timing, size, ordering or configuration change — rather than for whatever first "
-        "introduced the crash, which may be years old.",
+        "introduced the crash, which may be years old. The signature's first-seen build "
+        "therefore does NOT rule a candidate out: a change that landed long after this crash "
+        "first appeared can still be what made it frequent.",
+    ]
+
+
+def _watchdog_lines(crash: dict) -> list[str]:
+    """What a hang / timeout crash IS, as prompt lines, or ``[]`` for a fault.
+
+    Shared with the blind second opinion through ``_crash_facts``, like the rate block: it is a
+    fact about the report, not a direction. Both models otherwise reason about it as a fault, and
+    the two arguments that follow from that are inverted here. "The change touches no code on
+    the stack and cannot itself hang" -- the stack is the WATCHDOG's or the waiting thread's, and
+    the work being waited on is elsewhere by construction. "The signature predates the change" --
+    a watchdog signature fires whenever the awaited work exceeds its budget, so it is typically
+    years old and a change that adds work regresses it without introducing it. On 2026-08-15 both
+    were used to refute a lead the module owner confirmed the next day (bug 2063892)."""
+    raw = crash.get("raw_crash") or {}
+    dump = raw.get("json_dump") or {}
+    if not utils.is_watchdog_crash(
+        crash.get("signature") or raw.get("signature"),
+        raw.get("report_type"),
+        raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+    ):
+        return []
+    return [
+        "",
+        "WATCHDOG / TIMEOUT CRASH: nothing faulted at the crashing frame; a watchdog killed the "
+        "process because work elsewhere exceeded a time budget. Ask what made that work slower, "
+        "not what is wrong with the frames shown.",
+        "  A candidate explains this crash if it adds time to the awaited work (more I/O, more "
+        "items, an extra fsync, rescan or lock, a wait on another thread), even when it touches "
+        "no code on this stack.",
+        "  The signature's age is NOT a refutation: a timeout signature fires whenever the budget "
+        "is exceeded, so it is usually years old, and a change that adds work regresses it "
+        "without introducing it.",
     ]
 
 
@@ -1305,6 +1340,7 @@ def _crash_facts(crash: dict) -> list[str]:
             lines.append(f"{label}: {value}")
     # Before the signature-level block below, because it is still a fact about THIS report.
     lines += _thread_inventory(raw)
+    lines += _watchdog_lines(crash)
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)
