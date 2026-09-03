@@ -348,6 +348,69 @@ def trend_facts(product, channel, signature, asof=None,
     if not exposure:
         return {}
     series = models.SignatureDaily.series(product, channel, signature, base_start, win_end)
+    # Two statements, not `return _facts_from_series(...)`: the corroboration-registry scanner
+    # follows a carrier through `x = call()` / `return x`, and a bare `return call()` would hide
+    # every `signature_trend_*` write from it.
+    facts = _facts_from_series(series, exposure, asof, window=window, baseline=baseline)
+    return facts
+
+
+def rising_candidates(product, channel, asof=None, exclude=()):
+    """Every signature family whose rate ``is_rising`` as of *asof*, best statistic first, as
+    ``[(family, [members], facts)]``. Empty when the rollup cannot answer.
+
+    THE SELECTION PATH THE SPIKE TEST CANNOT BE. ``utils.evaluate_days`` asks whether ONE
+    build-day is 3x the loudest of the three before it, so a rise spread over days never fires
+    it: ``QuotaManager::Shutdown::<T>::operator()`` tripled on nightly between 2026-07-16 and
+    07-21 with a loudest build-day of 2.25x, while this statistic read 3.7-4.7x from 07-21 to
+    07-27. The two are complementary, not redundant -- replayed over the 30 days to 2026-09-03,
+    ~1.9 of nightly's ~6.7 daily rising episodes had not been spike-selected within a week.
+
+    Merged over lambda families (``utils.lambda_family``): the two demanglings of one lambda are
+    two Socorro signatures with one rate. Excludes any family with a member in *exclude* (the
+    pairs the spike test already took this run). Ranked by ``signature_trend_score`` -- lower is
+    a rarer tail -- because the caller has a daily BUDGET, and ordering is the one use the trend
+    study validated the tail for. Existing signatures only, by construction: with no baseline
+    installs there is no ``expected`` and therefore no ratio."""
+    asof = asof or date.today()
+    win_start = asof - timedelta(days=WINDOW_DAYS - 1)
+    base_start = win_start - timedelta(days=BASELINE_DAYS)
+    exposure = models.ChannelDaily.series(product, channel, base_start, asof)
+    if not exposure:
+        return []
+    all_series = models.SignatureDaily.series_all(product, channel, base_start, asof)
+    families = {}
+    for sgn in all_series:
+        families.setdefault(utils.lambda_family(sgn), []).append(sgn)
+    excluded = set(exclude)
+    out = []
+    for family, members in families.items():
+        if excluded.intersection(members):
+            continue
+        if not any(d >= win_start for m in members for d in all_series[m]):
+            continue
+        merged = {}
+        for m in members:
+            for d, (reports, installs) in all_series[m].items():
+                r, i = merged.get(d, (0, 0))
+                merged[d] = (r + reports, i + installs)
+        facts = _facts_from_series(merged, exposure, asof)
+        if not is_rising(facts):
+            continue
+        out.append((family, sorted(members), facts))
+    out.sort(key=lambda t: (t[2].get("signature_trend_score", 1.0),
+                            -t[2].get("signature_trend_installs", 0)))
+    return out
+
+
+def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASELINE_DAYS):
+    """``trend_facts``' arithmetic over an already-fetched ``{day: (reports, installs)}`` series
+    and exposure -- so a scan over every signature reads the channel once, not once per
+    signature."""
+    win_end = asof
+    win_start = asof - timedelta(days=window - 1)
+    base_end = win_start - timedelta(days=1)
+    base_start = base_end - timedelta(days=baseline - 1)
 
     w_ins, w_rep, w_exp, w_days = _window_sums(series, exposure, win_start, win_end)
     b_ins, b_rep, b_exp, b_days = _window_sums(series, exposure, base_start, base_end)

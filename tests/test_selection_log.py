@@ -153,6 +153,7 @@ class TestOutcomeVocabulary(unittest.TestCase):
                     utils.BELOW_INSTALL_THRESHOLD,
                     utils.IMMATURE,
                     utils.DROPPED_NO_USERS,
+                    utils.RISING_RATE,
                 }
             ),
         )

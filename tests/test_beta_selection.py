@@ -303,6 +303,9 @@ def _collect(population, channel="beta", date=datetime(2026, 8, 18), builds=None
         # decision is made before them.
         mock.patch.object(dc, "get_proto_small"),
         mock.patch.object(dc, "get_proto_big"),
+        # The rate path reads the daily rollup and the selection log (`test_frequency_regression`
+        # covers it); here only the spike test is under test.
+        mock.patch.object(dc, "_rising_picks", return_value={}),
     ]
     if builds is not None:
         patches.append(

@@ -11,7 +11,7 @@ from libmozdata import socorro, utils as lmdutils
 from libmozdata.connection import Connection, Query
 import pytz
 import re
-from . import config, models, utils
+from . import config, models, sigtrend, utils
 from .logger import logger
 
 
@@ -322,6 +322,53 @@ def get_new_signatures(product, channel, date):
     big_data = {}
     small_data = {}
     selection = []
+    # What the spike test declined, series and all, for the rate path below.
+    declined = {}
+    # ONE LAMBDA, TWO SIGNATURES (`utils.lambda_family`): a family is decided ONCE, on the
+    # summed series, and each member then carries its own share of the picked builds. Split,
+    # the 2026-08-14 nightly build-day of `QuotaManager::Shutdown::<T>::operator()` read 19 vs
+    # a bar of 21 on one half and 8 vs 9 on the other; merged, 27 vs 27 fires.
+    families = utils.lambda_families(data)
+    decided = set()
+
+    def decide(numbers):
+        """The spike test over one series minus the no-user build-days; ``None`` when nothing
+        is left to test."""
+        if dead_days:
+            numbers = {d: v for d, v in numbers.items() if d not in dead_days}
+            if not numbers:
+                return None
+        return utils.evaluate_days(
+            numbers,
+            shift,
+            threshold,
+            floor,
+            ratio,
+            today=date,
+            mature_after=mature_after,
+            mature_installs=mature_installs,
+        )
+
+    def keep(sgn, bids, big):
+        d = {
+            "bids": bids,
+            "protos": {b: [] for b in bids},
+            "installs": {b: 0 for b in bids},
+        }
+        if big:
+            big_data[sgn] = d
+        else:
+            small_data[sgn] = d
+
+    def worth_logging(records):
+        # Keep every decision that is not a plain "nothing happened", plus the loud days
+        # that did not spike -- "we had N crashes and you did nothing" is a question the
+        # pipeline could not answer before. Everything quieter is dropped: it is the
+        # overwhelming majority and it carries no signal.
+        return [
+            rec for rec in records
+            if rec["outcome"] != utils.NOT_SPIKING or rec["count"] >= floor
+        ]
 
     for sgn, numbers in data.items():
         # The drop leaves a trace, at this table's own grain: one row per signature that
@@ -332,43 +379,48 @@ def get_new_signatures(product, channel, date):
             dict(rec, signature=sgn)
             for rec in dropped_day_records(numbers, dead_days)
         )
-        if dead_days:
-            numbers = {d: v for d, v in numbers.items() if d not in dead_days}
-            if not numbers:
+        members = families.get(sgn)
+        if members:
+            if sgn in decided:
                 continue
-        bids, big, records = utils.evaluate_days(
-            numbers,
-            shift,
-            threshold,
-            floor,
-            ratio,
-            today=date,
-            mature_after=mature_after,
-            mature_installs=mature_installs,
-        )
-        # Keep every decision that is not a plain "nothing happened", plus the loud days
-        # that did not spike -- "we had N crashes and you did nothing" is a question the
-        # pipeline could not answer before. Everything quieter is dropped: it is the
-        # overwhelming majority and it carries no signal.
-        selection.extend(
-            dict(rec, signature=sgn)
-            for rec in records
-            if rec["outcome"] != utils.NOT_SPIKING or rec["count"] >= floor
-        )
+            decided.update(members)
+            verdict = decide(utils.merge_day_series([data[m] for m in members]))
+            if verdict is None:
+                continue
+            bids, big, records = verdict
+            for m in members:
+                others = [o for o in members if o != m]
+                selection.extend(
+                    dict(rec, signature=m, merged_with=others)
+                    for rec in worth_logging(records)
+                )
+                # This member's own crashes on the builds the FAMILY picked; a half with none
+                # there has no proto-signatures to fetch.
+                own = {}
+                for b in bids:
+                    n = sum(e["bids"].get(b, 0) for e in data[m].values())
+                    if n:
+                        own[b] = n
+                if own:
+                    keep(m, own, big)
+                elif not bids:
+                    declined[m] = data[m]
+            continue
+        verdict = decide(numbers)
+        if verdict is None:
+            continue
+        bids, big, records = verdict
+        selection.extend(dict(rec, signature=sgn) for rec in worth_logging(records))
         if bids:
-            d = {
-                "bids": bids,
-                "protos": {b: [] for b in bids},
-                "installs": {b: 0 for b in bids},
-            }
-            if big:
-                big_data[sgn] = d
-            else:
-                small_data[sgn] = d
+            keep(sgn, bids, big)
         else:
-            data[sgn] = None
+            declined[sgn] = numbers
 
+    rising_data = _rising_picks(
+        product, channel, date, declined, set(big_data) | set(small_data), threshold, selection
+    )
     del data
+    del declined
 
     logger.info("Get crash numbers for {}-{}: finished.".format(product, channel))
     if big_data:
@@ -377,7 +429,14 @@ def get_new_signatures(product, channel, date):
     if small_data:
         get_proto_small(product, small_data, search_date, channel)
 
+    if rising_data:
+        get_proto_small(
+            product, rising_data, search_date, channel,
+            proto_cap=config.get_spike("rising_protos", product, channel),
+        )
+
     small_data.update(big_data)
+    small_data.update(rising_data)
     data = small_data
 
     if product == "Fennec":
@@ -387,11 +446,87 @@ def get_new_signatures(product, channel, date):
     return data, selection
 
 
-def get_proto_small(product, signatures, search_date, channel):
+def _rising_picks(product, channel, date, declined, already, threshold, selection):
+    """The RATE path: among the signatures the spike test declined, the ones whose
+    exposure-normalised daily rate is rising (``sigtrend.rising_candidates``), within today's
+    budget, each on its freshest build with users. Returns the same ``{signature: {"bids",
+    "protos", "installs"}}`` shape as a spike pick and appends one ``rising_rate`` record per
+    picked signature to *selection*.
+
+    Budgeted, not thresholded: ``spike.rising_per_day`` picks a day per channel, best statistic
+    first, and a family already selected -- by the spike test within a week, or by this path --
+    is skipped (``Selection.covered_recently``), so a rise that lasts its whole 7-day window is
+    paid for once. A rising family with no crash on a current-window build that clears the
+    install threshold is not picked: there is nothing current to analyse. Never raises -- the
+    rollup is observability, and observability must not be able to stop the spike test."""
+    budget = config.get_spike("rising_per_day", product, channel)
+    if budget <= 0 or not declined:
+        return {}
+    room = budget - models.Selection.taken_today(product, channel, utils.RISING_RATE)
+    if room <= 0:
+        return {}
+    asof = date.date() if hasattr(date, "date") else date
+    try:
+        candidates = sigtrend.rising_candidates(product, channel, asof=asof, exclude=already)
+    except Exception:
+        logger.error("Cannot scan %s-%s for rising signatures", product, channel, exc_info=True)
+        return {}
+    if not candidates:
+        return {}
+    covered = models.Selection.covered_recently(
+        product, channel, [m for _, members, _ in candidates for m in members]
+    )
+    picks = {}
+    for family, members, facts in candidates:
+        if room <= 0:
+            break
+        if covered.intersection(members):
+            continue
+        chosen = {}
+        for m in members:
+            numbers = declined.get(m)
+            latest = utils.pick_latest_build(numbers, threshold) if numbers else None
+            if latest:
+                chosen[m] = (numbers, latest)
+        if not chosen:
+            continue
+        room -= 1
+        for m, (numbers, (day, bid, n)) in chosen.items():
+            picks[m] = {"bids": {bid: n}, "protos": {bid: []}, "installs": {bid: 0}}
+            selection.append({
+                "signature": m,
+                "day": day,
+                "count": numbers[day]["count"],
+                "index": sorted(numbers).index(day),
+                "baseline": [],
+                "evaluable": True,
+                "spiked": False,
+                "bids": dict(numbers[day]["bids"]),
+                "installs": dict(numbers[day]["installs"]),
+                "picked": bid,
+                "outcome": utils.RISING_RATE,
+                "trend_ratio": facts.get("signature_trend_ratio"),
+                "trend_installs": facts.get("signature_trend_installs"),
+                "merged_with": [o for o in members if o != m],
+            })
+        logger.info(
+            "Rising rate for {}-{}: selecting {} ({}x, {} installs in {} days) on {}".format(
+                product, channel, family, facts.get("signature_trend_ratio"),
+                facts.get("signature_trend_installs"), facts.get("signature_trend_window_days"),
+                ", ".join(utils.get_buildid(latest[1]) for _, latest in chosen.values()),
+            )
+        )
+    return picks
+
+
+def get_proto_small(product, signatures, search_date, channel, proto_cap=None):
     """Get the proto-signatures for signature with a small number of crashes.
     Since we 'must' aggregate uuid on proto-signatures, to be faster we query
     several signatures: it's possible because we know that card(proto) <= card(crashes)
-    for a given signature."""
+    for a given signature.
+
+    ``proto_cap`` overrides ``thresholds.protos`` -- the rate path's picks are capped lower
+    than nightly's spike picks (see ``config._SPIKE_DEFAULTS["rising_protos"]``)."""
     logger.info(
         "Get proto-signatures (small) for {}-{}: started.".format(product, channel)
     )
@@ -415,6 +550,8 @@ def get_proto_small(product, signatures, search_date, channel):
 
     limit = config.get_limit_facets()
     threshold = config.get_threshold("protos", product, channel)
+    if proto_cap is not None:
+        threshold = proto_cap
     base_params = {
         "product": product,
         "release_channel": utils.get_search_channel(channel),

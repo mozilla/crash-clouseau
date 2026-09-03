@@ -483,14 +483,24 @@ def _open_bugs_for_signature(signature):
     if not signature:
         return []
     sig = signature.strip()
+    # EVERY SPELLING OF THE LAMBDA, not just the one this crash came in under: the `<T>` and `$`
+    # demanglings of one lambda are one defect (`utils.lambda_siblings`), and a bug filed on the
+    # Windows spelling is the venue for the Linux crash too. Two clauses per spelling, same
+    # `j_top: OR`.
+    spellings = sorted(utils.lambda_siblings(sig))
     params = {
         "include_fields": "id,summary,status,resolution,creation_time,product,keywords,"
                           "cf_crash_signature,regressed_by",
         "j_top": "OR",
-        "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
-        "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
         "resolution": "---",
     }
+    for i, spelling in enumerate(spellings):
+        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
+        params["o{}".format(2 * i + 1)] = "substring"
+        params["v{}".format(2 * i + 1)] = spelling
+        params["f{}".format(2 * i + 2)] = "short_desc"
+        params["o{}".format(2 * i + 2)] = "substring"
+        params["v{}".format(2 * i + 2)] = "[@ " + spelling
     try:
         r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
@@ -507,7 +517,7 @@ def _open_bugs_for_signature(signature):
          "product": b.get("product"), "keywords": b.get("keywords") or [],
          "regressed_by": b.get("regressed_by") or []}
         for b in sorted(bugs, key=lambda b: b.get("id", 0))
-        if b.get("id") and _row_is_about(b, sig)
+        if b.get("id") and any(_row_is_about(b, s) for s in spellings)
     ]
 
 

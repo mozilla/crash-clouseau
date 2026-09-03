@@ -1052,8 +1052,12 @@ SELECTION_OUTCOMES = frozenset(
         utils.BELOW_INSTALL_THRESHOLD,
         utils.IMMATURE,
         utils.DROPPED_NO_USERS,
+        utils.RISING_RATE,
     }
 )
+# The outcomes that mean "we analysed this pair" -- what `ever_selected` records and what the
+# rate path treats as already covered.
+SELECTED_OUTCOMES = frozenset({utils.SELECTED, utils.RISING_RATE})
 
 
 class Selection(db.Model):
@@ -1085,7 +1089,7 @@ class Selection(db.Model):
     channel = db.Column(db.String(16), nullable=False)
     build_day = db.Column(db.Date, nullable=False)
     # selected | untestable_prefix | below_install_threshold | immature | not_spiking
-    # | dropped_no_users
+    # | dropped_no_users | rising_rate
     outcome = db.Column(db.String(24), nullable=False)
     number = db.Column(db.Integer, nullable=False, default=0)
     # Position in the build-day series and whether that position is testable at all
@@ -1137,7 +1141,7 @@ class Selection(db.Model):
             "bids": bids,
             "picked": utils.get_buildid(picked) if picked else None,
             "run_date": run_date,
-            "ever_selected": record["outcome"] == utils.SELECTED,
+            "ever_selected": record["outcome"] in SELECTED_OUTCOMES,
             "first_run_date": run_date,
         }
 
@@ -1215,6 +1219,60 @@ class Selection(db.Model):
             logger.error("Cannot prune the selection log", exc_info=True)
             db.session.rollback()
             return 0
+
+    @staticmethod
+    def covered_recently(product, channel, signatures, days=7):
+        """The subset of *signatures* the pipeline has ANALYSED in the last ``days`` -- a pair
+        the spike test selected on a recent build-day, or one the rate path already took.
+
+        What keeps the rate path from paying twice: a rising signature stays rising for about
+        as long as the window it is measured over, so without this it would be re-selected on
+        every tick for a week. Fails toward "covered": a lookup that cannot be done must not
+        turn into spend."""
+        if not signatures:
+            return set()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        try:
+            rows = (
+                db.session.query(Selection.signature)
+                .filter(
+                    Selection.product == product,
+                    Selection.channel == channel,
+                    Selection.signature.in_(sorted({s[:512] for s in signatures})),
+                    Selection.build_day >= cutoff,
+                    or_(Selection.ever_selected.is_(True),
+                        Selection.outcome == utils.RISING_RATE),
+                )
+                .distinct()
+                .all()
+            )
+            return {r[0] for r in rows}
+        except Exception:
+            logger.error("Cannot read the selection log", exc_info=True)
+            db.session.rollback()
+            return set(signatures)
+
+    @staticmethod
+    def taken_today(product, channel, outcome):
+        """How many pairs got *outcome* on runs dated today -- the rate path's daily budget
+        counter. Fails toward the budget being SPENT."""
+        try:
+            start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0,
+                                                       microsecond=0)
+            return (
+                db.session.query(func.count(Selection.id))
+                .filter(
+                    Selection.product == product,
+                    Selection.channel == channel,
+                    Selection.outcome == outcome,
+                    Selection.run_date >= start,
+                )
+                .scalar()
+            ) or 0
+        except Exception:
+            logger.error("Cannot count today's selections", exc_info=True)
+            db.session.rollback()
+            return 10 ** 6
 
     @staticmethod
     def for_signature(signature, product=None, channel=None, limit=200):
@@ -2911,7 +2969,8 @@ class Dossier(db.Model):
                     # to make.
                     fb["filed"].astext == "true",
                     fb["bug"].astext == str(bug_id),
-                    fb["signature"].astext == signature,
+                    # Either demangling of the lambda: one defect, one comment.
+                    fb["signature"].astext.in_(sorted(utils.lambda_siblings(signature))),
                 )
                 .order_by(Dossier.id)
                 .first()
@@ -2968,7 +3027,9 @@ class Dossier(db.Model):
                     # Same `filed` term as `already_commented`: a recorded SKIP must not read as
                     # a filing.
                     fb["filed"].astext == "true",
-                    fb["signature"].astext == signature,
+                    # Either demangling of the lambda (`utils.lambda_siblings`): a bug we filed
+                    # on the Windows spelling covers the Linux crash of the same defect.
+                    fb["signature"].astext.in_(sorted(utils.lambda_siblings(signature))),
                 )
             )
             if channel:
@@ -4015,6 +4076,30 @@ class SignatureDaily(db.Model):
             logger.error("Cannot read the signature daily series", exc_info=True)
             db.session.rollback()
             return {}
+
+    @staticmethod
+    def series_all(product, channel, start, end):
+        """``{signature: {day: (reports, installs)}}`` for EVERY signature with a row in the
+        inclusive day range -- ``series`` for a whole channel in one query, which is what a scan
+        for rising signatures needs (~300-450 active signatures x ~63 days per channel, once per
+        tick; per-signature queries would be that many round trips)."""
+        try:
+            rows = (
+                db.session.query(SignatureDaily.signature, SignatureDaily.day,
+                                 SignatureDaily.reports, SignatureDaily.installs)
+                .filter(SignatureDaily.product == product,
+                        SignatureDaily.channel == channel,
+                        SignatureDaily.day >= start, SignatureDaily.day <= end)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read the signature daily series", exc_info=True)
+            db.session.rollback()
+            return {}
+        out = {}
+        for sgn, d, r, i in rows:
+            out.setdefault(sgn, {})[d] = (r, i)
+        return out
 
     @staticmethod
     def prune(days=90):

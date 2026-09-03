@@ -373,6 +373,22 @@ _SPIKE_DEFAULTS = {
     # quietest real build showing ~29 at the one window index that ever selects). NOT reports:
     # that number is age-dependent and the floor then fires on a real build seen early.
     "min_build_installs": 15,
+    # THE RATE PATH'S DAILY BUDGET, per channel: how many EXISTING signatures whose
+    # exposure-normalised rate is rising (`sigtrend.rising_candidates`) the selector may add per
+    # day on top of the spike test, best statistic first. 0 = off (the default: a channel with no
+    # daily rollup has nothing to rank). Replayed over the 30 days to 2026-09-03 on the real
+    # rollup with the deployed constants (ratio >= 3, >= 5 installs, 7 vs 56 days, one pick per
+    # signature per week): ~6.7 new rising episodes a day on nightly, of which ~1.9 the spike
+    # test had NOT selected within a week; ~6.6 on beta, of which ~6.5. Uncapped that is most of
+    # beta's triage spend again, so this is a BUDGET ranked by the statistic -- the use the
+    # trend study validated (top-5/day reaches 15-19 of 57 human cases at 7% of the spend) --
+    # not a threshold fitted to the case that motivated it.
+    "rising_per_day": 0,
+    # Proto-signature clusters one rate-path pick may spawn. Nightly's spike cap is 50 because it
+    # never binds there (mean 1.07 protos per pair); a rising EXISTING signature is a different
+    # population -- hangs and shutdown timeouts whose stacks are all distinct -- and 3 is the
+    # priced fallback from the beta measurement in `get_threshold`.
+    "rising_protos": 3,
 }
 
 
