@@ -1747,7 +1747,8 @@ class UUID(db.Model):
 
     @staticmethod
     def to_analyze(report_uuid):
-        """The next report to score, as ``(uuid, buildid, channel, product, node)``.
+        """The next report to score, as ``(uuid, buildid, channel, product, node, signature)``
+        -- the signature so ``update.put_report`` can read its rate (``rising_rate_mindate``).
 
         TWO PREDICATES THAT LOOK COSMETIC AND ARE NOT, because this feeds a SERIAL,
         SELF-RE-ENQUEUING chain (``update.analyze_one_report`` calls ``analyze_reports``,
@@ -1767,11 +1768,17 @@ class UUID(db.Model):
         asking for one named report on purpose, including a retry of an errored one."""
         uuid = (
             db.session.query(
-                UUID.uuid, Build.buildid, Build.channel, Build.product, Node.node
+                UUID.uuid, Build.buildid, Build.channel, Build.product, Node.node,
+                Signature.signature,
             )
             .select_from(UUID)
             .join(Build)
             .join(Node)
+            # OUTER: `signatureid` is nullable in the schema even though every writer sets it,
+            # and an inner join would drop such a report from the serial chain forever, with no
+            # log line -- the shape of the silent no-ops this repo keeps meeting. A None
+            # signature simply scores inside the deployed window.
+            .outerjoin(Signature)
         )
         if report_uuid:
             uuid = uuid.filter(UUID.uuid == report_uuid).first()

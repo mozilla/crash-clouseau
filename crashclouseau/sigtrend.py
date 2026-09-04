@@ -460,6 +460,21 @@ def is_rising(facts):
     return facts.get("signature_trend_installs", 0) >= WORDING_MIN_INSTALLS
 
 
+def rise_lookback_days():
+    """How many days before a crashing build the regressor of a RISE can have landed -- the lower
+    bound ``update.rising_rate_mindate`` gives the ON-STACK candidate window when ``is_rising``.
+
+    Two lags that already exist, summed; not a tuned number. The statistic compares a trailing
+    ``WINDOW_DAYS`` window to its baseline, so a rise is noticed up to ``WINDOW_DAYS`` after the
+    change that caused it landed, and the rate path then analyses the freshest build with users,
+    up to ``config.get_ndays()`` further on -- the deployed per-build lookback. The nightly step of
+    ``QuotaManager::Shutdown::<T>::operator()`` is the case: the 2026-07-16 batch made
+    ``UnloadQuota`` fsync once per origin, this ratio replays at 3.7-4.7x from 07-21, and a 3-day
+    window from any build after 07-19 cannot reach it -- although ``dom/quota/ActorsParent.cpp``
+    is ON that stack, so the file filter would have kept it."""
+    return WINDOW_DAYS + config.get_ndays()
+
+
 def describe(facts):
     """One sentence, in the form :aryx used, or ``None``.
 

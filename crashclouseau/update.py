@@ -83,8 +83,57 @@ def put_filelog(channel, start_date=None, end_date=None):
     return end_date
 
 
-def put_report(uuid, buildid, channel, product, chgset):
-    """Put a report in the database"""
+def rising_rate_mindate(mindate, buildid, channel, product, signature):
+    """The on-stack candidate window's lower bound, moved back when *signature*'s rate is rising.
+
+    ``Changeset.find`` is filtered to changesets touching a file ON THE CRASH STACK, so the file
+    filter is the tight constraint and the clock the loose one: ``get_ndays()`` (3) days on
+    nightly, the cycle's uplifts on beta. That reaches the regressor of a crash that STARTED on
+    this build. It does not reach the regressor of a RISE, which landed up to
+    ``sigtrend.rise_lookback_days()`` (10) days before the build being analysed -- see there for
+    the two lags. Never narrower than the deployed bound: the EARLIER of the two, so a
+    build-stream gap that already gave a wider window keeps it.
+
+    On beta the earlier bound reaches across the cycle merge for roughly the first ten days of a
+    cycle -- the ~5,100 merged changesets that ``tests/test_beta_windows.py`` measures the
+    previous-build bound excluding by one second. That is the point, not a leak: a rise on the
+    first betas of a cycle is exactly the case where the regressor is IN the merge (bug 2069097,
+    a 08-14 central landing that tripled the QM shutdown watchdog on 156.0b1), and the stack-file
+    filter keeps the merge down to the handful touching a stack file. The OFF-STACK window is not
+    widened here -- ten days of unfiltered pushlog is 1,000+ changesets against a 150 cap;
+    ``orchestrator._offstack_window`` widens that path to 24 h on its own measurement.
+
+    A rate we could not measure is not a rise (``trend_facts`` -> ``{}``, ``is_rising`` False),
+    and the rollup is observability: it must not be able to stop a report from being scored."""
+    if not signature:
+        return mindate
+    try:
+        facts = sigtrend.trend_facts(product, channel, signature)
+    except Exception:
+        logger.error(
+            "Cannot read the rate of %s on %s/%s", signature, product, channel, exc_info=True
+        )
+        return mindate
+    if not sigtrend.is_rising(facts):
+        return mindate
+    wide = buildid - relativedelta(days=sigtrend.rise_lookback_days())
+    if wide >= mindate:
+        return mindate
+    logger.info(
+        "Rising rate for %s on %s/%s (%sx, %s installs in %s days): on-stack candidate window "
+        "widened from %s to %s",
+        signature, product, channel, facts.get("signature_trend_ratio"),
+        facts.get("signature_trend_installs"), facts.get("signature_trend_window_days"),
+        mindate, wide,
+    )
+    return wide
+
+
+def put_report(uuid, buildid, channel, product, chgset, signature=None):
+    """Put a report in the database.
+
+    *signature* is what ``rising_rate_mindate`` reads the rate of; ``None`` scores the report
+    inside the deployed window exactly as before."""
     if channel == "nightly":
         mindate = buildid - relativedelta(days=config.get_ndays())
     else:
@@ -110,6 +159,7 @@ def put_report(uuid, buildid, channel, product, chgset):
             mindate = buildid - relativedelta(days=config.get_ndays())
         else:
             mindate += relativedelta(seconds=1)
+    mindate = rising_rate_mindate(mindate, buildid, channel, product, signature)
 
     interesting_chgsets = set()
     res = inspector.get_crash(
