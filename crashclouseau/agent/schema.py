@@ -897,6 +897,11 @@ _KIND_ALIASES = {
     "source_raw": "ref", "source_read": "ref", "source_pinned": "ref",
     "pinned_source": "ref", "source_line": "ref", "history": "ref",
     "history_changeset": "ref", "history_file_history": "ref",
+    # The blame tool's output, cited with the tool's own name. Only the SIDE map knew the
+    # word: 87581617-d25a (2026-09-05) cited ``mcp__history__blame`` as ``kind:"blame"`` in
+    # the verdict's mechanism and in a hunk, both failed the union tag, and salvage turned
+    # a complete analysis of the wgpu bump into a pipeline-error abstain.
+    "blame": "ref", "history_blame": "ref", "history-blame": "ref",
     # ...but NOT ``stack``: 5 of the 6 prod ``kind:"stack"`` citations carry the exact
     # ``StackFrameCitation`` field set (uuid/stackpos/filename/function/line/node), so
     # routing them to the catch-all would silently discard function/stackpos/uuid and render

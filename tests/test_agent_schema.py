@@ -901,7 +901,8 @@ class TestRefCitation(unittest.TestCase):
 
     def test_invented_kinds_normalize_to_ref_and_keep_the_verdict(self):
         for kind in ("changeset", "source", "source_raw_file", "history",
-                     "history_changeset", "source_line", "pinned_source", "ref"):
+                     "history_changeset", "source_line", "pinned_source", "ref",
+                     "blame", "history_blame"):
             with self.subTest(kind=kind):
                 d = self._with_kind(kind)
                 self.assertEqual(d.verdict.decision, Decision.strong_evidence)
