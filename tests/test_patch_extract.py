@@ -242,6 +242,45 @@ class TestDerivedSignals(unittest.TestCase):
         self.assertIn("NOT SHOWN, 1 further changed file", out)
         self.assertIn("later.cpp", out)
 
+    def test_a_lockfile_is_not_rendered_but_is_named(self):
+        """36b14b9bf5f9 (the wgpu bump, bug 2066780) renders alphabetically, so ``Cargo.lock``
+        came first, spent line budget the crashing ``server.rs`` never got, and ended up the
+        ONLY diff content the model could cite: crashstack for 87581617-d25a showed a lockfile
+        line as the "changed code" of a wgpu-core race. A lockfile is generated and never the
+        cause, so its lines are dropped -- but it stays NAMED, so "does this changeset touch
+        Cargo.lock" is still answerable from the tool output."""
+        from crashclouseau.agent.tools.patch import _fmt_patch
+        lock = ("diff --git a/Cargo.lock b/Cargo.lock\n--- a/Cargo.lock\n+++ b/Cargo.lock\n"
+                "@@ -1,1 +1,2 @@\n+name = \"wgpu-core-remote-types\"\n+version = \"30.0.0\"\n")
+        ex = pe.PatchExtraction(node="n", channel="nightly", raw_diff=lock + _NULLCHECK,
+                                files=pe.parse_hunks(lock + _NULLCHECK))
+        self.assertTrue(pe.file_is_generated(ex.files[0]))
+        self.assertFalse(pe.file_is_generated(ex.files[1]))
+        out = _fmt_patch(ex, "n")
+        self.assertNotIn("wgpu-core-remote-types", out)      # no citeable lockfile line
+        self.assertNotIn("file Cargo.lock", out)
+        self.assertIn("omitted 1 generated lockfile", out)
+        self.assertIn("Cargo.lock", out)                      # ...but still named
+        self.assertIn("file g.cpp", out)                      # the real change is intact
+        self.assertNotIn("truncated", out)
+        # vendored crates' lockfiles/checksums match on the basename too
+        for name in ("third_party/rust/naga/.cargo-checksum.json", "a/b/package-lock.json",
+                     "uv.lock"):
+            self.assertTrue(pe.file_is_generated(pe.FileDiff(filename=name)), name)
+        self.assertFalse(pe.file_is_generated(pe.FileDiff(filename="gfx/wgpu_bindings/Cargo.toml")))
+
+    def test_a_lockfile_only_patch_is_inert_and_says_so(self):
+        from crashclouseau.agent.tools.patch import _fmt_patch
+        lock = ("diff --git a/Cargo.lock b/Cargo.lock\n--- a/Cargo.lock\n+++ b/Cargo.lock\n"
+                "@@ -1,1 +1,1 @@\n-version = \"29.0.0\"\n+version = \"30.0.0\"\n")
+        ex = pe.PatchExtraction(node="n", channel="nightly", raw_diff=lock,
+                                files=pe.parse_hunks(lock))
+        self.assertTrue(ex.is_inert())
+        out = _fmt_patch(ex, "n")
+        self.assertIn("omitted 1 generated lockfile", out)
+        self.assertIn("down-rank", out)                       # the inert NOTE fires
+        self.assertNotIn("No diff available", out)            # not mistaken for a fetch failure
+
     def test_an_untruncated_patch_says_nothing_about_truncation(self):
         from crashclouseau.agent.tools.patch import _fmt_patch
         ex = pe.PatchExtraction(node="n", channel="nightly", raw_diff=_NULLCHECK,

@@ -88,11 +88,11 @@ class PatchExtraction:
 
     def is_inert(self):
         """True when the whole patch is noise for crash-triage purposes: every file is
-        cosmetic, comment-only, or a doc/build-metadata file. 'Down-rank, never drop'
+        cosmetic, comment-only, a doc file, or a generated lockfile. 'Down-rank, never drop'
         (a real fix CAN be comment-adjacent) — this is only a ranking/confidence hint,
         surfaced to the agent, not a hard filter."""
         return bool(self.files) and all(
-            file_is_cosmetic(f) or file_is_comment_only(f) or file_is_doc(f)
+            file_is_cosmetic(f) or file_is_comment_only(f) or file_is_doc(f) or file_is_generated(f)
             for f in self.files
         )
 
@@ -382,6 +382,26 @@ def file_is_comment_only(file_diff):
 def file_is_doc(file_diff):
     name = (file_diff.filename or "").lower()
     return name.endswith(_DOC_SUFFIXES) or "/docs/" in name or name.startswith("docs/")
+
+
+# Machine-written dependency manifests: a package-manager lockfile is regenerated wholesale
+# by a version bump and never contains behaviour a crash can be traced to. It was still the
+# first thing the agent saw of 36b14b9bf5f9 (the wgpu bump behind bug 2066780): the patch
+# tool renders files in diff order, which is alphabetical, and ``Cargo.lock`` sorts before
+# every source directory -- so it consumed part of the line budget AND was the only diff
+# content left for the model to cite once the cap hit, and the panel for 87581617-d25a
+# showed a ``Cargo.lock`` line as the "changed code" of a wgpu-core race. Matched on the
+# basename so vendored crates' own lockfiles are caught too.
+_LOCKFILES = frozenset((
+    "cargo.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock",
+    "poetry.lock", "pipfile.lock", "gemfile.lock", ".cargo-checksum.json",
+))
+
+
+def file_is_generated(file_diff):
+    """True for a package-manager lockfile / vendoring checksum: generated, never the cause."""
+    name = (file_diff.filename or "").lower()
+    return name.rsplit("/", 1)[-1] in _LOCKFILES
 
 
 _TAG_PATTERNS = {

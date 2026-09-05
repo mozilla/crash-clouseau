@@ -60,8 +60,17 @@ def _fmt_patch(ext, node: str) -> str:
                    "moved around), which very rarely INTRODUCES a crash; down-rank unless the "
                    "crash proves a real behavior change here (an extract CAN shift lifetime/"
                    "ordering).")
+    # Generated lockfiles are NOT rendered: their lines are never the cause and, sorting
+    # first, they spend the line budget the crashing file needs (see
+    # ``patch_extract.file_is_generated``). They are still NAMED, for the same reason
+    # ``_truncate`` names what it hides -- "does this changeset touch X" must stay answerable.
+    files = [f for f in ext.files if not patch_extract.file_is_generated(f)]
+    omitted = [f.filename for f in ext.files if patch_extract.file_is_generated(f)]
+    if omitted:
+        out.append("  omitted {} generated lockfile{} (not code, never the culprit): {}".format(
+            len(omitted), "" if len(omitted) == 1 else "s", ", ".join(omitted)))
     n = 0
-    for i, f in enumerate(ext.files):
+    for i, f in enumerate(files):
         out.append("file {} ({})".format(f.filename, f.status))
         for h in f.hunks:
             where = " in {}".format(h.enclosing_function) if h.enclosing_function else ""
@@ -69,7 +78,7 @@ def _fmt_patch(ext, node: str) -> str:
             for side, lines in (("-", h.deleted_lines), ("+", h.added_lines)):
                 for ln, text in lines:
                     if n >= _MAX_LINES:
-                        return _truncate(out, ext.files, i)
+                        return _truncate(out, files, i)
                     out.append("    {} {}: {}".format(side, ln, text))
                     n += 1
     return "\n".join(out)
