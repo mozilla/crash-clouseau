@@ -28,6 +28,15 @@ if uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
 app.config["SQLALCHEMY_DATABASE_URI"] = uri
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# Test each pooled connection with a `SELECT 1` on checkout and reconnect if it is dead.
+# Measured 2026-09-06: Heroku Postgres went away for ~4 minutes (SSL EOF, then connection
+# refused, then timed out) and came back; the outage itself was theirs, but MINUTES after it
+# ended web.1 (`/tasks.html`, twice) and clock.1 (`reap_stale_agent_jobs`) each failed one
+# more query with `SSL SYSCALL error: EOF detected` on a socket that had died during the
+# outage and was still sitting in that process's pool. Without pre-ping the pool only learns
+# a connection is dead by failing a real query on it — one 404 per stale connection per
+# process, and one skipped fifteen-minute reaper cycle.
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 db = SQLAlchemy(app)
 # EMPTY, because the only cross-origin consumer is gone. It used to be scoped to
 # `/api/javast`, the single endpoint the webextension called; that endpoint could not execute
