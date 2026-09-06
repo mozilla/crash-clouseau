@@ -421,6 +421,131 @@ class TestRunCrashTriage(unittest.TestCase):
         self.assertIsInstance(r, CrashTriageResult)
         self.assertEqual(r.decision, Decision.strong_evidence)
         self.assertEqual(r.num_turns, 3)
+        self.assertIsNone(r.handoff_repair)
+
+
+# The handoff block from the strong dossier with one character broken: an unescaped quote
+# inside a string, which is the shape prod's syntax-error family takes (a stray `"` in a
+# skeptic note on 2026-08-25; something in an elided 3.6k chars on 2026-09-06).
+_BROKEN_JSON = _DOSSIER_JSON.replace(': "', ': "un"escaped ', 1)
+assert _BROKEN_JSON != _DOSSIER_JSON
+
+
+class _RepairingSDKClient(_FakeSDKClient):
+    """First response: a run that ends in prose + a broken block. Second response (the
+    repair turn): the same block, valid. Records every prompt it was sent."""
+
+    def __init__(self, options=None):
+        super().__init__(options)
+        self.prompts = []
+        self.responses = [
+            _result_msg("I conclude...\n```json\n" + _BROKEN_JSON + "\n```", num_turns=11, cost=2.0),
+            _result_msg("```json\n" + _DOSSIER_JSON + "\n```", num_turns=1, cost=0.05),
+        ]
+
+    async def query(self, prompt):
+        self.prompts.append(prompt)
+
+    async def receive_response(self):
+        yield self.responses.pop(0)
+
+
+class TestHandoffRepair(unittest.TestCase):
+    def _run(self, client_cls):
+        made = []
+
+        def factory(options=None):
+            c = client_cls(options)
+            made.append(c)
+            return c
+
+        fake_type = type(_result_msg(""))
+        with mock.patch.object(triage, "ClaudeSDKClient", factory), \
+             mock.patch.object(triage, "Reporter", _DummyReporter), \
+             mock.patch.object(triage, "ResultMessage", fake_type), \
+             mock.patch.object(triage, "build_options", return_value=object()):
+            r = asyncio.run(run_crash_triage(crash=_CRASH))
+        return r, made[0]
+
+    def test_a_broken_block_is_repaired_on_the_same_session(self):
+        r, client = self._run(_RepairingSDKClient)
+        self.assertEqual(len(client.prompts), 2)                 # the run, then ONE repair
+        repair = client.prompts[1]
+        self.assertIn("JSON syntax error", repair)               # the model is told WHAT broke
+        self.assertIn("SAME content", repair)                    # ...and not to re-investigate
+        self.assertEqual(r.decision, Decision.strong_evidence)   # the verdict survived
+        self.assertEqual(r.handoff_repair["turns"], 1)
+        self.assertTrue(r.handoff_repair["repaired"])
+        self.assertEqual(len(r.handoff_repair["failures"]), 1)
+        # Per-query counters (0.05 < 2.0): the repair's cost is ADDED, not swapped in.
+        self.assertAlmostEqual(r.total_cost_usd, 2.05)
+        self.assertEqual(r.num_turns, 12)
+
+    def test_a_repair_that_is_still_broken_settles_as_missing_handoff(self):
+        class StillBroken(_RepairingSDKClient):
+            def __init__(self, options=None):
+                super().__init__(options)
+                self.responses[1] = _result_msg("```json\n" + _BROKEN_JSON + "\n```", num_turns=1, cost=0.05)
+
+        with self.assertRaises(MissingHandoffError) as cm:
+            self._run(StillBroken)
+        exc = cm.exception
+        self.assertIn("no readable", str(exc))
+        self.assertIn("JSON syntax error", str(exc))             # the reason rides on the error
+        self.assertAlmostEqual(exc.cost_usd, 2.05)               # both turns are paid for
+        self.assertEqual(exc.num_turns, 12)
+
+    def test_repair_is_off_when_the_budget_is_zero(self):
+        with mock.patch.object(triage.config, "get_agent_handoff_repair_turns", return_value=0), \
+             self.assertRaises(MissingHandoffError):
+            self._run(_RepairingSDKClient)
+
+    def test_a_readable_handoff_spends_no_repair_turn(self):
+        r, client = self._run(_FakeSDKClient)
+        self.assertFalse(hasattr(client, "prompts") and len(client.prompts) > 1)
+        self.assertIsNone(r.handoff_repair)
+
+
+class TestHandoffParseFailure(unittest.TestCase):
+    def test_none_when_the_block_parses(self):
+        self.assertIsNone(triage.handoff_parse_failure("x\n```json\n" + _DOSSIER_JSON + "\n```"))
+
+    def test_names_the_syntax_error_with_position_and_context(self):
+        f = triage.handoff_parse_failure("```json\n" + _BROKEN_JSON + "\n```")
+        self.assertIn("JSON syntax error", f)
+        self.assertIn("line 1 column", f)
+        self.assertIn("escaped", f)                              # the context window shows the spot
+
+    def test_tells_a_missing_fence_from_an_unclosed_one(self):
+        self.assertIn("no fenced", triage.handoff_parse_failure("just prose"))
+        self.assertIn("opened but", triage.handoff_parse_failure("```json\n{\"a\": 1}"))
+        self.assertIn("not a JSON object", triage.handoff_parse_failure("```json\n[1]\n```"))
+        self.assertIn("empty", triage.handoff_parse_failure(""))
+
+
+class TestMergeResultMessages(unittest.TestCase):
+    def test_per_query_counters_are_summed(self):
+        a = _result_msg("a", num_turns=11, cost=2.0)
+        b = _result_msg("b", num_turns=1, cost=0.05)
+        m = triage._merge_result_messages(a, b)
+        self.assertEqual((m.result, m.num_turns), ("b", 12))
+        self.assertAlmostEqual(m.total_cost_usd, 2.05)
+
+    def test_cumulative_counters_are_taken_as_is(self):
+        a = _result_msg("a", num_turns=11, cost=2.0)
+        b = _result_msg("b", num_turns=12, cost=2.05)
+        m = triage._merge_result_messages(a, b)
+        self.assertEqual(m.num_turns, 12)
+        self.assertAlmostEqual(m.total_cost_usd, 2.05)
+
+    def test_tokens_follow_the_same_rule(self):
+        a = SimpleNamespace(result="a", num_turns=1, total_cost_usd=1.0, model_usage=None,
+                            usage={"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 10})
+        b = SimpleNamespace(result="b", num_turns=1, total_cost_usd=0.01, model_usage=None,
+                            usage={"input_tokens": 5, "output_tokens": 3, "cache_read_input_tokens": 1})
+        self.assertEqual(triage._sum_tokens(triage._merge_result_messages(a, b)), (105, 53, 11))
+        b.usage = {"input_tokens": 105, "output_tokens": 53, "cache_read_input_tokens": 11}
+        self.assertEqual(triage._sum_tokens(triage._merge_result_messages(a, b)), (105, 53, 11))
 
 
 class TestSumTokens(unittest.TestCase):

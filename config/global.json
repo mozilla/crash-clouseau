@@ -127,6 +127,7 @@
         "channels": ["nightly", "beta"],
         "queue": "agent",
         "job_timeout": 1800,
+        "handoff_repair_turns": 1,
         "skip_if_existing": true,
         "max_seed_frames": 40,
         "reap_max_attempts": 2,

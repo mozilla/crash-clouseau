@@ -34,6 +34,12 @@ class CrashTriageResult(HackbotAgentResult):
     # is that a change to the call-graph tools or to the skeptic's enumeration duty can be told
     # to have stopped working. Additive: an older persisted result reads as ``{}``.
     tool_calls: dict = Field(default_factory=dict)
+    # Set when the run's final message had no readable ```json handoff and a repair turn
+    # was spent asking the model to re-emit it (``triage._repair_handoff``):
+    # ``{"failures": [<parse error per attempt>], "turns": n, "repaired": bool}``. Lands in
+    # the dossier payload via ``model_dump``, so ``payload ? 'handoff_repair'`` counts how
+    # often the turn is needed and how often it works. None on the ordinary path.
+    handoff_repair: dict | None = None
 
     @property
     def decision(self) -> Decision | None:

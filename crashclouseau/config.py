@@ -518,6 +518,14 @@ def get_agent_job_timeout():
     return get_agent().get("job_timeout", 1800)
 
 
+def get_agent_handoff_repair_turns():
+    """How many extra turns ``triage.run_crash_triage`` may spend asking the model to
+    re-emit a handoff whose ```json block did not parse, before the run settles as a
+    ``MissingHandoffError``. 0 disables the repair. Each turn is a few hundred output
+    tokens on an already-cached context, against a run that has already cost ~$2."""
+    return int(get_agent().get("handoff_repair_turns", 1))
+
+
 def get_agent_skip_if_existing():
     return get_agent().get("skip_if_existing", True)
 

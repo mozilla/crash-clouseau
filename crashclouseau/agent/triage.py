@@ -17,6 +17,7 @@ which is an infrastructure failure and not a verdict). #11 runs
 test without spawning the bundled CLI."""
 from __future__ import annotations
 
+import copy
 import functools
 import json
 import os
@@ -42,6 +43,7 @@ from crashclouseau.agent.result import CrashTriageResult
 from crashclouseau.agent.schema import (
     Decision,
     NO_HANDOFF_REASON,
+    handoff_parse_failure,
     parse_and_validate,
 )
 from crashclouseau.agent.tools import history as history_tools
@@ -1909,7 +1911,7 @@ def _sum_tokens(result_msg):
     return 0, 0, 0
 
 
-def build_result(result_msg, *, recorder=None, tool_calls=None) -> CrashTriageResult:
+def build_result(result_msg, *, recorder=None, tool_calls=None, handoff_repair=None) -> CrashTriageResult:
     """Fold a terminal ``ResultMessage`` into a typed ``CrashTriageResult``,
     best-effort parsing + #03-validating the trailing ```json handoff. Raises
     ``AgentError`` on a missing/errored result, and ``MissingHandoffError`` when the
@@ -1946,14 +1948,17 @@ def build_result(result_msg, *, recorder=None, tool_calls=None) -> CrashTriageRe
         # The raw text and the usage ride on the exception so the error row keeps the
         # forensics and the spend -- these runs cost full price (~$0.81 each).
         ti, to, tc = _sum_tokens(result_msg)
+        # The TAIL of the text, not the head: the fence is the last thing the model writes,
+        # and the head is prose. And the parse error itself, which nothing recorded before.
+        failure = handoff_parse_failure(result_msg.result) or NO_HANDOFF_REASON
         logger.error(
-            "agent: no ```json handoff after %s turns; final text was: %r",
-            getattr(result_msg, "num_turns", "?"), (result_msg.result or "")[:2000],
+            "agent: no readable ```json handoff after %s turns (%s); final text ended: %r",
+            getattr(result_msg, "num_turns", "?"), failure, (result_msg.result or "")[-2000:],
         )
         raise MissingHandoffError(
             "crash triage ended after {} turns with no readable ```json handoff "
-            "-- the run never reached a verdict".format(
-                getattr(result_msg, "num_turns", "?")
+            "-- the run never reached a verdict ({})".format(
+                getattr(result_msg, "num_turns", "?"), failure,
             ),
             raw_result=result_msg.result or "",
             cost_usd=getattr(result_msg, "total_cost_usd", None),
@@ -1981,7 +1986,99 @@ def build_result(result_msg, *, recorder=None, tool_calls=None) -> CrashTriageRe
         input_tokens=ti,
         output_tokens=to,
         cache_read_tokens=tc,
+        handoff_repair=handoff_repair,
     )
+
+
+def _repair_prompt(failure: str) -> str:
+    return (
+        "Your previous message was meant to end with the fenced ```json handoff, but it "
+        "could not be read: {}.\n\n"
+        "Re-emit the handoff now as ONE fenced ```json block containing exactly one JSON "
+        "object, with the SAME content as before. Do not investigate further, do not call "
+        "any tool, and do not add, remove or reword any finding, citation or reason -- only "
+        "repair the JSON syntax (quoting, escaping, commas, brackets). Reply with the fenced "
+        "block and nothing else."
+    ).format(failure)
+
+
+def _merge_result_messages(first, second):
+    """The terminal message of a run that needed a repair turn: *second*'s text, with the
+    cost / turn / token counters covering BOTH.
+
+    Whether the CLI reports those counters per query or cumulatively for the session is
+    not something this code should have to know (the usage shape alone has varied across
+    CLI versions, see ``_sum_tokens``), so it is decided from the numbers: a repair turn is
+    a few hundred output tokens against a run of tens of thousands, so a second reading
+    that is NOT below the first can only be cumulative and is taken as is; one that is
+    below is per-query and is added on."""
+    merged = copy.copy(second)
+    f_cost, s_cost = (first.total_cost_usd or 0.0), (second.total_cost_usd or 0.0)
+    merged.total_cost_usd = s_cost if s_cost >= f_cost else f_cost + s_cost
+    f_turns, s_turns = (first.num_turns or 0), (second.num_turns or 0)
+    merged.num_turns = s_turns if s_turns > f_turns else f_turns + s_turns
+    ft, st = _sum_tokens(first), _sum_tokens(second)
+    ti, to, tc = st if st[0] >= ft[0] else tuple(a + b for a, b in zip(ft, st))
+    merged.model_usage = None
+    merged.usage = {"input_tokens": ti, "output_tokens": to, "cache_read_input_tokens": tc}
+    return merged
+
+
+async def _repair_handoff(client, result_msg, reporter, trace):
+    """One more turn on the SAME session when the run ended with a handoff that does not
+    parse: quote the parse error back and ask for the block again, content unchanged.
+    Returns ``(terminal_message, record)``; ``record`` is None when there was nothing to
+    repair, else ``{"failures": [...], "turns": n, "repaired": bool}`` for the payload.
+
+    Why a turn is worth spending: the run has already reached its conclusion and been paid
+    for. Run 8bc83111 (2026-09-06) ended after 11 turns with a complete, skeptic-checked
+    hardware abstain and lost all of it to a syntax error in the JSON -- $2.18 recorded as
+    `error`, verdict discarded. Prod's baseline for this failure is 6 of 9 cases being a
+    fence WITH a syntax error, i.e. exactly the case a re-emit fixes. The context is cached
+    and the answer is a few hundred tokens, so the repair costs cents.
+
+    Bounded by ``agent.handoff_repair_turns`` (default 1). A repair attempt that comes back
+    unreadable too is merged in anyway (its cost is real, and its short JSON-only text is a
+    better forensic record than the elided original), so the ``MissingHandoffError`` that
+    follows accounts for the whole run. Never raises past the merge: a failure HERE must not
+    turn a diagnosable run into an undiagnosed one."""
+    if result_msg is None or getattr(result_msg, "is_error", False):
+        return result_msg, None
+    failure = handoff_parse_failure(result_msg.result)
+    if failure is None:
+        return result_msg, None
+    budget = config.get_agent_handoff_repair_turns()
+    if budget <= 0:
+        return result_msg, None
+    record = {"failures": [failure], "turns": 0, "repaired": False}
+    current = result_msg
+    try:
+        while failure is not None and record["turns"] < budget:
+            record["turns"] += 1
+            logger.warning(
+                "agent: handoff unreadable (%s); asking for the block again (attempt %d of %d)",
+                failure, record["turns"], budget,
+            )
+            await client.query(_repair_prompt(failure))
+            repaired = None
+            async for msg in client.receive_response():
+                reporter.message(msg)
+                trace.observe(msg)
+                if isinstance(msg, ResultMessage):
+                    repaired = msg
+            if repaired is None or getattr(repaired, "is_error", False):
+                logger.warning("agent: handoff repair turn produced no usable result")
+                break
+            current = _merge_result_messages(current, repaired)
+            failure = handoff_parse_failure(current.result)
+            if failure is not None:
+                record["failures"].append(failure)
+        record["repaired"] = failure is None
+        if record["repaired"]:
+            logger.info("agent: handoff repaired in %d turn(s)", record["turns"])
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("agent: handoff repair turn failed", exc_info=True)
+    return current, record
 
 
 def _log_prompt_budget(system: str, user: str, crash: dict) -> None:
@@ -2034,6 +2131,7 @@ async def run_crash_triage(
     system = system if isinstance(system, str) else ""
     _log_prompt_budget(system, user, crash)
     result_msg = None
+    handoff_repair = None
     trace = _RunTrace()
     with Reporter(verbose=False, log_path=None) as reporter:
         reporter.header(_crash_label(crash))
@@ -2044,5 +2142,10 @@ async def run_crash_triage(
                 trace.observe(msg)
                 if isinstance(msg, ResultMessage):
                     result_msg = msg
+            # Inside the session on purpose: the repair is a follow-up turn on the same
+            # (cached) context, not a fresh run.
+            result_msg, handoff_repair = await _repair_handoff(client, result_msg, reporter, trace)
     trace.summary(result_msg)
-    return build_result(result_msg, recorder=recorder, tool_calls=trace.provenance())
+    return build_result(
+        result_msg, recorder=recorder, tool_calls=trace.provenance(), handoff_repair=handoff_repair,
+    )

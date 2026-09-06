@@ -865,6 +865,35 @@ def _extract_last_json_block(text: str | None):
     return data if isinstance(data, dict) else None
 
 
+def handoff_parse_failure(text: str | None) -> str | None:
+    """WHY ``_extract_last_json_block`` returns None for *text*, in one line a model can act
+    on -- or None when the last block parses. The extractor itself stays silent (it runs on
+    every result, valid or not); this is for the two callers that care about the reason: the
+    repair turn in ``triage.run_crash_triage`` and the forensics at the ``MissingHandoffError``
+    raise. Until 2026-09-06 that reason was recorded nowhere: the extractor swallowed the
+    ``JSONDecodeError``, the log kept the first 2000 chars of the final text (prose), and the
+    stored ``result`` elided the middle -- which is exactly where the fence and the syntax
+    error were for run 8bc83111 (a complete, considered hardware abstain, lost to one bad
+    character somewhere in 3668 chars nobody kept)."""
+    if not text:
+        return "the final message was empty"
+    matches = _JSON_BLOCK.findall(text)
+    if not matches:
+        if "```json" in text:
+            return ("a ```json fence was opened but no complete ```json { ... } ``` object "
+                    "block was found (unclosed fence, or the block is not a JSON object)")
+        return "no fenced ```json { ... } ``` block in the final message"
+    # A matched block is `{...}` by construction, so valid JSON here is always an object.
+    block = matches[-1]
+    try:
+        json.loads(block)
+    except json.JSONDecodeError as exc:
+        lo, hi = max(0, exc.pos - 80), min(len(block), exc.pos + 40)
+        return "JSON syntax error in the handoff block: {} (line {} column {}); near: {!r}".format(
+            exc.msg, exc.lineno, exc.colno, block[lo:hi])
+    return None
+
+
 # Common LLM spelling variants for the citation discriminator (``kind``) and the diff
 # ``side``, keyed lowercased -> canonical enum token. The model routinely writes the
 # prose spelling ("stack-frame" with a hyphen; a "removed" diff line) instead of the
