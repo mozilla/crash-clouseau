@@ -172,6 +172,19 @@ def _compiled_out_text(channel=None):
 # rendering when the crash is not on nightly.
 _COMPILED_OUT = _compiled_out_text("nightly")
 
+# The presence inversion. Crash 0027161c (2026-09-06): the skeptic failed a correct lead with
+# "the 512KB cap is ALREADY present in this exact crash build, so the WAL-cap fix cannot be
+# blamed for causing THIS instance". `schema.is_presence_ground` stops that `fail` from binding
+# in code; this tells the model why, so it stops emitting it. Kept short on purpose.
+_PRESENCE = (
+    "BUILD TIMING: a candidate being PRESENT in the crashing build is the precondition for it "
+    "to be the cause, never a refutation -- the only build-timing `fail` is a candidate ABSENT "
+    "from the build (landed after it, or backed out before it). A change described as a fix, "
+    "cap, tuning or mitigation can still be the regressor: shrinking or reverting an earlier "
+    "mitigation re-exposes the failure it hid, and a rate that stepped up in the version that "
+    "shipped the change is evidence FOR it, not against. "
+)
+
 _ROLES: dict[str, dict] = {
     "crash-interpreter": {
         "description": "Normalize a raw processed crash into a grounded crash brief "
@@ -300,7 +313,7 @@ _ROLES: dict[str, dict] = {
         "mechanism you simply cannot verify end-to-end is `unverifiable` (it lowers confidence "
         "but KEEPS the lead) — NOT `fail`: a credible-but-unproven clue is exactly what we "
         "want to surface. Use `unverifiable` for searchfox holes such as virtual/IPC/FFI/"
-        "macro/template edges. " + _COMPILED_OUT + "A claim without a fresh citation "
+        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + "A claim without a fresh citation "
         "cannot pass. A fault-address↔field "
         "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (with namespaces, no template `<...>` args — "

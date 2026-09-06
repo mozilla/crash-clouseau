@@ -947,6 +947,20 @@ def get_agent_signature_age():
     }
 
 
+def get_agent_version_rates():
+    """Per-version crash-rate facts (``sigage.version_rates``) for the prompt and the
+    ``version_step`` corroboration. ``step_ratio`` is what counts as a step between two
+    consecutive versions; ``min_reports`` is how many reports a version needs before its rate
+    is compared at all (1 of 3 being 33% is noise, see ``triage._cpu_spread_line``)."""
+    a = get_agent().get("version_rates", {})
+    return {
+        "enabled": _env_bool("VERSION_RATES_ENABLED", a.get("enabled", True)),
+        "days": int(a.get("days", 60)),
+        "step_ratio": float(a.get("step_ratio", 3.0)),
+        "min_reports": int(a.get("min_reports", 5)),
+    }
+
+
 def get_agent_bit_flip():
     """Hardware bit-flip suppression knobs.
 

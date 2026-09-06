@@ -330,6 +330,15 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # argument would have been RIGHT about is the number that decides whether a surface
         # should say so.
         "stale_signature_waived",
+        # A skeptic `fail` that rested on "the candidate is already present in this build" and
+        # was not allowed to bind (`schema.is_presence_ground`). Write-only for the same reason
+        # as `skeptic_build_flag_unbound`: its failure mode is a false abstain nothing else
+        # records, so the count is the whole point until it has been read off prod.
+        "skeptic_presence_unbound",
+        # Per-version crash rate (`sigage.version_rates`). Recorded, not acted on, until the
+        # first question it exists to answer has been read off the persisted dossiers: how often
+        # a candidate inside a step version's window is vetoed anyway (crash 0027161c).
+        "version_step", "version_step_ratio", "crash_in_step_version",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

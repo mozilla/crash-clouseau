@@ -495,6 +495,124 @@ NO_HARDWARE_NOISE = {
 }
 
 
+# Reports per day per VERSION on one channel. Written for crash 0027161c-203a-4bc5-bb1d-efa910260905
+# (2026-09-06): `AsyncShutdownTimeout | profile-before-change | CookiePersistentStorage:
+# cookies.sqlite closing` ran at 1-2 reports/day on 154.x, 5-8/day on 155.0 and 30-35/day on
+# 155.0.1, whose 22-changeset dot-release diff held exactly one cookie/storage change (bug
+# 2066155, the WAL cap back down to 512KB). The agent FOUND that candidate and the skeptic vetoed
+# it because it was "already present in this exact crash build" -- nothing in the prompt said the
+# version carrying it had multiplied the rate. On nightly a build is a day and `sigtrend` already
+# says whether the rate rose; on beta and release the unit that moves is the VERSION (a beta
+# number after an uplift, a dot release), and this is that quantity.
+VERSION_RATES_DAYS = 60
+VERSION_STEP_RATIO = 3.0
+VERSION_MIN_REPORTS = 5
+NO_VERSION_RATES = {"versions": None, "step": None, "days": None}
+
+
+def _version_key(version):
+    """Sort key that puts 155.0.1 after 155.0 and 156.0b2 after 156.0b1."""
+    parts = re.split(r"[.ab]", str(version or ""))
+    return tuple(int(p) if p.isdigit() else 0 for p in parts)
+
+
+def version_rates(signature, product="Firefox", channel="release", days=VERSION_RATES_DAYS,
+                  step_ratio=VERSION_STEP_RATIO, min_reports=VERSION_MIN_REPORTS):
+    """How often this signature crashes PER VERSION on ``channel`` over the last ``days``.
+
+    ``{"versions": [{"version", "reports", "first_day", "last_day", "days", "per_day",
+    "build_ids"}, ...] oldest-first, "step": {...} | None, "days": N}``. ``step`` names the
+    LATEST version with at least ``min_reports`` reports whose per-day rate is ``step_ratio``
+    times (or more) the preceding such version's: ``{"version", "from_version", "ratio",
+    "per_day", "from_per_day", "build_ids"}``. ``NO_VERSION_RATES`` (every value None) means
+    "we could not find out", which the renderer prints as nothing -- never as "no change".
+
+    ONE SuperSearch: a per-day histogram faceted by version, plus the build ids per version.
+    Per-day is reports over the span from the version's first to its last report day, which
+    counts a version's adoption ramp against it in both directions (the previous version is
+    still ramping down while the new one ramps up); the renderer states that and asks for a
+    ``step_ratio``-sized step, not a drift. Versions with no report in the window do not appear.
+    Never raises."""
+    empty = dict(NO_VERSION_RATES)
+    if not signature or not channel:
+        return empty
+    days = max(1, min(int(days or VERSION_RATES_DAYS), MAX_WINDOW_DAYS))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    params = {
+        "signature": "=" + signature,
+        "product": product or "Firefox",
+        "release_channel": utils.get_search_channel(channel),
+        "date": ">=" + since,
+        "_results_number": 0,
+        "_histogram.date": "version",
+        "_histogram_interval.date": "1d",
+        "_facets": "version",
+        "_aggs.version": "build_id",
+        "_facets_size": 200,
+    }
+    got = {}
+
+    def handler(json_, data):
+        data["r"] = json_
+
+    try:
+        socorro.SuperSearch(queries=[Query(socorro.SuperSearch.URL, params=params,
+                                           handler=handler, handlerdata=got)]).wait()
+    except Exception as exc:  # pragma: no cover - network; never break a seed
+        logger.warning("sigage: version rates lookup failed for %r: %s", signature, exc)
+        return empty
+    result = got.get("r")
+    if not isinstance(result, dict):
+        return empty
+    return summarize_version_rates(result, days=days, step_ratio=step_ratio,
+                                   min_reports=min_reports)
+
+
+def summarize_version_rates(result, days=VERSION_RATES_DAYS, step_ratio=VERSION_STEP_RATIO,
+                            min_reports=VERSION_MIN_REPORTS):
+    """The pure half of ``version_rates``: a SuperSearch response -> the summary dict. Split out
+    so the arithmetic is testable on a recorded response without a network stand-in."""
+    facets = (result or {}).get("facets") or {}
+    per = {}
+    for bucket in facets.get("histogram_date") or []:
+        day = str(bucket.get("term") or "")[:10]
+        if not day:
+            continue
+        for t in (bucket.get("facets") or {}).get("version") or []:
+            v = per.setdefault(str(t.get("term")), {"reports": 0, "days": set()})
+            v["reports"] += int(t.get("count") or 0)
+            v["days"].add(day)
+    if not per:
+        return {"versions": [], "step": None, "days": days}
+    builds = {}
+    for t in facets.get("version") or []:
+        builds[str(t.get("term"))] = sorted(
+            str(b.get("term")) for b in (t.get("facets") or {}).get("build_id") or [])
+    rows = []
+    for version, v in per.items():
+        first, last = min(v["days"]), max(v["days"])
+        span = (datetime.strptime(last, "%Y-%m-%d") - datetime.strptime(first, "%Y-%m-%d")).days + 1
+        rows.append({"version": version, "reports": v["reports"], "first_day": first,
+                     "last_day": last, "days": span,
+                     "per_day": round(v["reports"] / float(span), 2),
+                     "build_ids": builds.get(version, [])})
+    # By version, not by first report day: a stale 150.0 install that reports once in the window
+    # would otherwise land between 154.0 and 155.0 and read as a version in that sequence.
+    rows.sort(key=lambda r: (_version_key(r["version"]), r["first_day"]))
+    step = None
+    eligible = [r for r in rows if r["reports"] >= min_reports]
+    if len(eligible) >= 2:
+        latest, previous = eligible[-1], eligible[-2]
+        if previous["per_day"] > 0:
+            ratio = latest["per_day"] / previous["per_day"]
+            if ratio >= step_ratio:
+                step = {"version": latest["version"], "from_version": previous["version"],
+                        "ratio": round(ratio, 1), "per_day": latest["per_day"],
+                        "from_per_day": previous["per_day"],
+                        "build_ids": latest["build_ids"]}
+    return {"versions": rows, "step": step, "days": days}
+
+
 def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
     """How much of this SIGNATURE is hardware error rather than a bug anyone can fix?
 

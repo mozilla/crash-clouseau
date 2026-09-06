@@ -1351,7 +1351,63 @@ def _crash_facts(crash: dict) -> list[str]:
     # and this says whether it got WORSE -- the two answers are independent and a rise on an old
     # signature is exactly the case the age lines alone read as uninteresting.
     lines += _signature_trend_lines(crash)
+    # The beta/release counterpart of the trend block: which VERSION the rate stepped up in.
+    lines += _version_rate_lines(crash)
     return lines
+
+
+def _version_rate_lines(crash: dict) -> list[str]:
+    """This signature's reports per day PER VERSION on the crash's channel, as prompt lines, or
+    ``[]`` when there is nothing to compare (fewer than two versions with enough reports).
+
+    Written for crash 0027161c-203a-4bc5-bb1d-efa910260905 (release 155.0.1, 2026-09-06). The
+    facts the run needed and did not have: 154.x ran at 1-2 reports/day, 155.0 at 5-8, 155.0.1
+    at 30-35; the 155.0 -> 155.0.1 diff was 22 changesets with exactly one cookie/storage change
+    (bug 2066155). The principal found that candidate; the skeptic vetoed it as "already
+    present in this exact crash build" and the run abstained. With the step stated, the same
+    presence is what makes the candidate explain the step. Shared with the blind second opinion
+    via ``_crash_facts`` on the ``_hardware_noise_lines`` reasoning: a fact, not a direction.
+
+    Per-day rates count each version's adoption ramp against it, so the block asks for a
+    ``step_ratio``-sized step and says why a drift is not one."""
+    from crashclouseau import sigage
+
+    rates = crash.get("version_rates") or {}
+    rows = rates.get("versions") or []
+    if len([r for r in rows if (r.get("reports") or 0) >= sigage.VERSION_MIN_REPORTS]) < 2:
+        return []
+    own = str(crash.get("version") or "")
+    channel = crash.get("channel") or "this"
+    out = [
+        "",
+        "CRASH RATE BY VERSION on {}, last {} days (reports per day between each version's first "
+        "and last report; a version's adoption ramps over its first days, so read a step of "
+        "{:.0f}x or more, not a drift; versions with no report in the window are not listed):"
+        .format(channel, rates.get("days") or sigage.VERSION_RATES_DAYS,
+                config.get_agent_version_rates()["step_ratio"]),
+    ]
+    for r in rows:
+        mark = "   <- this crash's version" if own and str(r.get("version")) == own else ""
+        out.append("  {}: {:.1f}/day over {} day{} ({} report{}){}".format(
+            r.get("version"), r.get("per_day") or 0.0, r.get("days"),
+            "" if r.get("days") == 1 else "s", r.get("reports"),
+            "" if r.get("reports") == 1 else "s", mark))
+    step = rates.get("step")
+    if step:
+        builds = step.get("build_ids") or []
+        out.append(
+            "  STEP: {} runs at {}x the rate of {}. The changes that shipped between those two "
+            "versions are few{}; a candidate among them that adds work, I/O or fsyncs on the "
+            "awaited path explains the step -- and being present in the build is exactly what "
+            "makes it a candidate, never a refutation. A patch described as a fix, cap or "
+            "mitigation can still be the regressor if it shrinks or reverts an earlier one."
+            .format(step.get("version"), step.get("ratio"), step.get("from_version"),
+                    " (build{} {})".format("" if len(builds) == 1 else "s", ", ".join(builds))
+                    if builds else ""))
+        if own and own == str(step.get("version")):
+            out.append("  This report is on the step version, so this crash's own candidate "
+                       "window (previous build to this one) is that set of changes.")
+    return out
 
 
 def _user_prompt(crash: dict) -> str:

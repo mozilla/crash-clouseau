@@ -821,6 +821,11 @@ def build_seed(uuid):
         # signature-level half of the bit-flip gate (`sigage.hardware_noise`). All None when
         # unknown.
         "hardware_noise": _hardware_noise(info, channel),
+        # Reports per day per VERSION on this channel (`sigage.version_rates`): the beta/release
+        # counterpart of `signature_trend`, whose unit is the nightly build-day. Crash 0027161c
+        # (2026-09-06) is why: 155.0.1 ran at ~5x 155.0's rate, its dot-release diff held one
+        # cookie change, and the run abstained because nothing said so. All None when unknown.
+        "version_rates": _version_rates(info, channel),
         # Has this signature's install-normalised crash RATE changed? (`sigtrend.trend_facts`.)
         # A DB read, no Socorro call. Empty dict when the rollup has too little history to
         # compare against, which must read as "not measured" and never as "no change" — the
@@ -860,6 +865,28 @@ def _signature_trend(info, uuid_info, channel):
     except Exception:
         logger.error("Cannot compute the signature trend", exc_info=True)
         return {}
+
+
+def _version_rates(info, channel):
+    """This signature's per-version crash rate on the crash's own channel, for
+    ``triage._version_rate_lines`` and ``_record_version_step``. ONE SuperSearch, off when the
+    knob is off, and never raises -- an unknown answer prints nothing and flags nothing."""
+    from crashclouseau import sigage
+
+    empty = dict(sigage.NO_VERSION_RATES)
+    cfg = config.get_agent_version_rates()
+    if not cfg["enabled"]:
+        return empty
+    try:
+        return sigage.version_rates(
+            info.get("signature", ""),
+            product=info.get("product") or "Firefox",
+            channel=channel or "nightly",
+            days=cfg["days"], step_ratio=cfg["step_ratio"], min_reports=cfg["min_reports"],
+        )
+    except Exception as exc:                            # pragma: no cover - never break a seed
+        logger.warning("agent: version-rates lookup failed: %s", exc)
+        return empty
 
 
 def _hardware_noise(info, channel):
@@ -1566,6 +1593,26 @@ def _record_sensitivity(dossier, seed):
                               "memory_unsafe_signals": signals}
     logger.info("agent: analysis withheld from the public surfaces (%s) for %s",
                 "; ".join(signals), (seed or {}).get("uuid"))
+
+
+def _record_version_step(dossier, seed):
+    """Record the per-version rate step, when there is one. A RECORDER, not a gate: nothing
+    moves on it yet. What it makes countable is the case of crash 0027161c -- a candidate inside
+    the dot-release window of a version whose rate multiplied, vetoed as "already present in the
+    build" -- so the next prompt or gate change can be measured against prod instead of argued.
+    Mutates ``dossier`` in place."""
+    rates = (seed or {}).get("version_rates") or {}
+    step = rates.get("step")
+    if not step:
+        return
+    own = str((seed or {}).get("version") or "")
+    dossier.corroborations = {
+        **(dossier.corroborations or {}),
+        "version_step": "{} at {}x the rate of {}".format(
+            step.get("version"), step.get("ratio"), step.get("from_version")),
+        "version_step_ratio": step.get("ratio"),
+        "crash_in_step_version": bool(own and own == str(step.get("version"))),
+    }
 
 
 def _classify_exposer(dossier, seed):
@@ -3573,6 +3620,8 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # verdict, no rung and no filing -- see `crashclouseau/sensitive.py` for why its address
         # read and byte rule are its own rather than `_looks_poison`'s.
         _record_sensitivity(result.dossier, seed)
+        # Per-version rate step (beta/release): recorded, not acted on. See `_record_version_step`.
+        _record_version_step(result.dossier, seed)
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
         # match raises a bare lead (medium/50%) to `probable` (70%).
         _apply_corroboration_gate(result.dossier, seed)

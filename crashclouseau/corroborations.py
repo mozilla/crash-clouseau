@@ -353,6 +353,26 @@ REGISTRY = {
         "diagnostic", (),
         "A skeptic `fail` that rested on a compile-flag claim and was NOT allowed to bind. Its "
         "failure mode is a false abstain, which reaches no scoreboard, so this is the count."),
+    "skeptic_presence_unbound": (
+        "diagnostic", (),
+        "A skeptic `fail` whose stated ground was that the candidate is ALREADY PRESENT in the "
+        "crashing build, and which was therefore not allowed to bind: presence in the build is "
+        "the precondition for causing the crash, not a refutation of it (crash 0027161c, "
+        "2026-09-06: bug 2066155 vetoed as 'already present ... cannot be blamed'). Same "
+        "invisible-abstain failure mode as `skeptic_build_flag_unbound`, hence a count."),
+    # -- per-version crash rate (`sigage.version_rates`, `orchestrator._record_version_step`) --
+    "version_step": (
+        "diagnostic", (),
+        "Which version's per-day rate is >= `step_ratio` times the preceding version's, as one "
+        "readable string. Recorded, not acted on: the first thing to measure is how often a "
+        "candidate inside the step version's window gets vetoed anyway."),
+    "version_step_ratio": (
+        "diagnostic", (),
+        "The step as a number, so the threshold can be re-derived from prod."),
+    "crash_in_step_version": (
+        "diagnostic", (),
+        "Is the triaged report ON the step version? When it is, the crash's own pushlog window "
+        "(the previous build to this one) is the set of changes that shipped with the step."),
 }
 
 

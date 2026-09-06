@@ -769,13 +769,17 @@ class Dossier(BaseModel):
         # because the skeptic emits one per claim: a genuine contradiction sitting in its
         # own entry must keep its teeth even when another entry cites a configure switch.
         gate_agrees = bool((self.corroborations or {}).get("compiled_out_suppressed"))
-        failed, binding, unbound = [], [], []
+        failed, binding, unbound, presence = [], [], [], []
         for s in self.skeptic:
             if s.status != SkepticStatus.failed:
                 continue
             failed.append(s.claim_ref)
             if not gate_agrees and compiled_out.is_build_flag_ground(s.note, s.citations):
                 unbound.append(s.claim_ref)
+            elif is_presence_ground(s.note):
+                # (1d) "The candidate is already in this build" is the precondition for
+                # causation, not a refutation of it. See ``is_presence_ground``.
+                presence.append(s.claim_ref)
             else:
                 binding.append(s.claim_ref)
         # (1) Skeptic ladder on a strong-evidence verdict.
@@ -810,14 +814,24 @@ class Dossier(BaseModel):
         # (1c) The only fails left rest on a configure-switch claim, which the deterministic
         # compiled-out gate decides. Keep the lead and RECORD it, so a rule whose whole
         # failure mode is a false abstain is countable instead of invisible.
-        elif v.decision == Decision.lead and unbound:
-            self.corroborations = {
-                **(self.corroborations or {}),
-                "skeptic_build_flag_unbound": unbound,
-            }
-            logger.info("schema: skeptic fail(s) %s rest on a configure-switch claim, not on this "
-                        "crash's own facts; lead kept (the compiled-out gate decides that)",
-                        ", ".join(unbound) or "?")
+        elif v.decision == Decision.lead and (unbound or presence):
+            if unbound:
+                self.corroborations = {
+                    **(self.corroborations or {}),
+                    "skeptic_build_flag_unbound": unbound,
+                }
+                logger.info("schema: skeptic fail(s) %s rest on a configure-switch claim, not on "
+                            "this crash's own facts; lead kept (the compiled-out gate decides that)",
+                            ", ".join(unbound) or "?")
+            if presence:
+                # (1d) Its own flag, so the two unbindings stay countable apart.
+                self.corroborations = {
+                    **(self.corroborations or {}),
+                    "skeptic_presence_unbound": presence,
+                }
+                logger.info("schema: skeptic fail(s) %s rest on the candidate being already "
+                            "present in the crashing build, which is not a refutation; lead kept",
+                            ", ".join(presence) or "?")
         # (2) A lead (from the ladder OR emitted directly) needs a cited anchor.
         if self.verdict.decision == Decision.lead and not self._has_lead_anchor():
             self.verdict = Verdict(
@@ -863,6 +877,51 @@ def _extract_last_json_block(text: str | None):
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
+
+
+# The skeptic's "already present in the build" refutation. The two lists are deliberately
+# short and literal; see ``is_presence_ground``.
+_PRESENCE_RE = re.compile(
+    r"already (?:present|in|ships|shipped|shipping|contained|contains|included|includes|applied|"
+    r"landed|part of)\b"
+    r"|(?:is|was|are|be) (?:already )?(?:present|included|contained|shipping|shipped) in (?:this|the|that)\b"
+    r"|(?:this|the|that) (?:exact |same |very )?(?:crash(?:ing)? )?build (?:already )?"
+    r"(?:contains|includes|ships|has|carries|is running)\b"
+    r"|cannot be blamed for causing|can't be blamed for causing|could not have caused this"
+    r"|argues the opposite direction|so the fix cannot|the fix is (?:already )?(?:in|present)",
+    re.IGNORECASE,
+)
+_ABSENCE_RE = re.compile(
+    r"\bnot (?:present|in|included|part of|contained|shipped|shipping|yet)\b|\babsent\b"
+    r"|\blanded after\b|\bafter (?:this|the) build\b|\bpost-?dates?\b|\bnewer than\b"
+    r"|\bmissing from\b|\bnever (?:shipped|landed|reached)\b|\bbacked out\b|\bbackout\b"
+    r"|\b(?:isn't|is not|wasn't|was not|aren't|are not) in (?:this|the|that)\b|\bpredates?\b",
+    re.IGNORECASE,
+)
+
+
+def is_presence_ground(note) -> bool:
+    """Does this skeptic ``fail`` rest on "the candidate is ALREADY IN the crashing build"?
+
+    A question about the claim's GROUND, like ``compiled_out.is_build_flag_ground``, and for
+    the same reason: that ground is not a refutation. Being in the build is the precondition
+    for a changeset to have caused the crash; the build-timing refutation is the OPPOSITE fact,
+    a candidate ABSENT from the build (landed after it, backed out before it). Crash 0027161c
+    (2026-09-06, release 155.0.1): the principal found bug 2066155 in the dot-release window
+    and the skeptic failed "consistency (build-timing)" with "the 512KB cap is ALREADY present
+    in this exact crash build, so the WAL-cap fix cannot be blamed for causing THIS instance --
+    it argues the opposite direction". 155.0.1 ran at ~5x 155.0's rate and that patch was the
+    only cookie change between the two; the veto turned a correct lead into a noise abstain.
+
+    Conservative on purpose: the note must SAY presence, and must not also say absence -- a
+    note that says "not in this build" or "landed after" is a real timing refutation and keeps
+    its teeth. Text-matching a model's prose is a weak instrument; its only job is to stop this
+    one inversion from binding, and the count it produces (``skeptic_presence_unbound``) is how
+    it gets audited."""
+    text = str(note or "")
+    if not text or _ABSENCE_RE.search(text):
+        return False
+    return bool(_PRESENCE_RE.search(text))
 
 
 def handoff_parse_failure(text: str | None) -> str | None:
