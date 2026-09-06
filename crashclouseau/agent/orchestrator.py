@@ -1991,6 +1991,22 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 "agent: second-opinion refuted -> lead clamped to medium for %s",
                 (seed or {}).get("uuid"),
             )
+        elif v.decision == Decision.lead and _step_tied(dossier, seed):
+            # The candidate shipped in the version whose rate stepped up, and it is in this
+            # crash's own window. That is EMPIRICAL evidence the blind reviewer argues against
+            # from mechanism alone -- and on I/O it argues badly: crash 0027161c (2026-09-06),
+            # five release runs, the reviewer refuted bug 2066155 with "a smaller WAL cap means
+            # LESS to checkpoint at close" while 155.0.1, whose 22-changeset diff held that one
+            # cookie change, ran at 5.5x 155.0. A mechanism doubt costs the lead its band, not
+            # its existence: clamp to `low`, keep it reportable, record it.
+            if v.confidence != Confidence.low:
+                dossier.verdict = v.model_copy(update={"confidence": Confidence.low})
+            flags["second_opinion_refuted_step_kept"] = True
+            logger.info(
+                "agent: second-opinion refuted a %s lead, but the candidate is in the window "
+                "of the version whose rate stepped up -> kept as a low lead for %s",
+                v.confidence.value, (seed or {}).get("uuid"),
+            )
         elif v.decision == Decision.lead:
             # At or below `medium` there is no lower band to clamp to, and the old floor
             # ("never drop a report on one blind disagreement") made a refutation of the
@@ -2014,6 +2030,19 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 "abstain for %s", v.confidence.value, (seed or {}).get("uuid"),
             )
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
+
+
+def _step_tied(dossier, seed):
+    """Is this lead's candidate tied to a per-version rate STEP? Both halves must hold: the
+    triaged report is on the version whose rate stepped up (``crash_in_step_version``, from
+    ``_record_version_step``, which runs earlier in ``apply_deterministic_gates``) and the
+    candidate is in this crash's own pushlog window (computed here because
+    ``_record_window_membership`` runs later). Fails closed: unknown is ``False``."""
+    if dossier is None:
+        return False
+    if not (dossier.corroborations or {}).get("crash_in_step_version"):
+        return False
+    return _candidate_window_membership(dossier, seed) is True
 
 
 _STALE_SIGNATURE_CLAMP = {
@@ -2533,6 +2562,22 @@ def _apply_bad_machine_gate(dossier, seed):
     )
 
 
+def _candidate_window_membership(dossier, seed):
+    """Was the chosen candidate in the build's pushlog window? ``True`` / ``False``, or ``None``
+    when there is no candidate or no window to consult. The one computation behind
+    ``_record_window_membership``'s flag, split out because ``_fold_second_opinion`` runs
+    BEFORE that recorder and needs the same answer (see its step-tied branch)."""
+    cand = dossier.candidate if dossier is not None else None
+    if cand is None or not cand.node:
+        return None
+    window = {c.get("node") for c in ((seed or {}).get("candidates") or [])
+              if isinstance(c, dict) and c.get("node")}
+    window |= {node for node in ((seed or {}).get("candidate_pushdates") or {}) if node}
+    if not window:
+        return None
+    return cand.node in window
+
+
 def _record_window_membership(dossier, seed):
     """Record whether the chosen candidate was in the build's PUSHLOG WINDOW at all.
 
@@ -2567,15 +2612,10 @@ def _record_window_membership(dossier, seed):
     which is precisely why the two-arm calibration split had to be backfilled by hand rather than
     read off the corpus (``config.get_agent_calibration``, ``spike/window_arm_null.py``). A fact
     the eval harness cannot record is a fact no fit can ever be validated against."""
-    cand = dossier.candidate if dossier is not None else None
-    if cand is None or not cand.node:
+    in_window = _candidate_window_membership(dossier, seed)
+    if in_window is None:
         return
-    window = {c.get("node") for c in ((seed or {}).get("candidates") or [])
-              if isinstance(c, dict) and c.get("node")}
-    window |= {node for node in ((seed or {}).get("candidate_pushdates") or {}) if node}
-    if not window:
-        return
-    in_window = cand.node in window
+    cand = dossier.candidate
     flags = {"candidate_in_pushlog_window": in_window}
     # ...AND HOW IT GOT THERE. On a release branch a whole development cycle arrives as ONE
     # push at ONE pushdate, so "in this build's pushlog window" stops being recency evidence:

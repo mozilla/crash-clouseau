@@ -338,7 +338,10 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # Per-version crash rate (`sigage.version_rates`). Recorded, not acted on, until the
         # first question it exists to answer has been read off the persisted dossiers: how often
         # a candidate inside a step version's window is vetoed anyway (crash 0027161c).
-        "version_step", "version_step_ratio", "crash_in_step_version",
+        "version_step", "version_step_ratio",
+        # The blind reviewer refuted a lead the version step ties to its window; the lead was
+        # kept at `low`. Write-only until `Feedback` can say which of the two was right.
+        "second_opinion_refuted_step_kept",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

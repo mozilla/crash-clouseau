@@ -72,7 +72,14 @@ _SYSTEM = (
     "hang or timeout signature fires whenever the awaited work exceeds its budget. For a crash "
     "whose rate has risen, or a shutdownhang / AsyncShutdownTimeout / watchdog crash, judge "
     "whether the change adds work, I/O or blocking to the path being waited on -- even when it "
-    "touches no code on the stack -- and say so rather than arguing from the signature's age.\n\n"
+    "touches no code on the stack -- and say so rather than arguing from the signature's age. "
+    "If the crash facts show a CRASH RATE BY VERSION step -- this crash's version running at "
+    "several times the previous version's rate -- and the candidate is one of the few changes "
+    "shipped between those versions, that empirical step outweighs an intuition about the "
+    "DIRECTION of an I/O change ('a smaller cap means less work'): checkpoint count vs bytes, "
+    "fsync frequency vs size, and batch vs trickle routinely go the other way in practice. "
+    "Refute (corroborates: false) only when the change cannot touch the awaited path at all; "
+    "a direction doubt is corroborates: null with the doubt stated.\n\n"
     "End your reply with EXACTLY one fenced block:\n"
     "```json\n"
     '{"corroborates": true|false|null, "confidence": "low|medium|high", '
@@ -109,6 +116,13 @@ def _user_prompt(crash: dict, candidate: dict | None) -> str:
             "unrelated — if so, say why.".format(
                 candidate["node"], " (bug {})".format(bug) if bug else ""),
         ]
+        step = (crash.get("version_rates") or {}).get("step") or {}
+        if step and str(crash.get("version") or "") == str(step.get("version")):
+            lines.append(
+                "Note the CRASH RATE BY VERSION block above: this report is on {}, which runs at "
+                "{}x the rate of {}, and this candidate shipped between those two versions. Weigh "
+                "that against any intuition that the change should make the awaited work "
+                "cheaper.".format(step.get("version"), step.get("ratio"), step.get("from_version")))
     else:
         lines += [
             "",

@@ -339,3 +339,115 @@ class TestTheSkepticIsToldWhy(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------------------------
+# The second gate that ate the same lead once the skeptic let it through: the blind second
+# opinion refuted bug 2066155 with "a smaller WAL cap means LESS to checkpoint at close", at
+# medium confidence, and the fold abstained the medium lead (five release runs, 2026-09-06 21:15).
+
+from crashclouseau.agent.schema import SecondOpinion  # noqa: E402
+from crashclouseau.agent import second_opinion  # noqa: E402
+
+
+def _step_seed(**over):
+    seed = {"uuid": "0027161c", "signature": "sig", "channel": "release", "version": "155.0.1",
+            "candidates": [{"node": "ab9673b0a48d", "bug": 2066155}, {"node": "c5f2a83e6d14"}],
+            "version_rates": sigage.summarize_version_rates(_response())}
+    seed.update(over)
+    return seed
+
+
+def _refuted(confidence="medium"):
+    return SecondOpinion(mode="verify", corroborates=False, confidence=confidence,
+                         mechanism="close-time checkpoint",
+                         refutation="a smaller WAL cap means less to checkpoint at close")
+
+
+def _medium_lead(node="ab9673b0a48d"):
+    return Dossier(
+        crash={"uuid": "u", "signature": "sig", "frames": []},
+        verdict=Verdict(decision=Decision.lead, confidence=Confidence.medium,
+                        needinfo_draft="could you take a look?",
+                        mechanism=Claim(summary="WAL checkpoint fsync", citations=[_SF])),
+        candidate=Candidate(node=node, bug=2066155, author="A", channel="release"),
+    )
+
+
+class TestAStepTiedLeadSurvivesTheBlindReviewer(unittest.TestCase):
+    def test_the_0027161c_refutation_now_clamps_instead_of_abstaining(self):
+        d = _medium_lead()
+        seed = _step_seed()
+        orch._record_version_step(d, seed)
+        orch._fold_second_opinion(d, _refuted(), seed)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.verdict.confidence, Confidence.low)
+        self.assertTrue(d.corroborations["second_opinion_refuted"])
+        self.assertTrue(d.corroborations["second_opinion_refuted_step_kept"])
+        self.assertNotIn("second_opinion_abstained", d.corroborations)
+        self.assertIsNotNone(d.verdict.needinfo_draft)
+
+    def test_without_the_step_the_refutation_still_abstains(self):
+        d = _medium_lead()
+        seed = _step_seed(version_rates=dict(sigage.NO_VERSION_RATES))
+        orch._record_version_step(d, seed)
+        orch._fold_second_opinion(d, _refuted(), seed)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertTrue(d.corroborations["second_opinion_abstained"])
+
+    def test_a_report_on_the_previous_version_is_not_step_tied(self):
+        d = _medium_lead()
+        seed = _step_seed(version="155.0")
+        orch._record_version_step(d, seed)
+        orch._fold_second_opinion(d, _refuted(), seed)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_a_candidate_outside_the_window_is_not_step_tied(self):
+        d = _medium_lead(node="5b70f67df703")     # bug 1158387, seven weeks before the window
+        seed = _step_seed()
+        orch._record_version_step(d, seed)
+        orch._fold_second_opinion(d, _refuted(), seed)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_no_window_to_consult_fails_closed(self):
+        d = _medium_lead()
+        seed = _step_seed(candidates=[])
+        orch._record_version_step(d, seed)
+        orch._fold_second_opinion(d, _refuted(), seed)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_a_high_confidence_refutation_is_treated_the_same(self):
+        # The step is evidence the reviewer never weighed; its own confidence does not change that.
+        d = _medium_lead()
+        seed = _step_seed()
+        orch._record_version_step(d, seed)
+        orch._fold_second_opinion(d, _refuted("high"), seed)
+        self.assertEqual((d.verdict.decision, d.verdict.confidence), (Decision.lead, Confidence.low))
+
+    def test_membership_helper_matches_the_recorder(self):
+        d = _medium_lead()
+        seed = _step_seed()
+        self.assertTrue(orch._candidate_window_membership(d, seed))
+        orch._record_window_membership(d, seed)
+        self.assertTrue(d.corroborations["candidate_in_pushlog_window"])
+        self.assertIsNone(orch._candidate_window_membership(d, {"candidates": []}))
+
+
+class TestTheBlindReviewerIsToldAboutTheStep(unittest.TestCase):
+    def test_the_system_prompt_weighs_the_step_over_a_direction_intuition(self):
+        self.assertIn("CRASH RATE BY VERSION", second_opinion._SYSTEM)
+        self.assertIn("a smaller cap means less work", second_opinion._SYSTEM)
+        self.assertIn("corroborates: null", second_opinion._SYSTEM)
+
+    def test_the_user_prompt_names_the_step_for_a_report_on_the_step_version(self):
+        crash = _step_seed(raw_crash={"json_dump": {}})
+        text = second_opinion._user_prompt(crash, {"node": "ab9673b0a48d", "bug": 2066155})
+        self.assertIn("CRASH RATE BY VERSION on release", text)          # the shared facts
+        self.assertIn("this report is on 155.0.1, which runs at 5.1x the rate of 155.0", text)
+
+    def test_no_note_off_the_step_version_or_without_a_candidate(self):
+        crash = _step_seed(version="155.0", raw_crash={"json_dump": {}})
+        self.assertNotIn("this report is on", second_opinion._user_prompt(
+            crash, {"node": "ab9673b0a48d"}))
+        self.assertNotIn("this report is on", second_opinion._user_prompt(
+            _step_seed(raw_crash={"json_dump": {}}), None))

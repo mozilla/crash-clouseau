@@ -370,9 +370,17 @@ REGISTRY = {
         "diagnostic", (),
         "The step as a number, so the threshold can be re-derived from prod."),
     "crash_in_step_version": (
-        "diagnostic", (),
+        "evidence", ("agent/orchestrator.py",),
         "Is the triaged report ON the step version? When it is, the crash's own pushlog window "
-        "(the previous build to this one) is the set of changes that shipped with the step."),
+        "(the previous build to this one) is the set of changes that shipped with the step. Read "
+        "by `_step_tied`: with the candidate in that window, a second-opinion refutation clamps "
+        "the lead to `low` instead of abstaining it."),
+    "second_opinion_refuted_step_kept": (
+        "diagnostic", (),
+        "A medium-or-better refutation met a step-tied lead and clamped it to `low` instead of "
+        "abstaining it. The count of how often the blind reviewer's mechanism read disagrees "
+        "with the version-step evidence; when `Feedback` later says which was right, this is "
+        "the flag to join on."),
 }
 
 
