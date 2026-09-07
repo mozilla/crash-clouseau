@@ -228,6 +228,64 @@ class TestRowShape(unittest.TestCase):
         self.assertEqual(models.Selection.record_many([], "Firefox", "nightly"), 0)
 
 
+class TestOneRowPerPairPerBatch(unittest.TestCase):
+    """Postgres rejects a multi-row upsert whose rows share the `selection_pair` key -- the
+    WHOLE statement, which `record_many` then swallows. Beta hit it every tick from
+    2026-09-06 23:43Z: the rate path picked `AsyncShutdownTimeout | profile-before-change-
+    telemetry | CrashManager: submitting Glean crash ping(s)` on build 20260831122253, the
+    same build-day the spike test had just logged as `not_spiking`. Seven errors in the 80-minute
+    log window, zero beta rows written, and the pick repeating because it was never recorded."""
+
+    RUN = datetime(2026, 9, 7, 6, 43, tzinfo=timezone.utc)
+
+    def _rows(self, *records):
+        return [models.Selection._row(r, "Firefox", "beta", self.RUN) for r in records]
+
+    def test_the_later_record_wins_the_pair(self):
+        spike = _record(outcome=utils.NOT_SPIKING)
+        rising = _record(outcome=utils.RISING_RATE, count=7)
+        rising["picked"] = _record()["picked"]
+        rows = models.Selection._collapse_pairs(self._rows(spike, rising))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["outcome"], utils.RISING_RATE)
+        self.assertEqual(rows[0]["number"], 7)
+        self.assertEqual(rows[0]["picked"], "20260731085738")
+        self.assertTrue(rows[0]["ever_selected"])
+
+    def test_the_sticky_fields_merge_like_the_sql_does(self):
+        # Across batches `ON CONFLICT` keeps `picked` and ORs `ever_selected`; one collapsed
+        # batch must leave the table in the same state as two batches would.
+        selected = _record()
+        downgrade = _record(outcome=utils.NOT_SPIKING, count=2)
+        rows = models.Selection._collapse_pairs(self._rows(selected, downgrade))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["outcome"], utils.NOT_SPIKING)
+        self.assertEqual(rows[0]["number"], 2)
+        self.assertEqual(rows[0]["picked"], "20260731085738")
+        self.assertTrue(rows[0]["ever_selected"])
+
+    def test_distinct_pairs_are_untouched_and_keep_their_order(self):
+        a = _record()
+        b = _record(outcome=utils.NOT_SPIKING)
+        b["signature"] = "another::signature"
+        c = _record(outcome=utils.NOT_SPIKING)
+        c["day"] = datetime(2026, 8, 1)
+        rows = models.Selection._collapse_pairs(self._rows(a, b, c))
+        self.assertEqual([(r["signature"], r["build_day"]) for r in rows],
+                         [(r["signature"], r["build_day"]) for r in self._rows(a, b, c)])
+
+    def test_record_many_hands_the_upsert_one_row_per_pair(self):
+        spike = _record(outcome=utils.NOT_SPIKING)
+        rising = _record(outcome=utils.RISING_RATE)
+        with mock.patch.object(models.Selection, "_upsert", return_value=1) as upsert, \
+                mock.patch.object(models.db.session, "commit"):
+            written = models.Selection.record_many([spike, rising], "Firefox", "beta", self.RUN)
+        self.assertEqual(written, 1)
+        (values,), _ = upsert.call_args
+        self.assertEqual(len(values), 1)
+        self.assertEqual(values[0]["outcome"], utils.RISING_RATE)
+
+
 class TestPutCrashesWiring(unittest.TestCase):
     """put_crashes must unpack the new tuple AND persist the declined pairs — the log is
     worthless if the writer is not actually called."""
@@ -351,6 +409,20 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["outcome"], utils.UNTESTABLE_PREFIX)
         self.assertEqual(rows[0]["number"], 9)
+
+    def test_two_records_for_one_pair_in_one_batch_write_one_row(self):
+        # The statement Postgres used to reject outright ("ON CONFLICT DO UPDATE command
+        # cannot affect row a second time"), taking the whole batch with it.
+        run = datetime(2026, 9, 7, 6, 43, tzinfo=timezone.utc)
+        spike = self._record(outcome=utils.NOT_SPIKING)
+        rising = self._record(outcome=utils.RISING_RATE, count=7)
+        self.assertEqual(
+            models.Selection.record_many([spike, rising], "Firefox", "beta", run), 1
+        )
+        rows = models.Selection.for_signature(self.SIGNATURE)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["outcome"], utils.RISING_RATE)
+        self.assertEqual(rows[0]["number"], 7)
 
     def test_a_downgrade_never_erases_that_we_analysed_it(self):
         """A pair's verdict legitimately changes as its build ages past `mature_after`

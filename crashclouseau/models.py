@@ -1160,10 +1160,10 @@ class Selection(db.Model):
         if run_date is None:
             run_date = datetime.now(timezone.utc)
         try:
-            values = [
+            values = Selection._collapse_pairs([
                 Selection._row(record, product, channel, run_date)
                 for record in records
-            ]
+            ])
             written = 0
             for start in range(0, len(values), Selection._CHUNK):
                 written += Selection._upsert(values[start:start + Selection._CHUNK])
@@ -1174,6 +1174,49 @@ class Selection(db.Model):
             logger.error("Cannot record the selection log", exc_info=True)
             db.session.rollback()
             return 0
+
+    @staticmethod
+    def _collapse_pairs(values):
+        """One row per ``selection_pair`` within a batch, the LATER record winning.
+
+        Postgres rejects a multi-row ``INSERT ... ON CONFLICT DO UPDATE`` whose rows share a
+        constrained key ("cannot affect row a second time") -- and it rejects the WHOLE
+        statement, which ``record_many`` then swallows: beta's selection log wrote nothing
+        from 2026-09-06 23:43Z until this landed. The colliding pair was the rate path
+        (``datacollector._rising_picks``) picking a signature on the very build-day the spike
+        test had just logged as ``not_spiking`` -- two records, one key, every tick; and
+        because the batch rolled back, the pick was never recorded as taken
+        (``taken_today`` / ``covered_recently`` read this table), so it repeated every
+        20 minutes.
+
+        Later wins because the later record describes what happened: the spike test logs its
+        verdict first, the rate path appends its pick after. The two sticky fields merge the
+        way the ``ON CONFLICT`` clause merges them ACROSS batches -- a ``picked`` build and
+        ``ever_selected`` are never lost to a record that lacks them -- so one collapsed batch
+        and two separate batches leave the table in the same state."""
+        merged = {}
+        collided = []
+        for row in values:
+            key = (row["signature"], row["product"], row["channel"], row["build_day"])
+            earlier = merged.get(key)
+            if earlier is not None:
+                collided.append((key, earlier["outcome"], row["outcome"]))
+                row = dict(
+                    row,
+                    picked=row["picked"] or earlier["picked"],
+                    ever_selected=row["ever_selected"] or earlier["ever_selected"],
+                )
+            merged[key] = row
+        if collided:
+            logger.info(
+                "selection log: %d pair(s) recorded twice in one batch, later wins: %s",
+                len(collided),
+                "; ".join(
+                    "{} on {} {}->{}".format(key[0][:80], key[3], before, after)
+                    for key, before, after in collided[:5]
+                ),
+            )
+        return list(merged.values())
 
     @staticmethod
     def _upsert(values):
