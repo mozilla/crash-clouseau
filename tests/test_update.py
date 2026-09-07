@@ -56,5 +56,34 @@ class TestUpdateAllChannels(unittest.TestCase):
         self.assertEqual(self._channels_used("nightly beta"), ["nightly", "beta"])
 
 
+class TestUpdateRefusesAChannelTheDeploymentDoesNotIngest(unittest.TestCase):
+    """`update_all` reads INGEST_CHANNELS, but the job it enqueues carries the channel as an
+    argument -- so a queued or RQ-re-run job for a channel just dropped from the variable would
+    ingest it once more (esr115/esr140, 2026-09-07), and a label `config.channels` no longer
+    lists would land in the enum column as residue. `update()` is the one entry point."""
+
+    def _run(self, channel, env):
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for name in ("put_filelog", "update_builds", "put_crashes", "analyze_reports"):
+                stack.enter_context(mock.patch.object(
+                    update, name, side_effect=lambda *a, _n=name, **k: calls.append(_n)))
+            stack.enter_context(mock.patch.dict(os.environ, {"INGEST_CHANNELS": env}))
+            update.update(None, channel, "Firefox")
+        return calls
+
+    def test_a_channel_outside_the_config_does_nothing(self):
+        self.assertNotIn("esr115", update.config.get_channels())
+        self.assertEqual(self._run("esr115", "nightly beta esr115"), [])
+
+    def test_a_channel_outside_ingest_channels_does_nothing(self):
+        self.assertIn("release", update.config.get_channels())
+        self.assertEqual(self._run("release", "nightly beta"), [])
+
+    def test_an_ingested_channel_runs_every_step(self):
+        self.assertEqual(self._run("nightly", "nightly beta"),
+                         ["put_filelog", "update_builds", "put_crashes", "analyze_reports"])
+
+
 if __name__ == "__main__":
     unittest.main()

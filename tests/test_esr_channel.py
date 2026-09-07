@@ -11,10 +11,14 @@ lines at once -- 115, 140 and 153 on 2026-09-07, at 21.9k / 68k / 4k reports a w
 its own repository (`releases/mozilla-esr<major>`), its own searchfox tree, its own Buildhub
 version pattern, its own BMO tracking flag and its own build lineage. Everything in this codebase
 that is a LINEAGE (`nodes`, `builds`, `lastdate`, the selection and candidate windows, the
-proto-cluster dedup) is keyed by the channel label, so each line is its own label (`esr140`),
+proto-cluster dedup) is keyed by the channel label, so a line is its own label (`esr153`),
 exactly the way `release` is one label for one repo. Everything that is a POLICY (thresholds, the
 filing overlay, the calibration table, the build-flag partition, the prose, the Socorro query) is
 keyed by the FAMILY `esr` (`config.channel_family`), and a line may override its family.
+
+ONLY THE CURRENT LINE IS A CHANNEL. All three ran for two hours on 2026-09-07; esr115 (Windows 7,
+32-bit, security-only) spent its first tick on 17 runs of one `OOM | large` signature, and
+Calixte's decision was "remove esr115 and esr140, just keep the last one".
 
 The Postgres half -- the enum migration that makes the new labels storable, and the per-line
 `builds` lineage through the production writers -- is tests/test_enum_migration_pg.py.
@@ -36,7 +40,7 @@ from crashclouseau import (  # noqa: E402
 )
 from crashclouseau.agent import roles, triage  # noqa: E402
 
-LINES = ("esr115", "esr140", "esr153")
+LINES = ("esr153",)                       # the current ESR line; the family code takes any
 
 
 class TestTheFamily(unittest.TestCase):
@@ -85,16 +89,40 @@ class TestTheFamily(unittest.TestCase):
 
 
 class TestTheShippedChannels(unittest.TestCase):
-    def test_the_three_live_lines_are_channels(self):
-        """115, 140 and 153 are the lines Buildhub built in the 30 days before 2026-09-07
-        (115.40.0esr, 140.15.0esr and 153.2.0esr, all on 08-26) and Socorro's `esr` reports
-        come from. 128 has had no build since 2025 and is not a label; the bare family is
-        policy, not a lineage, and is not one either."""
-        for line in LINES:
-            self.assertIn(line, config.get_channels())
-            self.assertIn(line, models.CHANNEL_TYPE.enums)
-        self.assertNotIn("esr128", config.get_channels())
-        self.assertNotIn("esr", config.get_channels())
+    def test_only_the_current_line_is_a_channel(self):
+        """esr153 is the current ESR line. esr115 and esr140 were declared with it and retired
+        two hours later (Calixte, 2026-09-07); 128 has had no build since 2025; the bare family
+        is policy, not a lineage. The family code still understands any line label, so the next
+        line is one entry here and one `searchfox.Repo` member."""
+        self.assertIn("esr153", config.get_channels())
+        self.assertIn("esr153", models.CHANNEL_TYPE.enums)
+        for retired in ("esr115", "esr140", "esr128", "esr"):
+            self.assertNotIn(retired, config.get_channels(), retired)
+        self.assertEqual(config.get_channels(), ["nightly", "beta", "release", "esr153"])
+
+    def test_a_retired_label_still_reads_back(self):
+        """A Postgres enum label cannot be dropped, and a retired line's rows may outlive the
+        label in `config.channels`. SQLAlchemy would raise `LookupError` on every read of such a
+        row -- `tasks.html` joins `Build.channel` for 500 rows -- so `CHANNEL_TYPE` hands the
+        raw label back instead. Exercised on sqlite through the real column type."""
+        from sqlalchemy import text
+
+        from crashclouseau import db
+
+        models.LastDate.__table__.create(bind=db.engine, checkfirst=True)
+        db.session.execute(text("DELETE FROM lastdate WHERE channel = 'esr140'"))
+        db.session.execute(text(
+            "INSERT INTO lastdate (channel, mindate, maxdate) VALUES ('esr140', NULL, NULL)"))
+        db.session.commit()
+        try:
+            rows = {r.channel for r in db.session.query(models.LastDate).all()}
+            self.assertIn("esr140", rows)
+            self.assertEqual(models.LastDate.get("esr140"), (None, None))
+        finally:
+            db.session.execute(text("DELETE FROM lastdate WHERE channel = 'esr140'"))
+            db.session.commit()
+        self.assertEqual(models.CHANNEL_TYPE._object_value_for_elem("esr140"), "esr140")
+        self.assertEqual(models.CHANNEL_TYPE._object_value_for_elem("nightly"), "nightly")
 
     def test_the_enum_migration_carries_every_channel_label(self):
         """A long-lived Postgres has the enum it was created with; `_ensure_enum_values` adds
@@ -130,7 +158,7 @@ class TestTheShippedChannels(unittest.TestCase):
         autofile = dict(agent["autofile"])
         autofile["channels"] = {**autofile["channels"],
                                 "esr153": {"daily_cap": 1},
-                                "esr115": {"enabled": False}}
+                                "esr166": {"enabled": False}}     # the next line, held
         agent["autofile"] = autofile
         with mock.patch.object(config, "get_agent", return_value=agent), \
                 mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
@@ -139,12 +167,12 @@ class TestTheShippedChannels(unittest.TestCase):
             self.assertEqual(pol["daily_cap"], 1)
             self.assertEqual(pol["summary_prefix"], "[new in esr]")
             self.assertTrue(pol["enabled"])
-            # esr115: held on its own -- a decision, so still declared; esr140 untouched.
-            self.assertTrue(config.autofile_channel_held("esr115"))
-            self.assertTrue(config.autofile_channel_declared("esr115"))
-            self.assertFalse(config.get_agent_autofile("esr115")["enabled"])
-            self.assertFalse(config.autofile_channel_held("esr140"))
-            self.assertTrue(config.get_agent_autofile("esr140")["enabled"])
+            # esr166: held on its own -- a decision, so still declared; esr153 untouched.
+            self.assertTrue(config.autofile_channel_held("esr166"))
+            self.assertTrue(config.autofile_channel_declared("esr166"))
+            self.assertFalse(config.get_agent_autofile("esr166")["enabled"])
+            self.assertFalse(config.autofile_channel_held("esr153"))
+            self.assertTrue(config.get_agent_autofile("esr153")["enabled"])
 
     def test_a_line_publishes_no_calibrated_probability(self):
         """`agent.calibration.channels.esr = {}`: named and unmeasured, like release."""

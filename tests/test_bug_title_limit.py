@@ -224,14 +224,11 @@ class TestAPrefixedTitle(unittest.TestCase):
         self.assertEqual(p["cf_crash_signature"], "[@ Foo::Bar]")
 
     def test_the_esr_preview_carries_the_familys_marks_from_the_shipped_config(self):
-        # A line label reads `channels.esr`: same prefix for every line, the flag per line.
-        p = self._preview("esr140", "140.15.0esr")
-        self.assertEqual(p["title"], "[new in esr] Crash in [@ Foo::Bar]")
-        self.assertEqual(p["tracking_flag"], "cf_tracking_firefox_esr140")
-        self.assertEqual(p["cf_crash_signature"], "[@ Foo::Bar]")
+        # A line label reads `channels.esr`: the family's prefix, the line's own flag.
         p = self._preview("esr153", "153.2.0esr")
         self.assertEqual(p["title"], "[new in esr] Crash in [@ Foo::Bar]")
         self.assertEqual(p["tracking_flag"], "cf_tracking_firefox_esr153")
+        self.assertEqual(p["cf_crash_signature"], "[@ Foo::Bar]")
 
     def test_the_nightly_preview_has_neither(self):
         p = self._preview("nightly", "157.0a1")

@@ -8,8 +8,6 @@
         "nightly",
         "beta",
         "release",
-        "esr115",
-        "esr140",
         "esr153"
     ],
     "facets_limit": 10000,

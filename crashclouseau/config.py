@@ -54,10 +54,19 @@ def get_channels():
 # version pattern, its own BMO tracking flag and its own build lineage. Everything in this
 # codebase that is a LINEAGE (the `nodes` and `builds` tables, `LastDate`, the selection window,
 # the candidate window, the proto-cluster dedup) is keyed by the channel label, so each line is
-# its own LABEL -- `esr140` -- exactly the way `release` is one label for one repo. Everything
+# its own LABEL -- `esr153` -- exactly the way `release` is one label for one repo. Everything
 # that is a POLICY (thresholds, the filing overlay, the calibration table, the build-flag
 # partition, the prose labels, the Socorro query) is keyed by the FAMILY, `esr`, and a label may
 # still override its family (`_channel_value`, `_autofile_overlay`).
+#
+# ONLY THE CURRENT LINE IS A CHANNEL (Calixte, 2026-09-07 evening). All three lines ran for two
+# hours; esr115 -- the Windows 7 line, 32-bit and security-only -- spent its first tick on 17 runs
+# of one `OOM | large` signature, and the decision was "keep the last one". When the next ESR
+# line ships (153 -> 166, mid-2027): add its label to `channels`, deploy (the release phase adds
+# the enum label), name it in the two env vars; retire the old line by dropping it from the env
+# vars first, purging its rows (`nodes`, `lastdate`, `selection` by channel -- the rest cascades),
+# then dropping the label here. A stored label this list no longer names still READS
+# (`models.CHANNEL_TYPE` is lenient on the way out), so that order is for tidiness, not survival.
 _ESR_LABEL = re.compile(r"^esr(\d*)$")
 
 

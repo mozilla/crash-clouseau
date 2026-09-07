@@ -361,7 +361,20 @@ def put_crashes(date, channel, product):
 
 
 def update(date, channel, product, analyze=True):
-    """Update all the data for a given date/channel/product"""
+    """Update all the data for a given date/channel/product.
+
+    REFUSES A CHANNEL THE DEPLOYMENT DOES NOT INGEST. The tick (``update_all``) reads
+    ``INGEST_CHANNELS``, but the job it enqueues carries the channel as an argument, so a job
+    still in the queue -- or one RQ re-runs after a restart -- when a channel is dropped from
+    the variable would ingest it once more, and a label this build's ``config.channels`` no
+    longer lists would then sit in the enum column as residue (esr115/esr140, 2026-09-07).
+    Checked here, at the one entry point every ingestion path goes through."""
+    if channel not in config.get_channels():
+        logger.warning("update: channel %r is not in config.channels; ignoring the job", channel)
+        return
+    if channel not in config.get_ingest_channels():
+        logger.warning("update: channel %r is not in INGEST_CHANNELS; ignoring the job", channel)
+        return
     logger.info("Update data: started.")
     put_filelog(channel)
     if date:

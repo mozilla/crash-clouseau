@@ -376,7 +376,7 @@ class TestTheChannelGate(_BetaBase):
                 self.assertEqual((self.created, self.comments, self.puts), ([], [], []))
         # The three channels somebody HAS decided about are not caught by it — the gate must not
         # be a global off switch.
-        for channel in ("nightly", "beta", "release", "NIGHTLY", "esr115", "esr140", "esr153"):
+        for channel in ("nightly", "beta", "release", "NIGHTLY", "esr153"):
             with self.subTest(channel=channel):
                 self.assertTrue(cconfig.autofile_channel_declared(channel))
         for channel in ("nightly-asan", None, ""):

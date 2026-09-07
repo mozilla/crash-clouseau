@@ -15,7 +15,26 @@ from . import config, db, utils
 from .logger import logger
 
 
-CHANNEL_TYPE = db.Enum(*config.get_channels(), name="CHANNEL_TYPE")
+class _LenientEnum(db.Enum):
+    """A named Postgres enum that TOLERATES a stored label this build's config no longer lists.
+
+    A Postgres enum label cannot be dropped, and a channel can be retired (esr115 and esr140
+    were, two hours after they were declared, 2026-09-07). SQLAlchemy's ``Enum`` raises
+    ``LookupError`` when a row carries a value outside its Python-side list -- so the residue
+    of a retired channel (a build, a dossier, a node not yet purged) would 500 every page that
+    joins it: ``tasks.html`` selects ``Build.channel`` for all 500 recent rows. The raw label
+    is returned instead; a reader that does not know it treats it as an unknown channel, which
+    is what it is. Writes are unchanged (an unknown label is refused by Postgres itself when
+    the type lacks it, and by ``update.update`` before that)."""
+
+    def _object_value_for_elem(self, elem):
+        try:
+            return super()._object_value_for_elem(elem)
+        except LookupError:
+            return elem
+
+
+CHANNEL_TYPE = _LenientEnum(*config.get_channels(), name="CHANNEL_TYPE")
 PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
 
 # Evidence-agent persistence (#04). The dossier JSON content schema is owned by
@@ -1584,6 +1603,18 @@ class UUID(db.Model):
         self.signatureid = signatureid
         self.protohash = protohash
         self.buildid = buildid
+
+    @staticmethod
+    def get_channel(uuid):
+        """The channel label of *uuid*'s build, or ``None`` for an unknown uuid. One indexed
+        query -- what ``run_evidence_agent`` asks before it spends anything."""
+        return (
+            db.session.query(Build.channel)
+            .select_from(UUID)
+            .join(Build, Build.id == UUID.buildid)
+            .filter(UUID.uuid == uuid)
+            .scalar()
+        )
 
     @staticmethod
     def get_info(uuid):
@@ -3947,9 +3978,11 @@ _ENUM_ADDITIONS = {
     "VERDICT_TYPE": ("lead",),
     # Every configured channel label. A long-lived DB built before a channel was declared has no
     # enum label for it, and the first tick on that channel would fail at `Build.put_data` /
-    # `LastDate.update` with `invalid input value for enum` -- the ESR lines (esr115/140/153,
-    # 2026-09-07) are the first labels added since the initial deploy. Labels the DB already
-    # has are skipped by the pg_enum check below.
+    # `LastDate.update` with `invalid input value for enum` -- the ESR line (esr153, 2026-09-07)
+    # is the first label added since the initial deploy. Labels the DB already has are skipped
+    # by the pg_enum check below; labels the DB has and this list no longer names (esr115,
+    # esr140, retired the same day) stay in the type forever and read back through
+    # `_LenientEnum`.
     "CHANNEL_TYPE": tuple(config.get_channels()),
 }
 
@@ -4011,10 +4044,10 @@ def _ensure_enum_values():
 # Columns whose width grew after the initial deploy. `create_all` never alters an existing
 # table, so a long-lived DB keeps the width it was created with: `builds.version` was
 # VARCHAR(10), which fits every nightly, beta and release version string and NOT an ESR one --
-# `140.15.0esr` is 11 characters, and the first esr140 tick would have died at `Build.put_data`
-# with `value too long for type character varying(10)`. Caught on a real Postgres by
-# tests/test_enum_migration_pg.py, which the sqlite suite structurally cannot (sqlite does not
-# enforce VARCHAR widths).
+# `140.15.0esr` is 11 characters (and `153.10.0esr`, due mid-2027, will be), so the first tick
+# would have died at `Build.put_data` with `value too long for type character varying(10)`.
+# Caught on a real Postgres by tests/test_enum_migration_pg.py, which the sqlite suite
+# structurally cannot (sqlite does not enforce VARCHAR widths).
 _WIDENED_COLUMNS = {("builds", "version"): 24}
 
 

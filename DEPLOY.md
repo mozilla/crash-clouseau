@@ -10,10 +10,11 @@ days); beta at cap 3 with `skip`, held from 2026-08-26 and **armed 2026-09-07** 
 fortnight of 40 held runs, 0 filed and 2 at the rung (both the QuotaManager spike a human had
 already filed as bug 2069097); release at cap 2 with `skip`, the `[new in release]` title and a
 tracking nomination, held 08-31 and armed 09-07 (`plans/20-release-channel-support.md`). The
-**ESR channel** is declared on release's model since 2026-09-07 as three channel labels, one per
-live ESR line (`esr115`, `esr140`, `esr153`), sharing one filing policy (`channels.esr`: `skip`,
-cap 2, `[new in esr]`, `cf_tracking_firefox_esr<major>` nominated) -- **and is not turned on until
-the two env vars name its lines** (see "Turning the ESR channel on"). A
+**ESR channel** is declared on release's model since 2026-09-07 as one channel label for the
+current ESR line (`esr153`; esr115 and esr140 ran for two hours that day and were retired), with
+the family's filing policy (`channels.esr`: `skip`, cap 2, `[new in esr]`,
+`cf_tracking_firefox_esr<major>` nominated) -- **and only runs where the two env vars name it**
+(see "Turning the ESR channel on"). A
 channel can still be held with `agent.autofile.channels.<ch>.enabled: false`, which beats the
 global arm. Read "Cost controls" below as what bounds the spend, not as evidence that there is
 none.
@@ -23,12 +24,12 @@ Several things are automated by the repo now; the rest are one-time app setup.
 ## Automated by the repo (no action needed)
 - **DB schema** — the `release:` phase runs `bin/release.py` on every deploy
   (`models.create()` is idempotent and adds any enum value the long-lived DB is missing: the
-  `lead` verdict, the ESR channel labels -- `models._ENUM_ADDITIONS`; no ingestion is run).
+  `lead` verdict, the ESR channel label -- `models._ENUM_ADDITIONS`; no ingestion is run).
   Until 2026-09-07 that ALTER had never actually run (it re-used a connection already in a
   transaction and the failure was logged, not raised); the first deploy carrying the ESR labels
   is the first time it matters. The same phase widens `builds.version` from VARCHAR(10) to 24
-  (`140.15.0esr` is 11 characters; `models._WIDENED_COLUMNS`). Check the release log for `enum
-  CHANNEL_TYPE: added value 'esr115'` (and 140, 153) and `widened builds.version`, or `psql` for
+  (`153.10.0esr` will be 11 characters; `models._WIDENED_COLUMNS`). Check the release log for
+  `enum CHANNEL_TYPE: added value 'esr153'` and `widened builds.version`, or `psql` for
   `SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname =
   'CHANNEL_TYPE'` and `\d builds`, before setting `INGEST_CHANNELS`.
 - **`searchfox-cli`** — `bin/post_compile` fetches the pinned static-musl binary at
@@ -137,37 +138,54 @@ beta then costs nothing and files nothing.
 ## Turning the ESR channel on (plan #23)
 
 Socorro has ONE `esr` channel; Mozilla ships several ESR lines at once (115, 140 and 153 on
-2026-09-07), each from its own repository, searchfox tree and build lineage. So each line is its
-own channel label -- `esr115`, `esr140`, `esr153` -- exactly the way `release` is one label for
-one repo, and the policy is shared by the family `esr` (`config.channel_family`). Everything is in
-the code and `config/global.json`; **nothing ESR happens until the env vars name the lines**:
+2026-09-07), each from its own repository, searchfox tree and build lineage. **Only the current
+line is a channel**: `esr153`, a label of its own exactly the way `release` is one label for one
+repo, with the policy shared by the family `esr` (`config.channel_family`). All three lines were
+switched on that evening; esr115 (Windows 7, 32-bit, security-only uplifts) spent its first tick
+on 17 runs of one `OOM | large` signature and the two older lines were retired within two hours.
+**Nothing ESR happens where the env vars do not name the line**:
 
 ```sh
-# 1. deploy first: the release phase adds the three enum labels to the long-lived DB (above)
+# 1. deploy first: the release phase adds the enum label to the long-lived DB (above)
 # 2. ingest-only canary: pushlog + builds + selection rows appear, nothing analysed or filed
-heroku config:set INGEST_CHANNELS="nightly beta release esr115 esr140 esr153"
-# 3. then analyse (and, with AUTOFILE_BUGS=1 already live, FILE) -- per line, so a line can be
-#    left out: esr115 is the Win7/8.1 line, security-only uplifts, ~22k reports a week
-heroku config:set AGENT_CHANNELS="nightly beta release esr115 esr140 esr153"
+heroku config:set INGEST_CHANNELS="nightly beta release esr153"
+# 3. then analyse (and, with AUTOFILE_BUGS=1 already live, FILE)
+heroku config:set AGENT_CHANNELS="nightly beta release esr153"
 ```
 
-Order matters: a line named in `INGEST_CHANNELS` before the deploy that adds its enum label fails
-its first tick with `invalid input value for enum` at `Build.put_data` (logged, not fatal, and
-retried every 20 minutes). Selection knobs are release's for every line (installs 50, protos 20,
-floor 50, rate path off); a line may get its own entry beside the family's -- `esr153` is the
-smallest line (~4k reports/week against release's 153k) and the one a lower `installs` would be
-tuned on. Filing: `channels.esr` is `enabled: true`, `skip`, `daily_cap: 2` (per LINE, since the
-cap is counted per channel label), `[new in esr] Crash in [@ ...]`, and the crash's own line
-nominated for tracking (`cf_tracking_firefox_esr140 = ?`, its own best-effort PUT). To hold one
-line only: `channels.esr115: {"enabled": false}` beside the family entry.
+Two guards make the variables authoritative even for work already queued: `update.update`
+ignores a job for a channel the deployment does not ingest, and `run_evidence_agent` does not
+start a non-forced run for a channel `AGENT_CHANNELS` no longer names (both 2026-09-07, after
+dropping esr115/esr140 left 36 of their jobs in the `agent` queue). Selection knobs are release's
+(installs 50, protos 20, floor 50, rate path off); filing is `channels.esr`: `enabled: true`,
+`skip`, `daily_cap: 2`, `[new in esr] Crash in [@ ...]`, and the crash's own line nominated for
+tracking (`cf_tracking_firefox_esr153 = ?`, its own best-effort PUT). To hold it:
+`channels.esr.enabled: false`.
+
+**Rotating to the next ESR line** (153 -> 166, mid-2027): add `esr166` to `config.channels` and a
+`searchfox.Repo` member, deploy, add it to both env vars. **Retiring a line**: drop it from both
+env vars (the two guards above turn its queued jobs into no-ops), purge its rows, then drop the
+label from `config.channels`. A Postgres enum label cannot be dropped and stays in the type; a
+stored label the config no longer lists still READS (`models.CHANNEL_TYPE` is lenient on the way
+out), so the order is for tidiness, not survival. The purge, in one transaction -- `builds`,
+`changesets`, `uuids`, `crashstack`, `dossiers` and `verdicts` cascade from `nodes`:
+
+```sql
+BEGIN;
+DELETE FROM selection WHERE channel IN ('esr115', 'esr140');
+DELETE FROM lastdate  WHERE channel IN ('esr115', 'esr140');
+DELETE FROM nodes     WHERE channel IN ('esr115', 'esr140');
+COMMIT;
+```
 
 What to watch on the first ESR days:
-- `selection.html?channel=esr140` (and 153, 115): each line's window is its own two or three
-  builds; the first tick after switch-on carries the two builds of the last 30 days per line.
-- The worker log: `Get pushlog data for esr140` against `releases/mozilla-esr140` (small: ESR
-  repos take a handful of uplifts a cycle), one `Update builds for esr1xx/Firefox` per line.
-- `tasks.html`: runs labelled `esr1xx` should be rare -- release-sized thresholds on a channel
-  a quarter to a fortieth of release's volume. `filed_bug` rows with `channel like 'esr%'`.
+- `selection.html?channel=esr153`: the window is the line's own two or three builds; the first
+  tick after switch-on carries the two builds of the last 30 days.
+- The worker log: `Get pushlog data for esr153` against `releases/mozilla-esr153` (small: an ESR
+  repo takes a handful of uplifts a cycle), one `Update builds for esr153/Firefox`.
+- `tasks.html`: runs labelled `esr153` should be rare -- release-sized thresholds on a channel
+  ~3% of release's volume (4k reports a week on 2026-09-07). `filed_bug` rows with
+  `channel = 'esr153'`.
 - ESR has no measured population rates (`sigage._POPULATION_RATES`), like release: prompts drop
   the hardware comparison. `sigtrend` refuses it, like release (rate path off).
 
@@ -182,7 +200,7 @@ with the volume; the investigator's analysis follows only where it grounded its 
 reads. An open bug on the signature gets it as a comment; so does a bug we filed ourselves that a
 human restricted or that was resolved FIXED after the spiking build (the spike is on builds
 without the fix), and anybody's bug fixed after the build; otherwise a new bug. An APPEARANCE (`...0, 0, 0 -> 50`, no earlier report on the channel) carries the channel's
-title mark — `[new in release]` on release, `[new in esr]` on an ESR line; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
+title mark — `[new in release]` on release, `[new in esr]` on ESR; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
 `GET /api/spikes` lists them.
 
 | lever | what it does |

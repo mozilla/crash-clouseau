@@ -4004,6 +4004,26 @@ def run_evidence_agent(uuid, force=False):
         # claim: this early-out runs first, so without it the claim's arm is unreachable
         # for every non-forced job. See ``Dossier.claim_running``.
         own_job_id = getattr(_current_job(), "id", None)
+        # THE MONEY SWITCH HAS TO REACH A JOB THAT IS ALREADY IN THE QUEUE. `AGENT_CHANNELS` was
+        # only ever read at ENQUEUE time (`enqueue_agent`), so dropping a channel from it stopped
+        # new jobs and nothing else: on 2026-09-07 esr115 and esr140 were removed from the
+        # variable with 36 of their jobs waiting in the `agent` queue and 9 more orphaned by the
+        # restart, every one of which would still have run at $1-3. A `force` run (a human's
+        # retrigger click, or the reaper re-running a retriggered row) still goes through: that
+        # is one explicit uuid somebody asked for, not the channel's flow.
+        if not force:
+            try:
+                channel = models.UUID.get_channel(uuid)
+            except Exception:                              # pragma: no cover - defensive
+                channel = None                             # the claim below decides, as before
+                try:
+                    db.session.rollback()                  # never poison the run's session
+                except Exception:
+                    pass
+            if channel is not None and channel not in config.get_agent_channels():
+                logger.info("agent: %s is on channel %r, which AGENT_CHANNELS no longer names; "
+                            "not running", uuid, channel)
+                return
         # Cheap cost dedup early-out (already-done / a same-proto sibling). A forced
         # retrigger bypasses it; the atomic claim below is still the real guard.
         if skip_dedup and not force and (

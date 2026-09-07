@@ -27,8 +27,9 @@ needed a repo discriminator on every node, a same-major filter in each of those 
 major threaded through ~15 hg-URL call sites — two notions of "channel" flowing through the same
 code, which is the `get_search_channel` class of trap (7 of 13 sites were wrong for aurora).
 
-So **each line is its own channel label** — `esr115`, `esr140`, `esr153` — exactly the way
-`release` is one label for one repo, and the release machinery works per line unchanged.
+So **a line is its own channel label** — `esr153` — exactly the way `release` is one label for one
+repo, and the release machinery works per line unchanged. (All three lines were declared at first;
+see §6 for why only the current one is a channel now.)
 Everything that is a **policy** is keyed by the **family** `esr` via `config.channel_family()`:
 thresholds and spike knobs (`_channel_value`: label, then family, then default), the filing
 overlay (`_autofile_overlay`: family entry with the line's layered on top), the calibration
@@ -37,9 +38,9 @@ table, the build-flag partition, the prose labels, and the Socorro query
 
 Costs of this shape, accepted: a new ESR line (yearly) is one label in `config.channels`, one
 `searchfox.Repo` member, a redeploy (the release phase adds the enum label), and its name in the
-two env vars. Enum labels are forever (a Postgres enum value cannot be dropped), so
-`config.channels` grows by one a year; `esr128` was not added because it has had no build since
-2025.
+two env vars. Enum labels are forever (a Postgres enum value cannot be dropped); a retired line's
+label leaves `config.channels` once its rows are purged, and `models.CHANNEL_TYPE` reads a stored
+label the config no longer lists rather than raising, so the two steps can happen in any order.
 
 ## 3. What differs from release ("almost")
 
@@ -88,3 +89,27 @@ Deploy (release phase adds the enum labels; check the log or `pg_enum`) → `ING
 the lines → `AGENT_CHANNELS` gains the lines. Naming a line in `INGEST_CHANNELS` before the deploy
 fails its ticks with `invalid input value for enum` until the deploy lands. `DEPLOY.md` has the
 commands and the first-day watch list.
+
+## 6. What happened at switch-on, and the cut to one line (2026-09-07 evening)
+
+Calixte deployed `1f7d823` (v161) and named all three lines in both env vars at 19:27 local. In two
+hours: esr115 4 selected pairs, esr140 2, esr153 0 (its two builds' signatures all
+`below_install_threshold` at release's 50). esr115's first pick was `OOM | large |
+js::AutoEnterOOMUnsafeRegion::crash | … | js::gc::AllocateCellInGC` on 115.40.0esr — 983 reports /
+847 installs against a 291 baseline on the previous build, a 32-bit content-process address-space
+exhaustion — and it produced **17 runs** of one signature (the proto-cluster fan-out the release
+memory warned about). Calixte: *"I don't want we analyze all the crashes similar to this"*, then
+*"we should remove esr115 and esr140, just keep the last one."*
+
+Done: both env vars cut to `nightly beta release esr153` (v165); `config.channels` cut to esr153;
+two guards added so the variables reach queued work (`update.update` ignores a non-ingested
+channel; `run_evidence_agent` refuses a non-forced run on a channel `AGENT_CHANNELS` does not
+name — 36 esr115/esr140 jobs were waiting in the `agent` queue and 9 were orphaned by the restart,
+each about to cost $1-3); `CHANNEL_TYPE` made lenient on read so the retired rows cannot 500 a
+page. The purge of the retired rows (536 nodes → 4 builds, 66 crashes, 21 dossiers; 2,240
+`selection` rows; 2 `lastdate` rows) is the operator's SQL in `DEPLOY.md`.
+
+For the record, the OOM question that started it, measured on all channels since the agent
+began: 315 `OOM | …` runs, $320.83 of $3,812 (8.4%), 4 filed bugs among them (2069460 and 2067511
+as culprits, 2069830 as a lead) — so a flat "never analyse OOM" rule would have cost real
+filings, and the answer was the channel, not the class.

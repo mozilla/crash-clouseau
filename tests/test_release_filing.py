@@ -92,10 +92,10 @@ class TestAReleaseFilingIsTitledAndNominated(_Base):
         self.assertNotIn("tracking_nominated", res)
 
 
-_ESR_INFO = {**_INFO, "channel": "esr140", "version": "140.15.0esr",
-             "buildid": "20260826142222"}
+_ESR_INFO = {**_INFO, "channel": "esr153", "version": "153.2.0esr",
+             "buildid": "20260826022508"}
 _ESR_PREVIEW = {**_PREVIEW, "title": "[new in esr] Crash in [@ Foo::Bar]",
-                "tracking_flag": "cf_tracking_firefox_esr140"}
+                "tracking_flag": "cf_tracking_firefox_esr153"}
 _ESR_POLICY = {"enabled": True, "comment_on_existing": "skip", "daily_cap": 2,
                "summary_prefix": "[new in esr]", "nominate_tracking": True}
 
@@ -117,14 +117,14 @@ class TestAnEsrFilingIsTitledAndNominatedLikeRelease(_Base):
         self.assertTrue(res["filed"])
         self.assertEqual(self.created[0]["summary"], "[new in esr] Crash in [@ Foo::Bar]")
         self.assertEqual(self.created[0]["cf_crash_signature"], "[@ Foo::Bar]")
-        self.assertIn((999, {"cf_tracking_firefox_esr140": "?"}), self.puts)
-        self.assertEqual(res["tracking_nominated"], "cf_tracking_firefox_esr140")
-        self.assertNotIn("cf_tracking_firefox_esr140", self.created[0])   # its own PUT
-        self.assertEqual(res["channel"], "esr140")
+        self.assertIn((999, {"cf_tracking_firefox_esr153": "?"}), self.puts)
+        self.assertEqual(res["tracking_nominated"], "cf_tracking_firefox_esr153")
+        self.assertNotIn("cf_tracking_firefox_esr153", self.created[0])   # its own PUT
+        self.assertEqual(res["channel"], "esr153")
 
     def test_the_filer_asks_for_the_lines_own_policy(self):
         self._file_esr()
-        bugzilla_apply.config.get_agent_autofile.assert_called_once_with("esr140")
+        bugzilla_apply.config.get_agent_autofile.assert_called_once_with("esr153")
 
 
 if __name__ == "__main__":

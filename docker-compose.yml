@@ -16,10 +16,10 @@ services:
     # Set to the two channels the beta series shipped with. To smoke-test the release ingestion
     # path locally — the release Buildhub regexp, `put_filelog` against
     # `releases/mozilla-release`, the merge suppression on a real beta->release merge — add
-    # `release` HERE. An ESR LINE is a channel label of its own (`esr140`, `esr153`, `esr115`:
-    # `releases/mozilla-esr140`, the `140\.[0-9]+(\.[0-9]+)?esr` Buildhub pattern, Socorro's
-    # one `esr` channel) — add a line here the same way. Production's value is the Heroku
-    # config var, set per DEPLOY.md.
+    # `release` HERE. The current ESR line is a channel label of its own (`esr153`:
+    # `releases/mozilla-esr153`, the `153\.[0-9]+(\.[0-9]+)?esr` Buildhub pattern, Socorro's
+    # one `esr` channel) — add it here the same way. Production's value is the Heroku config
+    # var, set per DEPLOY.md.
     environment:
       - INGEST_CHANNELS=nightly beta
     command: >

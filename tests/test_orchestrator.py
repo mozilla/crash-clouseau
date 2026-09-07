@@ -1009,6 +1009,36 @@ class TestRunEvidenceAgent(unittest.TestCase):
         self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "lead")
         self.assertEqual(MVerd.set.call_args.kwargs["confidence"], 50)
 
+    def test_a_channel_dropped_from_agent_channels_does_not_run(self):
+        """The money switch reaches a job that is already queued. `AGENT_CHANNELS` was read at
+        enqueue time only, so on 2026-09-07 dropping esr115/esr140 left 36 of their jobs in the
+        `agent` queue and 9 orphans for the reaper, each about to run at $1-3."""
+        pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+        with pD, pV, pC, pS as seed, pSc, \
+             mock.patch.object(orch.models.UUID, "get_channel", return_value="esr115"), \
+             mock.patch.object(orch.config, "get_agent_channels",
+                               return_value=["nightly", "beta", "release", "esr153"]), \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                        _triage_returning(_strong_result())):
+            orch.run_evidence_agent("u-1")
+        seed.assert_not_called()                 # nothing fetched, nothing spent
+        MDoss.claim_running.assert_not_called()
+        MVerd.set.assert_not_called()
+
+    def test_the_gate_lets_a_named_channel_an_unknown_uuid_and_a_forced_run_through(self):
+        for channel, force in (("esr153", False), (None, False), ("esr115", True)):
+            with self.subTest(channel=channel, force=force):
+                pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
+                with pD, pV, pC, pS as seed, pSc, \
+                     mock.patch.object(orch.models.UUID, "get_channel", return_value=channel), \
+                     mock.patch.object(orch.config, "get_agent_channels",
+                                       return_value=["nightly", "esr153"]), \
+                     mock.patch("crashclouseau.agent.triage.run_crash_triage",
+                                _triage_returning(_strong_result())):
+                    orch.run_evidence_agent("u-1", force=force)
+                seed.assert_called_once()
+                MVerd.set.assert_called_once()
+
     def test_exception_isolation(self):
         # A non-transient error: settle on `error`, record the reason, do NOT raise.
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
