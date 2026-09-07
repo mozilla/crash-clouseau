@@ -82,7 +82,11 @@ class TestTheEnumMigrationOnPostgres(unittest.TestCase):
 
     def test_the_pre_esr_enum_gained_the_esr_label(self):
         self.assertTrue(self.fresh)
-        self.assertEqual(_labels("CHANNEL_TYPE"), list(_OLD_CHANNELS) + ["esr153"])
+        # The first four in enum order; a label cannot be dropped, and the lenient-read test
+        # above (alphabetically earlier) adds a retired `esr140` after them when it runs first.
+        self.assertEqual(_labels("CHANNEL_TYPE")[:4], list(_OLD_CHANNELS) + ["esr153"])
+        self.assertLessEqual(set(_labels("CHANNEL_TYPE")) - {"esr140"},
+                             set(_OLD_CHANNELS) | {"esr153"})
         self.assertIn("lead", _labels("VERDICT_TYPE"))
 
     def test_the_migration_is_idempotent(self):
@@ -90,6 +94,30 @@ class TestTheEnumMigrationOnPostgres(unittest.TestCase):
         models._ensure_enum_values()
         models._ensure_enum_values()
         self.assertEqual(_labels("CHANNEL_TYPE"), before)
+
+    def test_a_label_the_type_has_and_the_config_does_not_still_reads(self):
+        """v166 500'd tasks.html with `LookupError: 'esr115' is not among the defined enum
+        values`: a retired line's rows outlived its label in `config.channels`, and the Enum
+        SUBCLASS that was meant to be lenient was adapted away by the Postgres dialect -- the
+        sqlite test passed, production did not. `CHANNEL_TYPE` is a TypeDecorator now; this is
+        the read that failed, against a real Postgres."""
+        with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text('ALTER TYPE "CHANNEL_TYPE" ADD VALUE IF NOT EXISTS \'esr140\''))
+        self.assertNotIn("esr140", models.CHANNEL_TYPE.enums)         # retired from the config
+        db.session.execute(text(
+            "INSERT INTO lastdate (channel, mindate, maxdate) VALUES ('esr140', NULL, NULL)"))
+        db.session.commit()
+        try:
+            self.assertEqual(models.LastDate.get("esr140"), (None, None))
+            self.assertIn("esr140", {r.channel for r in db.session.query(models.LastDate).all()})
+            # The exact shape of the failing read: a labelled enum column among other columns.
+            rows = db.session.query(models.LastDate.channel.label("channel"),
+                                    models.LastDate.maxdate).all()
+            self.assertIn("esr140", {r.channel for r in rows})
+            self.assertIsInstance([r.channel for r in rows if r.channel == "esr140"][0], str)
+        finally:
+            db.session.execute(text("DELETE FROM lastdate WHERE channel = 'esr140'"))
+            db.session.commit()
 
     def test_the_new_label_is_usable(self):
         now = datetime.datetime.now(_UTC)

@@ -10,28 +10,45 @@ from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
 from sqlalchemy import and_, inspect, func, not_, or_, text
 from sqlalchemy.orm import aliased
+from sqlalchemy.types import TypeDecorator
 import pytz
 from . import config, db, utils
 from .logger import logger
 
 
-class _LenientEnum(db.Enum):
+class _LenientEnum(TypeDecorator):
     """A named Postgres enum that TOLERATES a stored label this build's config no longer lists.
 
     A Postgres enum label cannot be dropped, and a channel can be retired (esr115 and esr140
     were, two hours after they were declared, 2026-09-07). SQLAlchemy's ``Enum`` raises
     ``LookupError`` when a row carries a value outside its Python-side list -- so the residue
-    of a retired channel (a build, a dossier, a node not yet purged) would 500 every page that
-    joins it: ``tasks.html`` selects ``Build.channel`` for all 500 recent rows. The raw label
-    is returned instead; a reader that does not know it treats it as an unknown channel, which
-    is what it is. Writes are unchanged (an unknown label is refused by Postgres itself when
-    the type lacks it, and by ``update.update`` before that)."""
+    of a retired channel (a build, a dossier, a node not yet purged) 500s every page that joins
+    it: ``tasks.html`` selects ``Build.channel`` for all 500 recent rows, and did exactly that
+    on v166 (2026-09-07 18:52Z, `LookupError: 'esr115' is not among the defined enum values`).
 
-    def _object_value_for_elem(self, elem):
-        try:
-            return super()._object_value_for_elem(elem)
-        except LookupError:
-            return elem
+    A ``TypeDecorator`` and NOT an ``Enum`` subclass, which was the first attempt and the one
+    v166 shipped: the Postgres dialect ADAPTS ``Enum`` to its own ``postgresql.ENUM`` at
+    execution time (``TypeEngine.adapt`` builds a fresh instance of the dialect's class), so an
+    overridden ``_object_value_for_elem`` on a subclass is simply not the method that runs
+    against Postgres -- and it IS the one that runs on sqlite, which is why the sqlite test
+    passed and production did not. A TypeDecorator is called on the way out whatever the
+    dialect did to its impl; returning ``None`` from ``result_processor`` means "hand the raw
+    value through", i.e. the label as Postgres stored it. Everything else -- the DDL
+    (``CREATE TYPE "CHANNEL_TYPE"`` on a fresh DB, the ``pg_enum`` name ``_ensure_enum_values``
+    looks for), the bind side (a string passes through to Postgres, which refuses a label the
+    type lacks), ``.enums`` for ``api.py``'s validation -- is the wrapped ``Enum``'s, proxied.
+    Proved against a real Postgres in tests/test_enum_migration_pg.py, where a label the type
+    has and the config does not is read back through the ORM."""
+
+    impl = db.Enum
+    cache_ok = True
+
+    def result_processor(self, dialect, coltype):
+        return None                    # no lookup: the label as stored, whatever the dialect
+
+    @property
+    def python_type(self):
+        return str
 
 
 CHANNEL_TYPE = _LenientEnum(*config.get_channels(), name="CHANNEL_TYPE")

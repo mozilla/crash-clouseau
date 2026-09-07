@@ -103,8 +103,10 @@ class TestTheShippedChannels(unittest.TestCase):
     def test_a_retired_label_still_reads_back(self):
         """A Postgres enum label cannot be dropped, and a retired line's rows may outlive the
         label in `config.channels`. SQLAlchemy would raise `LookupError` on every read of such a
-        row -- `tasks.html` joins `Build.channel` for 500 rows -- so `CHANNEL_TYPE` hands the
-        raw label back instead. Exercised on sqlite through the real column type."""
+        row -- `tasks.html` joins `Build.channel` for 500 rows, and did 500 on v166 -- so
+        `CHANNEL_TYPE` hands the raw label back instead. sqlite here; the Postgres half, which
+        is the one that failed in production (the dialect adapts an `Enum` subclass away), is
+        in tests/test_enum_migration_pg.py."""
         from sqlalchemy import text
 
         from crashclouseau import db
@@ -118,11 +120,13 @@ class TestTheShippedChannels(unittest.TestCase):
             rows = {r.channel for r in db.session.query(models.LastDate).all()}
             self.assertIn("esr140", rows)
             self.assertEqual(models.LastDate.get("esr140"), (None, None))
+            # A single-column query, the shape `Dossier.list_tasks` reads `Build.channel` in.
+            self.assertIn("esr140", {c for (c,) in db.session.query(models.LastDate.channel)})
         finally:
             db.session.execute(text("DELETE FROM lastdate WHERE channel = 'esr140'"))
             db.session.commit()
-        self.assertEqual(models.CHANNEL_TYPE._object_value_for_elem("esr140"), "esr140")
-        self.assertEqual(models.CHANNEL_TYPE._object_value_for_elem("nightly"), "nightly")
+        # `api.py` validates `?channel=` against this; the wrapped Enum's list is still there.
+        self.assertEqual(list(models.CHANNEL_TYPE.enums), config.get_channels())
 
     def test_the_enum_migration_carries_every_channel_label(self):
         """A long-lived Postgres has the enum it was created with; `_ensure_enum_values` adds
