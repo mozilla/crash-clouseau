@@ -353,8 +353,9 @@ class TestTheChannelGate(_BetaBase):
     variable to "turn beta on" turns release on too."""
 
     def test_an_undeclared_channel_files_nothing(self):
-        """`release` moved OUT of this list on 2026-08-31: it is now declared and HELD, which is
-        a different gate (`enabled: false`) reached later in the same function. An undeclared
+        """`release` moved OUT of this list on 2026-08-31: it is now declared (held until
+        2026-09-07, then armed), which is a different gate reached later in the same function.
+        An undeclared
         channel is one nobody has decided about at all -- `esr` is the live example."""
         for channel in ("esr", "aurora", "Beta ", "", None):
             with self.subTest(channel=channel):

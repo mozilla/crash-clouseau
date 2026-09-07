@@ -683,8 +683,11 @@ def autofile_channel_declared(channel):
     thought about this channel" must not look the same from the filer. An overlay of
     ``{"enabled": false}`` is a decision; a missing overlay is a gap.
 
-    RELEASE IS NOW DECLARED AND HELD (``enabled: false``, ``skip``, ``daily_cap: 2``), which
-    closes the gap this docstring used to describe. The only DANGEROUS overlay shape is one with
+    RELEASE IS DECLARED, and ARMED since 2026-09-07 (``enabled: true``, ``skip``,
+    ``daily_cap: 2``; held with ``enabled: false`` from 2026-08-31 until then). Its first held
+    week reached the filing rung 5 times, all one finding -- the cookies.sqlite shutdown hang
+    stepping 5.5x in 155.0.1 on bug 2066155 -- which is what the arm was decided on. Either way
+    the key is EXPLICIT. The only DANGEROUS overlay shape is one with
     no explicit ``enabled`` key — a bare ``{}``, or beta's shape minus its ``false`` — because
     ``get_agent_autofile``'s veto is ``over.get("enabled") is False`` and prod runs
     ``AUTOFILE_BUGS=1``, so an overlay that merely names a channel ARMS it at the top-level

@@ -160,16 +160,23 @@ class TestShippedAgentChannels(unittest.TestCase):
         self.assertIn("ingest_channels", doc)
         self.assertIn("fired in production", doc)
         # The containment, and the reason the accidental release ingest was not an incident: it
-        # is not triaged (no LLM spend), and its filing is now explicitly HELD rather than merely
-        # undeclared (the stronger state -- a decision, not a gap).
+        # is not triaged by the JSON default (no LLM spend without AGENT_CHANNELS naming it), and
+        # its filing is DECLARED -- a decision, not a gap. Held from 2026-08-31, ARMED 2026-09-07
+        # with `skip` and `daily_cap: 2`; an explicit `enabled` key either way, never a bare `{}`.
         self.assertNotIn("release", config.get_agent_channels())
-        self.assertTrue(config.autofile_channel_held("release"))
+        self.assertTrue(config.autofile_channel_declared("release"))
+        self.assertFalse(config.autofile_channel_held("release"))
         # Under prod's LIVE value. Asserting `enabled` with AUTOFILE_BUGS unset would pass
         # trivially -- the global default is already False -- and would say nothing about the
         # state production is in.
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
-            self.assertFalse(config.get_agent_autofile("release")["enabled"])
+            self.assertTrue(config.get_agent_autofile("release")["enabled"])
+            self.assertEqual(config.get_agent_autofile("release")["comment_on_existing"], "skip")
+            self.assertEqual(config.get_agent_autofile("release")["daily_cap"], 2)
             self.assertTrue(config.get_agent_autofile("nightly")["enabled"])
+        # ...and the global kill switch still beats the per-channel arm.
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
+            self.assertFalse(config.get_agent_autofile("release")["enabled"])
 
 
 class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
@@ -257,9 +264,9 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
                     config.autofile_channel_declared(channel),
                     "{} can appear in Build.channel but nobody has decided about filing "
                     "on it".format(channel))
-        # Release is DECLARED and HELD as of 2026-08-31 -- a decision, not a gap.
+        # Release is DECLARED -- a decision, not a gap. Held 2026-08-31, armed 2026-09-07.
         self.assertTrue(config.autofile_channel_declared("release"))
-        self.assertTrue(config.autofile_channel_held("release"))
+        self.assertFalse(config.autofile_channel_held("release"))
         # Fails CLOSED, at the filer, before any BMO request: this is the hole that a
         # tasks.html retrigger (`enqueue_agent(..., force=True)`, which bypasses the channel
         # gate by design) would otherwise walk straight through with `AUTOFILE_BUGS=1` live.
