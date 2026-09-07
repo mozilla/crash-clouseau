@@ -216,6 +216,17 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         self.assertEqual(nightly["daily_cap"], 10)
         self.assertEqual(beta["comment_on_existing"], "skip")
         self.assertEqual(beta["daily_cap"], 3)
+        release = config.get_agent_autofile("release")
+        self.assertEqual(release["comment_on_existing"], "skip")
+        self.assertEqual(release["daily_cap"], 2)
+        # Release's two marks (2026-09-07): the title prefix and the tracking nomination. A
+        # release bug reads as one in any list, and release management meets it in the
+        # tracking queue. Only release has either.
+        self.assertEqual(release["summary_prefix"], "[new in release]")
+        self.assertTrue(release["nominate_tracking"])
+        for other in (nightly, beta):
+            self.assertEqual(other["summary_prefix"], "")
+            self.assertFalse(other["nominate_tracking"])
         # THE OVERLAY DIFF, WITH THE ENV STATED BOTH WAYS, because it depends on `AUTOFILE_BUGS`
         # and CI's default is not production's. Unset (CI) the top-level `enabled: false` reaches
         # both channels, so `enabled` is equal on the two and drops out of the diff; with

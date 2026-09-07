@@ -361,6 +361,11 @@
         <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b|e }}">bug {{ b|e }}</a>{% if not loop.last %}, {% endif %}
         {%- endfor %}</p>
         {% endif -%}
+        {# Release only: the crash's own version is nominated for tracking in a PUT after the
+           create, so release management meets the bug in the tracking queue. Absent elsewhere. #}
+        {% if bug_preview.get('tracking_flag') -%}
+        <p><strong>Tracking flag:</strong> <code>{{ bug_preview['tracking_flag']|e }}</code> = ?</p>
+        {% endif -%}
         {# ONE comment, verbatim: stack + crash reason + volume + analysis + needinfo ask.
            Shown unrendered (escaped, not linkified) because it IS the markdown we post --
            what you read here is byte-for-byte what lands in the bug. #}

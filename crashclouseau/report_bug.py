@@ -1571,8 +1571,14 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
 _BMO_SUMMARY_MAX = 255
 
 
-def bug_title(signature):
-    """``Crash in [@ signature]``, capped at BMO's 255-character summary limit.
+def bug_title(signature, prefix=""):
+    """``Crash in [@ signature]`` -- or ``<prefix> Crash in [@ signature]`` -- capped at BMO's
+    255-character summary limit.
+
+    ``prefix`` is the channel's ``summary_prefix`` (``config.get_agent_autofile``): release files
+    as ``[new in release] Crash in [@ ...]`` so its bugs read as what they are in any list. It
+    counts against the same 255, so a long signature loses that many more characters of TITLE to
+    it; the ``cf_crash_signature`` field still carries the whole signature (below).
 
     SOCORRO'S OWN CAP IS ALSO 255, so the wrapper's 13 characters are exactly what pushes a
     long signature over: every signature longer than 242 is unfileable without this. Measured
@@ -1591,11 +1597,27 @@ def bug_title(signature):
     that is a real if minor loss: a bug whose ``cf_crash_signature`` is empty and whose summary
     is truncated is invisible to the venue lookup. Only the cf field is ever written by us."""
     sig = (signature or "").strip()
-    room = _BMO_SUMMARY_MAX - len("Crash in [@ ]")
+    prefix = (prefix or "").strip()
+    lead = "{} Crash in [@ ".format(prefix) if prefix else "Crash in [@ "
+    room = _BMO_SUMMARY_MAX - len(lead) - len("]")
     if len(sig) > room:
         # Socorro truncates with a trailing " ..." of its own; do not stack a second one.
         sig = sig[:room - 3].rstrip().rstrip(".").rstrip() + "..."
-    return "Crash in [@ {}]".format(sig)
+    return "{}{}]".format(lead, sig)
+
+
+def _tracking_flag(version):
+    """``cf_tracking_firefox<major>`` for a Firefox version string (``"155.0.1"`` -> firefox155),
+    or ``None`` when the version is unknown or unparseable.
+
+    The FIELD NAME only. Whether BMO still carries a flag for that version is for the filer's PUT
+    to find out (``bugzilla_apply._nominate_tracking``): today the live range is 152-157, and a
+    release-channel crash from an older version is ordinary, not exotic."""
+    try:
+        major = utils.get_major(str(version or "").strip())
+    except (ValueError, IndexError):
+        return None
+    return "cf_tracking_firefox{}".format(major) if major > 0 else None
 
 
 def build_incomplete_fix_note(fix, channel=None):
@@ -2208,6 +2230,10 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         except Exception:
             version = None
     first, stats = fetch_signature_stats(uuid, uuid_info)
+    # The channel's filing marks (`config.get_agent_autofile`): release titles its bugs
+    # "[new in release] Crash in [@ ...]" and nominates the crash's version for tracking; every
+    # other channel has neither. Read here so the page preview shows the bug the filer will post.
+    policy = config.get_agent_autofile(channel)
     suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
     # May the bug make a STRUCTURED claim about the regressor at all: a candidate from outside
     # this build's pushlog window is named in the prose and nowhere else.
@@ -2225,7 +2251,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
         # these bugs searchable/dedupable alongside Socorro-filed ones. Capped at BMO's
         # 255-character limit, which 1.3% of signatures exceed — see ``bug_title``.
-        "title": bug_title(uuid_info.get("signature")),
+        "title": bug_title(uuid_info.get("signature"), prefix=policy.get("summary_prefix") or ""),
         "comment": build_bug_comment(
             uuid_info,
             stack,
@@ -2271,6 +2297,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # the pipeline only ever names a single changeset.
         "regressed_by": [candidate["bug"]] if link_regressor else [],  # noqa: E501 (candidate is set whenever link_regressor is)
         "needinfo": _needinfo_line(person),
+        # The tracking NOMINATION, release only: `cf_tracking_firefox<major>` = ? for the crash's
+        # own version, set by the filer in its own PUT after the create. `None` everywhere else.
+        "tracking_flag": (_tracking_flag(version) if policy.get("nominate_tracking") else None),
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).

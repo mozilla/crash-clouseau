@@ -199,7 +199,9 @@
                 {
                     "enabled": true,
                     "comment_on_existing": "skip",
-                    "daily_cap": 2
+                    "daily_cap": 2,
+                    "summary_prefix": "[new in release]",
+                    "nominate_tracking": true
                 }
             }
         },

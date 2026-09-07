@@ -278,6 +278,28 @@ def _link_regressed_by(bug_id, regressors, token):
     return []
 
 
+def _nominate_tracking(bug_id, flag, token):
+    """Set ``<flag> = ?`` on a freshly-created bug -- the release channel's tracking NOMINATION
+    (``cf_tracking_firefox<major>`` for the crash's own version). Returns the flag on success,
+    ``None`` when BMO refused.
+
+    Its own PUT, after the create and after ``regressed_by``, for the reason the other two have
+    theirs: a create carrying an unknown field is rejected WHOLE, and the flag for a version is
+    retired a few cycles after that version ships (the live range on 2026-09-07 is 152-157) while
+    a release crash from an older version is ordinary -- so the nomination must be the one thing
+    that can fail. A PUT is atomic across fields too, so it shares nobody else's. Verified on
+    allizom 2026-09-07: ``PUT {"cf_tracking_firefox119": "?"}`` answers 200 and reads back ``?``.
+    Best-effort like its siblings: the bug is filed, the title already says it is new in release."""
+    if not flag:
+        return None
+    try:
+        _put_bug(bug_id, {flag: "?"}, token)
+        return flag
+    except Exception as exc:
+        logger.warning("autofile: nominating %s on bug %s failed: %s", flag, bug_id, exc)
+    return None
+
+
 def _create_bug_keeping_the_bug(payload, token):
     """``(bug_id, needinfo_dropped)`` — create the bug, and never let the needinfo cost it.
 
@@ -1158,6 +1180,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       different question from "never twice for one crash": several proto-signature clusters of
       the same signature are analysed independently and all land on the same bug.
 
+    A RELEASE filing is titled ``[new in release] Crash in [@ ...]`` and nominates the crash's
+    version for tracking (``cf_tracking_firefox<major>`` = ?, its own PUT, ``_nominate_tracking``);
+    both come from ``config.get_agent_autofile(channel)`` via the preview.
+
     ``regressed_by`` is set — under the pushlog-window gate, on a bug we filed ourselves, and in
     its own PUT (see ``_link_regressed_by`` and ``report_bug.build_bug_preview``). Because we now
     write the field the feedback loop reads, ``models.Feedback.classify`` is told what we claimed:
@@ -1664,6 +1690,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 result["regressed_by_unlinked"] = unset
                 logger.warning("autofile: bug %s could not be marked regressed_by %s",
                                bug_id, unset)
+            # Release's tracking nomination, in its own PUT (see ``_nominate_tracking``). Recorded
+            # either way: a refused flag is the one part of a release filing a human has to add.
+            flag = preview.get("tracking_flag")
+            if flag:
+                if _nominate_tracking(bug_id, flag, token):
+                    result["tracking_nominated"] = flag
+                else:
+                    result["tracking_failed"] = flag
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
         # PERSIST THE REJECTION. A failed write used to return here having written nothing, so

@@ -157,3 +157,69 @@ class TestARejectedWriteLeavesARecord(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAPrefixedTitle(unittest.TestCase):
+    """Release files as `[new in release] Crash in [@ ...]` (Calixte, 2026-09-07). The prefix
+    counts against the same 255, and the signature FIELD still carries the whole signature."""
+
+    PREFIX = "[new in release]"
+
+    def test_the_prefix_leads_the_title(self):
+        self.assertEqual(rb.bug_title("nsAtom::IsStatic", prefix=self.PREFIX),
+                         "[new in release] Crash in [@ nsAtom::IsStatic]")
+        self.assertEqual(rb.bug_title("nsAtom::IsStatic", prefix="  [new in release]  "),
+                         "[new in release] Crash in [@ nsAtom::IsStatic]")
+        for none in ("", None):
+            self.assertEqual(rb.bug_title("nsAtom::IsStatic", prefix=none),
+                             "Crash in [@ nsAtom::IsStatic]")
+
+    def test_the_prefix_counts_against_the_cap(self):
+        t = rb.bug_title(LONG_SIG, prefix=self.PREFIX)
+        self.assertEqual(len(t), 255)
+        self.assertTrue(t.startswith("[new in release] Crash in [@ "))
+        self.assertTrue(t.endswith("...]"))
+        # A signature that fits untouched on nightly needs the trim once the prefix is on.
+        sig = "a" * 240
+        self.assertEqual(rb.bug_title(sig), "Crash in [@ {}]".format(sig))
+        with_prefix = rb.bug_title(sig, prefix=self.PREFIX)
+        self.assertEqual(len(with_prefix), 255)
+        self.assertTrue(with_prefix.endswith("...]"))
+
+    def test_the_flag_name_follows_the_versions_major(self):
+        self.assertEqual(rb._tracking_flag("155.0.1"), "cf_tracking_firefox155")
+        self.assertEqual(rb._tracking_flag("155.0"), "cf_tracking_firefox155")
+        self.assertEqual(rb._tracking_flag("156.0b3"), "cf_tracking_firefox156")
+        self.assertEqual(rb._tracking_flag("157.0a1"), "cf_tracking_firefox157")
+        for bad in ("", None, "garbage", "0.1"):
+            self.assertIsNone(rb._tracking_flag(bad), bad)
+
+    def _preview(self, channel, version):
+        uuid_info = {"uuid": "u-1", "signature": "Foo::Bar", "channel": channel,
+                     "product": "Firefox", "buildid": "20260903215306", "version": version}
+        dossier = {"verdict": {"decision": "lead"},
+                   "candidate": {"node": "n", "bug": 1, "author": "A"}}
+        with mock.patch.object(rb, "fetch_signature_stats", return_value=(True, "")), \
+             mock.patch.object(rb, "fetch_crash_reason", return_value={}), \
+             mock.patch.object(rb, "resolve_product_component",
+                               return_value=("Core", "Networking: Cookies")), \
+             mock.patch.object(rb, "_needinfo_person", return_value={}), \
+             mock.patch.object(rb.models.UUID, "get_info", return_value={}):
+            return rb.build_bug_preview(uuid_info, {"frames": []}, dossier)
+
+    def test_the_release_preview_carries_both_marks_from_the_shipped_config(self):
+        # The REAL `config/global.json`, no mock: this is what the page shows and the filer posts.
+        p = self._preview("release", "155.0.1")
+        self.assertEqual(p["title"], "[new in release] Crash in [@ Foo::Bar]")
+        self.assertEqual(p["tracking_flag"], "cf_tracking_firefox155")
+        self.assertEqual(p["cf_crash_signature"], "[@ Foo::Bar]")
+
+    def test_the_nightly_preview_has_neither(self):
+        p = self._preview("nightly", "157.0a1")
+        self.assertEqual(p["title"], "Crash in [@ Foo::Bar]")
+        self.assertIsNone(p["tracking_flag"])
+
+    def test_no_version_means_no_flag_but_still_the_prefix(self):
+        p = self._preview("release", "")
+        self.assertEqual(p["title"], "[new in release] Crash in [@ Foo::Bar]")
+        self.assertIsNone(p["tracking_flag"])

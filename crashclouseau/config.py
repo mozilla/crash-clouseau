@@ -789,6 +789,16 @@ def get_agent_autofile(channel=None):
         # separate by three orders of magnitude — the correct comment landed on a bug filed 9
         # days AFTER its regressor, the wrong one on a bug filed 1375 days BEFORE.
         "comment_max_bug_age_days": a.get("comment_max_bug_age_days", 30),
+        # RELEASE'S TWO MARKS. A bug filed from the release channel is titled
+        # "[new in release] Crash in [@ ...]" and nominates `cf_tracking_firefox<major>` = ? for the
+        # crash's own version, so release management meets it in the tracking queue rather than
+        # in a component's backlog (Calixte, 2026-09-07). Empty / off everywhere else; an overlay
+        # sets them per channel like the rest of this dict. The prefix counts against BMO's 255
+        # (`report_bug.bug_title`); the nomination is its own best-effort PUT after the create
+        # (`bugzilla_apply._nominate_tracking`), because the flag for an old version may not
+        # exist any more and a create carrying an unknown field is rejected whole.
+        "summary_prefix": (a.get("summary_prefix") or "").strip(),
+        "nominate_tracking": bool(a.get("nominate_tracking", False)),
     }
 
 
