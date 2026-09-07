@@ -315,6 +315,12 @@ class _FilerBase(unittest.TestCase):
             mock.patch.object(report_bug, "security_group", return_value="core-security"),
             mock.patch.object(se, "resolve_component",
                               return_value=("Core", "JavaScript: GC", "investigator")),
+            # Nothing below the public open bugs unless a test says so: no earlier filing of
+            # ours, no bug fixed after the build.
+            mock.patch.object(models.Dossier, "already_filed_for_signature", return_value=None),
+            mock.patch.object(models.SpikeEscalation, "prior_bug_for", return_value=None),
+            mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[]),
+            mock.patch.object(se, "_bug_state", return_value=None),
             mock.patch.object(se, "_needinfo_person_for",
                               return_value={"nick": "dev", "account": "dev@moz.example",
                                             "name": "Dev", "email": "dev@moz.example"}),
@@ -500,6 +506,122 @@ class TestFiling(_FilerBase):
         res = se.file_spike_bug(_esc(channel="release"), brief, self.findings, grounded=True)
         self.assertTrue(res["filed"])
         self.assertEqual(self.created[1]["summary"], "[new in release] Crash in [@ mozilla::Foo::Bar]")
+
+
+class TestTheVenueBelowThePublicBugs(_FilerBase):
+    """Clouseau filed a bug on nightly for this signature; later it really spikes on beta."""
+
+    _RESOLVED_AFTER = "2026-09-05T10:00:00Z"      # the spiking build is 20260903093145
+    _RESOLVED_BEFORE = "2026-09-01T10:00:00Z"
+
+    def _beta(self):
+        return _esc(channel="beta"), dict(self.brief, channel="beta", siblings=["mozilla::Foo::Bar"])
+
+    def test_our_open_nightly_bug_is_the_venue_for_the_beta_spike(self):
+        esc, brief = self._beta()
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 70, "creation_time": "2026-08-30T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["bug"], res["venue_kind"]), ("spike_comment", 70, "open"))
+        self.assertEqual(self.created, [])
+
+    def test_our_restricted_open_bug_still_gets_the_spike(self):
+        # Public lookup sees nothing (a human restricted our bug); the database remembers it.
+        esc, brief = self._beta()
+        with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                               return_value={"uuid": "u-0", "bug": 71}), \
+                mock.patch.object(se, "_bug_state", return_value={
+                    "id": 71, "status": "NEW", "resolution": "", "resolved": None,
+                    "assigned_to": "nobody@mozilla.org"}):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["bug"], res["venue_kind"]),
+                         ("spike_comment", 71, "own_restricted"))
+        self.assertEqual(self.created, [])
+
+    def test_our_fixed_bug_gets_the_spike_when_the_fix_postdates_the_build(self):
+        esc, brief = self._beta()
+        with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                               return_value={"uuid": "u-0", "bug": 72}), \
+                mock.patch.object(se, "_bug_state", return_value={
+                    "id": 72, "status": "RESOLVED", "resolution": "FIXED",
+                    "resolved": datetime(2026, 9, 5, 10, tzinfo=timezone.utc),
+                    "assigned_to": "fixer@moz.example"}), \
+                mock.patch.object(report_bug, "_person_for_account",
+                                  return_value={"nick": "fixer", "account": "fixer@moz.example"}), \
+                mock.patch.object(se, "_needinfo_person_for", return_value={}):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["bug"], res["venue_kind"]), ("spike_comment", 72, "fixed"))
+        text = self.comments[0][1]
+        self.assertTrue(text.startswith("**Bug 72 is RESOLVED FIXED"))
+        self.assertIn("after build 20260903093145 was produced", text)
+        self.assertIn("beta builds that do not carry the fix", text)
+        self.assertIn(":fixer, can you have a look please?", text, "the fixer is the one to ask")
+        self.assertEqual(res["needinfo"], "fixer@moz.example")
+        self.assertEqual(self.created, [])
+
+    def test_a_fix_already_in_the_build_means_a_new_bug(self):
+        esc, brief = self._beta()
+        with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                               return_value={"uuid": "u-0", "bug": 73}), \
+                mock.patch.object(se, "_bug_state", return_value={
+                    "id": 73, "status": "RESOLVED", "resolution": "FIXED",
+                    "resolved": datetime(2026, 9, 1, 10, tzinfo=timezone.utc),
+                    "assigned_to": "fixer@moz.example"}):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual(res["mode"], "spike_new_bug")
+        self.assertEqual(self.comments, [])
+
+    def test_a_bug_closed_invalid_or_duplicate_is_not_a_venue(self):
+        esc, brief = self._beta()
+        for resolution in ("INVALID", "DUPLICATE", "WORKSFORME"):
+            self.created.clear()
+            with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                                   return_value={"uuid": "u-0", "bug": 74}), \
+                    mock.patch.object(se, "_bug_state", return_value={
+                        "id": 74, "status": "RESOLVED", "resolution": resolution,
+                        "resolved": datetime(2026, 9, 5, tzinfo=timezone.utc), "assigned_to": ""}):
+                res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+            self.assertEqual(res["mode"], "spike_new_bug", resolution)
+
+    def test_anybodys_bug_fixed_after_the_build_gets_the_spike(self):
+        esc, brief = self._beta()
+        row = {"id": 88, "assigned_to": "owner@moz.example", "product": "Core"}
+        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
+                (row, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \
+                mock.patch.object(report_bug, "_person_for_account", return_value={}):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["bug"], res["venue_kind"]), ("spike_comment", 88, "fixed"))
+        # Our own prior filing outranks anybody's fixed bug.
+        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
+                (row, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \
+                mock.patch.object(models.SpikeEscalation, "prior_bug_for", return_value=75), \
+                mock.patch.object(se, "_bug_state", return_value={
+                    "id": 75, "status": "REOPENED", "resolution": "", "resolved": None,
+                    "assigned_to": ""}):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["bug"], res["venue_kind"]), (75, "own_restricted"))
+
+    def test_a_memory_safety_crash_never_comments_on_a_public_fixed_bug(self):
+        esc, brief = self._beta()
+        brief["raw_crash"] = {"json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
+        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
+                ({"id": 88, "assigned_to": ""}, datetime(2026, 9, 5, tzinfo=timezone.utc))]):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 88))
+        self.assertEqual(self.created[0]["groups"], ["core-security"])
+        self.assertIn("Probably a duplicate of bug 88", self.created[0]["description"])
+
+    def test_skip_mode_writes_on_no_existing_bug_at_all(self):
+        esc, brief = self._beta()
+        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
+                ({"id": 88, "assigned_to": ""}, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \
+                mock.patch.object(config, "get_agent_spike_escalation",
+                                  return_value=dict(config.get_agent_spike_escalation(),
+                                                    comment_on_existing="skip")):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual(res["mode"], "spike_new_bug")
+        self.assertEqual(self.comments, [])
 
 
 class _FakeEscalation:

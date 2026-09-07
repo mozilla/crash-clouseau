@@ -867,6 +867,95 @@ def _pick_venue(existing, build_day):
     return sorted(existing, key=lambda b: b.get("id", 0))[0], False
 
 
+def _bug_state(bug_id, token):
+    """One bug's status, read WITH the filing token: ``{status, resolution, resolved,
+    assigned_to}`` or ``None``. Authenticated because the whole point is a bug the public lookup
+    could not see -- one a human restricted -- and BMO hides those from anonymous readers."""
+    try:
+        r = net.get("{}/{}".format(bugzilla_apply._bz_rest(), bug_id),
+                    headers={"X-Bugzilla-API-Key": token},
+                    params={"include_fields": "id,status,resolution,cf_last_resolved,assigned_to"},
+                    timeout=30)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("spike: could not read bug %s: %s", bug_id, exc)
+        return None
+    if not bugs:
+        return None
+    b = bugs[0]
+    return {"id": b.get("id"), "status": b.get("status") or "",
+            "resolution": (b.get("resolution") or "").upper(),
+            "resolved": sigage.to_datetime(b.get("cf_last_resolved")),
+            "assigned_to": b.get("assigned_to") or ""}
+
+
+def _own_prior_bugs(signatures):
+    """The bugs WE filed on these signatures, from the database -- the ordinary filer's
+    ``filed_bug`` records and the spike table -- newest spike filing first. Neither lookup may
+    raise into the filer; the ordinary one hands back a fail-closed sentinel with no ``bug``."""
+    out = []
+    try:
+        prior = models.SpikeEscalation.prior_bug_for(signatures)
+        if prior:
+            out.append(prior)
+    except Exception:  # pragma: no cover - defensive
+        pass
+    for sig in signatures:
+        try:
+            filed = models.Dossier.already_filed_for_signature(sig) or {}
+        except Exception:  # pragma: no cover - defensive
+            filed = {}
+        bug = filed.get("bug") if isinstance(filed, dict) else None
+        if bug:
+            try:
+                out.append(int(bug))
+            except (TypeError, ValueError):
+                continue
+    seen = []
+    for b in out:
+        if b not in seen:
+            seen.append(b)
+    return seen
+
+
+def resolve_venue_below_public(signatures, product, buildid, token):
+    """Where a spike goes when no OPEN public bug on the signature exists, in order:
+
+    1. a bug WE filed on the signature (any channel) that is still open but invisible to the
+       public lookup -- a human restricted it -- gets the comment (``kind`` ``own_restricted``);
+    2. a bug we filed that was RESOLVED FIXED after the spiking build was produced gets it: the
+       spike is on builds without the fix (``kind`` ``fixed``);
+    3. any public same-application bug RESOLVED FIXED after the build, the ordinary filer's
+       ``_fixed_after_build_bug`` question, gets it the same way.
+
+    ``None`` means a new bug: no bug, a bug resolved before the build (its fix is in the build,
+    so this is a new defect or a fix that did not hold) or one closed INVALID / WORKSFORME /
+    DUPLICATE, which say nothing about whether the crash is still happening."""
+    build_dt = sigage.to_datetime(str(buildid)) if buildid else None
+    for bug in _own_prior_bugs(signatures):
+        state = _bug_state(bug, token)
+        if not state:
+            continue
+        if not state["resolution"]:
+            return {"id": bug, "kind": "own_restricted", "assigned_to": state["assigned_to"]}
+        if state["resolution"] == "FIXED" and build_dt is not None and state["resolved"] is not None \
+                and _aware(state["resolved"]) > _aware(build_dt):
+            return {"id": bug, "kind": "fixed", "resolved": state["resolved"],
+                    "assigned_to": state["assigned_to"]}
+    if build_dt is None:
+        return None
+    try:
+        fixed = bugzilla_apply._fixed_bugs_about(signatures[0], product)
+    except Exception:  # pragma: no cover - the lookup already swallows
+        fixed = []
+    for bug, resolved in fixed:
+        if resolved is not None and _aware(resolved) > _aware(build_dt):
+            return {"id": bug["id"], "kind": "fixed", "resolved": resolved,
+                    "assigned_to": bug.get("assigned_to") or ""}
+    return None
+
+
 def _needinfo_person_for(findings, brief):
     culprit = findings.culprit if findings is not None else None
     if culprit is None or not culprit.node:
@@ -936,7 +1025,31 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         return dict(result, bug=venue["id"], skipped=(
             "bug {} was filed for this spike and already names its regressor ({})".format(
                 venue["id"], ", ".join("bug {}".format(b) for b in venue["regressed_by"]))))
+    # BELOW THE PUBLIC OPEN BUGS: a bug we filed ourselves that a human restricted or resolved,
+    # or anybody's bug fixed AFTER this build -- see `resolve_venue_below_public`. Not in `skip`
+    # mode (nothing is written on an existing bug there), and a memory-safety crash declines a
+    # public fixed bug the way it declines a public open one.
+    venue_kind = "open" if venue is not None else None
+    preface = None
+    if venue is None and mode != "skip":
+        siblings = brief.get("siblings") or [signature]
+        below = resolve_venue_below_public(siblings, product, esc.buildid, token)
+        if below is not None and withheld and below["kind"] != "own_restricted":
+            public_venue_declined = public_venue_declined or below["id"]
+        elif below is not None:
+            venue = {"id": below["id"], "assigned_to": below.get("assigned_to") or ""}
+            venue_kind = below["kind"]
+            for_spike = False
+            if below["kind"] == "fixed":
+                preface = spike_report.fixed_venue_note(
+                    below["id"], below.get("resolved"), esc.buildid, channel)
     person = _needinfo_person_for(findings, brief) if grounded else {}
+    if not person and venue is not None and venue.get("assigned_to"):
+        # Nobody to ask about a culprit: the bug's own assignee is the human who knows the fix.
+        try:
+            person = report_bug._person_for_account(venue["assigned_to"]) or {}
+        except Exception:  # pragma: no cover - a BMO read inside the ladder
+            person = {}
     link_regressor = bool(brief.get("culprit_in_window")) and grounded
     if venue is None:
         bz_product, component, how = resolve_component(findings, signature, product)
@@ -953,12 +1066,13 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             text = spike_report.build_spike_comment(
                 brief, findings, details=details, stack=stack, person=person,
                 author_display=report_bug._person_display(person) if person else None,
-                link_regressor=link_regressor, grounded=grounded, as_comment=True)
+                link_regressor=link_regressor, grounded=grounded, as_comment=True,
+                preface=preface)
             bugzilla_apply._post_comment(venue["id"], text, False, token)
             email = (person or {}).get("account") or ""
             outcome = bugzilla_apply._set_needinfo(venue["id"], email, token) if email else None
             result.update({"filed": True, "bug": venue["id"], "mode": "spike_comment",
-                           "venue_for_spike": bool(for_spike),
+                           "venue_kind": venue_kind, "venue_for_spike": bool(for_spike),
                            "needinfo": None if isinstance(outcome, Exception) else (email or None)})
         else:
             preview = spike_report.build_spike_preview(
@@ -971,7 +1085,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                     "memory-safety crash and no security group for product {!r}".format(bz_product)))
             if public_venue_declined is not None:
                 preview["comment"] = (
-                    "{}\n\n_Probably a duplicate of bug {}, which is open on this same signature. "
+                    "{}\n\n_Probably a duplicate of bug {}, which is on this same signature. "
                     "This bug was filed separately, and restricted, because the crash report shows "
                     "a memory-safety fault and that bug is public._".format(
                         preview["comment"], public_venue_declined))

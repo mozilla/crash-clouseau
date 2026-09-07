@@ -74,7 +74,15 @@ fetch uuids from Socorro itself.
    apply. Venue: open same-application non-meta bug → COMMENT (the volume is news to its owner),
    choosing a bug filed for this spike (created from the day before the spike day) over the
    oldest; a bug filed for the spike that already names `regressed_by` gets nothing; `skip` /
-   `file_new` modes exist (`comment_on_existing`). New bug: title `Crash in [@ sig]`, with the channel's
+   `file_new` modes exist (`comment_on_existing`). Below the public open bugs
+   (`resolve_venue_below_public`): a bug WE filed on the signature, on any channel, that the public
+   lookup cannot see — restricted (still open) or RESOLVED FIXED *after* the spiking build (the
+   spike is on builds without the fix: an uplift question, posted on the fixed bug with a preface
+   saying so and a needinfo to its assignee) — then anybody's same-application bug fixed after the
+   build. A fix that predates the build is in the build, so that spike is a new defect or a fix
+   that did not hold and files a new bug; INVALID / WORKSFORME / DUPLICATE closures are not venues.
+   So "Clouseau filed on nightly, then it spikes on beta" is a comment on the nightly bug in every
+   state but "fixed before the beta build" or "closed as not a bug". New bug: title `Crash in [@ sig]`, with the channel's
    `summary_prefix` (release: `[new in release]`) when the spike is an APPEARANCE — an all-zero
    baseline and no earlier report of the signature on that channel by its first-seen clock
    (`spike_report.is_new_signature`; a failed lookup cannot make an appearance look old) — and

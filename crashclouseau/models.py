@@ -4319,6 +4319,35 @@ class SpikeEscalation(db.Model):
         )
 
     @staticmethod
+    def prior_bug_for(signatures):
+        """The bug our most recent spike filing on any of ``signatures`` went to, on any channel,
+        or ``None``. The spike filer asks it after the PUBLIC venue lookup found nothing: a bug we
+        filed and a human restricted, or resolved, is invisible there, and only the database
+        knows we filed it. Never raises; a backend without JSONB paths answers ``None``."""
+        if not signatures:
+            return None
+        try:
+            row = (
+                db.session.query(SpikeEscalation.payload["filing"]["bug"].astext)
+                .filter(
+                    SpikeEscalation.signature.in_(sorted({s[:512] for s in signatures})),
+                    SpikeEscalation.payload["filing"]["filed"].astext == "true",
+                )
+                .order_by(SpikeEscalation.created.desc())
+                .first()
+            )
+        except Exception:
+            logger.error("Cannot read the prior spike filings", exc_info=True)
+            db.session.rollback()
+            return None
+        if not row or not row[0]:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def count_since(product, channel, since, filed_only=False):
         """Escalations created since ``since`` on a channel -- the spend budget -- or, with
         ``filed_only``, the ones that wrote to Bugzilla -- the filing cap. Fails toward the

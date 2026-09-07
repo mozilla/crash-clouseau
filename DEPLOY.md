@@ -130,7 +130,9 @@ dashboard's `major` alert rate (`crashclouseau/spikes.py`) — that the ordinary
 file gets one **Claude Fable 5.1 run at effort xhigh** (`agent.spike_escalation`) and a bug on
 **every triaged channel**, the per-channel culprit-filing hold notwithstanding. The bug leads
 with the volume; the investigator's analysis follows only where it grounded its claims in tool
-reads. An APPEARANCE (`...0, 0, 0 -> 50`, no earlier report on the channel) carries the channel's
+reads. An open bug on the signature gets it as a comment; so does a bug we filed ourselves that a
+human restricted or that was resolved FIXED after the spiking build (the spike is on builds
+without the fix), and anybody's bug fixed after the build; otherwise a new bug. An APPEARANCE (`...0, 0, 0 -> 50`, no earlier report on the channel) carries the channel's
 title mark — `[new in release]` on release; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
 `GET /api/spikes` lists them.
 
