@@ -24,6 +24,7 @@ time: the selection window, the build pair and the candidate window's lower boun
 import datetime
 import os
 import unittest
+from unittest import mock
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
@@ -118,6 +119,44 @@ class TestTheEnumMigrationOnPostgres(unittest.TestCase):
         finally:
             db.session.execute(text("DELETE FROM lastdate WHERE channel = 'esr140'"))
             db.session.commit()
+
+    def test_retire_deletes_a_retired_labels_rows_and_refuses_a_live_one(self):
+        """`bin/retire_channel.py`: the operator's version of the purge, refusing a label a
+        switch still names. Rows for a label the type has and the config does not."""
+        from crashclouseau import hgauthors, retire
+
+        with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text('ALTER TYPE "CHANNEL_TYPE" ADD VALUE IF NOT EXISTS \'esr140\''))
+        when = datetime.datetime(2026, 8, 26, 14, 0, tzinfo=_UTC)
+        models.Changeset.add([{"node": "1ace7e56a446", "date": when, "backedout": False,
+                               "merge": False, "bug": 1,
+                               "author": hgauthors.analyze_author("A <a@example.com>"),
+                               "files": ["dom/x.cpp"]}],
+                             datetime.datetime(2026, 9, 7, tzinfo=_UTC), "esr140")
+        models.Build.put_data({"Firefox": {"esr140": {
+            utils.get_build_date("20260826142222"): {"revision": "1ace7e56a446",
+                                                     "version": "140.15.0esr"}}}})
+        db.session.execute(text(
+            "INSERT INTO selection (signature, product, channel, build_day, outcome, number, "
+            "position, evaluable, baseline, bids, run_date, ever_selected, first_run_date) "
+            "VALUES ('Foo::Bar', 'Firefox', 'esr140', '2026-08-26', 'selected', 1, 1, true, "
+            "'[]', '{}', now(), true, now())"))
+        db.session.commit()
+        before, after = retire.retire(["esr140"], execute=False)
+        self.assertEqual((before["nodes"], before["builds"], before["selection"]), (1, 1, 1))
+        self.assertIsNone(after)
+        self.assertEqual(before, retire.counts(["esr140"]))          # the dry run deleted nothing
+        with mock.patch.dict(os.environ, {"AGENT_CHANNELS": "nightly esr140"}):
+            with self.assertRaises(ValueError):
+                retire.retire(["esr140"], execute=True)
+        with mock.patch.dict(os.environ, {"AGENT_CHANNELS": "nightly", "INGEST_CHANNELS": "nightly"}):
+            before, after = retire.retire(["esr140"], execute=True)
+        self.assertEqual((before["nodes"], before["builds"], before["selection"]), (1, 1, 1))
+        self.assertEqual(set(after.values()), {0})
+        self.assertEqual(set(retire.counts(["esr140"]).values()), {0})
+        # The other channels' rows are untouched.
+        self.assertGreaterEqual(
+            db.session.execute(text("SELECT count(*) FROM nodes")).scalar(), 0)
 
     def test_the_new_label_is_usable(self):
         now = datetime.datetime.now(_UTC)

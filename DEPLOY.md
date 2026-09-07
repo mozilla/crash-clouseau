@@ -167,14 +167,22 @@ tracking (`cf_tracking_firefox_esr153 = ?`, its own best-effort PUT). To hold it
 env vars (the two guards above turn its queued jobs into no-ops), purge its rows, then drop the
 label from `config.channels`. A Postgres enum label cannot be dropped and stays in the type; a
 stored label the config no longer lists still READS (`models.CHANNEL_TYPE` is lenient on the way
-out), so the order is for tidiness, not survival. The purge, in one transaction -- `builds`,
-`changesets`, `uuids`, `crashstack`, `dossiers` and `verdicts` cascade from `nodes`:
+out), so the order is for tidiness, not survival. The purge is one command -- a dry run without
+`--yes`; it refuses a label either env var still names -- and one transaction (`builds`,
+`changesets`, `uuids`, `crashstack`, `dossiers` and `verdicts` cascade from `nodes`):
+
+```sh
+heroku run -a crash-clouseau-augmented -- python bin/retire_channel.py esr115 esr140        # report
+heroku run -a crash-clouseau-augmented -- python bin/retire_channel.py esr115 esr140 --yes  # delete
+```
+
+The same thing by hand, if `heroku run` is not at hand:
 
 ```sql
 BEGIN;
 DELETE FROM selection WHERE channel IN ('esr115', 'esr140');
-DELETE FROM lastdate  WHERE channel IN ('esr115', 'esr140');
-DELETE FROM nodes     WHERE channel IN ('esr115', 'esr140');
+DELETE FROM lastdate  WHERE channel::text IN ('esr115', 'esr140');
+DELETE FROM nodes     WHERE channel::text IN ('esr115', 'esr140');
 COMMIT;
 ```
 
