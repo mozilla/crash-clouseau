@@ -161,6 +161,26 @@ def _parse_ts(value):
         return None
 
 
+# The first `bug N` in a decline reason. Every decline shape that names a bug names the bug the
+# decision was ABOUT first: "bug 2069744 already names its regressor (bug 2066780)", "open bug N
+# exists", "already fixed by bug N (...)", "already commented on bug N for this signature",
+# "already filed bug N for this signature on release".
+_BUG_IN_REASON = re.compile(r"\bbug (\d+)")
+
+
+def _declined_bug(bug, reason):
+    """The bug a filing was declined FOR, or ``None`` when the decline names none.
+
+    The structured id when the record has one (declines recorded since 2026-09-07 carry
+    ``filing_declined.bug``), else parsed out of the reason prose -- the 774 declines recorded
+    before that key existed have the id only there, and a culprit at 85 whose bug exists must
+    not render as a dash on the tasks page."""
+    if bug:
+        return str(bug)
+    m = _BUG_IN_REASON.search(reason or "")
+    return m.group(1) if m else None
+
+
 def _task_view(rows, stale_after_s, now):
     """Turn raw Dossier.list_tasks rows into per-task display dicts + a fleet summary.
 
@@ -245,6 +265,11 @@ def _task_view(rows, stale_after_s, now):
                 "filed_mode": getattr(r, "filed_mode", None),
                 "filed_needinfo": getattr(r, "filed_needinfo", None),
                 "filed_needinfo_missed": getattr(r, "filed_needinfo_missed", None),
+                # ...and what it DECLINED, with the bug the decline is about when it names one
+                # (`Dossier.list_tasks`, `_declined_bug`): "not filed (bug N)" on the page.
+                "declined_reason": getattr(r, "declined_reason", None),
+                "declined_bug": _declined_bug(getattr(r, "declined_bug", None),
+                                              getattr(r, "declined_reason", None)),
             }
         )
         if getattr(r, "filed_bug", None):

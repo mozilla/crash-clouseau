@@ -1253,7 +1253,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
 
     prior = models.Dossier.already_filed(uuid)
     if prior:
-        return {"filed": False, "skipped": "already filed", "prior": prior}
+        return {"filed": False, "skipped": "already filed", "prior": prior,
+                "bug": (prior or {}).get("bug") if isinstance(prior, dict) else None}
 
     since = datetime.now(timezone.utc) - timedelta(days=1)
     try:
@@ -1370,7 +1371,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # small, and the highest-value 1%.
     withheld = sensitive.is_withheld((dossier or {}).get("corroborations"))
     if existing and mode == "skip" and not withheld:
-        return {"filed": False, "skipped": "open bug {} exists".format(existing[0]["id"])}
+        # `bug` on a `filed: False` result is the bug the decision was ABOUT -- the open venue
+        # this crash was not written into -- as on every other decline shape below that names
+        # one; the tasks view renders it as "not filed (bug N)".
+        return {"filed": False, "bug": existing[0]["id"],
+                "skipped": "open bug {} exists".format(existing[0]["id"])}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
     # cannot, and with no landing date NONE of them can be shown to
     # (``_bug_for_this_regression``). Resolved before the preview is built so a new bug filed

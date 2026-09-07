@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=8">
+    <link rel="stylesheet" href="/clouseau.css?v=9">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
     <script src="/clouseau.js"></script>
@@ -113,9 +113,12 @@
             {%- else -%}&mdash;{%- endif %}
           </td>
           {#- What the automatic filer did. Empty for every run before filing was armed and
-              for anything it declined to file, so an em-dash here is the normal case, not a
-              failure. `comment_on_existing` is called out because the bug is somebody
-              else's — we added a comment to it rather than opening one. -#}
+              for a decline that names no bug (an abstain, a confidence below the rung), so an
+              em-dash here is the normal case, not a failure -- hover it for the reason. A
+              decline that IS about a bug (an open venue in `skip` mode, a bug that already
+              names its regressor, a fix that postdates the build) says "not filed (bug N)"
+              and links the bug. `comment_on_existing` is called out because the bug is
+              somebody else's — we added a comment to it rather than opening one. -#}
           <td class="task-bug">
             {% if t.filed_bug -%}
             <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.filed_bug|e }}"
@@ -124,6 +127,11 @@
             {%- if t.filed_mode == 'comment_on_existing' %} <span class="task-bug-mode" title="commented on an existing bug rather than filing a new one">cmt</span>{% endif -%}
             {%- if t.filed_needinfo %} <span class="task-bug-ni" title="needinfo: {{ t.filed_needinfo|e }}">ni?</span>
             {%- elif t.filed_needinfo_missed %} <span class="task-bug-ni task-bug-ni-missed" title="Bugzilla would not accept {{ t.filed_needinfo_missed|e }} as a needinfo requestee, so the bug was filed without one. Nobody has been asked — the author is still named in the comment.">no&nbsp;ni</span>{% endif -%}
+            {%- elif t.declined_bug -%}
+            <span class="task-bug-declined" title="Not filed: {{ t.declined_reason|e }}">not&nbsp;filed (<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.declined_bug|e }}"
+               target="_blank" rel="noopener">bug&nbsp;{{ t.declined_bug|e }}</a>)</span>
+            {%- elif t.declined_reason -%}
+            <span class="task-bug-declined" title="Not filed: {{ t.declined_reason|e }}">&mdash;</span>
             {%- else -%}&mdash;{%- endif %}
           </td>
           <td style="text-align:right;">{{ t.duration_str }}</td>

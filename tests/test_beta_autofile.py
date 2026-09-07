@@ -439,14 +439,18 @@ class TestBetaNeverCommentsOnSomebodyElsesBug(_BetaBase):
                 # reaches a human. (The PUTs in `file_new` are on bug 999, the one we filed:
                 # `blocks` and `regressed_by`.)
                 self.assertEqual([b for b, _ in self.puts if b == 12345], [])
-                self.assertNotEqual(res.get("bug"), 12345)
                 if mode == "file_new":
+                    self.assertNotEqual(res.get("bug"), 12345)   # the bug we WROTE is ours
                     self.assertTrue(res["filed"])
                     self.assertEqual(res["mode"], "new_bug")
                 else:
                     self.assertFalse(res["filed"])
                     self.assertEqual(self.created, [])
                     self.assertIn("open bug 12345 exists", res["skipped"])
+                    # On a `filed: False` result `bug` is the bug the decision was ABOUT, as
+                    # on every other decline that names one -- what the tasks view renders as
+                    # "not filed (bug 12345)". Not a write: `created`/`comments`/`puts` above.
+                    self.assertEqual(res["bug"], 12345)
 
     def test_file_new_mode_files_and_names_the_bug_it_did_not_comment_on(self):
         """A new bug that does not say why it is not a comment on the open bug reads as a

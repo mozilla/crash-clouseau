@@ -250,6 +250,34 @@ class TestADeclinedFilingLeavesARecord(unittest.TestCase):
         import json
         json.dumps(recorded)
 
+    def test_the_bug_the_decline_is_about_is_persisted(self):
+        """2d97ecf2 (culprit, 85) was declined with "bug 2069744 already names its regressor
+        (bug 2066780)" and the tasks page showed a dash: the id lived only in the prose. Every
+        decline shape that is about a bug carries `bug`, and the record now keeps it -- and
+        keeps the key OUT when the gate named none, so a reader cannot mistake `null` for a
+        bug."""
+        from crashclouseau.agent import orchestrator as orch
+        recorded = {}
+        info = {"channel": "nightly", "signature": "Foo::Bar"}
+        with mock.patch.object(models.CrashStack, "get_by_uuid", return_value=([], info)), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": False, "bug": 2069744,
+                                         "skipped": "bug 2069744 already names its regressor "
+                                                    "(bug 2066780)"}), \
+                mock.patch.object(models.Dossier, "record_filing_decline",
+                                  side_effect=lambda u, i, **kw: recorded.update(i) or True):
+            orch._autofile("u-1", {"dossier": {}}, {"verdict": "culprit", "confidence": 85})
+        self.assertEqual(recorded["bug"], 2069744)
+        recorded.clear()
+        with mock.patch.object(models.CrashStack, "get_by_uuid", return_value=([], info)), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": False, "skipped": "confidence 50 below 70"}), \
+                mock.patch.object(models.Dossier, "record_filing_decline",
+                                  side_effect=lambda u, i, **kw: recorded.update(i) or True):
+            orch._autofile("u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 50})
+        self.assertNotIn("bug", recorded)
+        self.assertEqual(recorded["skipped"], "confidence 50 below 70")
+
     def test_a_successful_filing_records_no_decline(self):
         from crashclouseau.agent import orchestrator as orch
         with mock.patch.object(models.CrashStack, "get_by_uuid",

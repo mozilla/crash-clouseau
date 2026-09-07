@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from unittest import mock  # noqa: E402
 
+from markupsafe import escape  # noqa: E402
+
 from crashclouseau import app, html, models  # noqa: E402
 
 
@@ -313,6 +315,101 @@ class TestFiledBugColumn(unittest.TestCase):
         tasks, summary = html._task_view([row], STALE, NOW)
         self.assertIsNone(tasks[0]["filed_bug"])
         self.assertEqual(summary["filed"], 0)
+
+
+class TestTheBugColumnSaysWhyNothingWasFiled(unittest.TestCase):
+    """A culprit at 85 with a dash in the Bug column read as "nothing happened", when the
+    truth was `filing_declined.skipped = "bug 2069744 already names its regressor (bug
+    2066780)"` (2d97ecf2, 2026-09-07). A decline that is ABOUT a bug now says
+    "not filed (bug N)" and links it; a decline about nothing keeps the dash, with the
+    reason as its tooltip."""
+
+    _REASON = "bug 2069744 already names its regressor (bug 2066780)"
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def _render(self, rows):
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
+            rv = self.client.get("/tasks.html")
+        self.assertEqual(rv.status_code, 200)
+        return rv.get_data(as_text=True)
+
+    def test_a_decline_about_a_bug_says_not_filed_and_links_it(self):
+        body = self._render([_row(uuid="2d97ecf2" + "0" * 28, verdict="culprit",
+                                  confidence=0.85, declined_reason=self._REASON,
+                                  declined_bug="2069744")])
+        self.assertIn("not&nbsp;filed (", body)
+        self.assertIn("show_bug.cgi?id=2069744", body)
+        self.assertIn("bug&nbsp;2069744", body)
+        self.assertIn("Not filed: " + self._REASON, body)      # the gate's reason, on hover
+        # Only the bug the decision was ABOUT is linked, not every bug the prose mentions.
+        self.assertNotIn("show_bug.cgi?id=2066780", body)
+        self.assertNotIn(">cmt<", body)
+        self.assertNotIn("ni?", body)
+
+    def test_a_decline_recorded_before_the_structured_id_is_parsed_from_the_prose(self):
+        """774 declines were recorded with the bug only inside `skipped`; the FIRST `bug N` of
+        every shape that names one is the bug the decision was about."""
+        cases = {
+            self._REASON: "2069744",
+            "open bug 12345 exists": "12345",
+            "already fixed by bug 777 (the fix postdates build 20260903215306)": "777",
+            "already commented on bug 4242 for this signature": "4242",
+            "already filed bug 31337 for this signature on release": "31337",
+        }
+        for reason, bug in cases.items():
+            with self.subTest(reason=reason):
+                self.assertEqual(html._declined_bug(None, reason), bug)
+                body = self._render([_row(uuid="prose001" + "0" * 28,
+                                          declined_reason=reason, declined_bug=None)])
+                self.assertIn("show_bug.cgi?id=" + bug, body)
+                self.assertIn("not&nbsp;filed (", body)
+        # The structured id wins over the prose when both are there.
+        self.assertEqual(html._declined_bug(2069744, "open bug 1 exists"), "2069744")
+        self.assertEqual(html._declined_bug("2069744", None), "2069744")
+
+    def test_a_decline_about_nothing_keeps_the_dash_and_explains_it_on_hover(self):
+        for reason in ("confidence 50 below 70", "verdict abstain not fileable",
+                       "autofile held for channel 'beta' (triage-only)",
+                       "suppressed by hardware_noise_signature_suppressed"):
+            with self.subTest(reason=reason):
+                self.assertIsNone(html._declined_bug(None, reason))
+                body = self._render([_row(uuid="nobug001" + "0" * 28,
+                                          declined_reason=reason, declined_bug=None)])
+                self.assertNotIn("show_bug.cgi", body)
+                self.assertNotIn("not&nbsp;filed", body)
+                # As Jinja escapes it: the beta reason carries quotes.
+                self.assertIn("Not filed: " + str(escape(reason)), body)
+
+    def test_a_filed_bug_outranks_a_stale_decline(self):
+        # `filing_declined` is not sticky, so a re-run that filed leaves no decline behind --
+        # but if both were ever present, the filing is the fact and the decline is history.
+        body = self._render([_row(uuid="both0001" + "0" * 28, filed_bug="999",
+                                  filed_mode="new_bug", declined_reason="open bug 12345 exists",
+                                  declined_bug="12345")])
+        self.assertIn("show_bug.cgi?id=999", body)
+        self.assertNotIn("not&nbsp;filed", body)
+        self.assertNotIn("show_bug.cgi?id=12345", body)
+
+    def test_a_decline_is_not_a_filing_in_the_summary(self):
+        rows = [_row(uuid="a" * 36, filed_bug="111"),
+                _row(uuid="b" * 36, declined_reason=self._REASON, declined_bug="2069744")]
+        tasks, summary = html._task_view(rows, STALE, NOW)
+        self.assertEqual(summary["filed"], 1)
+        self.assertEqual(tasks[1]["declined_bug"], "2069744")
+        self.assertEqual(tasks[1]["declined_reason"], self._REASON)
+        self.assertIsNone(tasks[0]["declined_bug"])
+
+    def test_rows_without_the_new_columns_still_render(self):
+        row = _row(uuid="legacy01" + "0" * 28)
+        for f in ("declined_reason", "declined_bug"):
+            if hasattr(row, f):
+                delattr(row, f)
+        tasks, _ = html._task_view([row], STALE, NOW)
+        self.assertIsNone(tasks[0]["declined_bug"])
+        self.assertIsNone(tasks[0]["declined_reason"])
+        self._render([row])
 
 
 class TestTasksRoute(unittest.TestCase):

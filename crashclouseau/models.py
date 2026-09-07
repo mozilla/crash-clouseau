@@ -2829,6 +2829,15 @@ class Dossier(db.Model):
                     Dossier.payload["filed_bug"]["needinfo_dropped"].astext,
                     Dossier.payload["filed_bug"]["needinfo_failed"].astext,
                 ).label("filed_needinfo_missed"),
+                # What the autofiler DECLINED to do (``record_filing_decline``): the gate's
+                # reason, and the bug that reason is about when it names one -- an open venue
+                # in `skip` mode, a bug that already names its regressor, a fix that postdates
+                # the build. A culprit at 85 with a dash in the Bug column read as "nothing
+                # happened" when the truth was "not filed: bug 2069744 already names its
+                # regressor". `bug` is structured only on declines recorded since 2026-09-07;
+                # the view parses the older reasons' prose.
+                Dossier.payload["filing_declined"]["skipped"].astext.label("declined_reason"),
+                Dossier.payload["filing_declined"]["bug"].astext.label("declined_bug"),
             )
             .select_from(Dossier)
             .join(UUID, Dossier.uuidid == UUID.id)

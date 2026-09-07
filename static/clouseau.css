@@ -544,6 +544,10 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 /* `no ni` = we wanted to ask someone and Bugzilla would not accept the requestee, so the
    bug was filed without one. Read as a gap, not as a success: nobody has been asked. */
 .task-bug-ni-missed { background: #f6e0e0; color: #8a2f2f; }
+/* `not filed (bug N)` = the filer declined because of that bug (an open venue in `skip` mode,
+   a bug that already names its regressor, a fix that postdates the build); the tooltip has
+   the gate's exact reason. Muted: the bug link is still the thing worth clicking. */
+.task-bug-declined { color: #777; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
 .task-err {
     margin-top: 0.3em;

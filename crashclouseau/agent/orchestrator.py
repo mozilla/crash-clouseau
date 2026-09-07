@@ -3955,7 +3955,7 @@ def _autofile(uuid, payload, row):
             # "run the channel for a cycle and count what it would have filed" is not
             # obtainable after the fact. See `Dossier.record_filing_decline` for why this must
             # NOT go under `filed_bug`.
-            models.Dossier.record_filing_decline(uuid, {
+            decline = {
                 "at": datetime.now(timezone.utc).isoformat(),
                 "skipped": res.get("skipped"),
                 "channel": uuid_info.get("channel"),
@@ -3970,7 +3970,16 @@ def _autofile(uuid, payload, row):
                 "signature": uuid_info.get("signature"),
                 "verdict": row["verdict"],
                 "confidence": row["confidence"],
-            })
+            }
+            # THE BUG THE DECLINE WAS ABOUT, when the gate named one: the open venue in `skip`
+            # mode, the bug that already names its regressor, the fix that postdates the build,
+            # the bug we already commented on. Until 2026-09-07 it reached this record only
+            # inside the `skipped` prose ("bug 2069744 already names its regressor (bug
+            # 2066780)"), so the tasks view showed a dash for a culprit at 85 whose bug exists
+            # -- `html._declined_bug` still parses the prose for the rows recorded before this.
+            if res.get("bug"):
+                decline["bug"] = res["bug"]
+            models.Dossier.record_filing_decline(uuid, decline)
     except Exception:                                    # pragma: no cover - defensive
         logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)
 
