@@ -512,7 +512,9 @@ NO_VERSION_RATES = {"versions": None, "step": None, "days": None}
 
 def _version_key(version):
     """Sort key that puts 155.0.1 after 155.0 and 156.0b2 after 156.0b1."""
-    parts = re.split(r"[.ab]", str(version or ""))
+    # `140.10.1esr` and `140.10.2esr` must not collapse to the same key: strip the ESR suffix
+    # before splitting, or every ESR dot release reads as its `.0`.
+    parts = re.split(r"[.ab]", str(version or "").lower().removesuffix("esr"))
     return tuple(int(p) if p.isdigit() else 0 for p in parts)
 
 
@@ -564,21 +566,33 @@ def version_rates(signature, product="Firefox", channel="release", days=VERSION_
     result = got.get("r")
     if not isinstance(result, dict):
         return empty
+    # An ESR LINE reads one Socorro channel shared with the other lines (`get_search_channel`),
+    # so the per-version series is cut to the line's own major: without it the "preceding
+    # version" of 153.0esr is 140.15.0esr, and a 5x "step" between two different products'
+    # populations is not a step.
     return summarize_version_rates(result, days=days, step_ratio=step_ratio,
-                                   min_reports=min_reports)
+                                   min_reports=min_reports, major=config.esr_major(channel))
 
 
 def summarize_version_rates(result, days=VERSION_RATES_DAYS, step_ratio=VERSION_STEP_RATIO,
-                            min_reports=VERSION_MIN_REPORTS):
+                            min_reports=VERSION_MIN_REPORTS, major=None):
     """The pure half of ``version_rates``: a SuperSearch response -> the summary dict. Split out
-    so the arithmetic is testable on a recorded response without a network stand-in."""
+    so the arithmetic is testable on a recorded response without a network stand-in.
+
+    ``major`` keeps only that major's versions (an ESR line's own, see ``version_rates``)."""
     facets = (result or {}).get("facets") or {}
+
+    def keep(version):
+        return major is None or _version_key(version)[:1] == (int(major),)
+
     per = {}
     for bucket in facets.get("histogram_date") or []:
         day = str(bucket.get("term") or "")[:10]
         if not day:
             continue
         for t in (bucket.get("facets") or {}).get("version") or []:
+            if not keep(t.get("term")):
+                continue
             v = per.setdefault(str(t.get("term")), {"reports": 0, "days": set()})
             v["reports"] += int(t.get("count") or 0)
             v["days"].add(day)
@@ -586,6 +600,8 @@ def summarize_version_rates(result, days=VERSION_RATES_DAYS, step_ratio=VERSION_
         return {"versions": [], "step": None, "days": days}
     builds = {}
     for t in facets.get("version") or []:
+        if not keep(t.get("term")):
+            continue
         builds[str(t.get("term"))] = sorted(
             str(b.get("term")) for b in (t.get("facets") or {}).get("build_id") or [])
     rows = []

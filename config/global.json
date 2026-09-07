@@ -7,7 +7,10 @@
     [
         "nightly",
         "beta",
-        "release"
+        "release",
+        "esr115",
+        "esr140",
+        "esr153"
     ],
     "facets_limit": 10000,
     "build_facets_limit": 500,
@@ -28,7 +31,8 @@
             {
                 "nightly": 1,
                 "beta": 6,
-                "release": 50
+                "release": 50,
+                "esr": 50
             }
         },
         "protos":
@@ -37,7 +41,8 @@
             {
                 "nightly": 50,
                 "beta": 5,
-                "release": 20
+                "release": 20,
+                "esr": 20
             }
         }
     },
@@ -49,7 +54,8 @@
             {
                 "nightly": 3,
                 "beta": 10,
-                "release": 50
+                "release": 50,
+                "esr": 50
             }
         },
         "ratio":
@@ -58,7 +64,8 @@
             {
                 "nightly": 3,
                 "beta": 3,
-                "release": 3
+                "release": 3,
+                "esr": 3
             }
         },
         "mature_after_days":
@@ -67,7 +74,8 @@
             {
                 "nightly": 5,
                 "beta": 5,
-                "release": 5
+                "release": 5,
+                "esr": 5
             }
         },
         "mature_installs":
@@ -76,7 +84,8 @@
             {
                 "nightly": 4,
                 "beta": 4,
-                "release": 4
+                "release": 4,
+                "esr": 4
             }
         },
         "min_build_installs":
@@ -85,7 +94,8 @@
             {
                 "nightly": 0,
                 "beta": 15,
-                "release": 15
+                "release": 15,
+                "esr": 15
             }
         },
         "rising_per_day":
@@ -94,7 +104,8 @@
             {
                 "nightly": 3,
                 "beta": 2,
-                "release": 0
+                "release": 0,
+                "esr": 0
             }
         },
         "rising_protos":
@@ -103,7 +114,8 @@
             {
                 "nightly": 3,
                 "beta": 3,
-                "release": 3
+                "release": 3,
+                "esr": 3
             }
         },
         "real_installs":
@@ -112,7 +124,8 @@
             {
                 "nightly": 3,
                 "beta": 6,
-                "release": 50
+                "release": 50,
+                "esr": 50
             }
         },
         "real_alert_rate":
@@ -121,7 +134,8 @@
             {
                 "nightly": 0.00015,
                 "beta": 0.00015,
-                "release": 0.00015
+                "release": 0.00015,
+                "esr": 0.00015
             }
         }
     },
@@ -166,7 +180,8 @@
             "channels":
             {
                 "beta": {},
-                "release": {}
+                "release": {},
+                "esr": {}
             }
         },
         "offstack":
@@ -219,6 +234,14 @@
                     "comment_on_existing": "skip",
                     "daily_cap": 2,
                     "summary_prefix": "[new in release]",
+                    "nominate_tracking": true
+                },
+                "esr":
+                {
+                    "enabled": true,
+                    "comment_on_existing": "skip",
+                    "daily_cap": 2,
+                    "summary_prefix": "[new in esr]",
                     "nominate_tracking": true
                 }
             }

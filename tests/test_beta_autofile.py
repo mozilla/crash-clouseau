@@ -304,7 +304,7 @@ class TestTheTriageOnlyHoldIsVisible(_BetaBase):
             self.assertTrue(cconfig.autofile_channel_held("beta"))
             self.assertFalse(cconfig.autofile_channel_held("nightly"))   # global default only
             self.assertFalse(cconfig.autofile_channel_held("release"))   # overlay, no `enabled`
-            self.assertFalse(cconfig.autofile_channel_held("esr"))       # undeclared
+            self.assertFalse(cconfig.autofile_channel_held("esr"))       # no overlay here
             self.assertFalse(cconfig.autofile_channel_held(None))
 
     def test_the_shipped_config_no_longer_holds_beta_and_a_hold_still_says_so(self):
@@ -364,8 +364,10 @@ class TestTheChannelGate(_BetaBase):
         """`release` moved OUT of this list on 2026-08-31: it is now declared (held until
         2026-09-07, then armed), which is a different gate reached later in the same function.
         An undeclared
-        channel is one nobody has decided about at all -- `esr` is the live example."""
-        for channel in ("esr", "aurora", "Beta ", "", None):
+        channel is one nobody has decided about at all -- `aurora` (Socorro's DevEdition label,
+        never ours) and a made-up build type are the examples, now that the ESR family is
+        declared too (tests/test_esr_channel.py)."""
+        for channel in ("nightly-asan", "aurora", "Beta ", "", None):
             with self.subTest(channel=channel):
                 self._reset()
                 res = self._file_beta(info={**_BETA_INFO, "channel": channel})
@@ -374,10 +376,10 @@ class TestTheChannelGate(_BetaBase):
                 self.assertEqual((self.created, self.comments, self.puts), ([], [], []))
         # The three channels somebody HAS decided about are not caught by it — the gate must not
         # be a global off switch.
-        for channel in ("nightly", "beta", "release", "NIGHTLY"):
+        for channel in ("nightly", "beta", "release", "NIGHTLY", "esr115", "esr140", "esr153"):
             with self.subTest(channel=channel):
                 self.assertTrue(cconfig.autofile_channel_declared(channel))
-        for channel in ("esr", None, ""):
+        for channel in ("nightly-asan", None, ""):
             with self.subTest(channel=channel):
                 self.assertFalse(cconfig.autofile_channel_declared(channel))
 

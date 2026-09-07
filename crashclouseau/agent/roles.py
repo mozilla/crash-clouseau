@@ -104,7 +104,21 @@ _BUILD_NAME = {
     "beta": "beta",
     "aurora": "Developer Edition",
     "release": "release",
+    "esr": "ESR",
 }
+
+
+def _build_name(channel):
+    """The build's name in the skeptic prompt: ``nightly``, ``beta``, ``Developer Edition``,
+    ``release`` -- or ``ESR 140`` for an ESR line, whose label (``esr140``) carries the major
+    (`config.esr_major`) and whose build type is the family's (`config.channel_family`)."""
+    ch = (channel or "nightly").lower()
+    if ch in _BUILD_NAME:
+        return _BUILD_NAME[ch]
+    major = config.esr_major(ch)
+    if major is not None:
+        return "ESR {}".format(major)
+    return _BUILD_NAME.get(config.channel_family(ch), ch)
 
 
 def _compiled_out_text(channel=None):
@@ -123,7 +137,7 @@ def _compiled_out_text(channel=None):
     channel = (channel or "nightly").lower()
     on = compiled_out.channel_on_deny(channel)
     off = compiled_out.channel_off(channel)
-    build = _BUILD_NAME.get(channel, channel or "nightly")
+    build = _build_name(channel)
     # Only assert the MOZ_DIAGNOSTIC_ASSERT prevalence where the macro is actually ON. On beta
     # it is off (`when=moz_debug | milestone.is_nightly | moz_dev_edition`), so the nightly
     # figure would be a false fact about the build in hand.

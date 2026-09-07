@@ -123,7 +123,9 @@ class Repo(str, Enum):
     """The exact ``-R``/``--repo`` tokens ``searchfox-cli`` accepts.
 
     There is deliberately **no ``autoland``** member -- searchfox has no such
-    tree. The ESR members are the variants indexed as of step 1 (2026-07-02).
+    tree. The ESR members are the lines searchfox indexes (``firefox-esr115``/``140``/``153``
+    answered 200 on 2026-09-07; 128 was indexed as of 2026-07-02). ``searchfox-cli -R``
+    accepts ``mozilla-esr*``, so a new ESR line needs one member here and nothing else.
     """
 
     CENTRAL = "mozilla-central"
@@ -132,6 +134,7 @@ class Repo(str, Enum):
     ESR115 = "mozilla-esr115"
     ESR128 = "mozilla-esr128"
     ESR140 = "mozilla-esr140"
+    ESR153 = "mozilla-esr153"
     COMM = "comm-central"
 
     @property
@@ -176,8 +179,23 @@ def repo_for_channel(channel) -> Repo:
 
     ``firefox-beta`` is indexed at its own branch tip (measured 2026-08-11: ``cd001e124b15`` /
     154.0b9 while ``firefox-main`` was at 155.0a1), which for a BETA crash is the correct tree
-    -- unlike the Fenix-nightly case in plan #16, where the same tree was a cycle behind."""
-    return _CHANNEL_REPO.get((channel or "").lower(), Repo.CENTRAL)
+    -- unlike the Fenix-nightly case in plan #16, where the same tree was a cycle behind.
+
+    An ESR LINE label (``esr140``) reads its own tree, ``mozilla-esr140``: the line's uplifts are
+    there and nowhere else, and central is a dozen cycles ahead of it. A line searchfox does not
+    index (no ``Repo`` member) degrades to central like any unknown channel."""
+    from crashclouseau import config
+
+    ch = (channel or "").lower()
+    repo = _CHANNEL_REPO.get(ch)
+    if repo is not None:
+        return repo
+    if config.channel_family(ch) == "esr":
+        try:
+            return Repo("mozilla-" + ch)
+        except ValueError:
+            pass
+    return Repo.CENTRAL
 
 
 def _coerce_repo(repo) -> Repo:

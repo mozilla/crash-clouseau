@@ -6,6 +6,7 @@ import asyncio
 from copy import deepcopy
 from functools import partial
 import json
+from . import config
 from . import net
 import six
 import time
@@ -23,6 +24,32 @@ VERSION_PATS = {
     "beta": r'[0-9]+".0b"[0-9]+',
     "release": r"[0-9]+\.[0-9]+(\.[0-9]+)?",
 }
+
+
+def target_channel(channel):
+    """Buildhub's ``target.channel`` for one of OUR labels. Every ESR line -- ``esr115``,
+    ``esr140``, ``esr153`` -- is ``esr`` there (and in Socorro); the line is told apart by
+    ``version_pat``."""
+    return "esr" if config.channel_family(channel) == "esr" else channel
+
+
+def version_pat(channel):
+    """The ``target.version`` regexp that keeps a channel's Buildhub rows to ITS builds.
+
+    Load-bearing off nightly: Buildhub files 26-30 RC/dot-release builds under
+    ``target.channel=beta`` that only this pattern keeps out of beta's ``builds`` table (see
+    ``models.Build.get_last_versions``), and it files every ESR line under one channel. For an
+    ESR line the pattern is the line's own major -- ``140\\.[0-9]+(\\.[0-9]+)?esr`` matches
+    140.15.0esr and nothing from esr115 or esr153, verified live 2026-09-07 -- so each line's
+    ``builds`` rows are one lineage and ``get_two_last`` / ``get_pushdate_before`` never pair a
+    153 build with a 140 one. Release's pattern matches NO esr build (the ``esr`` suffix), which
+    is why the family needs its own. Unknown channel: everything, as before."""
+    major = config.esr_major(channel)
+    if major is not None:
+        return r"{}\.[0-9]+(\.[0-9]+)?esr".format(major)
+    if config.channel_family(channel) == "esr":
+        return r"[0-9]+\.[0-9]+(\.[0-9]+)?esr"
+    return VERSION_PATS.get(channel, "*")
 
 
 def make_request(params, sleep, retry, callback):
@@ -88,10 +115,10 @@ def get(
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"target.channel": channel}},
+                    {"term": {"target.channel": target_channel(channel)}},
                     {"terms": {"source.product": prods}},
                     {"range": {"build.id": r}},
-                    {"regexp": {"target.version": VERSION_PATS.get(channel, "*")}},
+                    {"regexp": {"target.version": version_pat(channel)}},
                 ]
             }
         },
@@ -108,14 +135,18 @@ def get(
                 res_p = res[prod]
             else:
                 res[prod] = res_p = {}
-            for channel in product["channels"]["buckets"]:
-                chan = channel["key"]
+            for bucket in product["channels"]["buckets"]:
+                # Keyed by OUR label, not by Buildhub's `target.channel`: the query filtered on
+                # one channel, so this bucket IS the channel asked for -- and for an ESR line
+                # the two names differ (`esr140` here, `esr` there). `Build.put_data` writes
+                # this key straight into `builds.channel`, which is the CHANNEL_TYPE enum.
+                chan = channel
                 if chan in res_p:
                     res_pc = res_p[chan]
                 else:
                     res_p[chan] = res_pc = {}
 
-                for buildid in channel["buildids"]["buckets"]:
+                for buildid in bucket["buildids"]["buckets"]:
                     bid = utils.get_build_date(buildid["key"])
                     rev = buildid["revisions"]["buckets"][0]["key"]
                     version = buildid["versions"]["buckets"][0]["key"]
@@ -134,7 +165,7 @@ def get_rev_from(buildid, channel, product):
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"target.channel": channel}},
+                    {"term": {"target.channel": target_channel(channel)}},
                     {"term": {"source.product": product}},
                     {"term": {"build.id": buildid}},
                 ]
@@ -166,10 +197,10 @@ def get_two_last(buildid, channel, product):
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"target.channel": channel}},
+                    {"term": {"target.channel": target_channel(channel)}},
                     {"term": {"source.product": product}},
                     {"range": {"build.id": {"lte": buildid}}},
-                    {"regexp": {"target.version": VERSION_PATS.get(channel, "*")}},
+                    {"regexp": {"target.version": version_pat(channel)}},
                 ]
             }
         },
@@ -214,10 +245,10 @@ async def get_enclosing_builds_helper(pushdate, channel, product):
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"target.channel": channel}},
+                    {"term": {"target.channel": target_channel(channel)}},
                     {"term": {"source.product": product}},
                     {"range": {"build.id": {"lt": buildid}}},
-                    {"regexp": {"target.version": VERSION_PATS.get(channel, "*")}},
+                    {"regexp": {"target.version": version_pat(channel)}},
                 ]
             }
         },

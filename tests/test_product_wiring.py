@@ -1163,7 +1163,13 @@ class TestCodeview(unittest.TestCase):
         # revisions). It used to land on the default tree as an "unknown channel"; it is not
         # unknown, and a third of the beta population arrives under that label.
         self.assertEqual(html._searchfox_tree("aurora"), "firefox-beta")
-        self.assertEqual(html._searchfox_tree("esr140"), "firefox-main")  # unknown -> default
+        # Each ESR line reads its own tree (searchfox indexes esr115/140/153, probed 2026-09-07);
+        # a line it does not index and a genuinely unknown channel both land on the default.
+        self.assertEqual(html._searchfox_tree("esr140"), "firefox-esr140")
+        self.assertEqual(html._searchfox_tree("esr153"), "firefox-esr153")
+        self.assertEqual(html._searchfox_tree("esr115"), "firefox-esr115")
+        self.assertEqual(html._searchfox_tree("esr9"), "firefox-main")
+        self.assertEqual(html._searchfox_tree("nightly-asan"), "firefox-main")
         self.assertEqual(html._searchfox_tree(None), "firefox-main")
 
     def test_the_ui_and_the_agent_read_the_same_tree(self):
@@ -1172,7 +1178,7 @@ class TestCodeview(unittest.TestCase):
         did not exist at all (every beta read went to firefox-main)."""
         from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
 
-        for channel in ("nightly", "beta", "aurora", "release", "esr140", ""):
+        for channel in ("nightly", "beta", "aurora", "release", "esr140", "esr153", "esr9", ""):
             ctx = SearchfoxCtx(client=None, channel=channel)
             self.assertEqual(
                 searchfox.Repo(ctx.repo).tree, html._searchfox_tree(channel), channel

@@ -270,13 +270,21 @@ class TestTheChannelPartition(unittest.TestCase):
             with self.subTest(channel=channel):
                 self.assertEqual(on | off, expected)
                 self.assertFalse(on & off)
+        # ESR is the one partition with a NINTH macro, `MOZ_ESR` (ON there, in no other table):
+        # it drops nothing and double-books nothing either.
+        for channel in ("esr", "esr115", "esr140", "esr153"):
+            on, off = co.channel_on_deny(channel), co.channel_off(channel)
+            with self.subTest(channel=channel):
+                self.assertEqual(on | off, expected | {"MOZ_ESR"})
+                self.assertFalse(on & off)
 
     def test_an_unknown_channel_degrades_to_nightly_rather_than_to_nothing(self):
-        """`esr` is the channel the enum defect (`_ensure_enum_values` can never ALTER) would
-        add next. An empty partition would make EVERY build-flag claim unbind, so the
-        documented degradation is nightly's table -- the behaviour of the last year."""
-        self.assertEqual(co.channel_on_deny("esr"), co.CHANNEL_ON_DENY)
-        self.assertEqual(co.channel_off("esr"), co.channel_off("nightly"))
+        """An empty partition would make EVERY build-flag claim unbind, so the documented
+        degradation for a channel with no table is nightly's -- the behaviour of the last year.
+        (`esr` used to be the example here; it has its own partition now, pinned in
+        tests/test_esr_channel.py.)"""
+        self.assertEqual(co.channel_on_deny("nightly-asan"), co.CHANNEL_ON_DENY)
+        self.assertEqual(co.channel_off("nightly-asan"), co.channel_off("nightly"))
 
 
 class TestIsBuildFlagGroundInvertsPerChannel(unittest.TestCase):

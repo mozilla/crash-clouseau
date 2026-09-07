@@ -924,13 +924,17 @@ _NEW_SIGNATURE_GUIDANCE = (
 # anywhere" by enough to matter. Nightly is mozilla-central's own channel, so the two are the
 # same question there and this never fires; `_CHANNEL_NEW_DAYS` is deliberately the same
 # `NEW_SIGNATURE_DAYS` boundary the all-time clock uses, so there is one definition of "new".
-_CHANNEL_LABEL = {"beta": "beta", "aurora": "Developer Edition", "release": "release"}
+_CHANNEL_LABEL = {"beta": "beta", "aurora": "Developer Edition", "release": "release",
+                  "esr": "ESR"}
 
 
 def _channel_age_lines(crash, ever, age_ever):
     """``(lines, guidance)`` for "new to this channel, old elsewhere", else ``([], None)``."""
     channel = (crash.get("channel") or "").lower()
-    label = _CHANNEL_LABEL.get(channel)
+    # An ESR line (`esr140`) is asked about as the family: `signature_first_seen_channel` was
+    # measured over Socorro's one `esr` channel (`utils.get_search_channel`), so "new on ESR"
+    # is the honest sentence and "new on esr140" would claim a clock nobody read.
+    label = _CHANNEL_LABEL.get(channel) or _CHANNEL_LABEL.get(config.channel_family(channel))
     first_channel = crash.get("signature_first_seen_channel")
     if not label or not first_channel:
         return [], None

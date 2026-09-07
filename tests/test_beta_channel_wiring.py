@@ -111,15 +111,21 @@ class TestGetSearchChannel(unittest.TestCase):
         self.assertEqual(len(got), 2)
 
     def test_every_other_channel_is_passed_through_unchanged(self):
-        """Widening is beta-only. Nightly has no second label, and release's `esr` siblings
-        are separate populations we must not fold in.
+        """Widening is beta-only. Nightly has no second label, and release is its own.
 
         `aurora` in that list is the asymmetry that matters: the map is keyed on OUR stored
         label (`nightly`/`beta`/`release`), so handing it Socorro's raw `aurora` widens
         nothing and searches DevEdition alone. Every caller therefore has to pass the DB
-        channel — see `TestTheSeedAsksAboutTheChannelTheCrashIsOn`, where one does not."""
-        for channel in ("nightly", "release", "esr", "aurora", "esr140"):
+        channel — see `TestTheSeedAsksAboutTheChannelTheCrashIsOn`, where one does not.
+
+        The ESR lines go the other way: three of OUR labels (`esr115`/`esr140`/`esr153`) are
+        ONE Socorro `release_channel`, `esr`, so a line label NARROWS to its family. Nothing
+        Socorro keeps apart is folded in, and a query that has to stay within one line is
+        scoped by that line's own build ids, not by this map (tests/test_esr_channel.py)."""
+        for channel in ("nightly", "release", "esr", "aurora", "nightly-asan"):
             self.assertEqual(utils.get_search_channel(channel), channel)
+        for channel in ("esr115", "esr140", "esr153"):
+            self.assertEqual(utils.get_search_channel(channel), "esr")
 
     def test_the_channel_it_was_given_is_never_dropped(self):
         """The invariant that survives a re-tune: whatever comes back, the caller's own label
@@ -496,10 +502,15 @@ class TestSearchfoxReadsTheCrashsOwnTree(unittest.TestCase):
                          "mozilla-beta")
 
     def test_an_unknown_channel_falls_back_to_central_rather_than_raising(self):
-        """A wrong-but-indexed tree degrades one answer; an exception loses the whole run."""
-        for channel in ("esr140", "unknown", "", None):
+        """A wrong-but-indexed tree degrades one answer; an exception loses the whole run.
+        `esr9` is an ESR line searchfox does not index (no `Repo` member); the indexed lines
+        read their own tree."""
+        for channel in ("esr9", "unknown", "", None):
             self.assertEqual(sfcg.SearchfoxCtx(client=None, channel=channel).repo,
                              "mozilla-central", channel)
+        for channel in ("esr115", "esr140", "esr153"):
+            self.assertEqual(sfcg.SearchfoxCtx(client=None, channel=channel).repo,
+                             "mozilla-" + channel)
         # The channel label is ours and its case is not guaranteed anywhere.
         self.assertEqual(sfcg.SearchfoxCtx(client=None, channel="Beta").repo, "mozilla-beta")
 
@@ -577,12 +588,15 @@ class TestTheProvenanceLineNamesTheChannel(unittest.TestCase):
         """A channel with no phrase must not guess, and must not fall back to a claim about a
         DIFFERENT channel. `""`/`None` are the reachable ones: `build_bug_comment` reads the
         channel out of `uuid_info`, which is a dict."""
-        for channel in (None, "", "esr140", "aurora"):
+        for channel in (None, "", "nightly-asan", "aurora"):
             note = report_bug._provenance(channel)
             self.assertNotIn("nightly", note, channel)
             self.assertNotIn("beta ", note, channel)
             self.assertIn("Firefox crashes", note, channel)
         self.assertEqual(report_bug._provenance(), report_bug._provenance(None))
+        # An ESR line names its FAMILY: the reader wants "an ESR crash", not a repo label.
+        for channel in ("esr115", "esr140", "esr153"):
+            self.assertIn("analyses ESR crashes", report_bug._provenance(channel), channel)
 
     def test_the_channel_is_the_only_thing_that_changes(self):
         """Everything else in the paragraph is load-bearing and must survive the

@@ -193,6 +193,15 @@ class TestAPrefixedTitle(unittest.TestCase):
         self.assertEqual(rb._tracking_flag("157.0a1"), "cf_tracking_firefox157")
         for bad in ("", None, "garbage", "0.1"):
             self.assertIsNone(rb._tracking_flag(bad), bad)
+        # ESR is a flag FAMILY of its own on BMO (`cf_tracking_firefox_esr115/128/140/153` live
+        # on 2026-09-07), chosen from the CHANNEL: the same version string on a non-ESR channel
+        # keeps the release flag.
+        self.assertEqual(rb._tracking_flag("140.15.0esr", "esr140"), "cf_tracking_firefox_esr140")
+        self.assertEqual(rb._tracking_flag("153.0esr", "esr153"), "cf_tracking_firefox_esr153")
+        self.assertEqual(rb._tracking_flag("115.40.0esr", "esr115"), "cf_tracking_firefox_esr115")
+        self.assertEqual(rb._tracking_flag("155.0.1", "release"), "cf_tracking_firefox155")
+        self.assertEqual(rb._tracking_flag("155.0.1", None), "cf_tracking_firefox155")
+        self.assertIsNone(rb._tracking_flag("", "esr140"))
 
     def _preview(self, channel, version):
         uuid_info = {"uuid": "u-1", "signature": "Foo::Bar", "channel": channel,
@@ -213,6 +222,16 @@ class TestAPrefixedTitle(unittest.TestCase):
         self.assertEqual(p["title"], "[new in release] Crash in [@ Foo::Bar]")
         self.assertEqual(p["tracking_flag"], "cf_tracking_firefox155")
         self.assertEqual(p["cf_crash_signature"], "[@ Foo::Bar]")
+
+    def test_the_esr_preview_carries_the_familys_marks_from_the_shipped_config(self):
+        # A line label reads `channels.esr`: same prefix for every line, the flag per line.
+        p = self._preview("esr140", "140.15.0esr")
+        self.assertEqual(p["title"], "[new in esr] Crash in [@ Foo::Bar]")
+        self.assertEqual(p["tracking_flag"], "cf_tracking_firefox_esr140")
+        self.assertEqual(p["cf_crash_signature"], "[@ Foo::Bar]")
+        p = self._preview("esr153", "153.2.0esr")
+        self.assertEqual(p["title"], "[new in esr] Crash in [@ Foo::Bar]")
+        self.assertEqual(p["tracking_flag"], "cf_tracking_firefox_esr153")
 
     def test_the_nightly_preview_has_neither(self):
         p = self._preview("nightly", "157.0a1")

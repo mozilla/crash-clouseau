@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 
 import libmozdata.config
 
@@ -45,6 +46,49 @@ def _get_local():
 
 def get_channels():
     return _get_global()["channels"]
+
+
+# THE ESR FAMILY. Socorro has ONE `esr` release_channel, but Mozilla ships several ESR lines at
+# once -- 115, 140 and 153 on 2026-09-07, 21.9k / 68k / 4k reports a week -- and each line has
+# its own repository (`releases/mozilla-esr<major>`), its own searchfox tree, its own Buildhub
+# version pattern, its own BMO tracking flag and its own build lineage. Everything in this
+# codebase that is a LINEAGE (the `nodes` and `builds` tables, `LastDate`, the selection window,
+# the candidate window, the proto-cluster dedup) is keyed by the channel label, so each line is
+# its own LABEL -- `esr140` -- exactly the way `release` is one label for one repo. Everything
+# that is a POLICY (thresholds, the filing overlay, the calibration table, the build-flag
+# partition, the prose labels, the Socorro query) is keyed by the FAMILY, `esr`, and a label may
+# still override its family (`_channel_value`, `_autofile_overlay`).
+_ESR_LABEL = re.compile(r"^esr(\d*)$")
+
+
+def channel_family(channel):
+    """``esr`` for any ESR line label (``esr140``) or the bare family; otherwise the channel
+    itself, lowercased. The key POLICY tables are read with. Lowercased and NOT stripped, like
+    every label lookup around it: ``"Beta "`` is undeclared and must stay so."""
+    ch = (channel or "").lower()
+    return "esr" if _ESR_LABEL.match(ch) else ch
+
+
+def esr_major(channel):
+    """The ESR line's major version (``esr140`` -> 140), or ``None`` for a non-ESR channel and
+    for the bare family."""
+    m = _ESR_LABEL.match((channel or "").lower())
+    return int(m.group(1)) if m and m.group(1) else None
+
+
+def _channel_value(table, channel, default):
+    """``table[channel]``, else ``table[channel_family(channel)]``, else ``default``: a knob is
+    read for the LABEL first (an ``esr153`` override) and then for its FAMILY (``esr``)."""
+    table = table or {}
+    if channel in table:
+        return table[channel]
+    ch = (channel or "").lower()
+    if ch in table:
+        return table[ch]
+    fam = channel_family(ch)
+    if fam in table:
+        return table[fam]
+    return default
 
 
 def get_products():
@@ -336,12 +380,8 @@ def get_threshold(typ, product, channel):
     dossier yield comes in above the nightly-calibrated 0.55-0.77 this arithmetic assumes.
     Nightly's 50 is untouched — it does not bind, and lowering it would change a channel this
     measurement says nothing about."""
-    return (
-        _get_global()
-        .get("thresholds", {})
-        .get(typ, {})
-        .get(product, {})
-        .get(channel, 1)
+    return _channel_value(
+        _get_global().get("thresholds", {}).get(typ, {}).get(product, {}), channel, 1
     )
 
 
@@ -421,12 +461,9 @@ def get_spike(typ, product, channel):
     change makes the floor bind, it will be because the install threshold moved, not the floor.
     ``tests/test_selection_log`` pins the beta side of the same relation (there the floor, 10,
     genuinely sits ABOVE the threshold, 6, and does bind)."""
-    return (
-        _get_global()
-        .get("spike", {})
-        .get(typ, {})
-        .get(product, {})
-        .get(channel, _SPIKE_DEFAULTS[typ])
+    return _channel_value(
+        _get_global().get("spike", {}).get(typ, {}).get(product, {}),
+        channel, _SPIKE_DEFAULTS[typ],
     )
 
 
@@ -732,7 +769,24 @@ def autofile_channel_declared(channel):
         return False
     if ch == (a.get("default_channel") or "nightly").lower():
         return True
-    return ch in {k.lower() for k in (a.get("channels") or {})}
+    # A LINE is declared by its FAMILY's entry: `channels.esr` decides for esr115/esr140/esr153
+    # alike (`channel_family`), and a per-line entry may still exist on top of it.
+    keys = {k.lower() for k in (a.get("channels") or {})}
+    return ch in keys or channel_family(ch) in keys
+
+
+def _autofile_overlay(channel):
+    """The per-channel filing overlay for *channel*: its FAMILY's entry with its own LABEL's
+    layered on top (``channels.esr`` then ``channels.esr153``), so an ESR line can tighten its
+    family's policy -- a lower cap, a hold -- without restating it. ``{}`` with neither."""
+    channels = get_agent().get("autofile", {}).get("channels") or {}
+    ch = (channel or "").lower()
+    fam = channel_family(ch)
+    over = {}
+    if fam != ch:
+        over.update(channels.get(fam) or {})
+    over.update(channels.get(ch) or {})
+    return over
 
 
 def autofile_channel_held(channel):
@@ -752,7 +806,7 @@ def autofile_channel_held(channel):
     is beta dossiers whose verdict reached the filing rung. That is an UPPER bound: the gates
     after this one (an open bug on the signature, which is ~51% of beta's selected signatures; the daily
     cap; product/component resolution) never run, so they cannot subtract."""
-    over = (get_agent().get("autofile", {}).get("channels") or {}).get((channel or "").lower())
+    over = _autofile_overlay(channel)
     return bool(over) and over.get("enabled") is False
 
 
@@ -778,7 +832,7 @@ def get_agent_autofile(channel=None):
     # is exactly what a tasks.html retrigger calls. With ``AUTOFILE_BUGS=1`` live, the day
     # ``INGEST_CHANNELS`` gained ``beta`` one retrigger click would have filed a beta bug under
     # the nightly rules.
-    over = (a.get("channels") or {}).get((channel or "").lower()) or {}
+    over = _autofile_overlay(channel)
     a = {**a, **{k: v for k, v in over.items() if k != "channels"}}
     # THE STRICTEST OF THE TWO WINS, IN BOTH DIRECTIONS, and that needs saying because they are
     # different kinds of statement. `AUTOFILE_BUGS=0` is a KILL SWITCH and must beat any JSON --
@@ -816,7 +870,9 @@ def get_agent_autofile(channel=None):
         # RELEASE'S TWO MARKS. A bug filed from the release channel is titled
         # "[new in release] Crash in [@ ...]" and nominates `cf_tracking_firefox<major>` = ? for the
         # crash's own version, so release management meets it in the tracking queue rather than
-        # in a component's backlog (Calixte, 2026-09-07). Empty / off everywhere else; an overlay
+        # in a component's backlog (Calixte, 2026-09-07). ESR has the same two, as a family:
+        # "[new in esr]" and `cf_tracking_firefox_esr<major>` (`report_bug._tracking_flag` picks
+        # the ESR flag name from the channel). Empty / off everywhere else; an overlay
         # sets them per channel like the rest of this dict. The prefix counts against BMO's 255
         # (`report_bug.bug_title`); the nomination is its own best-effort PUT after the create
         # (`bugzilla_apply._nominate_tracking`), because the flag for an old version may not
@@ -1318,6 +1374,8 @@ def get_agent_calibration(channel=None):
     channels = cal.get("channels") or {}
     ch = (channel or "").lower()
     over = channels.get(ch)
+    if over is None and ch:
+        over = channels.get(channel_family(ch))   # an ESR line reads its family's entry
     if over is not None:
         cal = over
     elif ch and ch != (cal.get("fit_channel") or "nightly").lower():

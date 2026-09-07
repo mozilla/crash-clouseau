@@ -85,8 +85,10 @@ class TestShippedAgentChannels(unittest.TestCase):
         (`config.autofile_channel_declared`). It is nonetheless one `INGEST_CHANNELS` typo
         away from being ingested — see `test_ingest_channels_must_always_be_set_explicitly`."""
         self.assertEqual(config.get_agent_channels(), ["nightly", "beta"])
-        # ...and the config's third channel is a channel we ingest-only at most.
-        self.assertEqual(config.get_channels(), ["nightly", "beta", "release"])
+        # ...and the config's other channels -- release and the three ESR lines -- are turned on
+        # per deployment through `AGENT_CHANNELS`, never by this file (tests/test_esr_channel.py).
+        self.assertEqual(config.get_channels(),
+                         ["nightly", "beta", "release", "esr115", "esr140", "esr153"])
 
     def test_agent_channels_can_be_stopped_without_a_deploy(self):
         """`AGENT_CHANNELS` is a REAL kill switch, and the reason it had to exist.
@@ -177,6 +179,19 @@ class TestShippedAgentChannels(unittest.TestCase):
         # ...and the global kill switch still beats the per-channel arm.
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
             self.assertFalse(config.get_agent_autofile("release")["enabled"])
+        # The ESR lines follow release's model, as a FAMILY (`channels.esr`): declared and
+        # armed, `skip`, cap 2 -- and absent from the config file's `agent.channels`, so a line
+        # is triaged only when a deployment names it in `AGENT_CHANNELS`, as release is.
+        for line in ("esr115", "esr140", "esr153"):
+            self.assertNotIn(line, config.get_agent_channels())
+            self.assertTrue(config.autofile_channel_declared(line))
+            self.assertFalse(config.autofile_channel_held(line))
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            esr = config.get_agent_autofile("esr140")
+            self.assertTrue(esr["enabled"])
+            self.assertEqual((esr["comment_on_existing"], esr["daily_cap"]), ("skip", 2))
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
+            self.assertFalse(config.get_agent_autofile("esr140")["enabled"])
 
 
 class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
@@ -285,8 +300,9 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         # Fails CLOSED, at the filer, before any BMO request: this is the hole that a
         # tasks.html retrigger (`enqueue_agent(..., force=True)`, which bypasses the channel
         # gate by design) would otherwise walk straight through with `AUTOFILE_BUGS=1` live.
-        # `esr` is the undeclared channel now that release is declared.
-        for channel in (None, "esr", "nightly-asan"):
+        # `aurora` (Socorro's label for DevEdition, never one of ours) and a made-up build type
+        # are the undeclared channels now that release and the ESR family are declared.
+        for channel in (None, "aurora", "nightly-asan"):
             with self.subTest(channel=channel):
                 res = bugzilla_apply.autofile_bug(
                     "u-1", {"channel": channel, "signature": "Foo::Bar"},
@@ -308,7 +324,7 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         here with a patched overlay, because the shipped config no longer uses it; the switch
         directions are pinned in tests/test_beta_autofile.py::test_the_env_kill_switch_beats_the_overlay."""
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
-            for channel in ("nightly", "beta", "release"):
+            for channel in ("nightly", "beta", "release", "esr140"):
                 self.assertTrue(config.get_agent_autofile(channel)["enabled"], channel)
             self.assertFalse(config.autofile_channel_held("beta"))
             agent = dict(config.get_agent())

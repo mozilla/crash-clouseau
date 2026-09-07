@@ -1021,12 +1021,17 @@ _PROVENANCE_SCOPE = {
     "nightly": "nightly crashes",
     "beta": "beta and Developer Edition crashes",
     "release": "release crashes",
+    "esr": "ESR crashes",
 }
 
 
 def _provenance(channel=None):
-    """The last line of every filed bug, with the crash's own channel named in it."""
-    scope = _PROVENANCE_SCOPE.get((channel or "").lower(), "Firefox crashes")
+    """The last line of every filed bug, with the crash's own channel named in it. An ESR line
+    label (``esr140``) is named by its family: the reader wants to know it was an ESR crash."""
+    ch = (channel or "").lower()
+    scope = _PROVENANCE_SCOPE.get(ch)
+    if scope is None:
+        scope = _PROVENANCE_SCOPE.get(config.channel_family(ch), "Firefox crashes")
     return _PROVENANCE_TEMPLATE.format(scope=scope)
 
 
@@ -1606,18 +1611,28 @@ def bug_title(signature, prefix=""):
     return "{}{}]".format(lead, sig)
 
 
-def _tracking_flag(version):
+def _tracking_flag(version, channel=None):
     """``cf_tracking_firefox<major>`` for a Firefox version string (``"155.0.1"`` -> firefox155),
-    or ``None`` when the version is unknown or unparseable.
+    or ``cf_tracking_firefox_esr<major>`` when the crash is on an ESR channel
+    (``"140.15.0esr"`` on ``esr140`` -> firefox_esr140), or ``None`` when the version is unknown
+    or unparseable.
 
     The FIELD NAME only. Whether BMO still carries a flag for that version is for the filer's PUT
-    to find out (``bugzilla_apply._nominate_tracking``): today the live range is 152-157, and a
-    release-channel crash from an older version is ordinary, not exotic."""
+    to find out (``bugzilla_apply._nominate_tracking``): today the live range is 152-157 for
+    release, and ``_esr115`` / ``_esr140`` / ``_esr153`` for ESR (both read off
+    ``GET /rest/field/bug`` 2026-09-07); a crash from an older version is ordinary, not exotic.
+    ESR is a different flag FAMILY on BMO, not a different number: ``cf_tracking_firefox140``
+    is Firefox 140's release flag, long retired, and nominating it for an ESR crash would put
+    the bug in nobody's queue."""
     try:
         major = utils.get_major(str(version or "").strip())
     except (ValueError, IndexError):
         return None
-    return "cf_tracking_firefox{}".format(major) if major > 0 else None
+    if major <= 0:
+        return None
+    if config.channel_family(channel) == "esr":
+        return "cf_tracking_firefox_esr{}".format(major)
+    return "cf_tracking_firefox{}".format(major)
 
 
 def build_incomplete_fix_note(fix, channel=None):
@@ -2299,7 +2314,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         "needinfo": _needinfo_line(person),
         # The tracking NOMINATION, release only: `cf_tracking_firefox<major>` = ? for the crash's
         # own version, set by the filer in its own PUT after the create. `None` everywhere else.
-        "tracking_flag": (_tracking_flag(version) if policy.get("nominate_tracking") else None),
+        "tracking_flag": (_tracking_flag(version, channel)
+                          if policy.get("nominate_tracking") else None),
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).

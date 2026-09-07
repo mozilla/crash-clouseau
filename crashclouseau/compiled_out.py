@@ -40,6 +40,7 @@ import re
 
 from .logger import logger
 from .searchfox import repo_for_channel
+from . import config
 
 # THE CHANNEL THE CURRENT RUN IS ANALYSING, as a context variable.
 #
@@ -167,6 +168,18 @@ _CHANNEL_MACROS = {
         frozenset({"DEBUG", "MOZ_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
                    "MOZ_DIAGNOSTIC_ASSERT_ENABLED"}),
     ),
+    # ESR: release's build type whose milestone ALSO sets `MOZ_ESR` (init.configure:
+    # `set_define("MOZ_ESR", milestone.is_esr)`, read 2026-09-07), so `#ifdef MOZ_ESR` code is
+    # exactly the code that shipped and "off" is the wrong answer there. Keyed by the FAMILY
+    # (`config.channel_family`): esr115, esr140 and esr153 are the same build type. `MOZ_ESR`
+    # is NOT added to the other channels' OFF halves, where it would be true and free, because
+    # nightly's partition is pinned byte-identical and the `moz.configure` walk already answers
+    # it from that same `set_define` line.
+    "esr": (
+        frozenset({"MOZILLA_OFFICIAL", "NDEBUG", "RELEASE_OR_BETA", "MOZ_ESR"}),
+        frozenset({"DEBUG", "MOZ_ASSERT_ENABLED", "NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER",
+                   "MOZ_DIAGNOSTIC_ASSERT_ENABLED"}),
+    ),
 }
 
 # Macros whose OFF-ness follows from the CHANNEL ALONE and which are worth detecting as a
@@ -189,6 +202,7 @@ _CHANNEL_OFF_HOLLOW = {
     "beta": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
     "aurora": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
     "release": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
+    "esr": frozenset({"NIGHTLY_BUILD", "EARLY_BETA_OR_EARLIER"}),
 }
 
 # How each channel's OFF macros read in the published suppression, when the answer comes from
@@ -220,7 +234,12 @@ def channel_off_phrase(answer):
 
 
 def _partition(channel):
-    return _CHANNEL_MACROS.get((channel or "").lower(), _CHANNEL_MACROS["nightly"])
+    ch = (channel or "").lower()
+    # The label first, then its family: an ESR line (`esr140`) is the `esr` build type.
+    exact = _CHANNEL_MACROS.get(ch)
+    if exact is not None:
+        return exact
+    return _CHANNEL_MACROS.get(config.channel_family(ch), _CHANNEL_MACROS["nightly"])
 
 
 def channel_on_deny(channel=None):
@@ -245,9 +264,10 @@ def guard_deny(channel=None):
     channel answers by itself and that are worth catching as a hollow guard
     (``_CHANNEL_OFF_HOLLOW`` -- empty on nightly, so nightly is unchanged)."""
     channel = (channel or build_channel() or "").lower()
-    return (build_type_deny(channel) | PLATFORM_DENY) - _CHANNEL_OFF_HOLLOW.get(
-        channel, frozenset()
-    )
+    hollow = _CHANNEL_OFF_HOLLOW.get(channel)
+    if hollow is None:
+        hollow = _CHANNEL_OFF_HOLLOW.get(config.channel_family(channel), frozenset())
+    return (build_type_deny(channel) | PLATFORM_DENY) - hollow
 
 
 # The nightly partition, kept as module constants because that is what a year of docstrings,

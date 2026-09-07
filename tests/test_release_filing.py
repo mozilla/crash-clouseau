@@ -92,5 +92,40 @@ class TestAReleaseFilingIsTitledAndNominated(_Base):
         self.assertNotIn("tracking_nominated", res)
 
 
+_ESR_INFO = {**_INFO, "channel": "esr140", "version": "140.15.0esr",
+             "buildid": "20260826142222"}
+_ESR_PREVIEW = {**_PREVIEW, "title": "[new in esr] Crash in [@ Foo::Bar]",
+                "tracking_flag": "cf_tracking_firefox_esr140"}
+_ESR_POLICY = {"enabled": True, "comment_on_existing": "skip", "daily_cap": 2,
+               "summary_prefix": "[new in esr]", "nominate_tracking": True}
+
+
+class TestAnEsrFilingIsTitledAndNominatedLikeRelease(_Base):
+    """The ESR family carries release's two marks: `[new in esr]` in the title and the crash's
+    own ESR line nominated for tracking -- `cf_tracking_firefox_esr<major>`, a different flag
+    FAMILY on BMO (`cf_tracking_firefox140` is Firefox 140's long-retired release flag). The
+    filer is the same code path; what changes is the preview and the policy it is handed."""
+
+    def _file_esr(self, preview=None):
+        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(**_ESR_POLICY)
+        report_bug.build_bug_preview.return_value = preview or _ESR_PREVIEW
+        return bugzilla_apply.autofile_bug(
+            "u-1", _ESR_INFO, {}, {"candidate": {"node": "n"}}, "lead", 70)
+
+    def test_the_esr_title_and_the_esr_flag(self):
+        res = self._file_esr()
+        self.assertTrue(res["filed"])
+        self.assertEqual(self.created[0]["summary"], "[new in esr] Crash in [@ Foo::Bar]")
+        self.assertEqual(self.created[0]["cf_crash_signature"], "[@ Foo::Bar]")
+        self.assertIn((999, {"cf_tracking_firefox_esr140": "?"}), self.puts)
+        self.assertEqual(res["tracking_nominated"], "cf_tracking_firefox_esr140")
+        self.assertNotIn("cf_tracking_firefox_esr140", self.created[0])   # its own PUT
+        self.assertEqual(res["channel"], "esr140")
+
+    def test_the_filer_asks_for_the_lines_own_policy(self):
+        self._file_esr()
+        bugzilla_apply.config.get_agent_autofile.assert_called_once_with("esr140")
+
+
 if __name__ == "__main__":
     unittest.main()

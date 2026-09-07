@@ -271,7 +271,7 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
         "needinfo_email": account,
         # The channel's tracking nomination applies to a spike too: a release spike is exactly
         # what release management tracks.
-        "tracking_flag": (report_bug._tracking_flag(brief.get("version"))
+        "tracking_flag": (report_bug._tracking_flag(brief.get("version"), channel)
                           if policy.get("nominate_tracking") else None),
         "groups": [group] if (withhold and group) else [],
         "cc": [account] if (withhold and account) else [],

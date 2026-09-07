@@ -34,8 +34,21 @@ def demangle(name):
 
 
 def get_search_channel(channel):
-    """Get the search channel(s) for Socorro queries"""
-    return ["beta", "aurora"] if channel == "beta" else channel
+    """Get the search channel(s) for Socorro queries.
+
+    Two of OUR labels are not Socorro's. ``beta`` is filed as both ``beta`` and ``aurora``
+    (Developer Edition, 36-41% of the channel). An ESR LINE label (``esr140``) is one Socorro
+    ``release_channel``, ``esr``, shared by every line: the line is a repository/build
+    distinction, not a Socorro one, and every query that has to stay within a line is already
+    scoped by that line's own build ids (``datacollector``) or filters the versions it gets back
+    (``sigage.version_rates``). Channel-wide questions -- how old is this signature ON ESR --
+    are asked of the whole family on purpose: a crash that ran on esr140 for a year is not "new
+    in esr" when it reaches esr153."""
+    if channel == "beta":
+        return ["beta", "aurora"]
+    if config.channel_family(channel) == "esr":
+        return "esr"
+    return channel
 
 
 # ONE LAMBDA, TWO SIGNATURES. Socorro normalises a lambda's frame from what each toolchain
