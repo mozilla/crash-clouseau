@@ -523,13 +523,85 @@ def _crashing_area_experts(frames, channel, node, *, max_experts=3, max_files=4)
     return experts
 
 
+def _onstack_candidates(frames):
+    """The changesets that SCORED onto a crash frame (``frame.changesets``), ranked, each
+    tagged ``noise`` when EVERY frame that supports it is an anchor/ubiquitous one.
+
+    Extracted from ``build_seed`` unchanged so the seed can ask "is every on-stack seed
+    noise?" BEFORE deciding whether the off-stack window is needed (see there)."""
+    # The scored candidate changesets are already in the DB (frame.changesets); hand
+    # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
+    # instead of hunting for candidates with searchfox/Bash.
+    # Down-rank (never drop) candidates whose only support is "noise": a universal
+    # bottom-of-stack anchor frame or a ubiquitous-primitive file (#15 phase 3). A
+    # candidate that also appears on a real frame keeps its real ranking via the max.
+    filters = config.get_agent_filters()
+
+    def _frame_is_noise(fr):
+        fn, fname = fr.get("function") or "", fr.get("filename") or ""
+        return any(p in fn for p in filters["anchor_frame_patterns"]) or any(s in fn for s in filters["ubiquitous_symbols"]) or any(p in fname for p in filters["ubiquitous_paths"])
+
+    # Per node: max raw score (display), max penalized score (ranking), and noise =
+    # ALL supporting frames are noise. A candidate that ALSO sits on a real code frame
+    # keeps its real ranking and is NOT tagged noise (so it still yields an expert).
+    cand: dict = {}
+    for f in frames:
+        fnoise = _frame_is_noise(f)
+        factor = filters["penalty"] if fnoise else 1.0
+        for node, cs in (f.get("changesets") or {}).items():
+            score = cs.get("score") or 0
+            eff = score * factor
+            prev = cand.get(node)
+            if prev is None:
+                cand[node] = {
+                    "node": node,
+                    "score": score,
+                    "_eff": eff,
+                    "bug": cs.get("bugid"),
+                    "backedout": cs.get("backedout"),
+                    # Landing date (was previously dropped): lets the agent reason
+                    # about recency/regression-window proximity, and feeds future
+                    # first-seen corroboration. Per-node, so no max() on the merge.
+                    "pushdate": cs.get("pushdate"),
+                    "_all_noise": fnoise,
+                }
+            else:
+                prev["score"] = max(prev["score"], score)
+                prev["_eff"] = max(prev["_eff"], eff)
+                prev["_all_noise"] = prev["_all_noise"] and fnoise
+    candidates = sorted(cand.values(), key=lambda c: -c["_eff"])
+    for c in candidates:
+        c["noise"] = c.pop("_all_noise")
+        c.pop("_eff", None)
+    return candidates
+
+
+def _merge_noise_seeds(window, onstack):
+    """The off-stack window first -- its ranking is the only one that means anything when every
+    on-stack hit is an anchor frame -- then the noise seeds that are not already in it, so the
+    model still sees them, with their raw score and their ``noise`` tag. A seed that IS in the
+    window keeps the window's entry and gains both."""
+    by_node = {(c.get("node") or "")[:12]: c for c in window}
+    merged = list(window)
+    for c in onstack:
+        w = by_node.get((c.get("node") or "")[:12])
+        if w is not None:
+            w["score"] = c.get("score")
+            w["noise"] = True
+        else:
+            merged.append(c)
+    return merged
+
+
 def build_seed(uuid):
     """Assemble the ``crash=`` payload for ``run_crash_triage`` from the scored
     stack + processed crash. Returns None (logged) when there is nothing to reason
     about: an unknown UUID, no frames, or — for an OFF-STACK crash (no changeset scored
     onto any frame) — only when the P1 off-stack path is disabled (the default). When
     off-stack seeding is enabled, an off-stack crash instead seeds the FULL first-bad-build
-    pushlog window (``_offstack_candidates``) and runs pinned (see ``get_agent_offstack``)."""
+    pushlog window (``_offstack_candidates``) and runs pinned (see ``get_agent_offstack``).
+    A crash whose scored seeds are ALL noise (anchor/ubiquitous frames only) is off-stack too:
+    it gets the window AND keeps its seeds (``offstack_reason == "noise_only"``)."""
     res, uuid_info = models.CrashStack.get_by_uuid(uuid)
     frames = res.get("frames") if res else None
     if not frames:
@@ -576,7 +648,28 @@ def build_seed(uuid):
     candidate_window = None
     prior_hints: list = []
     prior_bugs: set = set()
-    if is_offstack:
+    onstack = _onstack_candidates(frames) if not is_offstack else []
+    # NOISE-ONLY IS OFF-STACK TOO. `is_offstack` asks "did ANY changeset score onto ANY frame",
+    # and one hit through a universal anchor frame answered yes for four runs on crash 139e5aee
+    # (2026-08-31): a profiler-marker fix to `TaskController.cpp` -- frame 12 of every main-thread
+    # stack -- was the single, score-0, already-tagged-noise seed, so the build's OWN push was
+    # never enumerated, and it held bug 2066149 (the JS buffer allocator rewrite) in the exact
+    # build where `OOM | unknown | nsGlobalWindowInner::ClearDocumentDependentSlots` went from
+    # ~1/day to 5-8 installs/day. Replayed 2026-09-07: the window was 14 changesets and contained
+    # it; the runs cited the marker fix as "the single seed candidate" and abstained, $3.5.
+    #
+    # So a seed list that is ALL noise is treated as no seed list: the off-stack window is
+    # enumerated as well, and the noise seeds are appended to it (never dropped -- they are
+    # real changesets, just not proximity). Everything downstream then runs the off-stack way,
+    # which is the right way for it: blame-based experts instead of the authors of anchor-frame
+    # touches, the SF-3 call-path bar for strong evidence, the off-stack cost ceiling. A single
+    # non-noise seed keeps the on-stack path byte-identical. Gated on the off-stack switch
+    # because that is what decides whether the pipeline is allowed to spend the wider window.
+    noise_only = bool(onstack) and offstack_cfg["enabled"] and all(c["noise"] for c in onstack)
+    offstack_reason = ("no_scored_changesets" if is_offstack
+                       else "noise_only" if noise_only else None)
+    candidates = onstack
+    if offstack_reason:
         # Prior-signature (P4) corroboration: a prior FIXED sibling of this crash's
         # signature that already names a regressor is a strong off-stack prior. Fetch it
         # once here so it can (a) rank/flag window candidates and (b) later corroborate the
@@ -602,67 +695,38 @@ def build_seed(uuid):
                 uuid_info, rising=sigtrend.is_rising(signature_trend))
         except Exception as exc:  # pragma: no cover - defensive; `_offstack_candidates` re-tries
             logger.warning("agent: off-stack window bounds failed for %s: %s", uuid, exc)
-        candidates = _offstack_candidates(
+        window_candidates = _offstack_candidates(
             uuid_info, offstack_cfg, prior_bugs, window=candidate_window)
-        if not candidates:
+        if not window_candidates and noise_only:
+            # The window is a bonus here, not the whole candidate set: keep the run on its
+            # noise seeds rather than losing it to an hg hiccup.
+            logger.warning("agent: off-stack window empty for %s; keeping its %d noise-only "
+                           "on-stack seed(s)", uuid, len(onstack))
+            offstack_reason = None
+            candidate_window = None
+        elif not window_candidates:
             # Window enumeration failed (no bounds / hg error): nothing to reason about,
             # so abstain rather than run the agent on an empty candidate set.
             logger.warning("agent: off-stack window empty for %s; skipping", uuid)
             return None
-        # FP guard: restrict the prior-signature CORROBORATION to prior-named regressor bugs
-        # that ALSO landed in THIS crash's window. Window-membership is a model-INDEPENDENT
-        # 2nd axis (it is deterministic from the build, not something we hinted the model
-        # into), and it drops the dangling/after-the-build pointers a raw signature-sibling
-        # list can contain. The FULL hint set already ranked the window (recall); only the
-        # corroboration/prompt set is tightened here.
-        window_bugs = {c.get("bug") for c in candidates if c.get("bug")}
-        prior_bugs = {b for b in prior_bugs if b in window_bugs}
-        prior_hints = [h for h in prior_hints if h["regressor_bug"] in prior_bugs]
-    else:
-        # The scored candidate changesets are already in the DB (frame.changesets); hand
-        # them to the agent (ranked) so patch-scout reads their diffs via mcp__patch__diff
-        # instead of hunting for candidates with searchfox/Bash.
-        # Down-rank (never drop) candidates whose only support is "noise": a universal
-        # bottom-of-stack anchor frame or a ubiquitous-primitive file (#15 phase 3). A
-        # candidate that also appears on a real frame keeps its real ranking via the max.
-        filters = config.get_agent_filters()
-
-        def _frame_is_noise(fr):
-            fn, fname = fr.get("function") or "", fr.get("filename") or ""
-            return any(p in fn for p in filters["anchor_frame_patterns"]) or any(s in fn for s in filters["ubiquitous_symbols"]) or any(p in fname for p in filters["ubiquitous_paths"])
-
-        # Per node: max raw score (display), max penalized score (ranking), and noise =
-        # ALL supporting frames are noise. A candidate that ALSO sits on a real code frame
-        # keeps its real ranking and is NOT tagged noise (so it still yields an expert).
-        cand: dict = {}
-        for f in frames:
-            fnoise = _frame_is_noise(f)
-            factor = filters["penalty"] if fnoise else 1.0
-            for node, cs in (f.get("changesets") or {}).items():
-                score = cs.get("score") or 0
-                eff = score * factor
-                prev = cand.get(node)
-                if prev is None:
-                    cand[node] = {
-                        "node": node,
-                        "score": score,
-                        "_eff": eff,
-                        "bug": cs.get("bugid"),
-                        "backedout": cs.get("backedout"),
-                        # Landing date (was previously dropped): lets the agent reason
-                        # about recency/regression-window proximity, and feeds future
-                        # first-seen corroboration. Per-node, so no max() on the merge.
-                        "pushdate": cs.get("pushdate"),
-                        "_all_noise": fnoise,
-                    }
-                else:
-                    prev["score"] = max(prev["score"], score)
-                    prev["_eff"] = max(prev["_eff"], eff)
-                    prev["_all_noise"] = prev["_all_noise"] and fnoise
-        candidates = sorted(cand.values(), key=lambda c: -c["_eff"])
-        for c in candidates:
-            c["noise"] = c.pop("_all_noise")
-            c.pop("_eff", None)
+        else:
+            if noise_only:
+                logger.info("agent: %s scored only through anchor/ubiquitous frames (%s); "
+                            "enumerating the off-stack window too", uuid,
+                            ", ".join(c["node"] for c in onstack[:5]))
+                candidates = _merge_noise_seeds(window_candidates, onstack)
+                is_offstack = True
+            else:
+                candidates = window_candidates
+            # FP guard: restrict the prior-signature CORROBORATION to prior-named regressor bugs
+            # that ALSO landed in THIS crash's window. Window-membership is a model-INDEPENDENT
+            # 2nd axis (it is deterministic from the build, not something we hinted the model
+            # into), and it drops the dangling/after-the-build pointers a raw signature-sibling
+            # list can contain. The FULL hint set already ranked the window (recall); only the
+            # corroboration/prompt set is tightened here.
+            window_bugs = {c.get("bug") for c in candidates if c.get("bug")}
+            prior_bugs = {b for b in prior_bugs if b in window_bugs}
+            prior_hints = [h for h in prior_hints if h["regressor_bug"] in prior_bugs]
 
     # Area-experts (#15 phase 2): the authors of the top non-noise candidates — a
     # knowledgeable person to ask, computed from local data (migration-proof). Attached
@@ -772,6 +836,9 @@ def build_seed(uuid):
         # P1 off-stack markers, consumed downstream by triage (prompt framing + pinned
         # tool ctx) and run_evidence_agent (SF-3 / exposer gates, observe-only, cost cap).
         "is_offstack": is_offstack,
+        # WHY it is off-stack: `no_scored_changesets` (the original meaning) or `noise_only`
+        # (every scored seed came through an anchor/ubiquitous frame, so the window was added).
+        "offstack_reason": offstack_reason,
         "build_node": build_node,
         # See the pin_rev computation above: the build rev pinned tools default to (or "" =>
         # tools read tip, both when pinning is off AND when the build node won't resolve).
@@ -2699,6 +2766,21 @@ def _record_signature_age_facts(dossier, seed):
         dossier.corroborations = {**(dossier.corroborations or {}), **facts}
 
 
+def _record_offstack_seed_facts(dossier, seed):
+    """Record that this run went off-stack ONLY because every scored seed was noise. Moves no rung.
+
+    Write-only on purpose: the rule was motivated by one crash (139e5aee, bug 2066149 hidden
+    behind a `TaskController.cpp` marker fix), and how often it fires -- and whether the named
+    candidate then comes out of the window rather than the noise seeds -- is the number that
+    decides whether it earned its cost. Read it off the persisted dossiers before touching it.
+    Literal subscript for the registry scanner, like its siblings."""
+    if dossier is None or seed is None or seed.get("offstack_reason") != "noise_only":
+        return
+    corroborations = dict(dossier.corroborations or {})
+    corroborations["offstack_noise_only"] = True
+    dossier.corroborations = corroborations
+
+
 def _record_candidate_window_facts(dossier, seed):
     """Record HOW WIDE the pushlog window this run's candidates came from was. Moves no rung.
 
@@ -3727,6 +3809,8 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # And how wide the window those candidates came out of was — the rate above is what
         # decides it, so the two are recorded together or neither can be read.
         _record_candidate_window_facts(result.dossier, seed)
+        # And whether the window was only there because every on-stack seed was noise.
+        _record_offstack_seed_facts(result.dossier, seed)
         # Which learned archetypes were in front of the agent. Recorded even when none matched
         # (as an empty list) so "this run saw no hints" and "this run predates the feature" stay
         # distinguishable — `Feedback` joins on this to score a rule against real outcomes.

@@ -88,6 +88,11 @@ REGISTRY = {
     "offstack_observe_only": (
         "evidence", ("bugzilla_apply.py",),
         "Canary switch: the filer must not act on an off-stack verdict while observing."),
+    "offstack_noise_only": (
+        "diagnostic", (),
+        "The run went off-stack because every scored seed was an anchor/ubiquitous-frame hit "
+        "(`build_seed`, 2026-09-07: a TaskController marker fix hid bug 2066149). Write-only "
+        "until its firing rate and where the named candidate then comes from are read off prod."),
     "downgraded_from_strong": (
         "clamp", ("policy:_SO_BOOST_POLICY",),
         "Written by `_downgrade_to_lead_or_abstain` for the exposer/SF-3 downgrades. Read ONLY "

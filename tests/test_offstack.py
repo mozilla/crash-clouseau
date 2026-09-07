@@ -5,6 +5,7 @@
 # P1 off-stack seeding + pinned mode + precision gates.
 # DATABASE_URL=sqlite:// python -m unittest tests.test_offstack
 import asyncio
+import contextlib
 import os
 
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
@@ -635,6 +636,139 @@ class TestUserPromptOffstack(unittest.TestCase):
         self.assertIn("proximity", out)
         self.assertIn("n19", out)
         self.assertNotIn("n20", out)                # capped at 20 on-stack
+
+
+class TestNoiseOnlySeedsGoOffstackToo(unittest.TestCase):
+    """A crash whose scored seeds ALL came through anchor/ubiquitous frames is off-stack too.
+
+    Crash 139e5aee (2026-08-31, `OOM | unknown | nsGlobalWindowInner::ClearDocumentDependentSlots`):
+    a profiler-marker fix to TaskController.cpp -- frame 12 of every main-thread stack -- was the
+    single score-0 noise seed, `is_offstack` read False, and the build's own push, which held bug
+    2066149 (the JS buffer allocator rewrite) in the exact build where the signature went from
+    ~1/day to 5-8 installs/day, was never enumerated. Four runs, four abstains, $3.5."""
+
+    _ANCHOR = {"stackpos": 12,
+               "function": "mozilla::TaskController::DoExecuteNextTaskOnlyMainThreadInternal",
+               "filename": "xpcom/threads/TaskController.cpp", "line": 1367,
+               "changesets": {"be444d4cf2f3": {"score": 3, "bugid": 2067376, "backedout": False}}}
+    _REAL = {"stackpos": 0, "function": "nsGlobalWindowOuter::SetNewDocument",
+             "filename": "dom/base/nsGlobalWindowOuter.cpp", "line": 2478, "changesets": {}}
+    _UI = {"uuid": "u-1", "id": 1,
+           "signature": "OOM | unknown | nsGlobalWindowInner::ClearDocumentDependentSlots",
+           "buildid": _dt(12), "channel": "nightly", "product": "Firefox", "java": False,
+           "node": "51cf5deab24a"}
+    _WINDOW = [{"node": "faf6c319a8f6", "date": _dt(3), "backedout": False, "merge": False,
+                "bug": 2066149,
+                "desc": "Bug 2066149 - Part 4: Partition buffer allocator free lists by chunk kind"}]
+    _EXPERT = [{"name": "Dom Dev", "email": "dom@moz.org", "nick": "", "node": "n0", "bug": 1,
+                "reason": "wrote nsGlobalWindowOuter.cpp:2478"}]
+
+    def _seed(self, frames, window, cfg=None):
+        patches = [
+            mock.patch.object(orch.models.CrashStack, "get_by_uuid",
+                              return_value=({"frames": frames}, self._UI)),
+            mock.patch.object(orch.models.UUID, "get_info",
+                              return_value={"signature": self._UI["signature"],
+                                            "channel": "nightly", "product": "Firefox",
+                                            "buildid": "x", "version": "1"}),
+            mock.patch.object(orch.models.Build, "get_two_last",
+                              return_value=[{"revision": "c64776bf9a03"},
+                                            {"revision": "51cf5deab24a"}]),
+            mock.patch("crashclouseau.pushlog.pushlog_for_revs", return_value=window),
+            mock.patch.object(orch.models.Node, "authors_for", return_value={}),
+            mock.patch.object(orch, "_crashing_area_experts", return_value=self._EXPERT),
+            mock.patch("crashclouseau.inspector.get_crash_data", return_value={}),
+            mock.patch("crashclouseau.inspector.git2hg", return_value="hgbuildnode"),
+        ]
+        if cfg is not None:
+            patches.append(mock.patch.object(orch.config, "get_agent_offstack", return_value=cfg))
+        with contextlib.ExitStack() as stack:
+            mocks = [stack.enter_context(p) for p in patches]
+            seed = orch.build_seed("u-1")
+        return seed, mocks[3]
+
+    def test_all_noise_seeds_open_the_window_and_keep_the_seeds(self):
+        seed, pushlog = self._seed([self._REAL, self._ANCHOR], self._WINDOW, _offstack_cfg())
+        pushlog.assert_called_once()
+        self.assertTrue(seed["is_offstack"])
+        self.assertEqual(seed["offstack_reason"], "noise_only")
+        # Window first (its ranking is the one that means something), the noise seed after it.
+        self.assertEqual([c["node"] for c in seed["candidates"]], ["faf6c319a8f6", "be444d4cf2f3"])
+        window, anchor = seed["candidates"]
+        self.assertIsNone(window["score"])
+        self.assertFalse(window["noise"])
+        self.assertEqual((anchor["score"], anchor["noise"], anchor["bug"]), (3, True, 2067376))
+        # Off-stack all the way down: blame-based experts, pinned reads.
+        self.assertEqual(seed["experts"], self._EXPERT)
+        self.assertEqual(seed["pin_rev"], "51cf5deab24a")
+
+    def test_one_real_seed_keeps_the_window_closed(self):
+        real = dict(self._REAL,
+                    changesets={"d30049cae8fb": {"score": 7, "bugid": 2063731, "backedout": False}})
+        seed, pushlog = self._seed([real, self._ANCHOR], self._WINDOW, _offstack_cfg())
+        pushlog.assert_not_called()
+        self.assertFalse(seed["is_offstack"])
+        self.assertIsNone(seed["offstack_reason"])
+        self.assertEqual({c["node"] for c in seed["candidates"]}, {"d30049cae8fb", "be444d4cf2f3"})
+
+    def test_with_offstack_disabled_nothing_changes(self):
+        seed, pushlog = self._seed([self._REAL, self._ANCHOR], self._WINDOW,
+                                   _offstack_cfg(enabled=False))
+        pushlog.assert_not_called()
+        self.assertFalse(seed["is_offstack"])
+        self.assertIsNone(seed["offstack_reason"])
+        self.assertEqual([c["node"] for c in seed["candidates"]], ["be444d4cf2f3"])
+        self.assertTrue(seed["candidates"][0]["noise"])
+
+    def test_an_empty_window_falls_back_to_the_noise_seeds(self):
+        # An hg hiccup must not turn a run we used to make into a skipped one.
+        seed, pushlog = self._seed([self._REAL, self._ANCHOR], [], _offstack_cfg())
+        pushlog.assert_called_once()
+        self.assertIsNotNone(seed)
+        self.assertFalse(seed["is_offstack"])
+        self.assertIsNone(seed["offstack_reason"])
+        self.assertEqual([c["node"] for c in seed["candidates"]], ["be444d4cf2f3"])
+        self.assertIsNone(seed.get("candidate_window"))
+
+    def test_a_noise_seed_already_in_the_window_is_merged_not_duplicated(self):
+        window = self._WINDOW + [{"node": "be444d4cf2f3", "date": _dt(2), "backedout": False,
+                                  "merge": False, "bug": 2067376,
+                                  "desc": "Bug 2067376 - Clear the flag when the timer fires"}]
+        seed, _ = self._seed([self._REAL, self._ANCHOR], window, _offstack_cfg())
+        # One entry per node (the window ranks its own two by recency, so no order is asserted).
+        self.assertEqual(sorted(c["node"] for c in seed["candidates"]),
+                         ["be444d4cf2f3", "faf6c319a8f6"])
+        merged = {c["node"]: c for c in seed["candidates"]}["be444d4cf2f3"]
+        self.assertTrue(merged["noise"])
+        self.assertEqual(merged["score"], 3)
+        self.assertIn("Clear the flag", merged["desc"])
+
+    def test_the_prompt_says_why_the_window_is_there(self):
+        from crashclouseau.agent import triage
+        cands = [{"node": "faf6c319a8f6", "score": None, "bug": 2066149, "backedout": False,
+                  "pushdate": None, "noise": False, "desc": "Bug 2066149 - Part 4"},
+                 {"node": "be444d4cf2f3", "score": 3, "bug": 2067376, "backedout": False,
+                  "pushdate": None, "noise": True}]
+        crash = {"uuid": "u", "signature": "S", "channel": "nightly", "stack": "#0 f a:1",
+                 "is_offstack": True, "offstack_reason": "noise_only", "candidates": cands}
+        out = triage._user_prompt(crash)
+        self.assertIn("ANCHOR-FRAME HITS ONLY: 1 changeset", out)
+        self.assertIn("(likely-noise: down-rank)", out)
+        self.assertIn("faf6c319a8f6", out)
+        self.assertIn("be444d4cf2f3", out)
+        crash["offstack_reason"] = "no_scored_changesets"
+        self.assertNotIn("ANCHOR-FRAME HITS ONLY", triage._user_prompt(crash))
+
+    def test_the_reason_is_recorded_write_only(self):
+        d = mock.Mock()
+        d.corroborations = {"x": 1}
+        orch._record_offstack_seed_facts(d, {"offstack_reason": "noise_only"})
+        self.assertEqual(d.corroborations, {"x": 1, "offstack_noise_only": True})
+        d2 = mock.Mock()
+        d2.corroborations = {}
+        orch._record_offstack_seed_facts(d2, {"offstack_reason": "no_scored_changesets"})
+        self.assertEqual(d2.corroborations, {})
+        orch._record_offstack_seed_facts(None, {"offstack_reason": "noise_only"})
 
 
 class TestOffstackIngestion(unittest.TestCase):

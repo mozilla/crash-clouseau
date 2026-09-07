@@ -1463,7 +1463,7 @@ def _user_prompt(crash: dict) -> str:
             lines += [
                 "",
                 "Candidate changesets = " + extent + " (this crash is OFF-STACK: no candidate "
-                "touched a file on the stack, so there is NO proximity score — the list "
+                "touched a real file on the stack, so there is NO proximity score — the list "
                 "is only lightly pre-ranked and the regressor may be anywhere in it). "
                 "Work it as a funnel: (1) scan the one-line descriptions and pick the few "
                 "whose area/subsystem best matches the crash signature + stack; (2) read "
@@ -1477,6 +1477,20 @@ def _user_prompt(crash: dict) -> str:
                 "changeset (it exposed a pre-existing UAF/latent bug rather than "
                 "introducing it) — prefer a lead + needinfo over accusing it:",
             ]
+            if crash.get("offstack_reason") == "noise_only":
+                # `build_seed`: every scored seed came through an anchor/ubiquitous frame, so
+                # the window was added and the seeds kept. Say so, or the model reads a
+                # `score=` on a TaskController touch as proximity and the window as an aside.
+                noisy = sum(1 for c in candidates if c.get("noise"))
+                lines += [
+                    "",
+                    "ANCHOR-FRAME HITS ONLY: {} changeset(s) below tagged '(likely-noise: "
+                    "down-rank)' DID score onto this stack, but only through universal anchor "
+                    "or ubiquitous-primitive frames (event loop, TaskController, string/array/"
+                    "hashtable helpers) that nearly every crash passes through. That is not "
+                    "proximity to the crash, which is why the window is enumerated as well; "
+                    "rank them with the rest of the window, not above it.".format(noisy),
+                ]
             lines += [
                 "",
                 "LINKED-CAUSE SEARCH: the regressor touched NO file on the stack (expected "

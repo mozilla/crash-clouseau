@@ -342,6 +342,10 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # The blind reviewer refuted a lead the version step ties to its window; the lead was
         # kept at `low`. Write-only until `Feedback` can say which of the two was right.
         "second_opinion_refuted_step_kept",
+        # Every scored seed was an anchor/ubiquitous-frame hit, so `build_seed` enumerated the
+        # off-stack window too. Write-only until read off prod: how often it fires, and whether
+        # the named candidate then comes out of the window (the 2066149 case) or the noise seeds.
+        "offstack_noise_only",
     }
 
     def test_the_write_only_set_is_exactly_this(self):
