@@ -20,15 +20,20 @@ from typing import Annotated
 from pydantic import Field
 
 from libmozdata.bugzilla import Bugzilla
-from crashclouseau import config
+from crashclouseau import config, utils
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
 _BUG_FIELDS = [
     "id", "summary", "status", "resolution", "product", "component",
     "keywords", "regressed_by", "regressions", "dupe_of",
 ]
-_SEARCH_FIELDS = ["id", "summary", "status", "resolution", "product", "component"]
+_SEARCH_FIELDS = [
+    "id", "summary", "status", "resolution", "product", "component",
+    "cf_crash_signature",
+]
 _MAX_SIG_BUGS = 15
+_SEARCH_PAGE_SIZE = 100
+_MAX_SIG_CANDIDATES = 500
 
 
 @dataclass
@@ -85,7 +90,9 @@ async def bug(
 @tool
 async def signature_bugs(
     ctx: BugzillaCtx,
-    signature: Annotated[str, Field(description="The exact crash signature.")],
+    signature: Annotated[
+        str, Field(description="The exact crash signature.", min_length=1)
+    ],
 ) -> str:
     """Find existing Bugzilla bugs whose crash-signature field matches this signature. Use it
     to see whether the crash is already reported / known — reuse prior analysis and avoid a
@@ -95,18 +102,58 @@ async def signature_bugs(
     also build on mozilla-central and so share Gecko's crash signatures, which means a matching
     bug in one of THEIR products is a different application's crash population with its own
     cause, however well the stack matches. It is context, not this crash's bug."""
-    params = {
+    signature = str(signature or "").strip()
+    if not signature:
+        return "signature_bugs: invalid empty crash signature."
+
+    # BMO has only a substring operator for this field.  It is a candidate fetch, not the
+    # match: one signature is often a prefix of another (especially AsyncShutdownTimeout
+    # blocker lists), so hold every returned field to an exact ``[@ signature]`` entry.
+    # ``limit`` also deliberately selects libmozdata's single-query path.  Without one it
+    # first counts and then downloads EVERY matching bug in 100-row pages, even though this
+    # tool renders only ``_MAX_SIG_BUGS`` rows; its count request also silently turns a
+    # non-2xx response into an empty result.
+    base_params = {
         "include_fields": _SEARCH_FIELDS,
         "f1": "cf_crash_signature", "o1": "substring", "v1": signature,
+        "limit": _SEARCH_PAGE_SIZE,
+        "order": "bug_id DESC",
     }
+    exact: dict[int, dict] = {}
+    folded_signature = signature.casefold()
+    exhausted = False
     try:
-        data = await asyncio.to_thread(_fetch, None, params)
+        for offset in range(0, _MAX_SIG_CANDIDATES, _SEARCH_PAGE_SIZE):
+            page = await asyncio.to_thread(
+                _fetch, None, {**base_params, "offset": offset})
+            for b in page.values():
+                if any(entry.casefold() == folded_signature
+                       for entry in utils.bugzilla_signature_entries(
+                           b.get("cf_crash_signature"))):
+                    exact[b["id"]] = b
+            if len(page) < _SEARCH_PAGE_SIZE:
+                exhausted = True
+                break
+            if len(exact) >= _MAX_SIG_BUGS:
+                break
     except Exception as exc:  # pragma: no cover - network/defensive
         return "signature_bugs: lookup failed ({}).".format(exc)
-    if not data:
+    if not exact:
+        if not exhausted:
+            return (
+                "signature_bugs: no exact match among the {} newest substring candidates; "
+                "older candidates were not scanned."
+            ).format(_MAX_SIG_CANDIDATES)
         return "signature_bugs: no existing bug references this signature."
+    ordered = sorted(exact.values(), key=lambda x: x.get("id", 0), reverse=True)
     rows = []
-    for b in sorted(data.values(), key=lambda x: x.get("id", 0), reverse=True)[:_MAX_SIG_BUGS]:
+    if not exhausted:
+        rows.append("signature_bugs: showing up to {} newest exact matches; more may exist.".format(
+            _MAX_SIG_BUGS))
+    elif len(ordered) > _MAX_SIG_BUGS:
+        rows.append("signature_bugs: showing the {} newest exact matches of {}.".format(
+            _MAX_SIG_BUGS, len(ordered)))
+    for b in ordered[:_MAX_SIG_BUGS]:
         state = "{} {}".format(b.get("status", ""), b.get("resolution", "") or "").strip()
         where = " {} :: {}".format(b["product"], b.get("component", "?")) \
             if b.get("product") else ""

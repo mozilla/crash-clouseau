@@ -551,3 +551,22 @@ def get_signatures(signatures):
         res |= set(sgns)
 
     return res
+
+
+def bugzilla_signature_entries(field):
+    """Return the exact signatures stored in one Bugzilla crash-signature field.
+
+    Bugzilla stores one or more ``[@ signature]`` entries in the field.  Split on the
+    opening marker and remove only the final delimiter: a signature itself may end in
+    ``]`` (for example an ``operator[]`` frame), so stopping at the first closing bracket
+    loses part of a valid signature.  Keep an unbracketed entry too because older bugs do
+    not all use the bracketed form.
+    """
+    pieces = re.split(r"\[@\s*", field or "")
+    entries = [pieces[0].strip()]
+    for piece in pieces[1:]:
+        piece = piece.strip()
+        if piece.endswith("]"):
+            piece = piece[:-1]
+        entries.append(piece.strip())
+    return [entry for entry in entries if entry]

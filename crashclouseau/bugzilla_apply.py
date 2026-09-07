@@ -473,14 +473,7 @@ def _signature_field_entries(field):
     1990812) strips to the bare signature like any other. Text before the first ``[@`` -- a
     field somebody typed without brackets -- is kept as an entry too, so it can still match
     exactly."""
-    pieces = re.split(r"\[@\s*", field or "")
-    entries = [pieces[0].strip()]
-    for piece in pieces[1:]:
-        piece = piece.strip()
-        if piece.endswith("]"):
-            piece = piece[:-1]
-        entries.append(piece.strip())
-    return [e for e in entries if e]
+    return utils.bugzilla_signature_entries(field)
 
 
 def _row_is_about(bug, signature):

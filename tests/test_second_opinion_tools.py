@@ -198,14 +198,19 @@ class TestBugzillaTool(unittest.TestCase):
 
     def test_signature_bugs(self):
         _FakeBugzilla.BUGS = {
-            10: {"id": 10, "summary": "old dupe", "status": "RESOLVED", "resolution": "DUPLICATE"},
-            20: {"id": 20, "summary": "open one", "status": "NEW", "resolution": ""},
+            10: {"id": 10, "summary": "old dupe", "status": "RESOLVED",
+                 "resolution": "DUPLICATE", "cf_crash_signature": "[@ Foo::Bar]"},
+            20: {"id": 20, "summary": "open one", "status": "NEW", "resolution": "",
+                 "cf_crash_signature": "[@ Foo::Bar]"},
         }
         with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):
             out = asyncio.run(signature_bugs(BugzillaCtx(), "Foo::Bar"))
         self.assertIn("bug 20 [NEW]", out)
         self.assertIn("bug 10 [RESOLVED DUPLICATE]", out)
         self.assertEqual(_FakeBugzilla.last["params"]["v1"], "Foo::Bar")   # scoped to the signature
+        self.assertEqual(_FakeBugzilla.last["params"]["limit"], bz_tool._SEARCH_PAGE_SIZE)
+        self.assertEqual(_FakeBugzilla.last["params"]["order"], "bug_id DESC")
+        self.assertIn("cf_crash_signature", _FakeBugzilla.last["params"]["include_fields"])
 
     def test_signature_bugs_name_the_product(self):
         # Every application built on mozilla-central shares Gecko's signatures, and this search
@@ -213,7 +218,8 @@ class TestBugzillaTool(unittest.TestCase):
         # Thunderbird one that matched (bug 2057980, `MailNews Core :: Networking: Exchange`).
         _FakeBugzilla.BUGS = {
             2057980: {"id": 2057980, "summary": "opening PDF", "status": "NEW", "resolution": "",
-                      "product": "MailNews Core", "component": "Networking: Exchange"},
+                      "product": "MailNews Core", "component": "Networking: Exchange",
+                      "cf_crash_signature": "[@ Foo::Bar]"},
         }
         with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):
             out = asyncio.run(signature_bugs(BugzillaCtx(), "Foo::Bar"))
@@ -227,6 +233,70 @@ class TestBugzillaTool(unittest.TestCase):
         with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):
             out = asyncio.run(signature_bugs(BugzillaCtx(), "Nope"))
         self.assertIn("no existing bug", out)
+
+    def test_signature_bugs_reports_a_request_failure(self):
+        class FailingBugzilla(_FakeBugzilla):
+            def wait(self):
+                raise RuntimeError("HTTP 503")
+
+        with mock.patch.object(bz_tool, "Bugzilla", FailingBugzilla):
+            out = asyncio.run(signature_bugs(BugzillaCtx(), "Foo::Bar"))
+        self.assertIn("lookup failed (HTTP 503)", out)
+
+    def test_signature_bugs_reject_a_longer_signature(self):
+        # Real BMO shape: searching for WlLogHandler returns bug 1996736 even though its only
+        # entry is WlLogHandler_UnknownObject.  The substring is the fetch, not the match.
+        _FakeBugzilla.BUGS = {
+            1: {"id": 1, "summary": "exact", "status": "NEW", "resolution": "",
+                "cf_crash_signature": "[@ mozilla::widget::WlLogHandler]"},
+            1996736: {"id": 1996736, "summary": "longer", "status": "NEW", "resolution": "",
+                      "cf_crash_signature":
+                          "[@ mozilla::widget::WlLogHandler_UnknownObject]"},
+        }
+        with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):
+            out = asyncio.run(signature_bugs(BugzillaCtx(),
+                                             "mozilla::widget::WlLogHandler"))
+        self.assertIn("bug 1 [NEW]", out)
+        self.assertNotIn("1996736", out)
+
+    def test_signature_bugs_rejects_whitespace_without_a_request(self):
+        with mock.patch.object(bz_tool, "Bugzilla") as client:
+            out = asyncio.run(signature_bugs(BugzillaCtx(), "  \t"))
+        self.assertIn("invalid empty crash signature", out)
+        client.assert_not_called()
+
+    def test_signature_bugs_says_when_the_output_is_truncated(self):
+        _FakeBugzilla.BUGS = {
+            i: {"id": i, "summary": "match {}".format(i), "status": "NEW", "resolution": "",
+                "cf_crash_signature": "[@ Foo::Bar]"}
+            for i in range(1, bz_tool._MAX_SIG_BUGS + 2)
+        }
+        with mock.patch.object(bz_tool, "Bugzilla", _FakeBugzilla):
+            out = asyncio.run(signature_bugs(BugzillaCtx(), "Foo::Bar"))
+        self.assertIn("showing the 15 newest exact matches of 16", out)
+        self.assertEqual(out.count("\nbug "), bz_tool._MAX_SIG_BUGS)
+
+    def test_signature_bugs_bounds_false_positive_pages(self):
+        calls = []
+
+        class FullFalsePage(_FakeBugzilla):
+            def __init__(self, params=None, **kwargs):
+                super().__init__(params=params, **kwargs)
+                self.offset = params["offset"]
+                calls.append(params)
+
+            def wait(self):
+                for i in range(self.offset, self.offset + bz_tool._SEARCH_PAGE_SIZE):
+                    self._h({"id": i + 1, "summary": "longer", "status": "NEW",
+                             "resolution": "", "cf_crash_signature": "[@ NeedleLonger]"},
+                            self._d)
+                return self
+
+        with mock.patch.object(bz_tool, "Bugzilla", FullFalsePage):
+            out = asyncio.run(signature_bugs(BugzillaCtx(), "Needle"))
+        self.assertEqual(len(calls),
+                         bz_tool._MAX_SIG_CANDIDATES // bz_tool._SEARCH_PAGE_SIZE)
+        self.assertIn("older candidates were not scanned", out)
 
 
 if __name__ == "__main__":
