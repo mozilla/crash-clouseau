@@ -9,7 +9,11 @@ release"`) and **files bugs unattended on all three** (`AUTOFILE_BUGS=1`): night
 days); beta at cap 3 with `skip`, held from 2026-08-26 and **armed 2026-09-07** after a
 fortnight of 40 held runs, 0 filed and 2 at the rung (both the QuotaManager spike a human had
 already filed as bug 2069097); release at cap 2 with `skip`, the `[new in release]` title and a
-tracking nomination, held 08-31 and armed 09-07 (`plans/20-release-channel-support.md`). A
+tracking nomination, held 08-31 and armed 09-07 (`plans/20-release-channel-support.md`). The
+**ESR channel** is declared on release's model since 2026-09-07 as three channel labels, one per
+live ESR line (`esr115`, `esr140`, `esr153`), sharing one filing policy (`channels.esr`: `skip`,
+cap 2, `[new in esr]`, `cf_tracking_firefox_esr<major>` nominated) -- **and is not turned on until
+the two env vars name its lines** (see "Turning the ESR channel on"). A
 channel can still be held with `agent.autofile.channels.<ch>.enabled: false`, which beats the
 global arm. Read "Cost controls" below as what bounds the spend, not as evidence that there is
 none.
@@ -18,7 +22,15 @@ Several things are automated by the repo now; the rest are one-time app setup.
 
 ## Automated by the repo (no action needed)
 - **DB schema** — the `release:` phase runs `bin/release.py` on every deploy
-  (`models.create()` is idempotent + adds the `lead` enum value; no ingestion is run).
+  (`models.create()` is idempotent and adds any enum value the long-lived DB is missing: the
+  `lead` verdict, the ESR channel labels -- `models._ENUM_ADDITIONS`; no ingestion is run).
+  Until 2026-09-07 that ALTER had never actually run (it re-used a connection already in a
+  transaction and the failure was logged, not raised); the first deploy carrying the ESR labels
+  is the first time it matters. The same phase widens `builds.version` from VARCHAR(10) to 24
+  (`140.15.0esr` is 11 characters; `models._WIDENED_COLUMNS`). Check the release log for `enum
+  CHANNEL_TYPE: added value 'esr115'` (and 140, 153) and `widened builds.version`, or `psql` for
+  `SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname =
+  'CHANNEL_TYPE'` and `\d builds`, before setting `INGEST_CHANNELS`.
 - **`searchfox-cli`** — `bin/post_compile` fetches the pinned static-musl binary at
   build time and exports `$SEARCHFOX_CLI` via `.profile.d` (the agent needs it for
   call-graph grounding; it queries searchfox.org over the network).
@@ -122,6 +134,43 @@ beta then costs nothing and files nothing.
   behaviour ("only crashes without a bug in Bugzilla"), and it suppresses roughly 58-59%
   of beta signatures — the alternative, `file_new`, is measured at ~2.4x the volume.
 
+## Turning the ESR channel on (plan #23)
+
+Socorro has ONE `esr` channel; Mozilla ships several ESR lines at once (115, 140 and 153 on
+2026-09-07), each from its own repository, searchfox tree and build lineage. So each line is its
+own channel label -- `esr115`, `esr140`, `esr153` -- exactly the way `release` is one label for
+one repo, and the policy is shared by the family `esr` (`config.channel_family`). Everything is in
+the code and `config/global.json`; **nothing ESR happens until the env vars name the lines**:
+
+```sh
+# 1. deploy first: the release phase adds the three enum labels to the long-lived DB (above)
+# 2. ingest-only canary: pushlog + builds + selection rows appear, nothing analysed or filed
+heroku config:set INGEST_CHANNELS="nightly beta release esr115 esr140 esr153"
+# 3. then analyse (and, with AUTOFILE_BUGS=1 already live, FILE) -- per line, so a line can be
+#    left out: esr115 is the Win7/8.1 line, security-only uplifts, ~22k reports a week
+heroku config:set AGENT_CHANNELS="nightly beta release esr115 esr140 esr153"
+```
+
+Order matters: a line named in `INGEST_CHANNELS` before the deploy that adds its enum label fails
+its first tick with `invalid input value for enum` at `Build.put_data` (logged, not fatal, and
+retried every 20 minutes). Selection knobs are release's for every line (installs 50, protos 20,
+floor 50, rate path off); a line may get its own entry beside the family's -- `esr153` is the
+smallest line (~4k reports/week against release's 153k) and the one a lower `installs` would be
+tuned on. Filing: `channels.esr` is `enabled: true`, `skip`, `daily_cap: 2` (per LINE, since the
+cap is counted per channel label), `[new in esr] Crash in [@ ...]`, and the crash's own line
+nominated for tracking (`cf_tracking_firefox_esr140 = ?`, its own best-effort PUT). To hold one
+line only: `channels.esr115: {"enabled": false}` beside the family entry.
+
+What to watch on the first ESR days:
+- `selection.html?channel=esr140` (and 153, 115): each line's window is its own two or three
+  builds; the first tick after switch-on carries the two builds of the last 30 days per line.
+- The worker log: `Get pushlog data for esr140` against `releases/mozilla-esr140` (small: ESR
+  repos take a handful of uplifts a cycle), one `Update builds for esr1xx/Firefox` per line.
+- `tasks.html`: runs labelled `esr1xx` should be rare -- release-sized thresholds on a channel
+  a quarter to a fortieth of release's volume. `filed_bug` rows with `channel like 'esr%'`.
+- ESR has no measured population rates (`sigage._POPULATION_RATES`), like release: prompts drop
+  the hardware comparison. `sigtrend` refuses it, like release (rate path off).
+
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct
@@ -133,7 +182,7 @@ with the volume; the investigator's analysis follows only where it grounded its 
 reads. An open bug on the signature gets it as a comment; so does a bug we filed ourselves that a
 human restricted or that was resolved FIXED after the spiking build (the spike is on builds
 without the fix), and anybody's bug fixed after the build; otherwise a new bug. An APPEARANCE (`...0, 0, 0 -> 50`, no earlier report on the channel) carries the channel's
-title mark — `[new in release]` on release; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
+title mark — `[new in release]` on release, `[new in esr]` on an ESR line; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
 `GET /api/spikes` lists them.
 
 | lever | what it does |
