@@ -971,15 +971,15 @@ class TestAFixThatPostdatesTheBuild(unittest.TestCase):
         got, _ = self._ask(row)
         self.assertIsNone(got)
 
-    def test_a_longer_signature_with_a_cf_field_is_still_kept(self):
-        # And the limit of the re-check, stated so nobody reads more into it than it does: the
-        # cf side is a BARE substring, so `[@ Foo_UnknownObject]` contains `Foo` and the row
-        # survives. Measured on the top 200 nightly signatures, all three prefix over-matches
-        # are cf-reachable like this, so the form test changes the keep-set for 0 of 200 — it
-        # is insurance for the empty-cf shape above, not a save the panel witnessed.
+    def test_a_longer_signature_in_the_cf_field_is_not_ours_either(self):
+        # The cf side is an EXACT `[@ sig]` entry, so `[@ Foo_UnknownObject]` is a different
+        # signature and a FIXED bug about it does not suppress a filing on `Foo`. Until
+        # 2026-09-07 this test asserted the opposite ("a bare substring, so the row survives"),
+        # and that same substring took bug 2067456 — a two-blocker AsyncShutdownTimeout
+        # signature — as the venue for a release crash on its one-blocker prefix.
         got, _ = self._ask(_closed(1996736, "FIXED", "2026-08-17T08:07:20Z",
                                    signature=self.SIG + "_UnknownObject"))
-        self.assertEqual(got, 1996736)
+        self.assertIsNone(got)
 
     def test_the_lowest_bug_id_wins_when_several_qualify(self):
         # A tie-break only: 0 of the 52 filings surfaced more than one.
@@ -1250,6 +1250,71 @@ class TestRegressedBy(_Base):
         self._file()
         uuid, info = self.filed[0]
         self.assertEqual(info["regressed_by"], [42])
+
+
+class TestCrashSignatureFieldMatching(unittest.TestCase):
+    """The cf half of the lookup: `_row_is_about` over `cf_crash_signature`. BMO is asked for a
+    SUBSTRING (the fetch); the row is kept only for an EXACT `[@ sig]` entry (the test). Found on
+    release crash 0027161c (2026-09-06): the one-blocker cookie signature took bug 2067456, our
+    own nightly filing on the two-blocker signature, as its venue — and on a `skip` channel that
+    is a full stop. 1 of the 17 comment venues ever chosen was substring-only (2068006, same
+    family, same direction)."""
+
+    COOKIE = ("AsyncShutdownTimeout | profile-before-change | "
+              "CookiePersistentStorage: cookies.sqlite closing")
+
+    @staticmethod
+    def _row(cf, summary="Crash in [@ something else entirely]"):
+        return {"id": 1, "cf_crash_signature": cf, "summary": summary}
+
+    def test_a_longer_blocker_list_is_a_different_signature(self):
+        # Bug 2067456's real field and summary against the release crash's signature.
+        two = self.COOKIE + ",ServiceWorkerRegistrar: Flushing data"
+        row = self._row("[@ {}]".format(two), "Crash in [@ {}]".format(two))
+        self.assertFalse(bugzilla_apply._row_is_about(row, self.COOKIE))
+        # ...while the two-blocker crash still finds its own bug.
+        self.assertTrue(bugzilla_apply._row_is_about(row, two))
+
+    def test_the_exact_entry_matches_in_every_layout_bmo_uses(self):
+        for cf in ("[@ {}]", "[@ {} ]", "[@ other]\n[@ {}]", "[@ other]\r\n[@ {}]\r\n",
+                   "[@ other] [@ {}]", "[@ {}]\n[@ other]", "[@{}]"):
+            row = self._row(cf.format(self.COOKIE))
+            self.assertTrue(bugzilla_apply._row_is_about(row, self.COOKIE), repr(cf))
+
+    def test_the_trailing_space_form_still_matches(self):
+        # Bug 1990812, `[@ mozilla::MediaDecoder::SetCDMProxy ]` — the case that made the QUERY
+        # a bare substring in the first place. The exact test must keep it.
+        row = self._row("[@ mozilla::MediaDecoder::SetCDMProxy ]")
+        self.assertTrue(bugzilla_apply._row_is_about(row, "mozilla::MediaDecoder::SetCDMProxy"))
+
+    def test_a_signature_ending_in_a_bracket_is_read_whole(self):
+        # The shape of bug 1996583's real field: two entries, each with `operator[]` inside. A
+        # parse that stops at the first `]` reads `operator[` and matches nothing.
+        sig = ("mozilla::detail::InvalidArrayIndex_CRASH | mozilla::Array<T>::operator[] | "
+               "mozilla::BitSet<T>::Reference::operator= | js::gc::ArenaChunk::findFreeArena")
+        other = sig.replace("findFreeArena", "commitArena")
+        cf = "[@ {}]\n[@ {}]".format(sig, other)
+        self.assertEqual(bugzilla_apply._signature_field_entries(cf), [sig, other])
+        self.assertTrue(bugzilla_apply._row_is_about(self._row(cf), sig))
+        self.assertTrue(bugzilla_apply._row_is_about(self._row(cf), other))
+        self.assertTrue(bugzilla_apply._row_is_about(
+            self._row("[@ mozilla::Array<T>::operator[]]"), "mozilla::Array<T>::operator[]"))
+
+    def test_case_is_ignored_like_the_bmo_operator(self):
+        self.assertTrue(bugzilla_apply._row_is_about(self._row("[@ OOM | SMALL]"), "oom | small"))
+
+    def test_a_bare_field_without_brackets_still_matches_exactly(self):
+        self.assertTrue(bugzilla_apply._row_is_about(self._row(self.COOKIE), self.COOKIE))
+        self.assertFalse(bugzilla_apply._row_is_about(
+            self._row(self.COOKIE + ",ServiceWorkerRegistrar: Flushing data"), self.COOKIE))
+
+    def test_an_empty_field_falls_back_to_the_summary_form(self):
+        summary = "Crash in [@ {}]".format(self.COOKIE)
+        self.assertTrue(bugzilla_apply._row_is_about(self._row("", summary), self.COOKIE))
+        self.assertFalse(bugzilla_apply._row_is_about(self._row("", summary), "nothing like it"))
+        self.assertFalse(bugzilla_apply._row_is_about(self._row(None, None), self.COOKIE))
+        self.assertFalse(bugzilla_apply._row_is_about(self._row("[@ x]"), ""))
+        self.assertFalse(bugzilla_apply._row_is_about(self._row("[@ x]"), None))
 
 
 class TestSignatureMatching(_Base):

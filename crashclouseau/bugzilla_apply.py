@@ -427,31 +427,72 @@ def _summary_is_about(summary, signature):
     ``mozilla::widget::WlLogHandler`` against bug 1996736 ``Crash in [@
     mozilla::widget::WlLogHandler_UnknownObject]``, plus ``amdxx64.dll`` and
     ``IPCError-browser | ShutDownKill`` — but every one of those bugs ALSO carries the longer
-    signature in its ``cf_crash_signature``, which is a bare substring match, so the union the
-    caller keeps is identical: the exact form changes the keep-set for 0 of the 200 and moves
-    the venue for 0. What it guards is a shape the panel does not contain — a crash bug with an
-    EMPTY ``cf_crash_signature`` (1891138, 2009859 and 1960108 each have one) whose summary
-    carries a longer signature. Case-insensitive because BMO's ``substring`` operator is, and
-    anything this sees was already returned by that search."""
+    signature in its ``cf_crash_signature``, which the cf side accepted as a bare substring at
+    the time, so the union the caller kept was identical: the exact form changed the keep-set
+    for 0 of the 200 and moved the venue for 0. The cf side is an exact entry too now
+    (``_row_is_about``), so those three rows drop on both sides -- a longer signature is a
+    different signature. What this half guards is a shape the panel does not contain — a crash
+    bug with an EMPTY ``cf_crash_signature`` (1891138, 2009859 and 1960108 each have one)
+    whose summary carries a longer signature. Case-insensitive because BMO's ``substring``
+    operator is, and anything this sees was already returned by that search."""
     low = (summary or "").lower()
     sig = (signature or "").strip().lower()
     return bool(sig) and any(form.format(sig) in low for form in _SUMMARY_CRASH_FORMS)
 
 
+def _signature_field_entries(field):
+    """The signatures a ``cf_crash_signature`` field carries, one per ``[@ ...]`` entry, bare.
+
+    Split on the OPENING ``[@`` and take ONE closing bracket off each piece; never scan to the
+    first ``]``, because a signature can end in one -- bug 1996583 carries two entries of the
+    shape ``[@ mozilla::detail::InvalidArrayIndex_CRASH | mozilla::Array<T>::operator[] | ...]``
+    and a regex to the first ``]`` reads them as ``... operator[``. Entries may be separated by
+    newlines (BMO's own layout), CRLF or a space; the trailing-space form ``[@ sig ]`` (bug
+    1990812) strips to the bare signature like any other. Text before the first ``[@`` -- a
+    field somebody typed without brackets -- is kept as an entry too, so it can still match
+    exactly."""
+    pieces = re.split(r"\[@\s*", field or "")
+    entries = [pieces[0].strip()]
+    for piece in pieces[1:]:
+        piece = piece.strip()
+        if piece.endswith("]"):
+            piece = piece[:-1]
+        entries.append(piece.strip())
+    return [e for e in entries if e]
+
+
 def _row_is_about(bug, signature):
     """Does this BMO row really carry *signature*, or did the OR over-match?
 
-    One request asks ``cf_crash_signature`` for the bare signature OR ``short_desc`` for the
-    prefix ``[@ sig``, and the response does not say which clause matched, so both are
-    re-checked here. The cf side is a plain substring — that field only ever holds signatures,
-    which is why it needs no form test at all. The summary side demands the exact crash-bug
-    form (``_summary_is_about``), because the prefix over-matched a LONGER signature for 3 of
-    the top 200 nightly signatures. Measured cost and benefit both zero on that panel — all
-    three over-matches are cf-reachable anyway, so this re-check changes the keep-set for 0/200
-    and the venue for 0/200. It is insurance against an over-match on a bug whose
-    ``cf_crash_signature`` is empty, not a save the panel witnessed."""
-    sig = (signature or "").strip()
-    if sig and sig.lower() in (bug.get("cf_crash_signature") or "").lower():
+    One request asks ``cf_crash_signature`` for the bare signature as a SUBSTRING, OR
+    ``short_desc`` for the prefix ``[@ sig``, and the response does not say which clause
+    matched, so both are re-checked here -- and both re-checks are EXACT. The cf side is an
+    exact ``[@ sig]`` entry (``_signature_field_entries``); the summary side demands the exact
+    crash-bug form (``_summary_is_about``). The substring is the fetch, not the test.
+
+    The cf side used to be a bare substring, on the argument that the field "only ever holds
+    signatures". It does -- but one signature can be a PREFIX of another, and for
+    ``AsyncShutdownTimeout`` it routinely is: the blockers are comma-joined, so the one-blocker
+    ``AsyncShutdownTimeout | profile-before-change | CookiePersistentStorage: cookies.sqlite
+    closing`` is contained in the two-blocker ``...cookies.sqlite closing,ServiceWorkerRegistrar:
+    Flushing data`` (bug 2067456, our own nightly filing), and the substring took that bug as the
+    venue for a release crash on the shorter signature (0027161c, 2026-09-06). Measured over
+    every comment-on-existing filing ever made (17): 16 venues carried the exact signature and 1
+    was substring-only -- bug 2068006 took the one-blocker ``ServiceWorkerRegistrar: Flushing
+    data`` while carrying only multi-blocker supersets. Same shape both times, and only that
+    direction exists: a longer search never substring-matches a shorter entry. On a ``skip``
+    channel an over-matched venue is a FULL STOP ("open bug N exists"), so this decided release's
+    only rung-70 finding of its first held week; on the fixed-after-build side, which shares this
+    re-check, a FIXED bug about a longer signature would suppress a filing on the shorter one.
+
+    Case-insensitive on both sides, because BMO's ``substring`` operator is and anything this
+    sees was already returned by that search. Lambda demanglings are the CALLER's business:
+    ``_open_bugs_for_signature`` asks once per ``utils.lambda_siblings`` spelling."""
+    sig = (signature or "").strip().lower()
+    if not sig:
+        return False
+    if any(entry.lower() == sig
+           for entry in _signature_field_entries(bug.get("cf_crash_signature"))):
         return True
     return _summary_is_about(bug.get("summary"), sig)
 
@@ -467,10 +508,13 @@ def _open_bugs_for_signature(signature):
     Read-only and unauthenticated (public bugs only, which is the right scope: we must not
     reason about a security bug we can only see because the filing account can).
 
-    ``cf_crash_signature`` is matched on the BARE signature, not the ``[@ signature]`` form:
+    ``cf_crash_signature`` is QUERIED on the BARE signature, not the ``[@ signature]`` form:
     bug 1990812 carries ``[@ mozilla::MediaDecoder::SetCDMProxy ]`` — with a trailing space —
     so the bracketed form missed it and we filed 2060922 as a near-duplicate of a REOPENED bug
-    for the exact same crash. The SUMMARY half is the other way round and ungated: it asks for
+    for the exact same crash. The rows that come back are then held to an EXACT ``[@ sig]``
+    entry by ``_row_is_about``, because a one-blocker ``AsyncShutdownTimeout`` signature is a
+    substring of every longer blocker list that starts with it (bug 2067456 against the cookie
+    crash 0027161c). The SUMMARY half is the other way round and ungated: it asks for
     the crash-bug form ``[@ sig`` and then keeps only an exact ``[@ sig]``/``[@ sig ]``
     (``_summary_is_about``), which is what the retired ``_is_specific_signature`` length test
     was really reaching for. One request, so the rows are re-checked here rather than in a
