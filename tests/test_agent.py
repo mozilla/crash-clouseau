@@ -168,6 +168,26 @@ class TestBuildOptions(unittest.TestCase):
             self.assertIn("mcp__searchfox__field_layout", tools, role)
             self.assertIn("FULLY QUALIFIED", o.agents[role].prompt, role)
 
+    def test_the_builtin_toolset_is_off_and_the_subagent_tool_stays(self):
+        """`ClaudeAgentOptions.tools` is the REGISTRATION control; `allowed_tools` only decides
+        what runs without a permission prompt, and permissions are bypassed. With `tools` unset
+        the CLI's whole built-in set was live for the principal and every subagent -- and in a
+        2.4-hour prod log window on 2026-09-07, 6 runs made 21 `Grep`, 9 `Read` and 4 `Bash`
+        calls on a worker that has no checkout, only credentials. Live-probed the same day:
+        `tools=["Agent", "Task"]` still spawns a subagent and keeps every MCP tool, and neither
+        side has Bash even when the subagent's definition lists it."""
+        o = self._opts()
+        self.assertEqual(o.tools, ["Agent", "Task"])
+        banned = {"Bash", "Read", "Grep", "Glob", "Write", "Edit", "WebFetch", "WebSearch"}
+        self.assertFalse(banned & set(o.allowed_tools), sorted(banned & set(o.allowed_tools)))
+        for role, agent in o.agents.items():
+            self.assertFalse(banned & set(agent.tools), (role, sorted(agent.tools)))
+            self.assertTrue(agent.tools, "{} would be handed no tool at all".format(role))
+        # The subagent tool itself is what the principal orchestrates with; the spike
+        # investigator and the second opinion set `tools=[]`, this one may not.
+        self.assertIn("Agent", o.allowed_tools)
+        self.assertIn("Task", o.allowed_tools)
+
     def test_user_prompt_lists_candidates(self):
         crash = dict(_CRASH, candidates=[
             {"node": "abc123def456", "score": 9, "bug": 111, "backedout": False},

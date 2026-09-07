@@ -32,6 +32,11 @@ class TestSecondOpinionOptions(unittest.TestCase):
         # No shell / builtins / subagents -> the agent cannot GET hg json-pushes (no pushlog).
         for banned in ("Bash", "Read", "Grep", "Glob", "Task"):
             self.assertNotIn(banned, allowed)
+        # ...and that is now a REGISTRATION fact, not an allowlist one: with `tools` unset and
+        # bypassPermissions the CLI's whole built-in set was live whatever this list said
+        # (live-probed 2026-09-07: the same prompt ran `Bash` with `tools` unset and reported
+        # NO-BASH with `tools=[]`, while the MCP tools kept working under both).
+        self.assertEqual(opts.tools, [])
         self.assertEqual(
             set(opts.mcp_servers),
             {"searchfox", "patch", "history", "source", "bugzilla", "socorro"})

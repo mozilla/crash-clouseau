@@ -67,7 +67,14 @@ from crashclouseau.vendor.hackbot_runtime.errors import AgentError
 # The needinfo actions the agent may RECORD (nothing is executed; #12 applies).
 NEEDINFO_ACTIONS = ["bugzilla.add_comment", "bugzilla.update_bug"]
 
-_BUILTIN_TOOLS = ["Read", "Grep", "Glob", "Bash"]
+# EMPTY, since 2026-09-07. `Read`/`Grep`/`Glob`/`Bash` were allowlisted here for a checkout the
+# worker does not have: in production their only reachable targets are the dyno's own files --
+# the environment with the Anthropic, Socorro and Bugzilla credentials -- and the crash brief
+# they act on is built from client-supplied annotations and Bugzilla titles. Measured in a
+# 2.4-hour worker-log window on 2026-09-07: 6 runs made 21 `Grep`, 9 `Read` and 4 `Bash` calls
+# against nothing. The registration control is `ClaudeAgentOptions.tools` in `build_options`
+# (`allowed_tools` only decides what runs without a prompt, and permissions are bypassed).
+_BUILTIN_TOOLS = []
 
 # THE thing that keeps the five subagents inline. Handed to the bundled CLI subprocess
 # via ``ClaudeAgentOptions.env``, which the SDK MERGES over ``os.environ`` (options.env
@@ -1888,7 +1895,7 @@ def build_options(
         "source": build_sdk_server("source", source_ctx, source_tools.TOOLS),
     }
     allowed = [
-        *_BUILTIN_TOOLS, "Task",
+        *_BUILTIN_TOOLS, *_RunTrace._SUBAGENT_TOOLS,
         *roles.searchfox_tool_ids(), *roles.patch_tool_ids(),
         *roles.history_tool_ids(), *roles.source_tool_ids(),
     ]
@@ -1903,6 +1910,15 @@ def build_options(
         mcp_servers=mcp_servers,
         agents=roles.build_roles(llm_cfg, channel=channel),
         allowed_tools=allowed,
+        # THE REGISTRATION CONTROL: only the subagent-spawning tool from the CLI's built-in set;
+        # `Bash`/`Read`/`Grep`/`Glob`/`Write`/`WebFetch` are not offered to the principal or to
+        # any subagent, whatever their `tools` lists say. Live-probed 2026-09-07 on this SDK
+        # (CLI 2.1.226): with `tools=["Agent", "Task"]` a haiku principal spawned its subagent,
+        # the subagent's MCP tool worked, and both reported no Bash although the subagent's
+        # definition listed it; with `tools` unset the same prompt ran `Bash`. Both spellings
+        # because the CLI surfaces the tool as `Agent` and older code says `Task`
+        # (`_RunTrace._SUBAGENT_TOOLS`).
+        tools=list(_RunTrace._SUBAGENT_TOOLS),
         model=model,
         max_turns=max_turns,
         permission_mode="bypassPermissions",

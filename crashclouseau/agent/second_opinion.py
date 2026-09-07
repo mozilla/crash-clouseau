@@ -168,6 +168,16 @@ def build_options(crash: dict, candidate: dict | None = None, *,
         system_prompt=_SYSTEM,
         mcp_servers=mcp_servers,
         allowed_tools=allowed,
+        # THE REGISTRATION CONTROL the allowlist above is not. `allowed_tools` only decides what
+        # runs without a permission prompt, and `permission_mode` is bypassPermissions, so with
+        # `tools` unset the CLI's whole built-in set (Bash, Read, Write, WebFetch, Agent) was live
+        # here -- the "TIGHT allowlist" was a comment. Probed live 2026-09-07 with a toy MCP server
+        # on this SDK (CLI 2.1.226): `tools=[]` -> `--tools ""` registers no built-in tool while the
+        # MCP tools keep working ("NO-BASH", 1 MCP call); with `tools` unset the same prompt ran
+        # `Bash`. Nothing this agent legitimately uses is built-in, so the change removes only
+        # what the comment already said was absent. The principal keeps only the subagent tool
+        # (`triage.build_options`, `tools=["Agent", "Task"]`, probed the same way).
+        tools=[],
         model=triage._model_id(cfg["model"]),
         max_turns=cfg["max_turns"],
         permission_mode="bypassPermissions",

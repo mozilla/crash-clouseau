@@ -47,7 +47,10 @@ _SOURCE = ["mcp__source__raw_file"]
 # arbitrary-query tool even without a shell.
 _BUGZILLA = [f"mcp__bugzilla__{name}" for name in ("bug", "signature_bugs")]
 _SOCORRO = ["mcp__socorro__crash_stats"]
-_BUILTIN_READ = ["Read", "Grep", "Glob", "Bash"]
+# EMPTY, since 2026-09-07 -- see `triage._BUILTIN_TOOLS`. The built-in set is switched off at the
+# session level (`triage.build_options` sets `tools`), so a name here would be ignored anyway;
+# leaving the list empty keeps the role definitions honest about what they can reach.
+_BUILTIN_READ = []
 
 _GROUND = (
     " You have read-only access. Quote only what a tool actually returned; never "
@@ -203,7 +206,9 @@ _ROLES: dict[str, dict] = {
         "\"moz_crash_reason\":\"...\",\"reason\":\"...\",\"crashing_thread\":0,"
         "\"frames\":[{\"stackpos\":0,\"function\":\"...\",\"filename\":\"...\","
         "\"line\":0,\"node\":\"...\",\"inlines\":[]}]}." + _GROUND,
-        "tools": [*_BUILTIN_READ],
+        # Pinned source reads, so decoding a frame can look at the line it names; it used to have
+        # the (unreachable) built-in file tools and nothing else.
+        "tools": [*_BUILTIN_READ, *_SOURCE],
     },
     "call-graph-explorer": {
         "description": "Navigate the searchfox call graph from crash frames to reach "
