@@ -1318,6 +1318,33 @@ class Selection(db.Model):
             return 10 ** 6
 
     @staticmethod
+    def escalation_candidates(product, channel, days):
+        """The pairs the spike escalation sweep judges: every pair the pipeline ANALYSED on a
+        build-day within the last ``days`` -- ``ever_selected`` (sticky, so a pair the maturity
+        rule later re-decided still counts, and its ``number`` is the latest, fullest count) or
+        a rate-path pick. Declined pairs are never candidates: nothing of theirs was ingested.
+        Never raises; a log that cannot be read escalates nothing."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        try:
+            rows = (
+                db.session.query(Selection)
+                .filter(
+                    Selection.product == product,
+                    Selection.channel == channel,
+                    Selection.build_day >= cutoff,
+                    or_(Selection.ever_selected.is_(True),
+                        Selection.outcome == utils.RISING_RATE),
+                )
+                .order_by(Selection.build_day.desc(), Selection.number.desc())
+                .all()
+            )
+            return [row.to_dict() for row in rows]
+        except Exception:
+            logger.error("Cannot read the selection log for spike escalation", exc_info=True)
+            db.session.rollback()
+            return []
+
+    @staticmethod
     def for_signature(signature, product=None, channel=None, limit=200):
         """Every recorded decision about a signature, most recent build-day first."""
         query = db.session.query(Selection).filter(Selection.signature == signature)
@@ -4172,7 +4199,227 @@ def _prune_daily(model, days):
 
 
 _ADDED_TABLES = ("archetypes", "chandaily", "feedback", "reviewnote",
-                 "selection", "sigdaily", "sweepmarks")
+                 "selection", "sigdaily", "spike_escalations", "sweepmarks")
+
+
+class SpikeEscalation(db.Model):
+    """One row per REAL spike the pipeline escalated -- or decided not to -- keyed on the
+    (signature, product, channel, build-day) pair the selector flagged.
+
+    WHY A TABLE AND NOT A PAYLOAD KEY. A spike is a property of a signature on a build-day, not of
+    one crash report: the ordinary path writes one ``Dossier`` per proto-signature cluster and
+    ``filed_bug`` on whichever cluster happened to file, and its ``filed_bugs_since`` daily-cap
+    counter reads that key. Recording a spike filing there would spend the ordinary filer's
+    per-channel cap (release's is 2) on a different kind of bug, and would give one spike as many
+    records as it has stacks. So the escalation has its own row, its own budget counters and its
+    own dedup, and the ordinary filer meets a spike bug the way it meets a human's -- on BMO,
+    through ``_open_bugs_for_signature``.
+
+    ``status`` follows the dossier vocabulary (pending / running / done / error) as a plain
+    string, so this table shares no enum type with ``dossiers`` and ``_ensure_tables`` can create
+    it on a long-lived database with one plain ``CREATE TABLE``. ``payload`` holds what the sweep
+    measured (``spike``), what the agent said (``findings``, the raw handoff), what was filed or
+    why not (``filing``), and the failure reason on ``error``."""
+
+    __tablename__ = "spike_escalations"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    signature = db.Column(db.String(512), nullable=False)
+    product = db.Column(db.String(32), nullable=False)
+    channel = db.Column(db.String(16), nullable=False)
+    build_day = db.Column(db.Date, nullable=False)
+    # The build the sweep chose to investigate (the selection's ``picked``), as a 14-char id.
+    buildid = db.Column(db.String(14), nullable=True)
+    # The crash report the brief is built around; more stacks ride in ``payload``.
+    uuid = db.Column(db.String(36), nullable=True)
+    # ``build_day`` (a count over a baseline) or ``rate`` (the 7-day installs against the rate).
+    kind = db.Column(db.String(16), nullable=False, default="build_day")
+    status = db.Column(db.String(16), nullable=False, default="pending")
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    payload = db.Column(pg.JSONB, nullable=False, default=dict)
+    cost_usd = db.Column(db.Numeric(10, 4), nullable=True)
+    input_tokens = db.Column(db.Integer, default=0)
+    output_tokens = db.Column(db.Integer, default=0)
+    cache_read_tokens = db.Column(db.Integer, default=0)
+    created = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
+    )
+    updated = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now(),
+        onupdate=db.func.now(),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "signature", "product", "channel", "build_day", name="spike_escalation_pair"
+        ),
+        db.Index("spike_escalations_created_idx", "created"),
+    )
+
+    def __init__(self, signature, product, channel, build_day, buildid=None, uuid=None,
+                 kind="build_day", payload=None):
+        self.signature = signature[:512]
+        self.product = product
+        self.channel = channel
+        self.build_day = build_day
+        self.buildid = buildid
+        self.uuid = uuid
+        self.kind = kind
+        self.payload = payload or {}
+
+    @staticmethod
+    def get(escalation_id):
+        return db.session.get(SpikeEscalation, escalation_id)
+
+    @staticmethod
+    def for_pair(signature, product, channel, build_day):
+        return (
+            db.session.query(SpikeEscalation)
+            .filter(
+                SpikeEscalation.signature == signature[:512],
+                SpikeEscalation.product == product,
+                SpikeEscalation.channel == channel,
+                SpikeEscalation.build_day == build_day,
+            )
+            .first()
+        )
+
+    @staticmethod
+    def create(signature, product, channel, build_day, buildid=None, uuid=None,
+               kind="build_day", payload=None, commit=True):
+        """Insert the pair's row, or return the one that exists. Never two for one pair: the
+        sweep runs every few minutes and the same spike stays visible for days."""
+        row = SpikeEscalation.for_pair(signature, product, channel, build_day)
+        if row is not None:
+            return row
+        row = SpikeEscalation(signature, product, channel, build_day, buildid=buildid,
+                              uuid=uuid, kind=kind, payload=payload)
+        db.session.add(row)
+        if commit:
+            db.session.commit()
+        return row
+
+    @staticmethod
+    def latest_for_signature(signatures, product, channel, since):
+        """The newest escalation of any of ``signatures`` on this channel created after
+        ``since`` -- the once-per-episode guard. A spike that stays loud is re-selected on every
+        later build-day; it is one spike and gets one bug."""
+        if not signatures:
+            return None
+        return (
+            db.session.query(SpikeEscalation)
+            .filter(
+                SpikeEscalation.product == product,
+                SpikeEscalation.channel == channel,
+                SpikeEscalation.signature.in_(sorted({s[:512] for s in signatures})),
+                SpikeEscalation.created >= since,
+            )
+            .order_by(SpikeEscalation.created.desc())
+            .first()
+        )
+
+    @staticmethod
+    def count_since(product, channel, since, filed_only=False):
+        """Escalations created since ``since`` on a channel -- the spend budget -- or, with
+        ``filed_only``, the ones that wrote to Bugzilla -- the filing cap. Fails toward the
+        budget being SPENT, like ``Selection.taken_today``."""
+        try:
+            q = db.session.query(SpikeEscalation).filter(
+                SpikeEscalation.product == product,
+                SpikeEscalation.channel == channel,
+                SpikeEscalation.created >= since,
+            )
+            if filed_only:
+                # JSONB path on Postgres; a backend without it raises into the except below.
+                q = q.filter(SpikeEscalation.payload["filing"]["filed"].astext == "true")
+            return q.count()
+        except Exception:
+            logger.error("Cannot count the spike escalations", exc_info=True)
+            db.session.rollback()
+            return 10 ** 6
+
+    def set_status(self, status, error=None, commit=True):
+        self.status = status
+        payload = dict(self.payload or {})
+        if error is not None:
+            payload["error"] = str(error)[:2000]
+        elif "error" in payload and status != "error":
+            payload.pop("error", None)
+        self.payload = payload
+        self.updated = datetime.now(timezone.utc)
+        db.session.add(self)
+        if commit:
+            db.session.commit()
+
+    def merge_payload(self, values, commit=True):
+        """Whole-dict reassignment, like ``Dossier.merge_payload``: JSONB is not a MutableDict."""
+        payload = dict(self.payload or {})
+        payload.update(values or {})
+        self.payload = payload
+        self.updated = datetime.now(timezone.utc)
+        db.session.add(self)
+        if commit:
+            db.session.commit()
+
+    def add_usage(self, cost_usd=None, input_tokens=None, output_tokens=None,
+                  cache_read_tokens=None, commit=True):
+        if cost_usd is not None:
+            self.cost_usd = cost_usd
+        if input_tokens is not None:
+            self.input_tokens = input_tokens
+        if output_tokens is not None:
+            self.output_tokens = output_tokens
+        if cache_read_tokens is not None:
+            self.cache_read_tokens = cache_read_tokens
+        db.session.add(self)
+        if commit:
+            db.session.commit()
+
+    @staticmethod
+    def stale_running(stale_after_s):
+        """Rows stuck ``running`` past ``stale_after_s`` -- a worker died mid-run (RQ kills a job
+        at its timeout, and a SIGKILLed dyno never writes ``error``)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        return (
+            db.session.query(SpikeEscalation)
+            .filter(SpikeEscalation.status == "running", SpikeEscalation.updated < cutoff)
+            .all()
+        )
+
+    @staticmethod
+    def recent(limit=200, product=None, channel=None):
+        q = db.session.query(SpikeEscalation)
+        if product is not None:
+            q = q.filter(SpikeEscalation.product == product)
+        if channel is not None:
+            q = q.filter(SpikeEscalation.channel == channel)
+        rows = q.order_by(SpikeEscalation.created.desc()).limit(limit).all()
+        return [r.to_dict() for r in rows]
+
+    def to_dict(self):
+        payload = self.payload or {}
+        return {
+            "id": self.id,
+            "signature": self.signature,
+            "product": self.product,
+            "channel": self.channel,
+            "build_day": self.build_day.isoformat() if self.build_day else None,
+            "buildid": self.buildid,
+            "uuid": self.uuid,
+            "kind": self.kind,
+            "status": self.status,
+            "attempts": self.attempts,
+            "spike": payload.get("spike"),
+            "findings": payload.get("findings"),
+            "filing": payload.get("filing"),
+            "error": payload.get("error"),
+            "cost_usd": float(self.cost_usd) if self.cost_usd is not None else None,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "created": self.created.isoformat() if self.created else None,
+            "updated": self.updated.isoformat() if self.updated else None,
+        }
 
 
 def _ensure_tables():

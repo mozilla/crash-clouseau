@@ -46,7 +46,8 @@ class TestSchemaDefinition(unittest.TestCase):
         known = {
             "archetypes", "builds", "changesets", "chandaily", "crashstack", "dossiers",
             "feedback", "files", "hgauthors", "lastdate", "nodes", "reviewnote", "scores",
-            "selection", "sigdaily", "signatures", "stats", "sweepmarks", "uuids", "verdicts",
+            "selection", "sigdaily", "signatures", "spike_escalations", "stats", "sweepmarks",
+            "uuids", "verdicts",
         }
         self.assertEqual(
             set(db.metadata.tables) - known, set(),

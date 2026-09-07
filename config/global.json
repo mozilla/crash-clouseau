@@ -105,6 +105,24 @@
                 "beta": 3,
                 "release": 3
             }
+        },
+        "real_installs":
+        {
+            "Firefox":
+            {
+                "nightly": 3,
+                "beta": 6,
+                "release": 50
+            }
+        },
+        "real_alert_rate":
+        {
+            "Firefox":
+            {
+                "nightly": 0.00015,
+                "beta": 0.00015,
+                "release": 0.00015
+            }
         }
     },
     "population":

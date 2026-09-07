@@ -389,6 +389,17 @@ _SPIKE_DEFAULTS = {
     # population -- hangs and shutdown timeouts whose stacks are all distinct -- and 3 is the
     # priced fallback from the beta measurement in `get_threshold`.
     "rising_protos": 3,
+    # THE TWO KNOBS THAT MAKE A SELECTION A *REAL* SPIKE (``spikes.is_real_spike``) -- the bar
+    # for filing a bug on the volume alone and for spending a Claude Fable 5.1 run on it.
+    # ``real_installs`` is the distinct-installation floor on the spike day: one machine crashing
+    # a thousand times is one machine, and one imaged fleet can mint two "installations" in a
+    # minute, so nightly asks for three where the selector asks for one. ``real_alert_rate`` is
+    # the false-alarm rate per signature-day the Poisson excess test may have, the same quantity
+    # the crash-spikes dashboard configures (`alert_rate.major` = 0.015%); it is converted to a
+    # z threshold in code, so the config states a meaning rather than a magic number. Defaults
+    # err toward FEWER escalations, like everything else in this block.
+    "real_installs": 5,
+    "real_alert_rate": 0.00015,
 }
 
 
