@@ -118,6 +118,37 @@ beta then costs nothing and files nothing.
   behaviour ("only crashes without a bug in Bugzilla"), and it suppresses roughly 58-59%
   of beta signatures — the alternative, `file_new`, is measured at ~2.4x the volume.
 
+## Spike escalation (a real spike files a bug, culprit or not; plan #22)
+
+Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct
+installations, 3x the loudest preceding build-day and a Poisson excess at the crash-spikes
+dashboard's `major` alert rate (`crashclouseau/spikes.py`) — that the ordinary triage did not
+file gets one **Claude Fable 5.1 run at effort xhigh** (`agent.spike_escalation`) and a bug on
+**every triaged channel**, the per-channel culprit-filing hold notwithstanding. The bug leads
+with the volume; the investigator's analysis follows only where it grounded its claims in tool
+reads. An APPEARANCE (`...0, 0, 0 -> 50`, no earlier report on the channel) carries the channel's
+title mark — `[new in release]` on release; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
+`GET /api/spikes` lists them.
+
+| lever | what it does |
+|---|---|
+| `SPIKE_ESCALATION_ENABLED=0` | stops the SPEND (no investigations enqueued), no deploy |
+| `AUTOFILE_BUGS=0` | stops the WRITES, as for every filer |
+| `AGENT_CHANNELS` | which channels are swept, as for triage |
+| `agent.spike_escalation.max_runs_per_day` / `daily_cap` (4 / 3 per channel) | bound a bad predicate at a nuisance, not an incident |
+
+Fable 5.1 needs the org's 30-day data retention setting (it is not served under zero data
+retention); an unavailable model falls back to `fallback_model` (opus). A run is $5–40
+(`max_cost_usd`, a backstop whose CLI enforcement is unverified). The investigator and the second
+opinion set `ClaudeAgentOptions.tools=[]` and the triage principal `tools=["Agent", "Task"]`
+(all since 2026-09-07): the CLI's built-in `Bash`/`Read`/`Grep`/`Glob`/`Write`/`WebFetch` are no
+longer registered for any agent, the MCP tools stay — live-probed on this SDK that day (a toy
+MCP tool ran, a subagent still spawned, and the models reported no Bash; with `tools` unset the
+same prompt ran `Bash`). Before that, 6 triage runs in a 2.4-hour window had made 21 `Grep`, 9
+`Read` and 4 `Bash` calls on a dyno with no checkout. `payload->'usage'->'tools_used'` on a done
+spike row is still the cheap day-one glance; for triage, watch that runs still spawn their
+subagents (`▶ spawn` lines in the worker log) and that the abstain rate does not move.
+
 ## Before you deploy: check for live triage runs
 
 A release restarts every dyno (SIGTERM, then SIGKILL ~30s later). A triage run takes

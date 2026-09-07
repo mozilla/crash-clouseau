@@ -112,6 +112,10 @@ _MODEL_IDS = {
     "sonnet": "claude-sonnet-5",
     "opus": "claude-opus-4-8",
     "fable": "claude-fable-5",
+    # Claude Fable 5.1: the spike investigator's model (`agent.spike_escalation`). Thinking is
+    # always on and depth is the options-level `effort`; the raw chain of thought is never
+    # returned, so nothing here should expect `thinking` text from it.
+    "fable-5-1": "claude-fable-5-1",
 }
 
 

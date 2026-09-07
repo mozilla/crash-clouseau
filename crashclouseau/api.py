@@ -169,6 +169,35 @@ def selection():
     )
 
 
+def spikes():
+    """Read-only: the REAL spikes the pipeline escalated (``agent.spike_escalation``) -- what
+    fired, what Claude Fable 5.1 concluded, what was filed or why not. ``?signature=X`` narrows
+    to one signature; ``?channel=`` / ``?product=`` filter; ``?limit=`` caps (default 200)."""
+    product = request.args.get("product") or None
+    channel = request.args.get("channel") or None
+    if product and product not in models.PRODUCT_TYPE.enums:
+        abort(400, f"The product must be one of: {models.PRODUCT_TYPE.enums}")
+    if channel and channel not in models.CHANNEL_TYPE.enums:
+        abort(400, f"The channel must be one of: {models.CHANNEL_TYPE.enums}")
+    try:
+        limit = int(request.args.get("limit", 200))
+    except ValueError:
+        abort(400, "limit must be an integer")
+    limit = max(1, min(limit, 1000))
+    rows = models.SpikeEscalation.recent(limit=limit, product=product, channel=channel)
+    sgn = request.args.get("signature", "").strip()
+    if sgn:
+        rows = [r for r in rows if r.get("signature") == sgn]
+    # The raw model handoff and the persisted brief are for the database, not the feed: a
+    # withheld (memory-safety) analysis must not be readable here anonymously either.
+    if not viewer_authorized():
+        for r in rows:
+            filing = r.get("filing") or {}
+            if filing.get("security_groups"):
+                r["findings"] = None
+    return jsonify({"rows": rows})
+
+
 def evidence():
     """Read-only verdict/dossier/recorded-actions JSON for the evidence panel (#12).
     Writes nothing to Bugzilla or the DB. ``verdict`` is ``None`` when no row exists."""

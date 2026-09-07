@@ -259,6 +259,14 @@ def api_selection():
     return api.selection()
 
 
+# Same-origin only (no `@cross_origin()`), like the retrigger route: nothing else reads it.
+@app.route("/api/spikes", methods=["GET"])
+def api_spikes():
+    from crashclouseau import api
+
+    return api.spikes()
+
+
 @app.route("/api/evidence", methods=["GET"])
 @cross_origin()
 def api_evidence():

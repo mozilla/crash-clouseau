@@ -223,6 +223,24 @@
                 }
             }
         },
+        "spike_escalation":
+        {
+            "enabled": true,
+            "model": "fable-5-1",
+            "effort": "xhigh",
+            "fallback_model": "opus",
+            "max_turns": 40,
+            "max_cost_usd": 40.0,
+            "job_timeout": 3600,
+            "grace_s": 3600,
+            "lookback_days": 5,
+            "once_per_days": 7,
+            "max_per_tick": 2,
+            "max_runs_per_day": 4,
+            "max_stacks": 3,
+            "daily_cap": 3,
+            "comment_on_existing": "comment"
+        },
         "filters":
         {
             "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr", "security/ct/CTKnownLogs.h", "security/manager/ssl/StaticHPKPins.h"],
@@ -263,7 +281,8 @@
                 "claude-haiku-4-5": {"in": 1.0, "out": 5.0},
                 "claude-sonnet-5": {"in": 3.0, "out": 15.0},
                 "claude-opus-4-8": {"in": 5.0, "out": 25.0},
-                "claude-fable-5": {"in": 10.0, "out": 50.0}
+                "claude-fable-5": {"in": 10.0, "out": 50.0},
+                "claude-fable-5-1": {"in": 10.0, "out": 50.0}
             },
             "max_cost_usd_per_crash": 2.0,
             "max_cost_usd_per_crash_offstack": 4.0

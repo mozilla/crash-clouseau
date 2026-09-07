@@ -682,6 +682,19 @@ def comment_mode(value):
     return text if text in COMMENT_ON_EXISTING else "comment"
 
 
+def autofile_globally_enabled():
+    """The GLOBAL half of the filing switch alone: ``AUTOFILE_BUGS`` over the top-level
+    ``agent.autofile.enabled``, with no per-channel veto applied.
+
+    What the spike filer reads (``agent.spike_escalation``). A per-channel ``enabled: false`` is
+    a decision about culprit filings on that channel -- beta's was taken on their yield -- and a
+    spike bug is not one of those: the volume is the finding and it is filed on every triaged
+    channel. The kill switch still has to win, or the one route that files unattended on beta
+    could not be stopped without a deploy."""
+    a = get_agent().get("autofile", {})
+    return _env_bool("AUTOFILE_BUGS", a.get("enabled", False))
+
+
 def autofile_channel_declared(channel):
     """Is *channel* a channel somebody has DECIDED about filing on?
 
@@ -938,6 +951,45 @@ def get_agent_second_opinion():
         # buildid, whereas measured SO specificity is 1.00 (when it refutes, it is right). So:
         # promote conservatively, suppress readily.
         "min_boost_confidence": o.get("min_boost_confidence", 50),
+    }
+
+
+def get_agent_spike_escalation():
+    """The spike-escalation knobs: what happens when a selected build-day is a REAL spike
+    (``spikes.judge_selection``) and the ordinary pushlog triage did not file anything.
+
+    ``enabled`` is a spend switch, like ``AGENT_CHANNELS``: one escalation is a single
+    Claude Fable 5.1 run at ``effort`` xhigh (tens of dollars at the cap), so it has to be
+    stoppable from ``heroku config:set SPIKE_ESCALATION_ENABLED=0`` without a deploy. The
+    FILING half is gated by the global ``AUTOFILE_BUGS`` kill switch and by nothing else: a
+    real spike is filed on every channel, including one whose ordinary filing is held with
+    ``channels.<ch>.enabled: false`` -- that hold was decided on the yield of culprit filings,
+    and a spike bug is a different kind of bug (the volume is the finding).
+
+    ``grace_s`` is how long after a pair was first selected the sweep waits before it may
+    escalate, so the ~20-minute ordinary runs on that build have settled; ``once_per_days``
+    stops a plateau from being escalated again on every build-day it stays loud;
+    ``max_runs_per_day`` and ``daily_cap`` bound spend and writes per channel the way the
+    ordinary filer's cap does -- a bad predicate at 4 a day is a nuisance, at 400 an incident.
+    ``max_cost_usd`` rides ``ClaudeAgentOptions.max_budget_usd``; whether the bundled CLI honours
+    it under stream-json is unverified, so it is a backstop and not the budget."""
+    o = get_agent().get("spike_escalation", {})
+    return {
+        "enabled": _env_bool("SPIKE_ESCALATION_ENABLED", o.get("enabled", True)),
+        "model": o.get("model", "fable-5-1"),
+        "effort": o.get("effort", "xhigh"),
+        "fallback_model": o.get("fallback_model", "opus"),
+        "max_turns": int(o.get("max_turns", 40)),
+        "max_cost_usd": o.get("max_cost_usd", 40.0),
+        "job_timeout": int(o.get("job_timeout", 3600)),
+        "grace_s": int(o.get("grace_s", 3600)),
+        "lookback_days": int(o.get("lookback_days", 5)),
+        "once_per_days": int(o.get("once_per_days", 7)),
+        "max_per_tick": int(o.get("max_per_tick", 2)),
+        "max_runs_per_day": int(o.get("max_runs_per_day", 4)),
+        "max_stacks": int(o.get("max_stacks", 3)),
+        "daily_cap": int(o.get("daily_cap", 3)),
+        "comment_on_existing": comment_mode(o.get("comment_on_existing", "comment")),
     }
 
 

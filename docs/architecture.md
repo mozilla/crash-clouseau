@@ -128,6 +128,19 @@ flowchart TD
    operational view of the runs themselves — status, stalled, cost, duration and
    tokens, with a fleet summary.
 
+6. **Spikes (clock → agentworker).** A selected pair that is a REAL spike
+   (`spikes.judge_selection`: the channel floor, several distinct installations, 3x
+   the loudest preceding build-day and a Poisson excess at the dashboard's `major`
+   alert rate — never `0 → 1`) and that the ordinary triage did not file is escalated
+   by `spike_escalation.sweep_real_spikes` (every 10 min, after a grace period, once
+   per signature family per week): one Claude Fable 5.1 run at effort xhigh over the
+   brief (spike numbers, history, up to three distinct stacks, the ordinary runs'
+   conclusions, the on-stack candidates and the build's whole pushlog window, plus
+   the `crashstats` population tools), then a bug — a comment on the open bug about
+   the signature, or a new one in the investigator's Bugzilla-validated
+   product::component — with the volume first and only tool-grounded analysis under
+   it. Rows in `spike_escalations`; `GET /api/spikes`. Plan `plans/22`.
+
 ## Crash report processing (detail): report → scored seed
 
 This zooms into the **worker** stage above — exactly what `update.put_report`

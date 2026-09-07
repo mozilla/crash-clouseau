@@ -6,7 +6,7 @@ import functools
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from crashclouseau import app, feedback, update
-from crashclouseau.agent import orchestrator
+from crashclouseau.agent import orchestrator, spike_escalation
 
 
 sched = BlockingScheduler(timezone="GMT")
@@ -70,6 +70,16 @@ def sweep_untriaged_job():
     # leaves no dossier for the reaper to find. Deliberately six-hourly rather than 15-minutely:
     # this one SPENDS (~$3 a crash), it is bounded per tick, and nothing about it is urgent.
     orchestrator.sweep_untriaged_crashes()
+
+
+@scheduled(minutes=10)
+def spike_escalation_job():
+    # A REAL spike (not 0 -> 1: `spikes.judge_selection`) that the ordinary triage did not file
+    # gets one Claude Fable 5.1 investigation and a bug, culprit or not. Ten-minutely so a spike
+    # is filed within the hour of its ordinary runs settling; the sweep itself is a few DB reads
+    # per tick and spends nothing -- the spend is the escalations it enqueues, bounded per tick
+    # and per day in `agent.spike_escalation`.
+    spike_escalation.sweep_real_spikes()
 
 
 @scheduled(hours=6)
