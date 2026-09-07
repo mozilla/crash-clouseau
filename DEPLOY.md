@@ -3,12 +3,16 @@
 Checklist for standing up a fresh Heroku app running the evidence agent.
 
 **"Nightly-only, observe-only" is out of date and has been for weeks.** The deployment this
-document describes runs **nightly AND beta** triage (`AGENT_CHANNELS="nightly beta"`) and
-**files bugs unattended** on nightly (`AUTOFILE_BUGS=1`, `daily_cap` 10, `comment_on_existing:
-"comment"` — measured at 2.68 filings/day over 30 days). Beta is triaged with its filing
-**held** (`agent.autofile.channels.beta.enabled: false`); release is declared and held the same
-way and is **not ingested and not triaged** (`plans/20-release-channel-support.md`). Read
-"Cost controls" below as what bounds the spend, not as evidence that there is none.
+document describes runs **nightly, beta AND release** triage (`AGENT_CHANNELS="nightly beta
+release"`) and **files bugs unattended on all three** (`AUTOFILE_BUGS=1`): nightly at
+`daily_cap` 10 with `comment_on_existing: "comment"` (measured at 2.68 filings/day over 30
+days); beta at cap 3 with `skip`, held from 2026-08-26 and **armed 2026-09-07** after a
+fortnight of 40 held runs, 0 filed and 2 at the rung (both the QuotaManager spike a human had
+already filed as bug 2069097); release at cap 2 with `skip`, the `[new in release]` title and a
+tracking nomination, held 08-31 and armed 09-07 (`plans/20-release-channel-support.md`). A
+channel can still be held with `agent.autofile.channels.<ch>.enabled: false`, which beats the
+global arm. Read "Cost controls" below as what bounds the spend, not as evidence that there is
+none.
 
 Several things are automated by the repo now; the rest are one-time app setup.
 

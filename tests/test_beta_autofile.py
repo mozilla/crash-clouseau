@@ -307,12 +307,20 @@ class TestTheTriageOnlyHoldIsVisible(_BetaBase):
             self.assertFalse(cconfig.autofile_channel_held("esr"))       # undeclared
             self.assertFalse(cconfig.autofile_channel_held(None))
 
-    def test_the_shipped_config_holds_beta_and_says_so(self):
-        """Against the REAL config, because a mechanism that works while the shipped value does
-        not use it is the gap that let the first beta filing ride on a deploy."""
-        self.assertTrue(cconfig.autofile_channel_held("beta"))
+    def test_the_shipped_config_no_longer_holds_beta_and_a_hold_still_says_so(self):
+        """Against the REAL config first: beta was held 2026-08-26..09-07 and ARMED on 09-07 on
+        the fortnight's read (40 held, 0 filed, 2 at the rung, both a spike a human had already
+        filed as bug 2069097), so the shipped value no longer uses the veto. The veto's trace --
+        the reason it was built -- is then asserted with the hold patched back in, because a
+        held channel that reads like the global switch measures nothing."""
+        self.assertFalse(cconfig.autofile_channel_held("beta"))
         self.assertFalse(cconfig.autofile_channel_held("nightly"))
-        res = self._file_beta(enabled=False)
+        agent = dict(cconfig.get_agent())
+        agent["autofile"] = {**agent["autofile"], "channels": {
+            **agent["autofile"]["channels"], "beta": {"enabled": False}}}
+        with mock.patch.object(cconfig, "get_agent", return_value=agent):
+            self.assertTrue(cconfig.autofile_channel_held("beta"))
+            res = self._file_beta(enabled=False)
         self.assertFalse(res["filed"])
         self.assertIn("held for channel", res["skipped"])
         self.assertIn("beta", res["skipped"])
