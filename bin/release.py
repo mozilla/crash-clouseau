@@ -7,8 +7,9 @@
 # build, before the new release goes live).
 #
 # models.create() only builds tables when they are missing (gated on the "lastdate"
-# table) and runs _ensure_enum_values() to add any new enum values (e.g. "lead") to a
-# long-lived DB, so it is a safe no-op once the schema exists. HGAuthor.get_default_id()
+# table) and runs _ensure_enum_values() to add any new enum values (the "lead" verdict, the
+# ESR channel labels esr115/esr140/esr153) to a long-lived DB, so it is a safe no-op once the
+# schema exists and every label is present. HGAuthor.get_default_id()
 # seeds the default (empty) author row that Node.hgauthor references. It deliberately
 # does NOT run ingestion (update_all) -- the clock dyno owns that -- so the release
 # phase stays fast and never blocks a deploy on the network.

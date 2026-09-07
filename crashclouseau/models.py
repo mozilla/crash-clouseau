@@ -606,7 +606,9 @@ class Build(db.Model):
     buildid = db.Column(db.DateTime(timezone=True))
     product = db.Column(PRODUCT_TYPE)
     channel = db.Column(CHANNEL_TYPE)
-    version = db.Column(db.String(10))
+    # 24, not 10: `140.15.0esr` is 11 characters, and a long-lived DB keeps the width it was
+    # created with -- see `_WIDENED_COLUMNS`.
+    version = db.Column(db.String(24))
     nodeid = db.Column(db.Integer, db.ForeignKey("nodes.id", ondelete="CASCADE"))
     __table_args__ = (
         db.UniqueConstraint("buildid", "product", "channel", name="uix_builds"),
@@ -3932,7 +3934,19 @@ def commit():
 # each new value must be added explicitly (idempotently) at startup — see
 # _ensure_enum_values(). Fresh DBs and the full create.py recreate get them from the
 # db.Enum(...) definitions directly; only long-lived Postgres DBs need this.
-_ENUM_ADDITIONS = {"VERDICT_TYPE": ("lead",)}
+_ENUM_ADDITIONS = {
+    "VERDICT_TYPE": ("lead",),
+    # Every configured channel label. A long-lived DB built before a channel was declared has no
+    # enum label for it, and the first tick on that channel would fail at `Build.put_data` /
+    # `LastDate.update` with `invalid input value for enum` -- the ESR lines (esr115/140/153,
+    # 2026-09-07) are the first labels added since the initial deploy. Labels the DB already
+    # has are skipped by the pg_enum check below.
+    "CHANNEL_TYPE": tuple(config.get_channels()),
+}
+
+# The only strings ever interpolated into the ALTER below. Our own config labels, and still
+# checked: an enum label is quoted into DDL, so nothing but this alphabet may reach it.
+_ENUM_LABEL = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _ensure_enum_values():
@@ -3949,6 +3963,10 @@ def _ensure_enum_values():
         return
     for enum_name, values in _ENUM_ADDITIONS.items():
         for value in values:
+            if not _ENUM_LABEL.match(str(value)):
+                logger.warning("refusing to add enum %s value %r: not a plain label",
+                               enum_name, value)
+                continue
             try:
                 with engine.connect() as conn:
                     exists = conn.execute(
@@ -3959,18 +3977,61 @@ def _ensure_enum_values():
                         ),
                         {"n": enum_name, "v": value},
                     ).first()
-                    if exists:
-                        continue
-                    conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+                if exists:
+                    continue
+                # A SEPARATE connection, put in AUTOCOMMIT before it runs anything. This used to
+                # re-use the connection above, whose SELECT had already autobegun a transaction,
+                # and SQLAlchemy refuses `execution_options(isolation_level=...)` on a connection
+                # that is in one (`InvalidRequestError`) -- swallowed by the `except` below into a
+                # warning, so this DDL had NEVER run: `lead` reached production only because that
+                # DB was created after the value was in the enum (see plans/16 §4). Proved on a
+                # real Postgres in tests/test_enum_migration_pg.py.
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
                     conn.execute(
                         text('ALTER TYPE "{}" ADD VALUE IF NOT EXISTS \'{}\''.format(
                             enum_name, value))
                     )
+                logger.info("enum %s: added value %r", enum_name, value)
             except Exception as exc:
                 logger.warning(
                     "could not ensure enum %s value %r (add it manually if the DB is "
                     "missing it): %s", enum_name, value, exc
                 )
+
+
+# Columns whose width grew after the initial deploy. `create_all` never alters an existing
+# table, so a long-lived DB keeps the width it was created with: `builds.version` was
+# VARCHAR(10), which fits every nightly, beta and release version string and NOT an ESR one --
+# `140.15.0esr` is 11 characters, and the first esr140 tick would have died at `Build.put_data`
+# with `value too long for type character varying(10)`. Caught on a real Postgres by
+# tests/test_enum_migration_pg.py, which the sqlite suite structurally cannot (sqlite does not
+# enforce VARCHAR widths).
+_WIDENED_COLUMNS = {("builds", "version"): 24}
+
+
+def _ensure_column_widths():
+    """Widen the columns in ``_WIDENED_COLUMNS`` on a long-lived Postgres DB. Idempotent (only a
+    NARROWER column is altered), a no-op elsewhere (sqlite neither enforces widths nor supports
+    ``ALTER COLUMN TYPE``), and never raises -- like ``_ensure_enum_values``, whose AUTOCOMMIT
+    connection it borrows: a failed widening is logged and the tick that needs it fails
+    visibly instead."""
+    engine = db.engine
+    if engine.dialect.name != "postgresql":
+        return
+    for (table, column), width in _WIDENED_COLUMNS.items():
+        try:
+            cols = {c["name"]: c for c in inspect(engine).get_columns(table)}
+            current = getattr((cols.get(column) or {}).get("type"), "length", None)
+            if current is None or current >= width:
+                continue
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                conn.execute(text('ALTER TABLE "{}" ALTER COLUMN "{}" TYPE VARCHAR({})'.format(
+                    table, column, int(width))))
+            logger.info("widened %s.%s from VARCHAR(%s) to VARCHAR(%s)",
+                        table, column, current, width)
+        except Exception as exc:
+            logger.warning("could not widen %s.%s to VARCHAR(%s) (alter it manually): %s",
+                           table, column, width, exc)
 
 
 def create():
@@ -3982,6 +4043,7 @@ def create():
     # Idempotently add post-deploy enum values to a long-lived DB (no-op when fresh,
     # since create_all just built the enums from their current definitions).
     _ensure_enum_values()
+    _ensure_column_widths()
     _ensure_tables()
     return fresh
 
