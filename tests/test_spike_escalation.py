@@ -119,6 +119,19 @@ class TestTheInvestigator(unittest.TestCase):
             self.assertIn('"{}"'.format(name), spike_agent._SYSTEM, name)
         self.assertIn("Never invent", spike_agent._SYSTEM)
 
+    def test_code_in_prose_is_backticked_like_every_other_filing(self):
+        """The ordinary agents are told to wrap code mentions in backticks (`roles._GROUND`)
+        and the spike investigator was not: bug 2070033 named `MessageEventRunnable::WorkerRun
+        (MessageEventRunnable.cpp:88)` bare. Same sentence, and it has to reach the JSON fields
+        because that is what the bug is rendered from."""
+        from crashclouseau.agent import roles
+        rule = "wrap it in `backticks` so it renders as code"
+        self.assertIn(rule, roles._GROUND)
+        self.assertIn(rule, spike_agent._SYSTEM)
+        for field in ("summary", "why", "trigger_path", "evidence", "ruled_out",
+                      "open_questions"):
+            self.assertIn(field, spike_agent._SYSTEM[spike_agent._SYSTEM.index(rule):])
+
     def test_the_brief_reaches_the_prompt(self):
         p = spike_agent._user_prompt(self._BRIEF)
         for text in ("32 reports from 21 distinct installations", "HANG / TIMEOUT",

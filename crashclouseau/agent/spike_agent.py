@@ -102,6 +102,13 @@ _SYSTEM = (
     "timeout, that is exactly what a regressor looks like; for a crash the signature has had "
     "for years, ask what made it FREQUENT, not what introduced it. A change can also merely "
     "expose an older bug; say which you think it is.\n\n"
+    # The same sentence as `roles._GROUND`: the spike bug is Markdown like every other filing,
+    # and its prose comes straight out of the JSON fields below.
+    "Whenever you quote code in prose -- identifiers, function/type names, expressions, "
+    "`file:line`, paths -- wrap it in `backticks` so it renders as code; be consistent, don't "
+    "backtick some and leave the rest bare. This applies to every field of the JSON block "
+    "below (summary, why, trigger_path, evidence, ruled_out, open_questions): they are posted "
+    "to Bugzilla as Markdown, verbatim.\n\n"
     "You also name the Bugzilla product and component the bug belongs to: read them off the "
     "existing bugs for this signature (mcp__bugzilla__signature_bugs) or off a candidate's bug "
     "(mcp__bugzilla__bug), or infer them from the area of the crashing files, and give a "
