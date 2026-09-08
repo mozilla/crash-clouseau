@@ -715,6 +715,13 @@ class TestTheSweep(unittest.TestCase):
         self.assertIn("32 reports from 21", row.payload["spike_sentence"])
         self.assertEqual(row.payload["classic_runs"], 1)
 
+    def test_an_ignored_signature_is_never_escalated(self):
+        """`config.ignored_signatures`: CrashChannel::OpenContentStream has `selected` rows
+        inside the lookback (2026-09-08) and is a deliberate test crash, not a spike."""
+        rows = [_row(32, [1, 0, 2], 21, signature="CrashChannel::OpenContentStream")]
+        self.assertEqual(self._sweep(rows), 0)
+        self.assertEqual(self.created, [])
+
     def test_zero_to_one_is_never_escalated(self):
         self.assertEqual(self._sweep([_row(1, [0, 0, 0], 1), _row(4, [0, 0, 0], 4)]), 0)
         self.assertEqual(self.created, [])

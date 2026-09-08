@@ -154,6 +154,7 @@ class TestOutcomeVocabulary(unittest.TestCase):
                     utils.IMMATURE,
                     utils.DROPPED_NO_USERS,
                     utils.RISING_RATE,
+                    utils.IGNORED,
                 }
             ),
         )
@@ -162,6 +163,112 @@ class TestOutcomeVocabulary(unittest.TestCase):
         width = models.Selection.__table__.c.outcome.type.length
         for outcome in models.SELECTION_OUTCOMES:
             self.assertLessEqual(len(outcome), width, outcome)
+
+
+_TEST_SIG = "CrashChannel::OpenContentStream"
+
+
+class TestIgnoredSignatures(unittest.TestCase):
+    """`config.ignored_signatures`: a deliberate test crash is never analysed, whatever its
+    numbers. `CrashChannel::OpenContentStream` is what about:crashparent and about:crashcontent
+    both produce; it spike-selected on nightly on 2026-09-08 (build 20260908042139) and had been
+    analysed four times. The list has to bite at the selector, in the rate path, in the spike
+    sweep (its old `selected` rows are inside the lookback) and on a queued agent run."""
+
+    def test_the_shipped_list_names_the_about_crash_signature(self):
+        self.assertIn(_TEST_SIG, config.get_ignored_signatures())
+        self.assertTrue(config.is_ignored_signature(_TEST_SIG))
+        self.assertFalse(config.is_ignored_signature("mozilla::places::History::History"))
+        self.assertFalse(config.is_ignored_signature(None))
+        self.assertFalse(config.is_ignored_signature(""))
+
+    def _collect(self, population, builds):
+        """The real `get_new_signatures` over `{buildid: {signature: (count, installs)}}`."""
+        class FakeSuperSearch:
+            def __init__(self, params=None, handler=None, handlerdata=None):
+                bid = params["build_id"]
+                facets = [
+                    {"term": sgn,
+                     "facets": {"cardinality_install_time": {"value": installs},
+                                "build_id": [{"term": bid, "count": count}]}}
+                    for sgn, (count, installs) in population.get(bid, {}).items()
+                ]
+                handler({"errors": None, "facets": {"signature": facets}}, handlerdata)
+
+            def wait(self):
+                pass
+
+        rising = mock.Mock(return_value={})
+        with mock.patch.object(dc.socorro, "SuperSearch", FakeSuperSearch), \
+                mock.patch.object(dc, "get_proto_small"), \
+                mock.patch.object(dc, "get_proto_big"), \
+                mock.patch.object(dc, "_rising_picks", rising), \
+                mock.patch.object(dc, "get_builds", return_value=(list(builds), ">=2026-09-01")):
+            data, selection = dc.get_new_signatures("Firefox", "nightly", datetime(2026, 9, 4))
+        return data, selection, rising
+
+    def test_a_spiking_test_signature_is_dropped_and_logged_not_selected(self):
+        builds = [20260901040000, 20260902040000, 20260903040000, 20260904040000]
+        other = "mozilla::Real::Regression"
+        population = {b: {other: (2, 2)} for b in builds[:3]}
+        population[builds[0]] = dict(population[builds[0]], **{_TEST_SIG: (3, 3)})
+        # Both spike on the last build-day; only one is a regression.
+        population[builds[3]] = {other: (40, 30), _TEST_SIG: (40, 30)}
+        data, selection, rising = self._collect(population, builds)
+
+        self.assertIn(other, data)
+        self.assertNotIn(_TEST_SIG, data)
+        mine = [r for r in selection if r["signature"] == _TEST_SIG]
+        self.assertEqual({r["outcome"] for r in mine}, {utils.IGNORED})
+        # One row per build-day it was reported on (two here), none picked, not evaluated.
+        self.assertEqual(len(mine), 2)
+        self.assertTrue(all(r["picked"] is None and not r["evaluable"] for r in mine))
+        self.assertEqual({r["count"] for r in mine}, {3, 40})
+        # The other signature's decision is untouched.
+        self.assertIn(utils.SELECTED, {r["outcome"] for r in selection
+                                       if r["signature"] == other})
+        # And the rate path is told to keep its hands off it.
+        already = rising.call_args.args[4]
+        self.assertIn(_TEST_SIG, already)
+        self.assertIn(other, already)
+
+    def test_the_row_fits_the_selection_table(self):
+        bid = utils.get_build_date(20260904040000)
+        numbers = {datetime(2026, 9, 4): {"count": 40, "bids": {bid: 40}, "installs": {bid: 30}}}
+        rec = dict(dc.ignored_day_records(numbers)[0], signature=_TEST_SIG)
+        row = models.Selection._row(rec, "Firefox", "nightly", datetime.now(timezone.utc))
+        self.assertEqual((row["outcome"], row["picked"], row["number"], row["ever_selected"]),
+                         (utils.IGNORED, None, 40, False))
+        self.assertLessEqual(len(utils.IGNORED), models.Selection.__table__.c.outcome.type.length)
+
+    def test_a_queued_agent_run_on_it_does_not_spend(self):
+        from crashclouseau.agent import orchestrator
+
+        with mock.patch.object(models.UUID, "get_channel", return_value="nightly"), \
+                mock.patch.object(models.UUID, "get_signature", return_value=_TEST_SIG), \
+                mock.patch.object(models.Dossier, "skip_triage",
+                                  side_effect=AssertionError("the run went past the gate")):
+            self.assertIsNone(orchestrator.run_evidence_agent("u-ignored"))
+
+    def test_a_forced_run_still_goes_through(self):
+        """A retrigger click is one explicit uuid somebody asked for; it is not gated here."""
+        from crashclouseau.agent import orchestrator
+
+        with mock.patch.object(models.UUID, "get_signature",
+                               side_effect=AssertionError("a forced run must not ask")), \
+                mock.patch.object(orchestrator, "build_seed", return_value=None) as seed:
+            orchestrator.run_evidence_agent("u-forced", force=True)
+        seed.assert_called_once_with("u-forced")       # past every gate, up to the seed
+
+    def test_enqueue_skips_it(self):
+        from crashclouseau.agent import orchestrator
+
+        with mock.patch.object(config, "get_agent_enabled", return_value=True), \
+                mock.patch.object(config, "get_agent_channels", return_value=["nightly"]), \
+                mock.patch.object(models.UUID, "get_signature", return_value=_TEST_SIG), \
+                mock.patch.object(orchestrator.worker, "get_queue",
+                                  side_effect=AssertionError("enqueued an ignored signature")):
+            orchestrator.enqueue_agent("u-ignored", channel="nightly")
 
 
 def _record(outcome=utils.SELECTED, count=4):

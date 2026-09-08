@@ -194,6 +194,11 @@ def _sweep_channel(product, channel, cfg, room):
             break
         merged = merge_rows(members)
         signature = merged.get("signature") or family
+        # A deliberate test crash is never a spike worth a run, and its OLD `selected` rows
+        # (three for CrashChannel::OpenContentStream on 2026-09-08) sit inside the lookback.
+        if any(config.is_ignored_signature(s)
+               for s in [signature, family] + list(merged.get("signatures") or [])):
+            continue
         trend = None
         if merged.get("outcome") == utils.RISING_RATE:
             trend = _trend(product, channel, signature)

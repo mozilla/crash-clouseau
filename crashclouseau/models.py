@@ -1091,6 +1091,7 @@ SELECTION_OUTCOMES = frozenset(
         utils.IMMATURE,
         utils.DROPPED_NO_USERS,
         utils.RISING_RATE,
+        utils.IGNORED,
     }
 )
 # The outcomes that mean "we analysed this pair" -- what `ever_selected` records and what the
@@ -1629,6 +1630,18 @@ class UUID(db.Model):
             db.session.query(Build.channel)
             .select_from(UUID)
             .join(Build, Build.id == UUID.buildid)
+            .filter(UUID.uuid == uuid)
+            .scalar()
+        )
+
+    @staticmethod
+    def get_signature(uuid):
+        """The signature of *uuid*, or ``None`` for an unknown uuid. One indexed query -- what
+        ``run_evidence_agent`` asks against ``config.ignored_signatures`` before it spends."""
+        return (
+            db.session.query(Signature.signature)
+            .select_from(UUID)
+            .join(Signature, Signature.id == UUID.signatureid)
             .filter(UUID.uuid == uuid)
             .scalar()
         )

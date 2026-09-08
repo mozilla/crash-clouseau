@@ -48,6 +48,24 @@ def get_channels():
     return _get_global()["channels"]
 
 
+def get_ignored_signatures():
+    """Signatures never analysed, whatever their numbers: ``ignored_signatures`` in
+    ``config/global.json``, exact Socorro signatures.
+
+    The list exists for DELIBERATE crashes. ``CrashChannel::OpenContentStream`` is what
+    about:crashparent and about:crashcontent produce -- 470 of the 495 reports whose MOZ_CRASH
+    reason names ``about:crash*`` between 2026-06 and 2026-09 -- i.e. people testing crash
+    reporting, and it was spike-selected on nightly and analysed four times ($1.25) before this
+    list existed (Calixte, 2026-09-08: "always exclude it whatever the numbers are"). Nothing
+    about a test crash is a regression, so it is dropped at the selector, kept out of the rate
+    path, refused by the spike sweep and refused by a queued agent run."""
+    return frozenset(_get_global().get("ignored_signatures") or ())
+
+
+def is_ignored_signature(signature):
+    return bool(signature) and signature in get_ignored_signatures()
+
+
 # THE ESR FAMILY. Socorro has ONE `esr` release_channel, but Mozilla ships several ESR lines at
 # once -- 115, 140 and 153 on 2026-09-07, 21.9k / 68k / 4k reports a week -- and each line has
 # its own repository (`releases/mozilla-esr<major>`), its own searchfox tree, its own Buildhub

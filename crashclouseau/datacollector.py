@@ -226,6 +226,28 @@ def dropped_day_records(numbers, dead_days):
     return records
 
 
+def ignored_day_records(numbers):
+    """``Selection``-shaped records, outcome ``ignored``, for every build-day an ignored
+    signature (``config.ignored_signatures``) was reported on. Same key set as
+    ``dropped_day_records``, and the same "never placed in a series" markers."""
+    return [
+        {
+            "day": day,
+            "count": info["count"],
+            "index": -1,
+            "baseline": [],
+            "evaluable": False,
+            "spiked": False,
+            "bids": dict(info["bids"]),
+            "installs": dict(info["installs"]),
+            "picked": None,
+            "outcome": utils.IGNORED,
+        }
+        for day, info in sorted(numbers.items())
+        if info["count"]
+    ]
+
+
 def get_new_signatures(product, channel, date):
     """Collect the crash signatures worth triaging for a product/channel. A signature is
     kept when its per-day crash count SPIKES -- it clears an absolute floor and jumps well
@@ -302,6 +324,17 @@ def get_new_signatures(product, channel, date):
         params["build_id"] = bid
         socorro.SuperSearch(params=params, handler=hdler, handlerdata=data).wait()
 
+    # Deliberate test crashes (`config.ignored_signatures`) leave the series HERE, before any
+    # test can pick them -- whatever their numbers -- and leave one `ignored` row per build-day
+    # they were reported on, so the selection log still answers "why not". `ignored` is also
+    # handed to the rate path below, which reads its own rollup rather than this series.
+    selection = []
+    ignored = {sgn for sgn in data if config.is_ignored_signature(sgn)}
+    for sgn in sorted(ignored):
+        selection.extend(dict(rec, signature=sgn) for rec in ignored_day_records(data.pop(sgn)))
+        logger.info("Ignoring {} on {}-{}: a signature config.ignored_signatures names".format(
+            sgn, product, channel))
+
     shift = config.get_ndays() if channel == "nightly" else 1
     threshold = config.get_threshold("installs", product, channel)
     floor = config.get_spike("floor", product, channel)
@@ -321,7 +354,6 @@ def get_new_signatures(product, channel, date):
         )
     big_data = {}
     small_data = {}
-    selection = []
     # What the spike test declined, series and all, for the rate path below.
     declined = {}
     # ONE LAMBDA, TWO SIGNATURES (`utils.lambda_family`): a family is decided ONCE, on the
@@ -417,7 +449,8 @@ def get_new_signatures(product, channel, date):
             declined[sgn] = numbers
 
     rising_data = _rising_picks(
-        product, channel, date, declined, set(big_data) | set(small_data), threshold, selection
+        product, channel, date, declined, set(big_data) | set(small_data) | ignored, threshold,
+        selection,
     )
     del data
     del declined

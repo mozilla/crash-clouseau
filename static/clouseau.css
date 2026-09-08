@@ -472,6 +472,7 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 .sel-immature { color: #ef6c00; }
 .sel-below_install_threshold { color: #ef6c00; }
 .sel-not_spiking { color: #666; }
+.sel-ignored { color: #999; font-style: italic; }
 .sel-picked { font-weight: bold; }
 
 .task-progress {

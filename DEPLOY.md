@@ -41,6 +41,10 @@ Several things are automated by the repo now; the rest are one-time app setup.
   env var `AGENT_CHANNELS`), one run per proto-signature cluster **per channel** (dedup),
   a per-channel `autofile.daily_cap`, and a **sonnet** principal tier are all in
   `config/global.json`.
+- **Ignored signatures** — `ignored_signatures` in `config/global.json`: deliberate test
+  crashes (about:crashparent / about:crashcontent both sign as
+  `CrashChannel::OpenContentStream`) are never selected, never rate-picked, never escalated
+  and never run, whatever their numbers. The selection log records them as `ignored`.
 
 ## One-time app setup (required)
 1. **Add-ons:** Heroku Postgres + Heroku Redis. (`DATABASE_URL`/`REDIS_URL` are set

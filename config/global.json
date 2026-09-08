@@ -10,6 +10,10 @@
         "release",
         "esr153"
     ],
+    "ignored_signatures":
+    [
+        "CrashChannel::OpenContentStream"
+    ],
     "facets_limit": 10000,
     "build_facets_limit": 500,
     "backward_lookup_ndays": 3,

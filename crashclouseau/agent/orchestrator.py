@@ -4024,6 +4024,21 @@ def run_evidence_agent(uuid, force=False):
                 logger.info("agent: %s is on channel %r, which AGENT_CHANNELS no longer names; "
                             "not running", uuid, channel)
                 return
+            # A deliberate test crash (`config.ignored_signatures`) whose job was already
+            # queued when the list gained it: the selector stopped feeding it, this stops what
+            # it had fed. Same shape as the channel check, for the same reason.
+            try:
+                signature = models.UUID.get_signature(uuid)
+            except Exception:                              # pragma: no cover - defensive
+                signature = None
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+            if config.is_ignored_signature(signature):
+                logger.info("agent: %s is %r, a signature config.ignored_signatures names; "
+                            "not running", uuid, signature)
+                return
         # Cheap cost dedup early-out (already-done / a same-proto sibling). A forced
         # retrigger bypasses it; the atomic claim below is still the real guard.
         if skip_dedup and not force and (
@@ -4435,6 +4450,11 @@ def enqueue_agent(uuid, channel=None, force=False):
         channels = config.get_agent_channels()
         if channel is not None and channel not in channels:
             return
+        try:
+            if config.is_ignored_signature(models.UUID.get_signature(uuid)):
+                return
+        except Exception:                                  # pragma: no cover - defensive
+            pass                                           # run_evidence_agent asks again
         if config.get_agent_skip_if_existing() and _proto_already_triaged(uuid):
             logger.info("agent: proto-signature already triaged for %s; not enqueuing", uuid)
             return
