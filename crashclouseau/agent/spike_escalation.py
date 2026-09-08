@@ -757,8 +757,17 @@ def _aware(dt):
 
 
 def _pushdate(node, channel):
+    """When ``node`` landed, as a tz-aware datetime, or ``None``.
+
+    ``sigage.pushdate_for_node`` answers in hg's own shape, ``[epoch, tzoffset]``, and
+    ``validate_findings`` compares the answer to the build's datetime. Handed the list as-is, that
+    comparison raised ``TypeError: '>' not supported between instances of 'list' and
+    'datetime.datetime'`` -- AFTER Claude Fable 5.1 had run and been paid for -- and the beta
+    cookie-WAL escalation of 2026-09-07 (row 3) burned both its attempts on it. The unit tests
+    had mocked THIS function with a datetime, so the shape mismatch was never exercised; the
+    test now mocks the sigage call underneath."""
     try:
-        return sigage.pushdate_for_node(node, channel or "nightly")
+        return sigage.to_datetime(sigage.pushdate_for_node(node, channel or "nightly"))
     except Exception:
         return None
 

@@ -198,6 +198,29 @@ class TestValidation(unittest.TestCase):
         self.assertFalse(brief["culprit_in_window"])
         self.assertEqual(dropped, [])
 
+    def test_hg_answers_in_epoch_pairs_and_the_comparison_still_works(self):
+        """`sigage.pushdate_for_node` returns hg's `[epoch, tzoffset]`, not a datetime. The
+        tests above mock `_pushdate` with a datetime, so the real shape never met the `>`
+        against the build date -- and in prod it did: `TypeError: '>' not supported between
+        instances of 'list' and 'datetime.datetime'`, after Fable had run, on the beta cookie
+        WAL escalation of 2026-09-07 (both attempts). Mock the sigage call instead."""
+        brief = self._brief()          # build 2026-09-03 09:31:45 UTC
+        after = int(datetime(2026, 9, 4, tzinfo=timezone.utc).timestamp())
+        before = int(datetime(2026, 8, 20, tzinfo=timezone.utc).timestamp())
+        f = SpikeFindings(summary="S", culprit={"node": "deadbeefcafe", "confidence": "high"})
+        with mock.patch.object(se.sigage, "pushdate_for_node", return_value=[after, 0]):
+            out, dropped = se.validate_findings(f, dict(brief))
+        self.assertIsNone(out.culprit)
+        self.assertIn("landed after", dropped[0])
+        f = SpikeFindings(summary="S", culprit={"node": "deadbeefcafe", "confidence": "high"})
+        with mock.patch.object(se.sigage, "pushdate_for_node", return_value=[before, 0]):
+            out, dropped = se.validate_findings(f, dict(brief))
+        self.assertIsNotNone(out.culprit)
+        self.assertEqual(dropped, [])
+        # And a lookup that raises is "hg does not know it", not an exception out of the run.
+        with mock.patch.object(se.sigage, "pushdate_for_node", side_effect=RuntimeError("x")):
+            self.assertIsNone(se._pushdate("deadbeefcafe", "beta"))
+
     def test_a_non_hash_is_dropped(self):
         f = SpikeFindings(summary="S", culprit={"node": "bug 12345", "confidence": "high"})
         out, dropped = se.validate_findings(f, self._brief())
