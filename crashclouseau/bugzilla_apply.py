@@ -1182,6 +1182,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     write the field the feedback loop reads, ``models.Feedback.classify`` is told what we claimed:
     our own write agreeing with us is ``unconfirmed``, not ``correct``."""
     channel = uuid_info.get("channel")
+    # THE OPERATOR'S INSTRUCTION FOR THIS CRASH comes first: a run triggered through
+    # `/api/tasks/trigger` with `file_bug: false` writes nothing whatever the channel's policy
+    # says, and this is the reason its Bug column should carry. Sticky on the dossier, so the
+    # reaper's re-run and a retrigger click honour it too (`Dossier._STICKY_PAYLOAD_KEYS`).
+    if models.Dossier.run_options(uuid).get("autofile") is False:
+        return {"filed": False, "channel": channel,
+                "skipped": "filing disabled for this run (triggered with file_bug: false)"}
     cfg = config.get_agent_autofile(channel)
     # THE CHANNEL GATE, and it fails CLOSED. `get_agent_channels()` inside `enqueue_agent` was
     # the ONLY thing keeping filing nightly-only -- and `enqueue_agent(..., force=True)` bypasses

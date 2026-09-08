@@ -293,3 +293,12 @@ def api_tasks_retrigger():
     from crashclouseau import api
 
     return api.retrigger()
+
+
+# Same reasoning as the retrigger: no CORS, JSON body only, and the WRITE token in a header --
+# this one can also ingest a crash the pipeline never selected and file a bug for it.
+@app.route("/api/tasks/trigger", methods=["POST"])
+def api_tasks_trigger():
+    from crashclouseau import api
+
+    return api.trigger()

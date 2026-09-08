@@ -129,11 +129,17 @@ def rising_rate_mindate(mindate, buildid, channel, product, signature):
     return wide
 
 
-def put_report(uuid, buildid, channel, product, chgset, signature=None):
-    """Put a report in the database.
+def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=True,
+               force=False):
+    """Put a report in the database. Returns ``True`` when a stack was stored for it (the run
+    has something to read), ``False`` when every stack was already known on this build, and
+    ``None`` when Socorro has no ``json_dump`` for it.
 
     *signature* is what ``rising_rate_mindate`` reads the rate of; ``None`` scores the report
-    inside the deployed window exactly as before."""
+    inside the deployed window exactly as before. ``enqueue=False`` scores without firing the
+    evidence agent, and ``force`` stores the frames even when the same stack hash is already
+    on the build: both for ``trigger.ingest``, which enqueues its own forced run with the run's
+    options recorded first, on THIS uuid."""
     if channel == "nightly":
         mindate = buildid - relativedelta(days=config.get_ndays())
     else:
@@ -173,7 +179,7 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None):
     )
     if res is None:
         # 'json_dump' is not in crash data
-        return
+        return None
 
     useless = True
     chgsets = models.Changeset.to_analyze(chgsets=interesting_chgsets, channel=channel)
@@ -195,21 +201,21 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None):
     sh = jsh = ""
     if frames:
         sh = frames["hash"]
-        if not models.UUID.is_stackhash_existing(sh, buildid, channel, product, False):
+        if force or not models.UUID.is_stackhash_existing(sh, buildid, channel, product, False):
             models.CrashStack.put_frames(uuid, frames, False, commit=True, channel=channel)
             useless = False
 
     jframes = res.get("java")
     if jframes:
         jsh = jframes["hash"]
-        if not models.UUID.is_stackhash_existing(jsh, buildid, channel, product, True):
+        if force or not models.UUID.is_stackhash_existing(jsh, buildid, channel, product, True):
             models.CrashStack.put_frames(uuid, jframes, True, commit=True, channel=channel)
             useless = False
 
     models.UUID.add_stack_hash(uuid, sh, jsh)
     models.UUID.set_analyzed(uuid, useless)
 
-    if not useless:
+    if not useless and enqueue:
         # Fire the evidence agent for a scored report. Lazy import keeps
         # claude-agent-sdk out of the ingestion/web import path; wrapped so an
         # enqueue failure can never break ingestion.
@@ -219,6 +225,7 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None):
             enqueue_agent(uuid, channel)
         except Exception as e:
             logger.warning("could not enqueue evidence agent for %s: %s", uuid, e)
+    return not useless
 
 
 def analyze_one_report(uuid=None):

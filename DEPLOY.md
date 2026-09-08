@@ -272,3 +272,23 @@ killed those already.
   `crashstack.html?uuid=…` per crash, or `GET /api/evidence?uuid=…` for the JSON.
 - Agent evidence accumulates **slowly** (~20 min/run on the single agentworker), so
   early on most scored crashes won't be tagged yet.
+
+## Analysing one crash by hand
+
+`POST /api/tasks/trigger` analyses a crash the pipeline never selected (or re-runs one it did),
+with the two decisions the pipeline otherwise makes: whether the run may write to Bugzilla and
+whether it is listed on tasks.html. Both default to the cautious side (`file_bug: false`,
+`show_in_tasks: true`) and are recorded on the dossier, so the reaper's re-run and a later
+retrigger click honour them. A uuid we never ingested is fetched from Socorro and scored first;
+its build must be inside the ingested window (`builds` table), or the reply says so. Up to 20
+uuids per call, each a ~$1-3 run. Needs the write token in a header:
+
+```
+curl -s -X POST https://<app>.herokuapp.com/api/tasks/trigger \
+  -H "X-Clouseau-Token: $API_WRITE_TOKEN" -H "Content-Type: application/json" \
+  -d '{"uuids": ["2767868e-0d8d-4674-a1e6-c07c20260908"], "file_bug": false, "show_in_tasks": false}'
+```
+
+The result is on `crashstack.html?uuid=<uuid>` (and `/api/evidence?uuid=`) whatever
+`show_in_tasks` says; a run with `file_bug: false` shows "Not filed: filing disabled for this
+run" in the Bug column when it is listed.

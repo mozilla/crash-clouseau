@@ -2061,11 +2061,13 @@ class TestAlreadyCommentedRoundTrip(unittest.TestCase):
         self.assertNotIn("filed_bug", row.payload)
         self.assertNotIn(uuid, [r["uuid"] for r in models.Dossier.filed_bug_rows()])
 
-    def test_the_sticky_set_stays_exactly_filed_bug(self):
+    def test_the_sticky_set_is_exactly_the_two_decided_keys(self):
         """`reset_for_retrigger` deliberately POPS `reap_attempts` ("an operator retrigger earns
         a fresh give-up budget"), `error` and `run_started`. Making any of those sticky would
-        silently undo a deliberate clear, so widening this set is a decision, not a tidy-up."""
-        self.assertEqual(models.Dossier._STICKY_PAYLOAD_KEYS, ("filed_bug",))
+        silently undo a deliberate clear, so widening this set is a decision, not a tidy-up.
+        `run_options` (2026-09-08) is the second decision: the operator's instruction for a
+        crash's runs must outlive the run it instructs (tests/test_trigger_api.py)."""
+        self.assertEqual(models.Dossier._STICKY_PAYLOAD_KEYS, ("filed_bug", "run_options"))
 
     def test_another_signature_on_the_same_bug_is_not_a_match(self):
         # One defect, several signatures: a second signature arriving on the same bug is real

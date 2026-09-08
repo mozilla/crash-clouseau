@@ -1699,19 +1699,23 @@ class UUID(db.Model):
             db.session.commit()
 
     @staticmethod
-    def add(uuid, signatureid, proto, buildid, commit=True):
-        ret = True
+    def add(uuid, signatureid, proto, buildid, commit=True, force=False):
+        """Insert *uuid* unless a crash with the same proto-signature already sits on this
+        build (one row per proto cluster per build -- the ingest's own dedup). ``force`` skips
+        that check: an operator asking for THIS uuid (``/api/tasks/trigger``) gets its row."""
         protohash = utils.hash(proto)
-        q = (
-            db.session.query(UUID)
-            .filter(
-                UUID.signatureid == signatureid,
-                UUID.protohash == protohash,
-                UUID.buildid == buildid,
+        ret = True
+        if not force:
+            q = (
+                db.session.query(UUID)
+                .filter(
+                    UUID.signatureid == signatureid,
+                    UUID.protohash == protohash,
+                    UUID.buildid == buildid,
+                )
+                .first()
             )
-            .first()
-        )
-        ret = not bool(q)
+            ret = not bool(q)
         if ret:
             ins = pg.insert(UUID).values(
                 uuid=uuid, signatureid=signatureid, protohash=protohash, buildid=buildid
@@ -2465,7 +2469,13 @@ class Dossier(db.Model):
     # any of those sticky here would silently undo a deliberate clear. Stickiness is only correct
     # for a fact about the OUTSIDE WORLD -- something we did to Bugzilla cannot be un-done by
     # re-running the analysis.
-    _STICKY_PAYLOAD_KEYS = ("filed_bug",)
+    #
+    # `run_options` (2026-09-08) is the second, and it passes the same test from the other side:
+    # it is the OPERATOR's standing instruction for this crash (`/api/tasks/trigger`: may the run
+    # file, is it listed on tasks.html), read by `autofile_bug` AFTER the settle write and by the
+    # reaper's and a retrigger's re-runs. An instruction the run's own success erased would let a
+    # "do not file" run file on its re-run. A later API call replaces it; nothing else does.
+    _STICKY_PAYLOAD_KEYS = ("filed_bug", "run_options")
 
     @staticmethod
     def _carry_sticky(ins):
@@ -2857,7 +2867,13 @@ class Dossier(db.Model):
     def list_tasks(limit=500):
         """Recent triage runs (newest first) for the tasks/monitoring view: the uuid
         string + signature + verdict alongside each dossier's status/timestamps/cost/
-        tokens. Returns raw rows; the view layer derives duration/stalled/aggregates."""
+        tokens. Returns raw rows; the view layer derives duration/stalled/aggregates.
+        A run triggered through the API with ``show_in_tasks: false`` is left out."""
+        return Dossier._list_tasks_query(limit).all()
+
+    @staticmethod
+    def _list_tasks_query(limit):
+        """The ``list_tasks`` statement, unexecuted, so a test can read its SQL."""
         return (
             db.session.query(
                 UUID.uuid, Signature.signature, Dossier.status,
@@ -2911,6 +2927,14 @@ class Dossier(db.Model):
             # populated, so join on uuidid -- joining on dossierid would drop every
             # verdict. Dossier is also 1:1 per uuid, so this can't multiply rows.
             .outerjoin(Verdict, Verdict.uuidid == UUID.id)
+            # HIDDEN ON REQUEST: `/api/tasks/trigger` with `show_in_tasks: false` -- a curiosity
+            # run the operator does not want in the fleet's counters. Absent key = shown, so
+            # every row written before the key existed is unaffected. The run itself is still
+            # on crashstack.html and in /api/evidence; only this list omits it.
+            .filter(db.or_(
+                Dossier.payload["run_options"]["show_in_tasks"].astext.is_(None),
+                Dossier.payload["run_options"]["show_in_tasks"].astext != "false",
+            ))
             # NEWEST ACTIVITY first, not newest crash. `created` is INSERT-only
             # (`server_default`) and `reset_for_retrigger` leaves it alone, so a re-run keeps
             # its original timestamp: a retrigger of a 4-day-old crash sorted 4 days down the
@@ -2925,7 +2949,6 @@ class Dossier(db.Model):
             # during an outage. `updated` is a real column and cannot fail.
             .order_by(Dossier.updated.desc())
             .limit(limit)
-            .all()
         )
 
     @staticmethod
@@ -3029,6 +3052,48 @@ class Dossier(db.Model):
         if commit:
             db.session.commit()
         return True
+
+    @staticmethod
+    def set_run_options(uuid, options, commit=True):
+        """Record the operator's standing instructions for this crash's runs
+        (``/api/tasks/trigger``): ``{"autofile": bool, "show_in_tasks": bool, ...}`` under
+        ``payload["run_options"]``, a sticky key. Creates a ``pending`` dossier when none
+        exists (``claim_running`` turns it ``running``); MERGES into an existing one, so the
+        previous analysis stays readable until the re-run settles. ``False`` for an unknown
+        uuid."""
+        uuidid = UUID.get_id(uuid)
+        if uuidid is None:
+            return False
+        d = db.session.query(Dossier).filter(Dossier.uuidid == uuidid).first()
+        if d is None:
+            Dossier.upsert(uuid, payload={"run_options": dict(options)}, status="pending",
+                           commit=commit)
+            return True
+        payload = dict(d.payload or {})
+        payload["run_options"] = dict(options)
+        d.payload = payload
+        d.updated = datetime.now(timezone.utc)
+        db.session.add(d)
+        if commit:
+            db.session.commit()
+        return True
+
+    @staticmethod
+    def run_options(uuid):
+        """The recorded ``run_options`` for *uuid*, ``{}`` when there are none. Never raises:
+        the filer asks this on every run, and a read failure must not become a filing decision
+        either way -- ``{}`` means "no instruction", and the ordinary gates decide."""
+        try:
+            d = Dossier.get_by_uuid(uuid)
+            opts = ((d.payload or {}).get("run_options") if d is not None else None) or {}
+            return dict(opts) if isinstance(opts, dict) else {}
+        except Exception:
+            logger.error("Cannot read the run options of %s", uuid, exc_info=True)
+            try:
+                db.session.rollback()
+            except Exception:  # pragma: no cover - best-effort
+                pass
+            return {}
 
     @staticmethod
     def record_filing_decline(uuid, info, commit=True):

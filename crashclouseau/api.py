@@ -279,3 +279,46 @@ def retrigger():
     if not models.UUID.exists(uuid):
         abort(404, "Unknown uuid")
     return jsonify(orchestrator.retrigger_agent(uuid))
+
+
+# Each uuid is a ~$1-3 run; a list is a deliberate batch, not a bulk tool.
+_MAX_TRIGGER_UUIDS = 20
+
+
+def trigger():
+    """Analyse one crash -- or a short list -- on request, whether or not the pipeline ever
+    selected it: ``POST {"uuids": [...], "file_bug": false, "show_in_tasks": true}`` (or
+    ``"uuid": "..."``). A uuid Socorro knows and we never ingested is fetched and scored first
+    (``trigger.ingest``). ``file_bug`` (default FALSE) decides whether the run may write to
+    Bugzilla; ``show_in_tasks`` (default true) whether it is listed on tasks.html. Both are
+    recorded on the dossier (``run_options``) and honoured by the run and by later re-runs.
+
+    Per-uuid outcomes come back in ``results``; a uuid that cannot be analysed says why there
+    (``ok: false``, ``error``) rather than failing the whole call. Requires the WRITE token in
+    the ``X-Clouseau-Token`` header: this is for scripts, it spends money per uuid and it can
+    reach Bugzilla, so the header-only gate is the right one (``_require_write_token``)."""
+    from crashclouseau import trigger as trigger_mod
+
+    _require_write_token()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        abort(400, "a JSON object body is required")
+    uuids = data.get("uuids")
+    if uuids is None and data.get("uuid"):
+        uuids = [data["uuid"]]
+    if not isinstance(uuids, list) or not uuids:
+        abort(400, "uuids must be a non-empty list (or pass one uuid)")
+    if len(uuids) > _MAX_TRIGGER_UUIDS:
+        abort(400, "at most {} uuids per call".format(_MAX_TRIGGER_UUIDS))
+    if not all(isinstance(u, str) for u in uuids):
+        abort(400, "uuids must be strings")
+    file_bug = data.get("file_bug", False)
+    show_in_tasks = data.get("show_in_tasks", True)
+    if not isinstance(file_bug, bool) or not isinstance(show_in_tasks, bool):
+        abort(400, "file_bug and show_in_tasks must be JSON booleans")
+    unique = []
+    for u in uuids:
+        if u not in unique:
+            unique.append(u)
+    results = trigger_mod.trigger_many(unique, file_bug=file_bug, show_in_tasks=show_in_tasks)
+    return jsonify({"file_bug": file_bug, "show_in_tasks": show_in_tasks, "results": results})
