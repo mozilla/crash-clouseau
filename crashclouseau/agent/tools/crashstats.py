@@ -44,6 +44,9 @@ TERM_FIELDS = (
     "quota_manager_shutdown_timeout", "async_shutdown_timeout", "gmp_plugin",
     "graphics_critical_error", "signature", "proto_signature", "topmost_filenames",
     "accessibility", "accessibility_client", "safe_mode", "background_task_name",
+    # The annotation keys the crashing process set, protected ones included: faceting it split
+    # at the spike build is the annotation-presence differential the prompt asks for.
+    "crash_report_keys",
     "install_time", "uptime", "system_memory_use_percentage", "available_physical_memory",
     "available_virtual_memory", "total_physical_memory", "install_age", "oom_allocation_size",
 )
@@ -66,7 +69,7 @@ _REPORT_KEYS = (
     "quota_manager_shutdown_timeout", "xpcom_spin_event_loop_stack", "ipc_channel_error",
     "ipc_message_name", "ipc_shutdown_state", "adapter_vendor_id", "adapter_device_id",
     "adapter_driver_version", "accessibility", "accessibility_client", "app_init_dlls",
-    "dom_fission_enabled", "gmp_plugin", "graphics_critical_error",
+    "dom_fission_enabled", "gmp_plugin", "graphics_critical_error", "crash_report_keys",
 )
 _VALUE_CAP = 600
 _MAX_THREADS_LISTED = 80
@@ -224,8 +227,17 @@ def _frames_text(frames, max_frames) -> list[str]:
         parts = ["#{}".format(i), _short(fn, 160)]
         if loc:
             parts.append(_short(loc, 160))
+        # Trust (context / cfi / scan / ...) and the expanded inline frames: the prompt reads
+        # inlines on the first frames for the lifecycle phase and treats scan frames cautiously,
+        # so both have to be visible.
+        if fr.get("trust"):
+            parts.append(str(fr["trust"]))
         if module:
             parts.append("[{}]".format(module))
+        inlines = [il.get("function") for il in (fr.get("inlines") or [])
+                   if isinstance(il, dict) and il.get("function")]
+        if inlines:
+            parts.append("[inlined: {}]".format(_short(", ".join(inlines), 300)))
         out.append("  " + "  ".join(parts))
     if frames and len(frames) > max_frames:
         out.append("  ... {} more frames".format(len(frames) - max_frames))
@@ -246,8 +258,10 @@ async def report(
 ) -> str:
     """One processed crash report from crash-stats: the report-level annotations (OS, CPU,
     process type, reason, MOZ_CRASH reason, uptime, memory state, shutdown phase, shutdown-timeout
-    annotations, ...), the list of threads in the minidump, and the stack of ONE thread -- by
-    default the thread the signature describes, or the thread you ask for. Use it to read other
+    annotations, the crash_report_keys, ...), crash_info with the decoded instruction and memory
+    accesses, the list of threads in the minidump, and the stack of ONE thread with each frame's
+    trust and inline frames -- by default the thread the signature describes, or the thread you
+    ask for. Use it to read other
     threads of a hang (what was the awaited thread doing?), to compare reports from different
     machines, or to see annotations the summary did not carry. Read-only."""
     try:
@@ -265,9 +279,12 @@ async def report(
     dump = raw.get("json_dump") or {}
     info = dump.get("crash_info") or {}
     if info:
-        for key in ("type", "address", "instruction", "crashing_thread"):
-            if info.get(key) not in (None, ""):
-                lines.append("crash_info.{}: {}".format(key, _short(info[key], 200)))
+        # `memory_accesses` is the stackwalker's decoded effective address, `address` the raw
+        # exception value; the prompt reconciles the two, so both are printed.
+        for key in ("type", "address", "instruction", "memory_accesses", "assertion",
+                    "crashing_thread"):
+            if info.get(key) not in (None, "", []):
+                lines.append("crash_info.{}: {}".format(key, _short(info[key], 400)))
     threads = dump.get("threads") or []
     if not threads:
         lines.append("(no thread list in the minidump)")

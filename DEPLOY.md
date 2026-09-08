@@ -206,7 +206,7 @@ What to watch on the first ESR days:
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct
 installations, 3x the loudest preceding build-day and a Poisson excess at the crash-spikes
 dashboard's `major` alert rate (`crashclouseau/spikes.py`) — that the ordinary triage did not
-file gets one **Claude Fable 5.1 run at effort xhigh** (`agent.spike_escalation`) and a bug on
+file gets one **Claude Opus 5 run at effort xhigh** (`agent.spike_escalation`) and a bug on
 **every triaged channel**, the per-channel culprit-filing hold notwithstanding. The bug leads
 with the volume; the investigator's analysis follows only where it grounded its claims in tool
 reads. An open bug on the signature gets it as a comment; so does a bug we filed ourselves that a
@@ -226,8 +226,10 @@ crash or signature the spike path filed shows that bug in its Bug column marked 
 | `AGENT_CHANNELS` | which channels are swept, as for triage |
 | `agent.spike_escalation.max_runs_per_day` / `daily_cap` (4 / 3 per channel) | bound a bad predicate at a nuisance, not an incident |
 
-Fable 5.1 needs the org's 30-day data retention setting (it is not served under zero data
-retention); an unavailable model falls back to `fallback_model` (opus). A run is $5–40
+The investigator ran on Claude Fable 5.1 until 2026-09-08 and on Claude Opus 5 since
+(`agent.spike_escalation.model`; the prompt is `crashclouseau/agent/prompts/spike.md`, the
+generic crash-analysis prompt adapted to the MCP tools, which are what carry the tokens and the
+allowlisted UA); an unavailable model falls back to `fallback_model` (opus 4.8). A run is $5–40
 (`max_cost_usd`, a backstop whose CLI enforcement is unverified). The investigator and the second
 opinion set `ClaudeAgentOptions.tools=[]` and the triage principal `tools=["Agent", "Task"]`
 (all since 2026-09-07): the CLI's built-in `Bash`/`Read`/`Grep`/`Glob`/`Write`/`WebFetch` are no

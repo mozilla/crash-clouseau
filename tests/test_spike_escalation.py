@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""A REAL spike files a bug, culprit or not; Claude Fable 5.1 gets one shot at the culprit.
+"""A REAL spike files a bug, culprit or not; Claude Opus 5 gets one shot at the culprit.
 
     DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \\
         uv run python -m unittest tests.test_spike_escalation
@@ -41,7 +41,7 @@ class TestConfig(unittest.TestCase):
     def test_shipped_knobs(self):
         cfg = config.get_agent_spike_escalation()
         self.assertTrue(cfg["enabled"])
-        self.assertEqual((cfg["model"], cfg["effort"]), ("fable-5-1", "xhigh"))
+        self.assertEqual((cfg["model"], cfg["effort"]), ("opus-5", "xhigh"))
         self.assertEqual(cfg["comment_on_existing"], "comment")
         self.assertGreater(cfg["job_timeout"], config.get_agent_job_timeout())
 
@@ -62,10 +62,12 @@ class TestConfig(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
             self.assertFalse(config.autofile_globally_enabled(), "the kill switch still wins")
 
-    def test_the_model_id_is_fable_5_1(self):
+    def test_the_model_id_is_opus_5(self):
         from crashclouseau.agent import triage
-        self.assertEqual(triage._model_id("fable-5-1"), "claude-fable-5-1")
-        self.assertIn("claude-fable-5-1", config.get_llm()["pricing"])
+        self.assertEqual(triage._model_id("opus-5"), "claude-opus-5")
+        self.assertIn("claude-opus-5", config.get_llm()["pricing"])
+        # The other agents' `opus` stays the previous generation; the alias is a new one.
+        self.assertEqual(triage._model_id("opus"), "claude-opus-4-8")
 
 
 class TestTheInvestigator(unittest.TestCase):
@@ -92,10 +94,13 @@ class TestTheInvestigator(unittest.TestCase):
                                          "pref_flip": True}],
                              "window_extent": "the 24 hours before this build"}}
 
-    def test_options_are_fable_xhigh_with_the_builtin_toolset_off(self):
+    def test_options_are_opus_5_xhigh_with_the_builtin_toolset_off(self):
         opts = spike_agent.build_options(self._BRIEF, searchfox_client=object())
-        self.assertEqual(opts.model, "claude-fable-5-1")
+        self.assertEqual(opts.model, "claude-opus-5")
         self.assertEqual(opts.effort, "xhigh")
+        # Opus 5 thinks by default; `thinking: disabled` would be rejected at xhigh, so the
+        # options must not set it.
+        self.assertIsNone(opts.thinking)
         self.assertEqual(opts.tools, [], "the CLI's Bash/Read/Write/WebFetch must not be registered")
         allowed = set(opts.allowed_tools)
         for t in ("mcp__crashstats__facets", "mcp__crashstats__report",
@@ -117,7 +122,43 @@ class TestTheInvestigator(unittest.TestCase):
             self.assertIn('"{}"'.format(name), spike_agent._SYSTEM, name)
         for name in ("node", "bug", "confidence", "why"):
             self.assertIn('"{}"'.format(name), spike_agent._SYSTEM, name)
+        for name in ("kind", "confidence", "source"):
+            self.assertIn('"{}"'.format(name), spike_agent._SYSTEM, name)
         self.assertIn("Never invent", spike_agent._SYSTEM)
+
+    def test_the_prompt_is_the_adapted_generic_one(self):
+        """The prompt is ``prompts/spike.md``, the generic crash-analysis prompt adapted to this
+        runtime: it speaks to the MCP tools (the only route that carries the tokens and the UA)
+        and not to the shell routes the generic one assumed."""
+        path = os.path.join(os.path.dirname(spike_agent.__file__), "prompts", "spike.md")
+        with open(path) as handle:
+            self.assertEqual(spike_agent._SYSTEM, handle.read())
+        for server in ("crashstats", "socorro", "searchfox", "source", "history", "patch",
+                       "bugzilla"):
+            self.assertIn("mcp__{}__".format(server), spike_agent._SYSTEM, server)
+        for tool in ("facets", "report", "crash_stats", "raw_file", "blame", "file_history",
+                     "changeset", "diff", "signature_bugs", "calls_between", "field_layout"):
+            self.assertIn("`{}`".format(tool) if tool in ("blame", "file_history", "changeset",
+                                                          "diff", "signature_bugs")
+                          else tool, spike_agent._SYSTEM, tool)
+        for shell_route in ("searchfox-cli", "curl", "git show", "githubusercontent",
+                            "Checkpoint sha256", "Cost ledger", "Treeherder"):
+            self.assertNotIn(shell_route, spike_agent._SYSTEM, shell_route)
+        for kept in ("Observed:", "Derived:", "Inferred:", "ruled out", "Rate regression",
+                     "async_shutdown_timeout", "crash_report_keys", "memory_accesses",
+                     "no shell, no file system"):
+            self.assertIn(kept, spike_agent._SYSTEM, kept)
+
+    def test_evidence_carries_its_kind_and_confidence_for_inferences_only(self):
+        f = SpikeFindings(evidence=[
+            {"claim": "i", "kind": "Inferred", "confidence": "Medium", "source": "s"},
+            {"claim": "o", "kind": "observed", "confidence": "high", "source": "s"},
+            {"claim": "d", "kind": "derived", "source": "s"},
+            {"claim": "u", "kind": "guessed", "confidence": "certain", "source": "s"},
+            "bare"])
+        self.assertEqual([(e.kind, e.confidence) for e in f.evidence],
+                         [("inferred", "medium"), ("observed", ""), ("derived", ""), ("", ""),
+                          ("", "")])
 
     def test_code_in_prose_is_backticked_like_every_other_filing(self):
         """The ordinary agents are told to wrap code mentions in backticks (`roles._GROUND`)
@@ -902,8 +943,31 @@ class TestTheBugText(unittest.TestCase):
         bullets = [line for line in text.splitlines() if line.startswith("- ")]
         self.assertEqual(len(bullets), spike_report._MAX_EVIDENCE + spike_report._MAX_LIST)
 
+    def test_the_bug_text_shows_the_evidence_kind_and_weighs_alternatives(self):
+        """An inferred claim is marked as such with its confidence, a derived one as derived, an
+        observed one reads as before; and the alternatives list is not headed "Ruled out", since
+        the prompt reserves that word for a direct contradiction."""
+        f = SpikeFindings(summary="S",
+                          evidence=[{"claim": "i", "kind": "inferred", "confidence": "medium",
+                                     "source": "s1"},
+                                    {"claim": "d", "kind": "derived", "source": "s2"},
+                                    {"claim": "o", "kind": "observed", "source": "s3"},
+                                    {"claim": "n", "source": "s4"}],
+                          ruled_out=["X: disfavored -- because"])
+        text = spike_report.analysis_section(f, self._BRIEF)
+        self.assertIn("- i [inferred, medium confidence] (s1)", text)
+        self.assertIn("- d [derived] (s2)", text)
+        self.assertIn("- o (s3)", text)
+        self.assertIn("- n (s4)", text)
+        self.assertIn("Alternatives considered:\n- X: disfavored -- because", text)
+        self.assertNotIn("Ruled out", text)
+
 
 class TestCrashStatsTools(unittest.TestCase):
+    def test_the_annotation_keys_are_facetable(self):
+        self.assertIn("crash_report_keys", crashstats.TERM_FIELDS)
+        self.assertIn("crash_report_keys", crashstats._REPORT_KEYS)
+
     def test_facets_refuses_an_unknown_field(self):
         out = asyncio.run(crashstats.facets(crashstats.CrashStatsCtx(), "sig", "user_comments"))
         self.assertIn("not a field this tool will facet", out)
@@ -947,10 +1011,14 @@ class TestCrashStatsTools(unittest.TestCase):
     def test_report_prints_the_threads_and_one_stack(self):
         raw = {"product": "Firefox", "version": "157.0a1", "report_type": "hang",
                "shutdown_progress": "profile-before-change", "uptime": 80,
-               "json_dump": {"crash_info": {"crashing_thread": 1, "type": "SIGABRT"},
+               "crash_report_keys": ["ShutdownProgress", "QuotaManagerShutdownTimeout"],
+               "json_dump": {"crash_info": {"crashing_thread": 1, "type": "SIGABRT",
+                                            "address": "0x0",
+                                            "memory_accesses": [{"address": "0x18", "size": 8}]},
                              "threads": [
                                  {"thread_name": "MainThread", "frames": [
-                                     {"function": "Wait", "file": "hg:hg.mozilla.org/mozilla-central:xpcom/threads/x.cpp:abc", "line": 5, "module": "xul.dll"}]},
+                                     {"function": "Wait", "file": "hg:hg.mozilla.org/mozilla-central:xpcom/threads/x.cpp:abc", "line": 5, "module": "xul.dll",
+                                      "trust": "cfi", "inlines": [{"function": "Inner", "line": 9}]}]},
                                  {"thread_name": "Shutdown Hang Terminator", "frames": [
                                      {"function": "RunWatchdog", "module": "xul.dll"}]}]},
                "crashing_thread": 0}
@@ -961,6 +1029,10 @@ class TestCrashStatsTools(unittest.TestCase):
         self.assertIn("threads (2)", out)
         self.assertIn("thread 0 (MainThread) stack", out, "the hung thread, not the watchdog")
         self.assertIn("xpcom/threads/x.cpp:5", out)
+        self.assertIn("crash_report_keys: ['ShutdownProgress', 'QuotaManagerShutdownTimeout']", out)
+        self.assertIn("crash_info.address: 0x0", out)
+        self.assertIn("crash_info.memory_accesses: [{'address': '0x18', 'size': 8}]", out)
+        self.assertIn("  cfi  [xul.dll]  [inlined: Inner]", out)
         self.assertIn("thread 1 (Shutdown Hang Terminator) stack", other)
         self.assertIn("RunWatchdog", other)
 

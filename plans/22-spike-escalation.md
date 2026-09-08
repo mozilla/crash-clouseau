@@ -1,4 +1,4 @@
-# 22 — A real spike files a bug, culprit or not (Claude Fable 5.1 escalation)
+# 22 — A real spike files a bug, culprit or not (Claude Opus 5 escalation)
 
 Status: **implemented 2026-09-07, not deployed** (Calixte's rule, stated that day; every number
 below is the shipped configuration). Code: `crashclouseau/spikes.py` (the predicate),
@@ -13,7 +13,8 @@ below is the shipped configuration). Code: `crashclouseau/spikes.py` (the predic
 Whatever the channel, a REAL spike of crashes is a fact by itself and must reach Bugzilla, with a
 culprit when we have one and without when we do not. Ideally the bug tells the developers what
 could be wrong: a culprit candidate, or a fact-based path to the crash, never a guess. A strong
-model (Claude Fable 5.1, effort xhigh) is spent on that, and only on that: never on noise.
+model (Claude Opus 5, effort xhigh; Fable 5.1 until 2026-09-08) is spent on that, and only on
+that: never on noise.
 
 ## What "real" means here — and why 0 → 1 is not it
 
@@ -53,7 +54,8 @@ fetch uuids from Socorro itself.
    with their report facts, the ordinary runs' verdicts / abstain reasons / candidates / second
    opinions / filer declines, the on-stack scored candidates AND the spiking build's pushlog
    window (`_offstack_window`, widened when rising). `spike_agent.run_spike_agent`:
-   `claude-fable-5-1`, `effort` xhigh, `max_turns` 40, `fallback_model` opus, `max_budget_usd`
+   `claude-opus-5` (`claude-fable-5-1` until 2026-09-08), `effort` xhigh, `max_turns` 40,
+   `fallback_model` opus, `max_budget_usd`
    40, **`tools=[]`** (built-in Bash/Read/Write/WebFetch/Agent not registered — the first agent
    here with the sandbox actually set; live-probed 2026-09-07: `--tools ""` keeps the MCP tools
    and drops Bash, while with `tools` unset the same prompt ran Bash under bypassPermissions;
@@ -98,7 +100,7 @@ fetch uuids from Socorro itself.
 
 ## Cost and switches
 
-One escalation = one Fable 5.1 run, expect $5–40 (the budget cap). `SPIKE_ESCALATION_ENABLED=0`
+One escalation = one Opus 5 run, expect $5–40 (the budget cap). `SPIKE_ESCALATION_ENABLED=0`
 stops the spend without a deploy; `AUTOFILE_BUGS=0` stops the writes; `AGENT_CHANNELS` scopes the
 channels. Everything else is `agent.spike_escalation` in `config/global.json`.
 

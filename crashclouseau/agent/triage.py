@@ -111,10 +111,14 @@ _MODEL_IDS = {
     "haiku": "claude-haiku-4-5",
     "sonnet": "claude-sonnet-5",
     "opus": "claude-opus-4-8",
+    # Claude Opus 5: the spike investigator's model (`agent.spike_escalation`, since 2026-09-08;
+    # Fable 5.1 before). Thinking is on by default (adaptive) and depth is the options-level
+    # `effort`; `thinking: disabled` would be rejected at the investigator's `xhigh`, so nothing
+    # here sets `thinking`.
+    "opus-5": "claude-opus-5",
     "fable": "claude-fable-5",
-    # Claude Fable 5.1: the spike investigator's model (`agent.spike_escalation`). Thinking is
-    # always on and depth is the options-level `effort`; the raw chain of thought is never
-    # returned, so nothing here should expect `thinking` text from it.
+    # Claude Fable 5.1: thinking is always on and depth is the options-level `effort`; the raw
+    # chain of thought is never returned, so nothing here should expect `thinking` text from it.
     "fable-5-1": "claude-fable-5-1",
 }
 

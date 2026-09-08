@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""The spike investigator: one Claude Fable 5.1 run over everything we know about a REAL spike.
+"""The spike investigator: one Claude Opus 5 run over everything we know about a REAL spike.
 
 WHEN IT RUNS. ``spike_escalation.sweep_real_spikes`` found a (signature, build-day) the selector
 analysed that is a real spike by ``spikes.judge_selection`` -- a floor, several installations,
@@ -19,6 +19,15 @@ rising). Plus the tools: searchfox, pinned source and blame, patch diffs, Bugzil
 two crash-stats population tools (``tools/crashstats.py``) that answered the QuotaManager spike by
 hand: facets split at the spike build, and other threads of a hang dump.
 
+WHAT IT IS TOLD. The system prompt is ``prompts/spike.md``: the generic crash-analysis prompt
+(crash_prompt v6) adapted to this runtime. Its evidence model, fault classification, population
+labels, history stage and stop rules are kept; its shell, curl, searchfox-cli, git, file-writing
+and cost-ledger instructions are replaced by the MCP tools above, which are the only route that
+carries the Socorro and Bugzilla tokens and the allowlisted ``crash-clouseau`` User-Agent (all
+stamped by libmozdata / ``crashclouseau.net`` at import); its written report is replaced by the
+JSON handoff the filer renders, with the evidence model's observed / derived / inferred kinds
+carried through ``SpikeEvidence.kind``.
+
 WHAT IT MAY NOT DO. No shell, no file system, no subagents: ``ClaudeAgentOptions.tools=[]``
 switches the CLI's built-in toolset off (the second opinion only ALLOWLISTS, which is not a
 registration control -- see ``agent-tool-sandbox`` in the memory notes), so the model has exactly
@@ -32,6 +41,7 @@ has grounded nothing, and the filer publishes only the volume facts from it.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,7 +52,7 @@ from claude_agent_sdk import (
     ResultMessage,
     ToolUseBlock,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from crashclouseau import config
 from crashclouseau.agent import roles, triage
@@ -68,6 +78,8 @@ from crashclouseau.vendor.hackbot_runtime.claude import Reporter
 
 ASSESSMENTS = ("regression", "exposure", "external", "environment", "unknown")
 CONFIDENCES = ("low", "medium", "high")
+# The prompt's evidence model: what kind of claim an evidence item is.
+EVIDENCE_KINDS = ("observed", "derived", "inferred")
 
 # The population tools' ids, in the same shape as ``roles.*_tool_ids``.
 _CRASHSTATS = ["mcp__crashstats__{}".format(name) for name in ("facets", "report")]
@@ -77,85 +89,16 @@ def crashstats_tool_ids() -> list[str]:
     return list(_CRASHSTATS)
 
 
-_SYSTEM = (
-    "You are investigating a crash-volume SPIKE in Firefox for Mozilla's crash triage. One "
-    "crash signature's volume has risen well beyond its own recent baseline -- the numbers, the "
-    "stacks, the population facts and the candidate changesets are in the brief. The spike is a "
-    "fact: a bug will be filed for it whatever you find. Your job is to give the developers who "
-    "will read that bug the most useful FACT-BASED account of what could be wrong.\n\n"
-    "What a good answer is, in order of value:\n"
-    "1. A culprit candidate: a specific changeset (from the pushlog windows in the brief, or one "
-    "you found through blame or file history) with a concrete mechanism connecting what it "
-    "changed to this crash, and the evidence you checked for it. Say how confident you are.\n"
-    "2. Failing that, a plausible path to the crash: what the code is doing when it dies, what "
-    "state or input makes it die, and what changed in the crashing population (an OS or driver "
-    "version, a process type, a version, an annotation value, a memory state) -- each statement "
-    "backed by something you read with a tool in this run.\n"
-    "3. Failing that, an honest map: what you checked and ruled out, and what the code owner "
-    "should look at first.\n\n"
-    "Never invent. Every claim about code, history or the crash population must come from a tool "
-    "result you obtained here; label anything else as a hypothesis, or leave it out. A short "
-    "answer of checked facts is worth more than a long one with guesses: a wrong culprit sends a "
-    "team down the wrong path and costs every later finding its credibility. A candidate merely "
-    "being in the window, or sharing a keyword with the signature, is not evidence. Being "
-    "already present in the spiking build is not a refutation -- for a rate change, a hang or a "
-    "timeout, that is exactly what a regressor looks like; for a crash the signature has had "
-    "for years, ask what made it FREQUENT, not what introduced it. A change can also merely "
-    "expose an older bug; say which you think it is.\n\n"
-    # The same sentence as `roles._GROUND`: the spike bug is Markdown like every other filing,
-    # and its prose comes straight out of the JSON fields below.
-    "Whenever you quote code in prose -- identifiers, function/type names, expressions, "
-    "`file:line`, paths -- wrap it in `backticks` so it renders as code; be consistent, don't "
-    "backtick some and leave the rest bare. This applies to every field of the JSON block "
-    "below (summary, why, trigger_path, evidence, ruled_out, open_questions): they are posted "
-    "to Bugzilla as Markdown, verbatim.\n\n"
-    "You also name the Bugzilla product and component the bug belongs to: read them off the "
-    "existing bugs for this signature (mcp__bugzilla__signature_bugs) or off a candidate's bug "
-    "(mcp__bugzilla__bug), or infer them from the area of the crashing files, and give a "
-    "one-line reason. Use an existing Bugzilla pair exactly as Bugzilla spells it.\n\n"
-    "The ordinary pipeline already analysed this build and did not find a fileable culprit; its "
-    "conclusions are in the brief for you to check, not to trust -- say where you agree or "
-    "disagree and why.\n\n"
-    "Tools (all read-only):\n"
-    "- mcp__crashstats__facets: this signature's crash population broken down by one field, "
-    "optionally SPLIT at the spiking build so the reports before and in the spike can be "
-    "compared -- the fastest way to find what the spiking reports have in common that the "
-    "earlier ones did not (an OS, a driver, a version, a shutdown phase, an annotation, a memory "
-    "state). mcp__crashstats__report: one report's annotations, its thread list and any one "
-    "thread's stack -- on a hang, read the thread that owns the awaited work, not the watchdog.\n"
-    "- mcp__socorro__crash_stats: the signature's age (first-seen build) and top facets.\n"
-    "- mcp__searchfox__*: read the crashing code at tip, walk the call graph (calls_from / "
-    "calls_to / calls_between with FULLY-QUALIFIED symbols), field_layout for a struct offset.\n"
-    "- mcp__source__raw_file: source AS OF the crash build (leak-free; searchfox is tip-only). "
-    "mcp__history__blame / file_history / changeset: who changed a line or a file and when. "
-    "mcp__patch__diff: a candidate changeset's actual diff.\n"
-    "- mcp__bugzilla__bug / signature_bugs: a bug's product::component, status, regressed_by; "
-    "the bugs already filed on this signature (read what a human already found).\n\n"
-    "You have a bounded number of turns; spend them on the checks that would change the answer. "
-    "When the window has a plausible candidate, read its diff and connect it to a crash frame "
-    "before naming it. When it does not, the population comparison and the crashing code are "
-    "where the answer usually is.\n\n"
-    "End your reply with EXACTLY one fenced block:\n"
-    "```json\n"
-    "{\n"
-    '  "summary": "<2-6 sentences for the bug: what is spiking, what you think is wrong, how sure you are>",\n'
-    '  "assessment": "regression|exposure|external|environment|unknown",\n'
-    '  "product": "<Bugzilla product>", "component": "<Bugzilla component>",\n'
-    '  "component_reason": "<one line: where the pair came from>",\n'
-    '  "culprit": {"node": "<changeset hash>", "bug": <bug number or null>, "confidence": "low|medium|high", "why": "<the mechanism connecting the change to this crash>"} or null,\n'
-    '  "trigger_path": "<the checked path to the crash, or empty>",\n'
-    '  "evidence": [{"claim": "<one checked fact>", "source": "<what you read: a searchfox permalink, an hg node + file, a crash-stats facet line, a bug id>"}],\n'
-    '  "ruled_out": ["<candidate or hypothesis>: <why it is out>"],\n'
-    '  "open_questions": ["<what the code owner should check first>"]\n'
-    "}\n"
-    "```\n"
-    "assessment: regression = a Firefox change made this crash happen or happen more; exposure = "
-    "a change exposed an older defect; external = the cause is outside Firefox (an OS update, a "
-    "driver, an antivirus, web content); environment = a collection or signature artefact, not a "
-    "real change; unknown = you could not tell. culprit.confidence is about the CAUSAL link, not "
-    "about the change existing. An empty evidence list means you found nothing checkable -- say "
-    "so in the summary rather than filling it."
-)
+def _load_system_prompt() -> str:
+    """``prompts/spike.md``, read once at import. A file rather than a string so the prompt can
+    be read and diffed as prose; its contract with the filer (the JSON block's field names, the
+    backtick rule) is pinned by tests/test_spike_escalation.py."""
+    path = os.path.join(os.path.dirname(__file__), "prompts", "spike.md")
+    with open(path, "r") as handle:
+        return handle.read()
+
+
+_SYSTEM = _load_system_prompt()
 
 
 class SpikeCulprit(BaseModel):
@@ -187,13 +130,37 @@ class SpikeCulprit(BaseModel):
 
 
 class SpikeEvidence(BaseModel):
+    """One checked fact. ``kind`` is the prompt's evidence model (observed / derived /
+    inferred, empty when the model did not say); ``confidence`` applies to an inferred claim
+    only and is emptied on the others, as the prompt's rule has it."""
+
     claim: str = ""
+    kind: str = ""
+    confidence: str = ""
     source: str = ""
 
     @field_validator("claim", "source", mode="before")
     @classmethod
     def _text(cls, v):
         return str(v or "").strip()
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, v):
+        s = str(v or "").strip().lower()
+        return s if s in EVIDENCE_KINDS else ""
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _known_confidence(cls, v):
+        s = str(v or "").strip().lower()
+        return s if s in CONFIDENCES else ""
+
+    @model_validator(mode="after")
+    def _confidence_is_for_inferences(self):
+        if self.kind != "inferred":
+            self.confidence = ""
+        return self
 
 
 class SpikeFindings(BaseModel):
@@ -308,7 +275,7 @@ class SpikeRun:
 
 
 def build_options(brief: dict, *, searchfox_client=None) -> ClaudeAgentOptions:
-    """The investigator's ``ClaudeAgentOptions``: Claude Fable 5.1 at the configured effort, the
+    """The investigator's ``ClaudeAgentOptions``: Claude Opus 5 at the configured effort, the
     scoped MCP tools only, and the CLI's built-in toolset OFF. Pass ``searchfox_client`` in tests
     to avoid resolving the ``searchfox-cli`` binary."""
     cfg = config.get_agent_spike_escalation()

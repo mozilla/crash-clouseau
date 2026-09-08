@@ -150,16 +150,30 @@ def analysis_section(findings, brief, author_display=None, link_regressor=False,
         lines.append("Possible path to the crash: " + findings.trigger_path)
     evidence = [e for e in findings.evidence if e.claim][:_MAX_EVIDENCE]
     if evidence:
-        lines.append("Checked:\n" + "\n".join(
-            "- {}{}".format(e.claim, " ({})".format(e.source) if e.source else "")
-            for e in evidence))
+        lines.append("Checked:\n" + "\n".join(_evidence_line(e) for e in evidence))
     if findings.ruled_out:
-        lines.append("Ruled out:\n" + "\n".join(
+        # "Alternatives", not "Ruled out": the prompt's evidence model reserves "ruled out" for
+        # a direct contradiction and has each entry carry its own status word (disfavored, not
+        # supported, unresolved), so the heading must not claim more than the entries do.
+        lines.append("Alternatives considered:\n" + "\n".join(
             "- {}".format(x) for x in findings.ruled_out[:_MAX_LIST]))
     if findings.open_questions:
         lines.append("Worth checking first:\n" + "\n".join(
             "- {}".format(x) for x in findings.open_questions[:_MAX_LIST]))
     return "\n\n".join(lines)
+
+
+def _evidence_line(e):
+    """``- claim [inferred, medium confidence] (source)``. The kind is shown only when it is not
+    a plain observation, so a list of observed facts reads as it always did."""
+    kind = getattr(e, "kind", "") or ""
+    confidence = getattr(e, "confidence", "") or ""
+    tag = ""
+    if kind == "inferred":
+        tag = " [inferred{}]".format(", {} confidence".format(confidence) if confidence else "")
+    elif kind == "derived":
+        tag = " [derived]"
+    return "- {}{}{}".format(e.claim, tag, " ({})".format(e.source) if e.source else "")
 
 
 def other_reports_line(brief):

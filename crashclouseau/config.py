@@ -1042,7 +1042,7 @@ def get_agent_spike_escalation():
     (``spikes.judge_selection``) and the ordinary pushlog triage did not file anything.
 
     ``enabled`` is a spend switch, like ``AGENT_CHANNELS``: one escalation is a single
-    Claude Fable 5.1 run at ``effort`` xhigh (tens of dollars at the cap), so it has to be
+    Claude Opus 5 run at ``effort`` xhigh (tens of dollars at the cap), so it has to be
     stoppable from ``heroku config:set SPIKE_ESCALATION_ENABLED=0`` without a deploy. The
     FILING half is gated by the global ``AUTOFILE_BUGS`` kill switch and by nothing else: a
     real spike is filed on every channel, including one whose ordinary filing is held with
@@ -1059,7 +1059,7 @@ def get_agent_spike_escalation():
     o = get_agent().get("spike_escalation", {})
     return {
         "enabled": _env_bool("SPIKE_ESCALATION_ENABLED", o.get("enabled", True)),
-        "model": o.get("model", "fable-5-1"),
+        "model": o.get("model", "opus-5"),
         "effort": o.get("effort", "xhigh"),
         "fallback_model": o.get("fallback_model", "opus"),
         "max_turns": int(o.get("max_turns", 40)),
