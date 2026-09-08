@@ -21,7 +21,7 @@ from unittest import mock
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
-from crashclouseau import bugzilla_apply, config, models, report_bug, spike_report, utils  # noqa: E402
+from crashclouseau import bugzilla_apply, config, models, report_bug, spike_report, spikes, utils  # noqa: E402
 from crashclouseau.agent import spike_agent, spike_escalation as se  # noqa: E402
 from crashclouseau.agent.spike_agent import SpikeFindings  # noqa: E402
 from crashclouseau.agent.tools import crashstats  # noqa: E402
@@ -736,6 +736,8 @@ class TestTheSweep(unittest.TestCase):
                 {"uuid": "u-1", "status": "done", "verdict": "abstain", "filed_bug": None}]),
             mock.patch.object(se, "representative_uuid", return_value="u-1"),
             mock.patch.object(se, "_trend", return_value={}),
+            # The signature's own build history (Socorro): quiet unless a test says otherwise.
+            mock.patch.object(spikes, "build_history", return_value=[]),
         ]
         for p in patches:
             p.start()
@@ -755,6 +757,19 @@ class TestTheSweep(unittest.TestCase):
         self.assertEqual(row.payload["spike"]["count"], 32)
         self.assertIn("32 reports from 21", row.payload["spike_sentence"])
         self.assertEqual(row.payload["classic_runs"], 1)
+
+    def test_a_signature_loud_on_its_earlier_builds_is_not_a_spike(self):
+        """Bug 2070317's shape: the selector's baseline is one quiet build-day, the signature's
+        own builds of the weeks before carried far more. Not escalated, nothing recorded."""
+        loud = [{"buildid": "20260826090609", "count": 221}, {"buildid": "20260902090331", "count": 90}]
+        with mock.patch.object(spikes, "build_history", return_value=loud):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
+        self.assertEqual(self.created, [])
+
+    def test_an_unreadable_history_escalates_nothing(self):
+        with mock.patch.object(spikes, "build_history", return_value=None):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
+        self.assertEqual(self.created, [])
 
     def test_an_ignored_signature_is_never_escalated(self):
         """`config.ignored_signatures`: CrashChannel::OpenContentStream has `selected` rows
@@ -1035,6 +1050,27 @@ class TestCrashStatsTools(unittest.TestCase):
         self.assertIn("  cfi  [xul.dll]  [inlined: Inner]", out)
         self.assertIn("thread 1 (Shutdown Hang Terminator) stack", other)
         self.assertIn("RunWatchdog", other)
+
+
+class TestTheHistoryInTheBugText(unittest.TestCase):
+    _BRIEF = {"signature": "mozilla::Foo::Bar", "channel": "beta", "product": "Firefox",
+              "buildid": "20260907090530", "build_day": "2026-09-07",
+              "first_seen_channel": "20260907090530"}
+
+    def test_an_earlier_build_with_a_report_makes_it_a_rise_not_an_appearance(self):
+        spike = {"kind": "build_day", "count": 10, "installs": 6, "baseline": [0],
+                 "history": [], "history_max": 0, "history_days": 21}
+        self.assertTrue(spike_report.is_new_signature(dict(self._BRIEF, spike=spike)))
+        old = dict(spike, history=[{"buildid": "20260902090331", "count": 1}], history_max=1)
+        self.assertFalse(spike_report.is_new_signature(dict(self._BRIEF, spike=old)))
+
+    def test_the_paragraph_names_the_horizon(self):
+        spike = {"kind": "build_day", "count": 32, "installs": 21, "baseline": [1, 0, 2],
+                 "history": [{"buildid": "a", "count": 4}], "history_max": 4, "history_days": 21,
+                 "baseline_max": 4, "ratio": 8.0, "z": 7.0, "z_min": 3.62}
+        text = spike_report.spike_paragraph(dict(self._BRIEF, spike=spike))
+        self.assertIn("8.0x the loudest of the preceding build-days and of this signature's "
+                      "builds over the 21 days before", text)
 
 
 if __name__ == "__main__":

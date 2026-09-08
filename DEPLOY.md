@@ -204,8 +204,11 @@ What to watch on the first ESR days:
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct
-installations, 3x the loudest preceding build-day and a Poisson excess at the crash-spikes
-dashboard's `major` alert rate (`crashclouseau/spikes.py`) — that the ordinary triage did not
+installations, 3x the loudest of the preceding build-days AND of the signature's own builds over
+the 21 days before (`spike.history_days`, read from Socorro per judgement; unreadable = not a
+spike — added 2026-09-08 after bug 2070317 was filed on a one-build zero baseline), and a Poisson
+excess at the crash-spikes dashboard's `major` alert rate (`crashclouseau/spikes.py`) — that the
+ordinary triage did not
 file gets one **Claude Opus 5 run at effort xhigh** (`agent.spike_escalation`) and a bug on
 **every triaged channel**, the per-channel culprit-filing hold notwithstanding. The bug leads
 with the volume; the investigator's analysis follows only where it grounded its claims in tool

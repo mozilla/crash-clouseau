@@ -80,6 +80,16 @@
                 "esr": 5
             }
         },
+        "history_days":
+        {
+            "Firefox":
+            {
+                "nightly": 21,
+                "beta": 21,
+                "release": 42,
+                "esr": 42
+            }
+        },
         "mature_installs":
         {
             "Firefox":

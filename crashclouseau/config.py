@@ -456,8 +456,8 @@ _SPIKE_DEFAULTS = {
     # population -- hangs and shutdown timeouts whose stacks are all distinct -- and 3 is the
     # priced fallback from the beta measurement in `get_threshold`.
     "rising_protos": 3,
-    # THE TWO KNOBS THAT MAKE A SELECTION A *REAL* SPIKE (``spikes.is_real_spike``) -- the bar
-    # for filing a bug on the volume alone and for spending a Claude Fable 5.1 run on it.
+    # THE KNOBS THAT MAKE A SELECTION A *REAL* SPIKE (``spikes.is_real_spike``) -- the bar for
+    # filing a bug on the volume alone and for spending the investigator's run on it.
     # ``real_installs`` is the distinct-installation floor on the spike day: one machine crashing
     # a thousand times is one machine, and one imaged fleet can mint two "installations" in a
     # minute, so nightly asks for three where the selector asks for one. ``real_alert_rate`` is
@@ -467,6 +467,23 @@ _SPIKE_DEFAULTS = {
     # err toward FEWER escalations, like everything else in this block.
     "real_installs": 5,
     "real_alert_rate": 0.00015,
+    # HOW FAR BACK the escalation reads the signature's OWN per-build history before it calls a
+    # build-day a spike (``spikes.build_history``): the loudest of the signature's builds inside
+    # this many days joins the selector's baseline. The selector's window decides what to SPEND
+    # on and is 3 build-days on nightly and 1-2 on beta (``Build.get_last_versions(n=3)`` is the
+    # whole series there); a human deciding whether a signature spiked reads its build table for
+    # a few weeks. 21 is the selector's own ``nightly_window_ndays`` -- the stretch a build stays
+    # testable for -- and covers 6-9 beta builds; not fitted on a case. The horizon must hold at
+    # least the channel's PREVIOUS build or it adds nothing, and release and ESR ship every four
+    # weeks (a dot release in between when there is one), so ``config/global.json`` gives them 42
+    # days -- one cycle plus the slack of a slipped one; measured 2026-09-08 on the release
+    # cookie-WAL escalation (build 20260903215306): 21 days held no earlier release build at all.
+    # The miss that exposed the gap, 2026-09-08: bug 2070317, 10 reports of a 522-day-old OOM
+    # signature on 156.0b4 filed as an appearance from zero because 156.0b3 had symbolized the
+    # same crash under a sibling signature, while the preceding beta builds carried 90-221 each.
+    # Cost: a signature fixed and regressed inside the horizon is a rise the ordinary triage and
+    # the rate path still see, not a "spike" bug.
+    "history_days": 21,
 }
 
 

@@ -402,12 +402,15 @@ def _user_prompt(brief: dict) -> str:
         lines += ["", "WHAT FIRED: " + brief["spike_sentence"]]
         spike = brief.get("spike") or {}
         if spike.get("kind") == "build_day":
+            window = "the loudest of the preceding build-days"
+            if spike.get("history_days"):
+                window += " and of this signature's own builds over the {} days before".format(
+                    spike["history_days"])
             lines.append(
-                "  (the selector's bar is {}x the loudest of the preceding build-days; the "
-                "Poisson excess of this day against that baseline is z={}, bar {}; distinct "
-                "installations {} against a floor of {})".format(
+                "  (the bar is {}x {}; the Poisson excess of this day against that baseline is "
+                "z={}, bar {}; distinct installations {} against a floor of {})".format(
                     config.get_spike("ratio", brief.get("product") or "Firefox", channel),
-                    spike.get("z"), spike.get("z_min"), spike.get("installs"),
+                    window, spike.get("z"), spike.get("z_min"), spike.get("installs"),
                     spike.get("min_installs")))
     if brief.get("trend_sentence"):
         lines.append("Rate over the last week: " + brief["trend_sentence"])

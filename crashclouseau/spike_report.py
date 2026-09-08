@@ -32,11 +32,15 @@ def spike_paragraph(brief):
         return None
     parts = ["**Filed because this signature's crash volume spiked.** " + sentence]
     if spike.get("kind") == "build_day":
+        window = "the loudest of the preceding build-days"
+        if spike.get("history_days"):
+            window = ("the loudest of the preceding build-days and of this signature's builds "
+                      "over the {} days before".format(spike["history_days"]))
         parts.append(
-            "That is {}the loudest of the preceding build-days (Clouseau's bar is {}x, and the "
-            "Poisson excess of the day against that baseline is z = {}, bar {})."
+            "That is {}{} (Clouseau's bar is {}x, and the Poisson excess of the day against "
+            "that baseline is z = {}, bar {})."
             .format("{}x ".format(spike["ratio"]) if spike.get("ratio") else
-                    "an appearance from zero over ",
+                    "an appearance from zero over ", window,
                     config.get_spike("ratio", brief.get("product") or "Firefox",
                                      brief.get("channel") or "nightly"),
                     spike.get("z"), spike.get("z_min")))
@@ -63,11 +67,15 @@ def is_new_signature(brief):
     the all-channel one: a crash that ran on nightly for a month and reaches release with a
     version is new IN RELEASE, which is what the mark says. New until a clock says otherwise --
     the baseline is the selector's own evidence, and a first-seen can only push the origin
-    earlier; a lookup that failed cannot make an appearance look old."""
+    earlier; a lookup that failed cannot make an appearance look old. The signature's own build
+    history (``spikes.build_history``, when the judgement carried it) is the first clock: any
+    earlier build with a report of it, and this is a rise, not an appearance."""
     spike = brief.get("spike") or {}
     if spike.get("kind") != "build_day":
         return False
     if any(int(b or 0) > 0 for b in (spike.get("baseline") or [])):
+        return False
+    if any(int((h or {}).get("count") or 0) > 0 for h in (spike.get("history") or [])):
         return False
     buildid = str(brief.get("buildid") or "")
     seen = brief.get("first_seen_channel")
