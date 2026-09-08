@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=9">
+    <link rel="stylesheet" href="/clouseau.css?v=10">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
     <script src="/clouseau.js"></script>
@@ -76,6 +76,100 @@
       <div class="task-progress-bar" style="width:{{ summary.pct_done }}%;"></div>
     </div>
 
+    {#- The spike escalations: a REAL spike the ordinary triage did not file, investigated by
+        Claude Fable 5.1 and filed with or without a culprit (agent.spike_escalation). Its own
+        table in the database (spike_escalations) and its own budget, so it is its own section
+        here: bug 2070033 was filed from it on 2026-09-08 and this page showed nothing for it.
+        Same eleven columns as the table below so the .tasks column widths apply unchanged. -#}
+    {% if spike_summary is defined -%}
+    <h3 class="task-subtitle">Spike escalations
+      <span class="task-sub" title="the recent spike escalations: real spikes handed to Claude Fable 5.1 and filed by volume">{{ spike_summary.total }} recent &middot; {{ spike_summary.filed }} filed
+        {%- if spike_summary.triage_filed %} &middot; {{ spike_summary.triage_filed }} filed by the ordinary triage{% endif %}
+        {%- if spike_summary.running %} &middot; {{ spike_summary.running }} running{% endif %}
+        {%- if spike_summary.stalled %} &middot; <span class="tc-err-text">{{ spike_summary.stalled }} stalled</span>{% endif %}
+        {%- if spike_summary.error %} &middot; <span class="tc-err-text">{{ spike_summary.error }} error</span>{% endif %}
+        &middot; ${{ '%.2f' | format(spike_summary.cost_total) }}
+        &middot; <a href="/api/spikes">json</a></span>
+    </h3>
+    <table class="tasks spike-tasks">
+      <thead>
+        <tr>
+          <th>Crash</th>
+          <th>Ch.</th>
+          <th>Signature</th>
+          <th>Status</th>
+          <th>Spike</th>
+          <th>Bug</th>
+          <th style="text-align:right;">Duration</th>
+          <th style="text-align:right;">Cost</th>
+          <th style="text-align:right;">Tokens&nbsp;(in&nbsp;/&nbsp;out&nbsp;/&nbsp;cache)</th>
+          <th>Started&nbsp;(UTC)</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in spikes -%}
+        <tr>
+          <td>{% if s.uuid %}<a href="/crashstack.html?uuid={{ s.uuid }}" title="{{ s.uuid }}">{{ s.uuid[:8] }}</a>{% else %}&mdash;{% endif %}</td>
+          <td title="{{ s.channel or 'unknown' }}{% if s.buildid %} {{ s.buildid }}{% endif %}">{{ (s.channel or '?')[:1]|upper }}</td>
+          <td class="task-sgn" title="{{ s.signature }}">{{ s.signature }}</td>
+          <td>
+            <span class="status-badge status-{{ s.status }}"{% if s.error %} title="{{ s.error }}"{% endif %}>{{ s.status }}</span>
+            {% if s.stalled -%}<span class="status-badge status-stalled">stalled</span>{%- endif %}
+            {% if s.attempts > 1 %}<span class="task-conf" title="attempts">&times;{{ s.attempts }}</span>{% endif %}
+            {% if s.error -%}<div class="task-err" title="{{ s.error }}">{{ s.error[:120] }}{% if s.error|length > 120 %}&hellip;{% endif %}</div>{%- endif %}
+          </td>
+          {#- The spike itself (what fired, against what; the bug's sentence on hover), then
+              what the investigator concluded when it ran: its assessment and the culprit it
+              named, if any. Withheld anonymously for a memory-safety filing, as /api/spikes
+              does. -#}
+          <td class="spike-cell" title="{{ s.spike_sentence }}">
+            <span class="spike-kind">{{ 'rate' if s.kind == 'rate' else 'build-day' }}</span>
+            {%- if s.assessment %} <span class="assess assess-{{ s.assessment }}" title="the investigator's assessment of the spike">{{ s.assessment }}</span>{% endif %}
+            {%- if s.withheld %} <span class="assess assess-withheld" title="memory-safety crash: the analysis is not shown here">withheld</span>{% endif %}
+            {%- if s.culprit_node %} <span class="spike-culprit" title="culprit named by the investigator ({{ s.culprit_confidence }} confidence){% if s.culprit_bug %}, bug {{ s.culprit_bug }}{% endif %}">{{ s.culprit_node[:12] }}</span>{% endif %}
+            <span class="spike-num">{{ s.spike_str }}</span>
+          </td>
+          {#- What was filed. `new` = the escalation opened the bug; `cmt` = it commented on an
+              existing one; `triage` = the ordinary triage had already filed this spike, so the
+              escalation recorded that and did not run. A run that filed nothing says why on
+              hover, and links the bug the reason is about. -#}
+          <td class="task-bug">
+            {% if s.bug -%}
+            <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ s.bug|e }}"
+               target="_blank" rel="noopener"
+               title="{% if s.bug_mode == 'triage' %}{{ s.not_filed_reason|e }}{% elif s.bug_mode == 'spike_comment' %}An open bug about this signature exists; the spike was added there as a comment.{% else %}Filed by the spike escalation.{% endif %}{% if s.component %} {{ s.component|e }}.{% endif %}{% if s.needinfo %} Needinfo: {{ s.needinfo|e }}{% endif %}">bug&nbsp;{{ s.bug|e }}</a>
+            {%- if s.bug_mode == 'triage' %} <span class="task-bug-mode" title="filed by the ordinary triage; the escalation did not run">triage</span>
+            {%- elif s.bug_mode == 'spike_comment' %} <span class="task-bug-mode" title="commented on an existing bug rather than filing a new one">cmt</span>
+            {%- else %} <span class="task-bug-mode task-bug-new" title="a new bug">new</span>{% endif -%}
+            {%- if s.needinfo %} <span class="task-bug-ni" title="needinfo: {{ s.needinfo|e }}">ni?</span>{% endif -%}
+            {%- elif s.not_filed_bug -%}
+            <span class="task-bug-declined" title="Not filed: {{ s.not_filed_reason|e }}">not&nbsp;filed (<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ s.not_filed_bug|e }}"
+               target="_blank" rel="noopener">bug&nbsp;{{ s.not_filed_bug|e }}</a>)</span>
+            {%- elif s.not_filed_reason -%}
+            <span class="task-bug-declined" title="Not filed: {{ s.not_filed_reason|e }}">not&nbsp;filed</span>
+            {%- else -%}&mdash;{%- endif %}
+          </td>
+          <td style="text-align:right;">{{ s.duration_str }}</td>
+          <td style="text-align:right;">{% if s.cost_usd is not none %}${{ '%.4f' | format(s.cost_usd) }}{% else %}&mdash;{% endif %}</td>
+          <td style="text-align:right;" class="task-tok"
+              title="input / output / cache-read tokens (blank for a row that never ran)">
+            {%- if (s.input_tokens or 0) or (s.output_tokens or 0) or (s.cache_read_tokens or 0) -%}
+            {{ s.input_tokens }}&nbsp;/&nbsp;{{ s.output_tokens }}&nbsp;/&nbsp;{{ s.cache_read_tokens }}
+            {%- else -%}&mdash;{%- endif -%}
+          </td>
+          <td class="task-ts">{% if s.created %}{{ s.created.strftime('%Y-%m-%d&nbsp;%H:%M') | safe }}{% endif %}</td>
+          <td><a class="spike-json" href="/api/spikes?signature={{ s.signature|urlencode }}{% if s.channel %}&amp;channel={{ s.channel|urlencode }}{% endif %}" title="the escalation's record: the spike, the findings, the filing">json</a></td>
+        </tr>
+        {% endfor -%}
+        {% if not spikes -%}
+        <tr><td colspan="11" class="task-empty">No spike escalations yet.</td></tr>
+        {%- endif %}
+      </tbody>
+    </table>
+
+    <h3 class="task-subtitle">Triage runs</h3>
+    {%- endif %}
     <table class="tasks">
       <thead>
         <tr>
@@ -130,6 +224,14 @@
             {%- elif t.declined_bug -%}
             <span class="task-bug-declined" title="Not filed: {{ t.declined_reason|e }}">not&nbsp;filed (<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.declined_bug|e }}"
                target="_blank" rel="noopener">bug&nbsp;{{ t.declined_bug|e }}</a>)</span>
+            {#- This run filed nothing, but the SPIKE escalation filed on this crash or on this
+                signature (see the section above). A dash here read as "nothing happened" while
+                bug 2070034 existed for exactly this uuid. Marked as the spike path's. -#}
+            {%- elif t.spike_bug -%}
+            <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.spike_bug|e }}"
+               target="_blank" rel="noopener"
+               title="Filed by the spike escalation for this signature's crash volume, not by this run.{% if t.declined_reason %} This run: not filed: {{ t.declined_reason|e }}{% endif %}">bug&nbsp;{{ t.spike_bug|e }}</a>
+            <span class="task-bug-mode" title="filed by the spike escalation, not by this run">spike</span>
             {%- elif t.declined_reason -%}
             <span class="task-bug-declined" title="Not filed: {{ t.declined_reason|e }}">&mdash;</span>
             {%- else -%}&mdash;{%- endif %}

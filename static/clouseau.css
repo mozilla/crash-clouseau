@@ -549,6 +549,39 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
    the gate's exact reason. Muted: the bug link is still the thing worth clicking. */
 .task-bug-declined { color: #777; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
+
+/* Spike escalations: the second table on tasks.html (agent.spike_escalation). Same eleven
+   columns as the triage table so the .tasks nth-child widths above apply to it unchanged;
+   the "Spike" column stands where "Verdict" does, the "Details" one where "Actions" does. */
+.task-subtitle { margin: 1.1em 0.2em 0.4em; }
+.task-subtitle .task-sub { margin-left: 0.8em; font-size: 0.7em; font-weight: normal; color: #666; }
+.task-subtitle .task-sub a { color: #0060df; }
+.tc-err-text { color: #c0392b; }
+.spike-tasks { margin-bottom: 1.2em; }
+.spike-cell { overflow: hidden; }
+.spike-kind { font-family: monospace; font-size: 0.85em; color: #333; }
+.spike-num { display: block; font-family: monospace; font-size: 0.8em; color: #555;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spike-culprit { margin-left: 0.3em; font-family: monospace; font-size: 0.85em; color: #2e7d32; }
+/* The investigator's assessment of the spike: the vocabulary is spike_agent.ASSESSMENTS. */
+.assess {
+    display: inline-block;
+    margin-left: 0.3em;
+    padding: 0 0.35em;
+    border-radius: 3px;
+    font-size: 0.75em;
+    background: #eee;
+    color: #333;
+    vertical-align: middle;
+}
+.assess-regression { background: #2e7d32; color: #fff; }
+.assess-exposure { background: #fdf2d0; color: #8a6d1f; }
+.assess-external, .assess-environment { background: #e8eef7; color: #334d66; }
+.assess-unknown { color: #777; }
+.assess-withheld { background: #f6e0e0; color: #8a2f2f; }
+/* `new` = the escalation opened the bug (the loud case, the one worth reading). */
+.task-bug-new { background: #e3f1e4; color: #2e7d32; }
+.spike-json { font-size: 0.85em; }
 .task-err {
     margin-top: 0.3em;
     font-family: monospace;

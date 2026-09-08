@@ -4560,6 +4560,14 @@ class SpikeEscalation(db.Model):
             "status": self.status,
             "attempts": self.attempts,
             "spike": payload.get("spike"),
+            # The sentence the sweep decided on (the bug's first paragraph is built from it),
+            # the sibling signatures it merged, and the sweep-level reason a row was recorded
+            # WITHOUT a run ("the ordinary triage filed bug N for this spike", "no ingested
+            # report with a stack on the build") -- a `done` row with no cost and no filing is
+            # unreadable without it.
+            "spike_sentence": payload.get("spike_sentence"),
+            "siblings": payload.get("siblings"),
+            "skipped": payload.get("skipped"),
             "findings": payload.get("findings"),
             "filing": payload.get("filing"),
             "error": payload.get("error"),

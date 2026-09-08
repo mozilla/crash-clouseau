@@ -209,7 +209,11 @@ reads. An open bug on the signature gets it as a comment; so does a bug we filed
 human restricted or that was resolved FIXED after the spiking build (the spike is on builds
 without the fix), and anybody's bug fixed after the build; otherwise a new bug. An APPEARANCE (`...0, 0, 0 -> 50`, no earlier report on the channel) carries the channel's
 title mark — `[new in release]` on release, `[new in esr]` on ESR; a rise of an old signature does not. Rows land in `spike_escalations` (created by `_ensure_tables` on the release phase);
-`GET /api/spikes` lists them.
+`GET /api/spikes` lists them, and `tasks.html` has a "Spike escalations" section above the
+triage runs (status, the spike in numbers, the investigator's assessment, the bug and how it was
+filed: `new` / `cmt` / `triage` = the ordinary triage had already filed it). An ordinary run on a
+crash or signature the spike path filed shows that bug in its Bug column marked `spike`; the
+"bugs filed" tile stays the ordinary filer's count.
 
 | lever | what it does |
 |---|---|

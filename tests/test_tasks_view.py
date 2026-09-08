@@ -412,6 +412,209 @@ class TestTheBugColumnSaysWhyNothingWasFiled(unittest.TestCase):
         self._render([row])
 
 
+def _spike(**kw):
+    """A `SpikeEscalation.to_dict()` row -- the shape `SpikeEscalation.recent` hands the view."""
+    base = dict(
+        id=5, signature="mozilla::GlobalTeardownObserver::CheckCurrentGlobalCorrectness",
+        product="Firefox", channel="nightly", build_day="2026-09-06", buildid="20260906093052",
+        uuid="6f86db23-6613-44d1-ac89-4963b0260907", kind="rate", status="done", attempts=1,
+        spike={"kind": "rate", "installs": 8, "reports": 8, "window_days": 7,
+               "expected_installs": 0.24, "ratio": 33.88, "z": 4.22, "z_min": 3.62},
+        spike_sentence="8 distinct installations hit this signature in the last 7 days",
+        siblings=["mozilla::GlobalTeardownObserver::CheckCurrentGlobalCorrectness"],
+        skipped=None,
+        findings={"assessment": "unknown", "culprit": None, "product": "Core",
+                  "component": "DOM: Workers"},
+        filing={"filed": True, "bug": 2070033, "mode": "spike_new_bug", "product": "Core",
+                "component": "DOM: Workers", "needinfo": None},
+        error=None, cost_usd=0.93, input_tokens=11863, output_tokens=19663,
+        cache_read_tokens=265735,
+        created=(NOW - timedelta(minutes=6)).isoformat(),
+        updated=(NOW - timedelta(minutes=1)).isoformat(),
+    )
+    base.update(kw)
+    return base
+
+
+class TestTheSpikeSection(unittest.TestCase):
+    """Bug 2070033 was filed on 2026-09-08 by the spike escalation (`agent.spike_escalation`),
+    which records to `spike_escalations` and never to a dossier -- and this page rendered only
+    `Dossier.list_tasks`, so it showed nothing for a bug Clouseau had just filed. Worse, the
+    ordinary run 7fcc1b79 on the OTHER spike of that night was on the page as `lead 50` with a
+    dash in the Bug column while bug 2070034 existed for exactly that uuid.
+
+    So: a spike section with its own rows and counts, and the ordinary Bug column falls back
+    to a spike filing on the same crash or the same signature, marked as the spike path's."""
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def _render(self, rows, spikes):
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows), \
+                mock.patch.object(html.models.SpikeEscalation, "recent", return_value=spikes):
+            rv = self.client.get("/tasks.html")
+        self.assertEqual(rv.status_code, 200)
+        return rv.get_data(as_text=True)
+
+    def test_a_spike_filing_is_on_the_page(self):
+        body = self._render([], [_spike()])
+        self.assertIn("Spike escalations", body)
+        self.assertIn("show_bug.cgi?id=2070033", body)
+        self.assertIn("bug&nbsp;2070033", body)
+        self.assertIn(">new<", body)                       # the escalation opened it
+        self.assertIn("Core :: DOM: Workers", body)        # where, on hover
+        self.assertIn("/crashstack.html?uuid=6f86db23", body)
+        self.assertIn("8 inst / 7d vs 0.24 exp", body)     # the spike, in numbers
+        self.assertIn("33.9x", body)
+        self.assertIn("$0.9300", body)
+        self.assertIn("1 recent", body)
+        self.assertIn("1 filed", body)
+        self.assertIn("/api/spikes?signature=mozilla%3A%3AGlobalTeardownObserver", body)
+        # The ordinary table is still there and still empty.
+        self.assertIn("No triage runs yet", body)
+
+    def test_the_ordinary_run_on_the_same_crash_points_at_the_spike_bug(self):
+        uuid = "7fcc1b79-5113-4ef1-9f8d-ac7bd0260906"
+        row = _row(uuid=uuid, signature="vk_optimusGetDeviceProcAddr", channel="nightly",
+                   verdict="lead", confidence=0.5, declined_reason="confidence 50 below 70")
+        body = self._render([row], [_spike(id=6, uuid=uuid, signature="vk_optimusGetDeviceProcAddr",
+                                           siblings=["vk_optimusGetDeviceProcAddr"],
+                                           filing={"filed": True, "bug": 2070034,
+                                                   "mode": "spike_new_bug"})])
+        # Twice: once in the spike table, once on the ordinary row.
+        self.assertEqual(body.count("show_bug.cgi?id=2070034"), 2)
+        self.assertIn(">spike<", body)
+        self.assertIn("not by this run", body)
+        self.assertIn("This run: not filed: confidence 50 below 70", body)
+
+    def test_the_same_signature_on_the_same_channel_also_points_at_it(self):
+        row = _row(uuid="a" * 36, signature="vk_optimusGetDeviceProcAddr", channel="nightly")
+        other_channel = _row(uuid="b" * 36, signature="vk_optimusGetDeviceProcAddr",
+                             channel="beta")
+        spikes = [_spike(uuid="c" * 36, signature="vk_optimusGetDeviceProcAddr", siblings=None,
+                         filing={"filed": True, "bug": 2070034, "mode": "spike_new_bug"})]
+        tasks, summary = html._task_view([row, other_channel], STALE, NOW,
+                                         spike_filings=html._spike_filings(spikes))
+        self.assertEqual(tasks[0]["spike_bug"], "2070034")
+        self.assertIsNone(tasks[1]["spike_bug"])          # a spike is per channel
+        self.assertEqual(summary["filed"], 0)             # the tile is the ordinary filer's
+
+    def test_a_lambda_sibling_is_covered(self):
+        spikes = [_spike(uuid=None, signature="Foo::Bar::<T>::operator()",
+                         siblings=["Foo::Bar::<T>::operator()", "Foo::Bar::{lambda}::operator()"],
+                         filing={"filed": True, "bug": 1, "mode": "spike_comment"})]
+        filings = html._spike_filings(spikes)
+        self.assertEqual(filings[("Foo::Bar::{lambda}::operator()", "nightly")]["bug"], "1")
+        self.assertNotIn(None, filings)
+
+    def test_the_ordinary_rows_own_record_outranks_the_spike_fallback(self):
+        uuid = "d" * 36
+        filed = _row(uuid=uuid, filed_bug="111", filed_mode="new_bug")
+        declined = _row(uuid=uuid, declined_reason="open bug 222 exists", declined_bug="222")
+        filing = {"filed": True, "bug": 333, "mode": "spike_new_bug"}
+        filings = html._spike_filings([_spike(uuid=uuid, filing=filing)])
+        tasks, _ = html._task_view([filed, declined], STALE, NOW, spike_filings=filings)
+        # The keys are there, the template's precedence puts the row's own facts first.
+        self.assertEqual(tasks[0]["spike_bug"], "333")
+        body = self._render([filed, declined], [])
+        self.assertNotIn("show_bug.cgi?id=333", body)
+
+    def test_a_spike_the_ordinary_triage_filed_says_so(self):
+        body = self._render([], [_spike(
+            id=1, status="done", cost_usd=None, input_tokens=0, output_tokens=0,
+            cache_read_tokens=0, findings=None, filing=None,
+            skipped="the ordinary triage filed bug 2069647 for this spike")])
+        self.assertIn("show_bug.cgi?id=2069647", body)
+        self.assertIn(">triage<", body)
+        self.assertIn("1 filed by the ordinary triage", body)
+        self.assertNotIn(">new<", body)
+        # A recorded row never ran, so its filing count is not the escalation's.
+        self.assertIn("0 filed", body)
+
+    def test_a_run_that_filed_nothing_says_why(self):
+        body = self._render([], [_spike(filing={"filed": False, "skipped": "open bug 12345 exists"})])
+        self.assertIn("not&nbsp;filed (", body)
+        self.assertIn("show_bug.cgi?id=12345", body)
+        self.assertIn("Not filed: open bug 12345 exists", body)
+        body = self._render([], [_spike(filing={"filed": False, "skipped": "autofile disabled"})])
+        self.assertIn("Not filed: autofile disabled", body)
+        self.assertNotIn("show_bug.cgi", body)
+
+    def test_an_errored_escalation_shows_its_error_and_attempts(self):
+        err = "TypeError: '>' not supported between instances of 'list' and 'datetime.datetime'"
+        body = self._render([], [_spike(status="error", attempts=2, filing=None, findings=None,
+                                        error=err)])
+        self.assertIn("status-error", body)
+        self.assertIn(escape(err), body)
+        self.assertIn("&times;2", body)
+        self.assertIn("1 error", body)
+
+    def test_the_assessment_and_the_culprit_are_shown(self):
+        body = self._render([], [_spike(findings={
+            "assessment": "regression",
+            "culprit": {"node": "9dcaf4fe0a10abcdef", "bug": 2068764, "confidence": "medium"}})])
+        self.assertIn("assess-regression", body)
+        self.assertIn("9dcaf4fe0a10", body)
+        self.assertIn("bug 2068764", body)
+
+    def test_a_withheld_analysis_is_not_shown_anonymously(self):
+        body = self._render([], [_spike(
+            findings={"assessment": "regression",
+                      "culprit": {"node": "9dcaf4fe0a10", "confidence": "high"}},
+            filing={"filed": True, "bug": 2070033, "mode": "spike_new_bug",
+                    "security_groups": ["core-security"]})])
+        self.assertNotIn("assess-regression", body)
+        self.assertNotIn("9dcaf4fe0a10", body)
+        self.assertIn(">withheld<", body)
+        self.assertIn("show_bug.cgi?id=2070033", body)    # the filing itself is a fact
+
+    def test_a_broken_spike_table_does_not_take_the_page_down(self):
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=[_row()]), \
+                mock.patch.object(html.models.SpikeEscalation, "recent",
+                                  side_effect=RuntimeError("no such table")):
+            rv = self.client.get("/tasks.html")
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_data(as_text=True)
+        self.assertIn("No spike escalations yet", body)
+        self.assertIn("status-done", body)                # the ordinary row rendered
+
+    def test_durations_and_stalls(self):
+        done = _spike(created=(NOW - timedelta(minutes=6)).isoformat(),
+                      updated=(NOW - timedelta(minutes=1)).isoformat())
+        running = _spike(id=7, status="running", filing=None,
+                         created=(NOW - timedelta(minutes=3)).isoformat(),
+                         updated=(NOW - timedelta(minutes=3)).isoformat())
+        stalled = _spike(id=8, status="running", filing=None,
+                         created=(NOW - timedelta(hours=3)).isoformat(),
+                         updated=(NOW - timedelta(hours=2)).isoformat())
+        spikes, summary = html._spike_view([done, running, stalled], 3900, NOW)
+        self.assertAlmostEqual(spikes[0]["duration_s"], 5 * 60)   # updated - created
+        self.assertAlmostEqual(spikes[1]["duration_s"], 3 * 60)   # elapsed
+        self.assertFalse(spikes[1]["stalled"])
+        self.assertTrue(spikes[2]["stalled"])
+        self.assertEqual((summary["total"], summary["running"], summary["stalled"],
+                          summary["filed"]), (3, 2, 1, 1))
+        self.assertAlmostEqual(summary["cost_total"], 0.93 * 3)
+
+    def test_the_build_day_numbers(self):
+        self.assertEqual(html._spike_numbers({"kind": "build_day", "count": 19, "installs": 3,
+                                              "ratio": 4.8, "z": 4.62}),
+                         "19 rep / 3 inst · 4.8x · z 4.6")
+        self.assertEqual(html._spike_numbers({"kind": "build_day", "count": 11, "installs": 5,
+                                              "ratio": None, "z": 5.52}),
+                         "11 rep / 5 inst · from 0 · z 5.5")
+        self.assertEqual(html._spike_numbers(None), "")
+
+    def test_the_spike_table_has_the_same_columns_as_the_triage_table(self):
+        """It shares the `.tasks` fixed column widths, so it must have exactly as many <th>."""
+        with open(TestTaskColumnWidths._TPL, encoding="utf-8") as fh:
+            tpl = fh.read()
+        heads = re.findall(r'<table class="tasks[^"]*">.*?<thead>(.*?)</thead>', tpl, re.S)
+        self.assertEqual(len(heads), 2)
+        self.assertEqual(len(re.findall(r"<th\b", heads[0])),
+                         len(re.findall(r"<th\b", heads[1])))
+
+
 class TestTasksRoute(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()

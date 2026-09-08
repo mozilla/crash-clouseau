@@ -139,7 +139,8 @@ flowchart TD
    the `crashstats` population tools), then a bug — a comment on the open bug about
    the signature, or a new one in the investigator's Bugzilla-validated
    product::component — with the volume first and only tool-grounded analysis under
-   it. Rows in `spike_escalations`; `GET /api/spikes`. Plan `plans/22`.
+   it. Rows in `spike_escalations`; `GET /api/spikes`, and a section of `tasks.html`
+   (`html._spike_view`), whose filings also reach the ordinary rows' Bug column. Plan `plans/22`.
 
 ## Crash report processing (detail): report → scored seed
 

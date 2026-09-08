@@ -161,6 +161,21 @@ class TestTheTable(unittest.TestCase):
                          ("sig", "2026-09-03", 1))
         self.assertIsNone(d["cost_usd"])
 
+    def test_to_dict_carries_what_the_tasks_page_needs(self):
+        """A `done` row with no cost and no filing is unreadable without the sweep's reason;
+        the ordinary Bug column falls back to a spike filing by signature AND sibling."""
+        row = models.SpikeEscalation("sig", "Firefox", "nightly", date(2026, 9, 3),
+                                     payload={"spike": {"kind": "build_day"},
+                                              "spike_sentence": "32 reports from 21 installs",
+                                              "siblings": ["sig", "sig<T>"],
+                                              "skipped": "the ordinary triage filed bug 7 for this spike"})
+        d = row.to_dict()
+        self.assertEqual(d["spike_sentence"], "32 reports from 21 installs")
+        self.assertEqual(d["siblings"], ["sig", "sig<T>"])
+        self.assertEqual(d["skipped"], "the ordinary triage filed bug 7 for this spike")
+        self.assertIsNone(models.SpikeEscalation("s", "Firefox", "nightly", date(2026, 9, 3))
+                          .to_dict()["skipped"])
+
 
 if __name__ == "__main__":
     unittest.main()

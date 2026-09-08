@@ -181,13 +181,20 @@ def _declined_bug(bug, reason):
     return m.group(1) if m else None
 
 
-def _task_view(rows, stale_after_s, now):
+def _task_view(rows, stale_after_s, now, spike_filings=None):
     """Turn raw Dossier.list_tasks rows into per-task display dicts + a fleet summary.
 
     Pure (takes `now`) so it's testable without patching the clock. A "running" task
     whose last update is older than stale_after_s is flagged stalled: its worker very
     likely died -- the same threshold the reaper uses to requeue orphans. Duration is
-    the run time for finished tasks (done/error) and elapsed-so-far for live ones."""
+    the run time for finished tasks (done/error) and elapsed-so-far for live ones.
+
+    ``spike_filings`` (``_spike_filings``) is what the SPIKE path filed, keyed by uuid and by
+    ``(signature, channel)``. A run the ordinary filer did not file, on a crash or signature the
+    spike escalation then filed, rendered a dash in the Bug column: 7fcc1b79 sat on the page as
+    ``lead 50 / --`` while bug 2070034 existed for exactly that uuid (2026-09-08). The spike
+    filing is shown there as a fallback, marked as the spike path's and NOT counted in
+    ``filed``: that tile is the ordinary filer's, and the spike table has its own."""
     tasks = []
     counts = {"done": 0, "running": 0, "error": 0, "pending": 0}
     stalled = 0
@@ -231,6 +238,11 @@ def _task_view(rows, stale_after_s, now):
         if status == "done" and duration is not None:
             durations_done.append(duration)
 
+        spike = None
+        if spike_filings:
+            spike = spike_filings.get(r.uuid) or spike_filings.get(
+                (r.signature, getattr(r, "channel", None)))
+
         tasks.append(
             {
                 "uuid": r.uuid,
@@ -270,6 +282,8 @@ def _task_view(rows, stale_after_s, now):
                 "declined_reason": getattr(r, "declined_reason", None),
                 "declined_bug": _declined_bug(getattr(r, "declined_bug", None),
                                               getattr(r, "declined_reason", None)),
+                "spike_bug": spike.get("bug") if spike else None,
+                "spike_mode": spike.get("mode") if spike else None,
             }
         )
         if getattr(r, "filed_bug", None):
@@ -302,15 +316,187 @@ def _task_view(rows, stale_after_s, now):
     }
 
 
+# How many spike escalations the tasks page lists. At most 4 runs a day per channel
+# (`max_runs_per_day`) plus the rows the sweep records without running, this is weeks.
+_SPIKE_ROWS = 60
+
+
+def _spike_rows():
+    """The recent spike escalations for the tasks page, or ``[]`` when the table cannot be
+    read. Its own try/except on purpose: the ordinary runs are the page operators watch, and a
+    hiccup on the (newer, smaller) spike table must not 404 the whole view."""
+    try:
+        return models.SpikeEscalation.recent(limit=_SPIKE_ROWS)
+    except Exception:
+        logger.error("Cannot list the spike escalations", exc_info=True)
+        try:
+            models.db.session.rollback()
+        except Exception:  # pragma: no cover - best-effort
+            pass
+        return []
+
+
+def _spike_filings(spike_rows):
+    """What the spike path FILED, keyed by the crash it was built around and by every
+    ``(signature, channel)`` it covered (the merged lambda siblings too), for the ordinary
+    table's Bug column. Rows the sweep recorded because the ordinary triage filed are not
+    here: that bug is already on the ordinary row."""
+    out = {}
+    for r in spike_rows:
+        filing = r.get("filing") or {}
+        if not (filing.get("filed") and filing.get("bug")):
+            continue
+        info = {"bug": str(filing["bug"]), "mode": filing.get("mode")}
+        if r.get("uuid"):
+            out.setdefault(r["uuid"], info)
+        for sig in [r.get("signature")] + list(r.get("siblings") or []):
+            if sig:
+                out.setdefault((sig, r.get("channel")), info)
+    return out
+
+
+def _spike_numbers(spike):
+    """The spike in one short line: what fired, against what. The full sentence the bug
+    carries is the tooltip (``spike_sentence``)."""
+    if not spike:
+        return ""
+    z = spike.get("z")
+    z_str = " · z {:.1f}".format(z) if isinstance(z, (int, float)) else ""
+    ratio = spike.get("ratio")
+    if spike.get("kind") == "rate":
+        expected = spike.get("expected_installs")
+        return "{} inst / {}d vs {} exp · {}x{}".format(
+            spike.get("installs", "?"), spike.get("window_days", "?"),
+            "{:.2f}".format(expected) if isinstance(expected, (int, float)) else "?",
+            "{:.1f}".format(ratio) if isinstance(ratio, (int, float)) else "?", z_str)
+    return "{} rep / {} inst · {}{}".format(
+        spike.get("count", "?"), spike.get("installs", "?"),
+        "{:.1f}x".format(ratio) if isinstance(ratio, (int, float)) else "from 0", z_str)
+
+
+def _spike_view(rows, stale_after_s, now, public=True):
+    """``SpikeEscalation.recent`` dicts -> per-row display dicts + a summary for the spike
+    section of tasks.html. Pure, like ``_task_view``.
+
+    A row is one of: FILED by the escalation (``filing.filed``); RECORDED by the sweep without a
+    run (``skipped``: the ordinary triage had filed, or no report with a stack was ingested);
+    RUN but not filed (``filing.skipped`` says why, with the bug it is about when it names one);
+    or pending / running / error. ``public`` hides the analysis of a memory-safety filing
+    (``filing.security_groups``), as ``/api/spikes`` does: the page is anonymous."""
+    out = []
+    counts = {}
+    stalled = filed = triage_filed = 0
+    cost_total = 0.0
+    for r in rows:
+        status = r.get("status") or "pending"
+        counts[status] = counts.get(status, 0) + 1
+        created = _aware(_parse_ts(r.get("created")))
+        updated = _aware(_parse_ts(r.get("updated")))
+        if status in ("done", "error") and created and updated:
+            duration = (updated - created).total_seconds()
+        elif created:
+            duration = (now - created).total_seconds()
+        else:
+            duration = None
+        live = status == "running" and updated is not None
+        is_stalled = live and (now - updated).total_seconds() > stale_after_s
+        stalled += is_stalled
+        cost = r.get("cost_usd")
+        if cost is not None:
+            cost_total += float(cost)
+
+        filing = r.get("filing") or {}
+        skipped = r.get("skipped")
+        withheld = public and bool(filing.get("security_groups"))
+        findings = None if withheld else (r.get("findings") or {})
+        culprit = (findings or {}).get("culprit") or None
+        bug = bug_mode = not_filed_reason = not_filed_bug = None
+        if filing.get("filed") and filing.get("bug"):
+            bug, bug_mode = str(filing["bug"]), filing.get("mode") or "spike_new_bug"
+            filed += 1
+        elif skipped:
+            # Recorded, never run. The bug in the reason is the ordinary filer's.
+            not_filed_reason = skipped
+            bug = _declined_bug(None, skipped)
+            if bug:
+                bug_mode = "triage"
+                triage_filed += 1
+        elif filing:
+            not_filed_reason = filing.get("skipped")
+            not_filed_bug = _declined_bug(filing.get("bug"), filing.get("skipped"))
+        component = None
+        if filing.get("component"):
+            component = "{} :: {}".format(filing.get("product") or "", filing["component"]).strip(" :")
+        elif findings and findings.get("component"):
+            component = "{} :: {}".format(findings.get("product") or "",
+                                          findings["component"]).strip(" :")
+        out.append({
+            "id": r.get("id"),
+            "uuid": r.get("uuid"),
+            "channel": r.get("channel"),
+            "product": r.get("product"),
+            "signature": r.get("signature") or "",
+            "kind": r.get("kind") or "build_day",
+            "build_day": r.get("build_day"),
+            "buildid": r.get("buildid"),
+            "status": status,
+            "stalled": is_stalled,
+            "attempts": r.get("attempts") or 0,
+            "error": r.get("error"),
+            "duration_s": duration,
+            "duration_str": _fmt_duration(duration),
+            "cost_usd": float(cost) if cost is not None else None,
+            "input_tokens": r.get("input_tokens"),
+            "output_tokens": r.get("output_tokens"),
+            "cache_read_tokens": r.get("cache_read_tokens"),
+            "created": created,
+            "spike_str": _spike_numbers(r.get("spike")),
+            "spike_sentence": r.get("spike_sentence") or "",
+            "assessment": (findings or {}).get("assessment") if findings else None,
+            "culprit_node": (culprit or {}).get("node"),
+            "culprit_bug": (culprit or {}).get("bug"),
+            "culprit_confidence": (culprit or {}).get("confidence"),
+            "withheld": withheld,
+            "bug": bug,
+            "bug_mode": bug_mode,
+            "component": component,
+            "needinfo": filing.get("needinfo"),
+            "not_filed_reason": not_filed_reason,
+            "not_filed_bug": not_filed_bug,
+        })
+    return out, {
+        "total": len(rows),
+        "done": counts.get("done", 0),
+        "running": counts.get("running", 0),
+        "pending": counts.get("pending", 0),
+        "error": counts.get("error", 0),
+        "stalled": stalled,
+        "filed": filed,
+        "triage_filed": triage_filed,
+        "cost_total": cost_total,
+    }
+
+
 def tasks():
     try:
         # Flag orphans with the same threshold the reaper uses: a run past job_timeout
         # plus a buffer that avoids racing a run legitimately near the cap (see the
         # _STALE_BUFFER_S note in agent.orchestrator).
         stale_after = config.get_agent_job_timeout() + 300
+        now = datetime.now(timezone.utc)
         rows = models.Dossier.list_tasks()
-        tasks_, summary = _task_view(rows, stale_after, datetime.now(timezone.utc))
-        return render_template("tasks.html", tasks=tasks_, summary=summary)
+        # The spike escalations (`agent.spike_escalation`): their own table, their own budget,
+        # and until 2026-09-08 nothing on this page -- bug 2070033 was filed and the page showed
+        # nothing for it. Listed in their own section, and their filings reach the ordinary
+        # rows' Bug column (`_task_view`, `spike_filings`).
+        spike_rows = _spike_rows()
+        spikes_, spike_summary = _spike_view(
+            spike_rows, config.get_agent_spike_escalation()["job_timeout"] + 300, now,
+            public=not api.viewer_authorized())
+        tasks_, summary = _task_view(rows, stale_after, now,
+                                     spike_filings=_spike_filings(spike_rows))
+        return render_template("tasks.html", tasks=tasks_, summary=summary,
+                               spikes=spikes_, spike_summary=spike_summary)
     except Exception:
         logger.error("Invalid URL: {}".format(request.url), exc_info=True)
         abort(404)
