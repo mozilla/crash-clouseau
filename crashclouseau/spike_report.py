@@ -20,7 +20,6 @@ from crashclouseau import config, report_bug, sigage, sigtrend, spikes, utils
 _MAX_EVIDENCE = 8
 _MAX_LIST = 6
 _MAX_OTHER_REPORTS = 3
-_MODEL_LABEL = "Claude Fable 5.1"
 
 
 def spike_paragraph(brief):
@@ -135,8 +134,11 @@ def analysis_section(findings, brief, author_display=None, link_regressor=False,
                 "history or crash-stats data, so its conclusions would be unverified. The volume "
                 "above is the finding.")
     lines = []
-    head = ("Analysis (automated, {} -- nothing below was checked by a human; a claim it "
-            "could not ground is deliberately absent):".format(_MODEL_LABEL))
+    # No model name here (Calixte, 2026-09-08): the ordinary filer says "Clouseau analysis
+    # (automated ...)" and the footer already says an LLM wrote it; the reader needs to know
+    # a machine wrote this, not which one.
+    head = ("Clouseau analysis (automated -- nothing below was checked by a human; a claim it "
+            "could not ground is deliberately absent):")
     if findings.summary:
         lines.append(head + "\n\n" + findings.summary)
     else:

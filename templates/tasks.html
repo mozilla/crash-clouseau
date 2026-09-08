@@ -77,13 +77,13 @@
     </div>
 
     {#- The spike escalations: a REAL spike the ordinary triage did not file, investigated by
-        Claude Fable 5.1 and filed with or without a culprit (agent.spike_escalation). Its own
+        a dedicated agent and filed with or without a culprit (agent.spike_escalation). Its own
         table in the database (spike_escalations) and its own budget, so it is its own section
         here: bug 2070033 was filed from it on 2026-09-08 and this page showed nothing for it.
         Same eleven columns as the table below so the .tasks column widths apply unchanged. -#}
     {% if spike_summary is defined -%}
     <h3 class="task-subtitle">Spike escalations
-      <span class="task-sub" title="the recent spike escalations: real spikes handed to Claude Fable 5.1 and filed by volume">{{ spike_summary.total }} recent &middot; {{ spike_summary.filed }} filed
+      <span class="task-sub" title="the recent spike escalations: real spikes handed to the investigating agent and filed by volume">{{ spike_summary.total }} recent &middot; {{ spike_summary.filed }} filed
         {%- if spike_summary.triage_filed %} &middot; {{ spike_summary.triage_filed }} filed by the ordinary triage{% endif %}
         {%- if spike_summary.running %} &middot; {{ spike_summary.running }} running{% endif %}
         {%- if spike_summary.stalled %} &middot; <span class="tc-err-text">{{ spike_summary.stalled }} stalled</span>{% endif %}
