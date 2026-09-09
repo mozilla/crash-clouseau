@@ -268,7 +268,15 @@ def _first_date_batches(signatures):
 
 
 def first_seen_ever(signatures):
-    """``{signature -> first buildid, ever}`` from Socorro's ``SignatureFirstDate`` API.
+    """``{signature -> first buildid, ever}``: the ``first_build`` half of
+    ``first_seen_ever_facts``, kept for the callers and tests that only want the build."""
+    return {sig: facts["first_build"] for sig, facts in first_seen_ever_facts(signatures).items()
+            if facts.get("first_build")}
+
+
+def first_seen_ever_facts(signatures):
+    """``{signature -> {"first_build", "first_date"}}`` from Socorro's ``SignatureFirstDate``
+    API.
 
     THE MEASUREMENT THAT MOTIVATES THIS. Every other first-seen in this module comes from a
     SuperSearch bounded by ``MAX_WINDOW_DAYS``, and Socorro's Elasticsearch retention is shorter
@@ -327,10 +335,14 @@ def first_seen_ever(signatures):
             continue
         for hit in hits:
             sig, build = hit.get("signature"), hit.get("first_build")
-            # A row with no build is no answer. `first_date` is not a substitute: the whole
-            # module compares BUILD ids, and a crash date can post-date the build by months.
+            # A row with no build is no answer. `first_date` is not a substitute for it: the
+            # module's AGE arithmetic compares BUILD ids, and a crash date can post-date the
+            # build by months. It is carried beside the build for the one question where the
+            # crash date IS the answer -- did the signature appear WITH its build, or days later
+            # (`novelty_facts`).
             if sig and build:
-                out[sig] = str(build)
+                out[sig] = {"first_build": str(build),
+                            "first_date": str(hit.get("first_date") or "")[:10] or None}
     return out
 
 
@@ -507,7 +519,24 @@ NO_HARDWARE_NOISE = {
 VERSION_RATES_DAYS = 60
 VERSION_STEP_RATIO = 3.0
 VERSION_MIN_REPORTS = 5
-NO_VERSION_RATES = {"versions": None, "step": None, "days": None}
+# How many of a version's first reporting days count as "at the version boundary" when a step is
+# timed. Three, because a dot release reaches its full population in about that long (155.0.1:
+# 969 -> 5,522 -> 7,293 reports/day) and a change that shipped WITH the build is present from the
+# first of them. Not a threshold fitted to a case: the two cases that motivate the timing test sit
+# on day 5 (bug 2070489, a train-hop XPI deployment) and day 5 (bug 2070554, a Windows update's
+# symbol gap), and the one true positive it must keep (bug 2069800, the cookie WAL cap) stepped on
+# day 1.
+VERSION_STEP_EARLY_DAYS = 3
+# How many per-day rows the prompt block prints for a version. Two weeks covers every dot
+# release's whole life and keeps the block within the crash-facts budget.
+VERSION_DAILY_ROWS = 14
+# How many versions the prompt block lists: the most recent ones, plus whichever the step, the
+# date event or the crash itself names. A 60-day release window carries 40+ stale-install
+# versions with a handful of reports each (measured 46 for bug 2070489's signature), and every
+# one of them is a line the model reads for nothing.
+VERSION_ROWS = 6
+NO_VERSION_RATES = {"versions": None, "step": None, "date_event": None, "days": None,
+                    "since": None, "normalized": None}
 
 
 def _version_key(version):
@@ -520,28 +549,49 @@ def _version_key(version):
 
 def version_rates(signature, product="Firefox", channel="release", days=VERSION_RATES_DAYS,
                   step_ratio=VERSION_STEP_RATIO, min_reports=VERSION_MIN_REPORTS):
-    """How often this signature crashes PER VERSION on ``channel`` over the last ``days``.
+    """How often this signature crashes PER VERSION on ``channel`` over the last ``days``, as a
+    SHARE of that version's own crash reports.
 
-    ``{"versions": [{"version", "reports", "first_day", "last_day", "days", "per_day",
-    "build_ids"}, ...] oldest-first, "step": {...} | None, "days": N}``. ``step`` names the
-    LATEST version with at least ``min_reports`` reports whose per-day rate is ``step_ratio``
-    times (or more) the preceding such version's: ``{"version", "from_version", "ratio",
-    "per_day", "from_per_day", "build_ids"}``. ``NO_VERSION_RATES`` (every value None) means
-    "we could not find out", which the renderer prints as nothing -- never as "no change".
+    ``{"versions": [{"version", "reports", "all_reports", "share", "first_day", "last_day",
+    "days", "per_day", "daily", "build_ids"}, ...] oldest-first, "step": {...} | None,
+    "date_event": {...} | None, "days": N, "since": "YYYY-MM-DD", "normalized": bool}``.
+    ``share`` is reports of this signature per 1000 crash reports of the same version, and
+    ``daily`` is ``[[day, signature_reports, all_reports], ...]``. ``step`` names the LATEST
+    version with at least ``min_reports`` reports whose share is ``step_ratio`` times (or more)
+    the preceding such version's AND whose first ``VERSION_STEP_EARLY_DAYS`` reporting days
+    already show it: ``{"version", "from_version", "ratio", "share", "from_share", "build_ids",
+    "kind": "boundary"}``. When the share only rises LATER in the version's life the rise is a
+    ``date_event`` instead -- ``{"version", "day", "ratio", "share_before", "share_after"}`` --
+    and ``step`` is ``None``. ``NO_VERSION_RATES`` (every value None) means "we could not find
+    out", which the renderer prints as nothing -- never as "no change".
 
-    ONE SuperSearch: a per-day histogram faceted by version, plus the build ids per version.
-    Per-day is reports over the span from the version's first to its last report day, which
-    counts a version's adoption ramp against it in both directions (the previous version is
-    still ramping down while the new one ramps up); the renderer states that and asks for a
-    ``step_ratio``-sized step, not a drift. Versions with no report in the window do not appear.
-    Never raises."""
+    WHY A SHARE AND NOT REPORTS PER DAY, which this used to be. Bug 2070489 (2026-09-09): the
+    filed bug said "155.0.1 at 4.5x the rate of 155.0" and named the only pref flip in the
+    dot-release window. The 4.5 was reports/day per version with no population behind it: by
+    09-08 155.0.1 carried seven times 155.0's users (12,765 vs 1,708 crash reports that day), so
+    the ratio was mostly the population moving from one version to the other. Measured as a share
+    of all reports, 155.0.1 sat at or BELOW 155.0 for its first four days (3.6-6.2 vs 4-7 per
+    1000) and rose on 09-08, the hour a newtab train-hop XPI was deployed to release. The
+    denominator is the whole rule, exactly as it is for the hardware-noise gate.
+
+    WHY THE STEP IS TIMED. A change that shipped with a build is present from the build's first
+    reports, so its step sits at the version boundary. A rise that appears days into a version's
+    life -- while its first days matched the previous version -- was caused by something that
+    changed on that DATE (a server-side or Remote Settings deployment, an experiment, an OS update,
+    a signature split), and no changeset in the version's window explains it. The one true
+    positive on record (bug 2069800, the cookie WAL cap, 155.0.1 at ~9x 155.0's share from day
+    one) is a boundary step; both false positives of 2026-09-09 are date events.
+
+    TWO SuperSearches in one round-trip: the per-day histogram faceted by version for this
+    signature (plus the build ids per version), and the same histogram with no signature filter
+    for the denominators. A failed denominator query yields ``normalized: False`` and NO step:
+    a count ratio is not a rate claim we can make. Never raises."""
     empty = dict(NO_VERSION_RATES)
     if not signature or not channel:
         return empty
     days = max(1, min(int(days or VERSION_RATES_DAYS), MAX_WINDOW_DAYS))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-    params = {
-        "signature": "=" + signature,
+    common = {
         "product": product or "Firefox",
         "release_channel": utils.get_search_channel(channel),
         "date": ">=" + since,
@@ -549,84 +599,157 @@ def version_rates(signature, product="Firefox", channel="release", days=VERSION_
         "_histogram.date": "version",
         "_histogram_interval.date": "1d",
         "_facets": "version",
-        "_aggs.version": "build_id",
         "_facets_size": 200,
     }
+    params = {"signature": "=" + signature, "_aggs.version": "build_id", **common}
     got = {}
 
     def handler(json_, data):
         data["r"] = json_
 
+    def totals_handler(json_, data):
+        data["totals"] = json_
+
     try:
-        socorro.SuperSearch(queries=[Query(socorro.SuperSearch.URL, params=params,
-                                           handler=handler, handlerdata=got)]).wait()
+        socorro.SuperSearch(queries=[
+            Query(socorro.SuperSearch.URL, params=params, handler=handler, handlerdata=got),
+            Query(socorro.SuperSearch.URL, params=dict(common), handler=totals_handler,
+                  handlerdata=got),
+        ]).wait()
     except Exception as exc:  # pragma: no cover - network; never break a seed
         logger.warning("sigage: version rates lookup failed for %r: %s", signature, exc)
         return empty
     result = got.get("r")
     if not isinstance(result, dict):
         return empty
+    totals = got.get("totals")
+    if not isinstance(totals, dict):
+        logger.warning("sigage: version-rate denominators unavailable for %r; counts only",
+                       signature)
+        totals = None
     # An ESR LINE reads one Socorro channel shared with the other lines (`get_search_channel`),
     # so the per-version series is cut to the line's own major: without it the "preceding
     # version" of 153.0esr is 140.15.0esr, and a 5x "step" between two different products'
     # populations is not a step.
     return summarize_version_rates(result, days=days, step_ratio=step_ratio,
-                                   min_reports=min_reports, major=config.esr_major(channel))
+                                   min_reports=min_reports, major=config.esr_major(channel),
+                                   totals=totals, since=since)
 
 
-def summarize_version_rates(result, days=VERSION_RATES_DAYS, step_ratio=VERSION_STEP_RATIO,
-                            min_reports=VERSION_MIN_REPORTS, major=None):
-    """The pure half of ``version_rates``: a SuperSearch response -> the summary dict. Split out
-    so the arithmetic is testable on a recorded response without a network stand-in.
-
-    ``major`` keeps only that major's versions (an ESR line's own, see ``version_rates``)."""
-    facets = (result or {}).get("facets") or {}
-
-    def keep(version):
-        return major is None or _version_key(version)[:1] == (int(major),)
-
+def _daily_by_version(result, keep):
+    """``{version: {day: count}}`` from a per-day histogram faceted by version."""
     per = {}
-    for bucket in facets.get("histogram_date") or []:
+    for bucket in ((result or {}).get("facets") or {}).get("histogram_date") or []:
         day = str(bucket.get("term") or "")[:10]
         if not day:
             continue
         for t in (bucket.get("facets") or {}).get("version") or []:
             if not keep(t.get("term")):
                 continue
-            v = per.setdefault(str(t.get("term")), {"reports": 0, "days": set()})
-            v["reports"] += int(t.get("count") or 0)
-            v["days"].add(day)
+            daily = per.setdefault(str(t.get("term")), {})
+            daily[day] = daily.get(day, 0) + int(t.get("count") or 0)
+    return per
+
+
+def _share(reports, all_reports):
+    return round(1000.0 * reports / all_reports, 2) if all_reports else None
+
+
+def step_timing(row, from_share, step_ratio=VERSION_STEP_RATIO, min_reports=VERSION_MIN_REPORTS,
+                early_days=VERSION_STEP_EARLY_DAYS):
+    """Where in ``row``'s life its share stepped past ``step_ratio`` x ``from_share``:
+    ``("boundary", None)`` when the version's first ``early_days`` reporting days (pooled, with
+    at least ``min_reports`` reports among them) already show it, else ``("inside", day)`` with
+    the first day whose own share clears it (``None`` if no single day does -- a spread rise).
+
+    The pool is over days the VERSION reported anything (``all_reports > 0``), so a day the
+    signature was silent while the version was live counts against it, as it should."""
+    live = [d for d in (row.get("daily") or []) if d[2] > 0]
+    early = live[:early_days]
+    n = sum(d[1] for d in early)
+    a = sum(d[2] for d in early)
+    if a and n >= min_reports and 1000.0 * n / a >= step_ratio * from_share:
+        return "boundary", None
+    for day, sig, all_reports in live:
+        if all_reports and sig >= min_reports and 1000.0 * sig / all_reports >= step_ratio * from_share:
+            return "inside", day
+    return "inside", None
+
+
+def summarize_version_rates(result, days=VERSION_RATES_DAYS, step_ratio=VERSION_STEP_RATIO,
+                            min_reports=VERSION_MIN_REPORTS, major=None, totals=None,
+                            since=None):
+    """The pure half of ``version_rates``: the two SuperSearch responses -> the summary dict.
+    Split out so the arithmetic is testable on a recorded response without a network stand-in.
+
+    ``major`` keeps only that major's versions (an ESR line's own, see ``version_rates``).
+    ``totals`` is the unfiltered histogram (the denominators); without it every row keeps its
+    count fields, ``share``/``daily`` are absent, ``normalized`` is False and there is no step."""
+
+    def keep(version):
+        return major is None or _version_key(version)[:1] == (int(major),)
+
+    per = _daily_by_version(result, keep)
+    normalized = totals is not None
+    denom = _daily_by_version(totals, keep) if normalized else {}
+    base = {"step": None, "date_event": None, "days": days, "since": since,
+            "normalized": normalized}
     if not per:
-        return {"versions": [], "step": None, "days": days}
+        return {"versions": [], **base}
     builds = {}
-    for t in facets.get("version") or []:
+    for t in ((result or {}).get("facets") or {}).get("version") or []:
         if not keep(t.get("term")):
             continue
         builds[str(t.get("term"))] = sorted(
             str(b.get("term")) for b in (t.get("facets") or {}).get("build_id") or [])
     rows = []
-    for version, v in per.items():
-        first, last = min(v["days"]), max(v["days"])
+    for version, daily in per.items():
+        reports = sum(daily.values())
+        first, last = min(daily), max(daily)
         span = (datetime.strptime(last, "%Y-%m-%d") - datetime.strptime(first, "%Y-%m-%d")).days + 1
-        rows.append({"version": version, "reports": v["reports"], "first_day": first,
-                     "last_day": last, "days": span,
-                     "per_day": round(v["reports"] / float(span), 2),
-                     "build_ids": builds.get(version, [])})
+        row = {"version": version, "reports": reports, "first_day": first, "last_day": last,
+               "days": span, "per_day": round(reports / float(span), 2),
+               "build_ids": builds.get(version, [])}
+        all_daily = denom.get(version)
+        if all_daily:
+            all_reports = sum(all_daily.values())
+            row["all_reports"] = all_reports
+            row["share"] = _share(reports, all_reports)
+            row["daily"] = [[day, daily.get(day, 0), all_daily.get(day, 0)]
+                            for day in sorted(set(all_daily) | set(daily))]
+        rows.append(row)
     # By version, not by first report day: a stale 150.0 install that reports once in the window
     # would otherwise land between 154.0 and 155.0 and read as a version in that sequence.
     rows.sort(key=lambda r: (_version_key(r["version"]), r["first_day"]))
-    step = None
-    eligible = [r for r in rows if r["reports"] >= min_reports]
-    if len(eligible) >= 2:
-        latest, previous = eligible[-1], eligible[-2]
-        if previous["per_day"] > 0:
-            ratio = latest["per_day"] / previous["per_day"]
-            if ratio >= step_ratio:
-                step = {"version": latest["version"], "from_version": previous["version"],
-                        "ratio": round(ratio, 1), "per_day": latest["per_day"],
-                        "from_per_day": previous["per_day"],
-                        "build_ids": latest["build_ids"]}
-    return {"versions": rows, "step": step, "days": days}
+    out = {"versions": rows, **base}
+    if not normalized:
+        return out
+    eligible = [r for r in rows if r["reports"] >= min_reports and r.get("share") is not None]
+    if len(eligible) < 2:
+        return out
+    latest, previous = eligible[-1], eligible[-2]
+    if not previous["share"]:
+        return out
+    ratio = latest["share"] / previous["share"]
+    if ratio < step_ratio:
+        return out
+    kind, day = step_timing(latest, previous["share"], step_ratio, min_reports)
+    if kind == "boundary":
+        out["step"] = {"version": latest["version"], "from_version": previous["version"],
+                       "ratio": round(ratio, 1), "share": latest["share"],
+                       "from_share": previous["share"], "build_ids": latest["build_ids"],
+                       "kind": "boundary"}
+        return out
+    before = [d for d in latest["daily"] if day is None or d[0] < day]
+    after = [d for d in latest["daily"] if day is not None and d[0] >= day]
+    out["date_event"] = {
+        "version": latest["version"], "from_version": previous["version"], "day": day,
+        "ratio": round(ratio, 1),
+        "share_before": _share(sum(d[1] for d in before), sum(d[2] for d in before)),
+        "share_after": _share(sum(d[1] for d in after), sum(d[2] for d in after)),
+        "from_share": previous["share"],
+    }
+    return out
 
 
 def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
@@ -1191,4 +1314,97 @@ def age_facts(buildid, windowed, ever, observed=None):
             facts["signature_clock_drift_days"] = drift
             if drift <= -RENAME_DRIFT_DAYS:
                 facts["signature_rename_suspected"] = True
+    return facts
+
+
+# A signature token that is a bare MODULE NAME rather than a function: `ntdll.dll`,
+# `kernelbase.dll`, `libxul.so`, `libsystem_kernel.dylib`. Socorro writes one into a signature
+# only when it has no symbols for that frame's module.
+_MODULE_FRAME_RE = re.compile(r"^[\w.+-]+\.(dll|so|dylib|exe|sys)(\s.*)?$", re.I)
+
+# Above this share of a version's crash reports arriving BEFORE the signature's first report, the
+# signature did not come with the build. Not a fitted number: a crash a build introduces is in the
+# build's first day of reports (a few percent of what the version accumulates over its life), and
+# the two motivating cases sat at 53% (bug 2070554) and 46% (bug 2070489's rise, had its name been
+# new). The gap between "with the build" and "days later" is an order of magnitude wide.
+LATE_FIRST_REPORT_SHARE = 0.10
+
+
+def module_frames(signature):
+    """The bare module names in *signature*, in order: ``["ntdll.dll", "kernelbase.dll"]`` for
+    ``shutdownhang | ntdll.dll | kernelbase.dll | mozilla::MaybeLeakRefPtr<T>::~MaybeLeakRefPtr``,
+    ``[]`` for a fully symbolicated name."""
+    out = []
+    for token in str(signature or "").split(" | "):
+        token = token.strip()
+        if token and _MODULE_FRAME_RE.match(token) and "::" not in token and "(" not in token:
+            out.append(token)
+    return out
+
+
+def novelty_facts(signature, first_report_date=None, version=None, version_rates=None,
+                  channel=None):
+    """Whether "this signature is new" can be trusted, as corroboration facts. ``{}`` when there
+    is nothing to say.
+
+    Both readers of ``age_facts`` -- the crash brief and the filed bug -- say "this signature is
+    new" whenever Socorro's first-seen build is this crash's build. On 2026-09-09 that sentence
+    was true and worthless: ``shutdownhang | ntdll.dll | kernelbase.dll |
+    mozilla::MaybeLeakRefPtr<T>::~MaybeLeakRefPtr`` (bug 2070554) had its first report ever on
+    09-08, four days after 155.0.1 started reporting, and its `ntdll.dll` was a Windows build
+    Socorro had no symbols for. The crash was the years-old `nsHttpConnectionMgr::Shutdown`
+    hang wearing a name the symbol gap had minted; the run read "new signature, trustworthy
+    window" and named the only networking change in the dot-release diff.
+
+    Two tests, each a fact about the crash rather than a threshold on the case:
+
+    * ``signature_module_frames`` -- the NAME carries unsymbolicated module frames. Socorro
+      writes a bare module name into a signature only when it lacks that module's symbols, which
+      happens for days after every OS update, so such a name's first appearance dates a symbol
+      gap, not a crash. Signatures containing ``ntdll.dll | kernelbase.dll`` ran 1-5/day, then 8
+      on 09-08 and 79 on 09-09 across a dozen unrelated hangs.
+    * ``version_reports_before_first_report`` -- the share of the crash version's own crash
+      reports that had ALREADY arrived when this signature was first reported anywhere. A crash
+      a build introduces is in the build's first reports; one that first appears after a tenth
+      of the version's reports are in (``LATE_FIRST_REPORT_SHARE``) was set off by something
+      that changed on that date. Read off the denominators ``version_rates`` already fetched, so
+      it costs no request; only asked off nightly, where a version is one build's population
+      rather than a cycle's, and only when the version's first reporting day is inside the
+      window (a version older than the window has no visible first day).
+
+    ``signature_novelty_unreliable`` names whichever fired, comma-joined, so the brief and the
+    bug can say WHY the name's age is not the crash's. Never a novelty claim: this may only ever
+    take "new" away."""
+    facts = {}
+    reasons = []
+    mods = module_frames(signature)
+    if mods:
+        facts["signature_module_frames"] = mods
+        reasons.append("module_frames")
+    family = config.channel_family(channel) if channel else None
+    rows = (version_rates or {}).get("versions") or []
+    row = next((r for r in rows if str(r.get("version")) == str(version or "")), None)
+    daily = (row or {}).get("daily") or []
+    since = (version_rates or {}).get("since")
+    day = str(first_report_date or "")[:10]
+    if day and daily and family and family != ORIGIN_CHANNEL:
+        live = [d for d in daily if d[2] > 0]
+        total = sum(d[2] for d in live)
+        # The version must have STARTED inside the window, or its first day is the window's edge
+        # and the share below is measured against a life we cannot see.
+        if live and total and (not since or live[0][0] > since):
+            before = sum(d[2] for d in live if d[0] < day)
+            share = before / float(total)
+            facts["signature_first_report_date"] = day
+            facts["version_reports_before_first_report"] = round(share, 3)
+            try:
+                first = datetime.strptime(day, "%Y-%m-%d")
+                started = datetime.strptime(live[0][0], "%Y-%m-%d")
+                facts["signature_first_report_lag_days"] = (first - started).days
+            except ValueError:
+                pass
+            if share >= LATE_FIRST_REPORT_SHARE:
+                reasons.append("late_first_report")
+    if reasons:
+        facts["signature_novelty_unreliable"] = ",".join(reasons)
     return facts

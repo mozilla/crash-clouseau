@@ -73,13 +73,21 @@ _SYSTEM = (
     "whose rate has risen, or a shutdownhang / AsyncShutdownTimeout / watchdog crash, judge "
     "whether the change adds work, I/O or blocking to the path being waited on -- even when it "
     "touches no code on the stack -- and say so rather than arguing from the signature's age. "
-    "If the crash facts show a CRASH RATE BY VERSION step -- this crash's version running at "
-    "several times the previous version's rate -- and the candidate is one of the few changes "
-    "shipped between those versions, that empirical step outweighs an intuition about the "
-    "DIRECTION of an I/O change ('a smaller cap means less work'): checkpoint count vs bytes, "
-    "fsync frequency vs size, and batch vs trickle routinely go the other way in practice. "
-    "Refute (corroborates: false) only when the change cannot touch the awaited path at all; "
-    "a direction doubt is corroborates: null with the doubt stated.\n\n"
+    "A CRASH RATE BY VERSION block in the crash facts is this signature's SHARE of each "
+    "version's crash reports, with per-day rows. A step marked AT THE VERSION BOUNDARY -- the "
+    "new version several times the previous one's share from its first days -- is empirical "
+    "evidence that something in that version's small diff changed the crash's frequency, and it "
+    "outweighs an intuition about the DIRECTION of an I/O change ('a smaller cap means less "
+    "work'): checkpoint count vs bytes, fsync frequency vs size, and batch vs trickle routinely "
+    "go the other way in practice; there a direction doubt is corroborates: null with the doubt "
+    "stated. A rise marked as a DATE EVENT, or a version whose first days matched the previous "
+    "version, is NOT such evidence: it was caused by something that changed on that date, and "
+    "no changeset in the version explains it. And 'the change can touch the awaited path' is "
+    "true of most changes to networking, prefs, allocation or the event loop and is not "
+    "corroboration by itself: corroborate only when you can say what the change does to THIS "
+    "path that an innocent change would not, and refute (corroborates: false) when the crash's "
+    "own history already shows it at this rate without the change -- on the previous version, "
+    "or under a rollout that had already deployed the same value.\n\n"
     "End your reply with EXACTLY one fenced block:\n"
     "```json\n"
     '{"corroborates": true|false|null, "confidence": "low|medium|high", '
@@ -116,13 +124,26 @@ def _user_prompt(crash: dict, candidate: dict | None) -> str:
             "unrelated — if so, say why.".format(
                 candidate["node"], " (bug {})".format(bug) if bug else ""),
         ]
-        step = (crash.get("version_rates") or {}).get("step") or {}
-        if step and str(crash.get("version") or "") == str(step.get("version")):
+        rates = crash.get("version_rates") or {}
+        step = rates.get("step") or {}
+        event = rates.get("date_event") or {}
+        own = str(crash.get("version") or "")
+        if step and own == str(step.get("version")):
             lines.append(
-                "Note the CRASH RATE BY VERSION block above: this report is on {}, which runs at "
-                "{}x the rate of {}, and this candidate shipped between those two versions. Weigh "
-                "that against any intuition that the change should make the awaited work "
-                "cheaper.".format(step.get("version"), step.get("ratio"), step.get("from_version")))
+                "Note the CRASH RATE BY VERSION block above: this report is on {}, whose share of "
+                "crash reports has run at {}x {}'s since its first days, and this candidate "
+                "shipped between those two versions. That step is evidence about the version's "
+                "diff as a whole; say whether THIS change is the part of it that reaches the "
+                "crashing or awaited path.".format(
+                    step.get("version"), step.get("ratio"), step.get("from_version")))
+        elif event and own == str(event.get("version")):
+            lines.append(
+                "Note the CRASH RATE BY VERSION block above: this report is on {}, whose share "
+                "rose only on {}, days into its life, after first days that matched {}. That "
+                "rise is a date event and is not evidence for any changeset in this version; do "
+                "not credit the candidate with it.".format(
+                    event.get("version"), event.get("day") or "a later day",
+                    event.get("from_version")))
     else:
         lines += [
             "",

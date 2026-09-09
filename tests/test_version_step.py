@@ -84,38 +84,134 @@ def _response():
     }
 
 
+def _totals():
+    """EVERY crash report of those versions on release over the same days -- the denominators
+    (`version_rates`' second, unfiltered query), real 2026-09 numbers."""
+    return {
+        "total": 0,
+        "facets": {
+            "histogram_date": [
+                _bucket("2026-08-25", **{"154.0.1": 768}),
+                _bucket("2026-08-31", **{"154.0.1": 15542}),
+                _bucket("2026-09-01", **{"154.0.1": 14555}),
+                _bucket("2026-09-02", **{"155.0": 5275, "154.0.1": 10973}),
+                _bucket("2026-09-03", **{"155.0": 8467}),
+                _bucket("2026-09-04", **{"155.0": 8844, "155.0.1": 969}),
+                _bucket("2026-09-05", **{"155.0": 3089, "155.0.1": 5522}),
+                _bucket("2026-09-06", **{"155.0": 1699, "155.0.1": 7293}),
+            ],
+            "version": [],
+        },
+    }
+
+
+def _summary(**kw):
+    return sigage.summarize_version_rates(_response(), totals=_totals(), **kw)
+
+
+def _trainhop_response():
+    """Bug 2070489's signature on release, 2026-09-01..09 (real counts): 155.0.1 matched 155.0
+    for four days, then a newtab train-hop XPI was deployed on 09-08 at 17:58Z."""
+    sig = {"155.0": [12, 39, 45, 37, 20, 8, 18, 14, 19],
+           "155.0.1": [0, 0, 0, 6, 20, 26, 45, 204, 449]}
+    days = ["2026-09-0{}".format(i) for i in range(1, 10)]
+    return {"total": 0, "facets": {
+        "histogram_date": [_bucket(d, **{v: n[i] for v, n in sig.items() if n[i]})
+                           for i, d in enumerate(days)],
+        "version": [{"term": "155.0.1", "count": 750,
+                     "facets": {"build_id": [{"term": "20260903215306", "count": 750}]}},
+                    {"term": "155.0", "count": 212, "facets": {"build_id": []}}]}}
+
+
+def _trainhop_totals():
+    allv = {"155.0": [854, 5275, 8467, 8844, 3089, 1699, 2435, 1708, 676],
+            "155.0.1": [0, 0, 0, 969, 5522, 7293, 10670, 12765, 8804]}
+    days = ["2026-09-0{}".format(i) for i in range(1, 10)]
+    return {"total": 0, "facets": {
+        "histogram_date": [_bucket(d, **{v: n[i] for v, n in allv.items() if n[i]})
+                           for i, d in enumerate(days)],
+        "version": []}}
+
+
 class TestSummarizeVersionRates(unittest.TestCase):
-    def test_rows_are_oldest_first_with_per_day_over_the_versions_span(self):
-        out = sigage.summarize_version_rates(_response(), days=60)
+    def test_rows_are_oldest_first_with_a_share_of_the_versions_own_reports(self):
+        out = _summary(days=60)
         self.assertEqual([r["version"] for r in out["versions"]], ["154.0.1", "155.0", "155.0.1"])
         r155 = out["versions"][1]
         self.assertEqual((r155["reports"], r155["first_day"], r155["last_day"], r155["days"]),
                          (24, "2026-09-02", "2026-09-06", 5))
         self.assertAlmostEqual(r155["per_day"], 4.8)
+        # 24 of 27,374 crash reports of 155.0 -> 0.88 per 1000; 74 of 13,784 of 155.0.1 -> 5.37.
+        self.assertEqual((r155["all_reports"], r155["share"]), (27374, 0.88))
+        self.assertEqual((out["versions"][2]["all_reports"], out["versions"][2]["share"]),
+                         (13784, 5.37))
+        self.assertEqual(out["versions"][2]["daily"],
+                         [["2026-09-04", 9, 969], ["2026-09-05", 35, 5522],
+                          ["2026-09-06", 30, 7293]])
         self.assertEqual(out["versions"][2]["build_ids"], ["20260903215306"])
-        self.assertEqual(out["days"], 60)
+        self.assertEqual((out["days"], out["normalized"]), (60, True))
 
-    def test_the_155_0_1_step_is_found(self):
-        step = sigage.summarize_version_rates(_response())["step"]
+    def test_the_155_0_1_step_is_found_at_the_version_boundary(self):
+        step = _summary()["step"]
         self.assertIsNotNone(step)
         self.assertEqual((step["version"], step["from_version"]), ("155.0.1", "155.0"))
-        self.assertAlmostEqual(step["per_day"], 74 / 3.0, places=2)
-        self.assertGreaterEqual(step["ratio"], 5.0)
+        self.assertEqual((step["share"], step["from_share"]), (5.37, 0.88))
+        self.assertAlmostEqual(step["ratio"], 6.1)
+        self.assertEqual(step["kind"], "boundary")
         self.assertEqual(step["build_ids"], ["20260903215306"])
 
     def test_a_version_below_min_reports_is_never_the_comparison_point(self):
         # 154.0.1 has 4 reports: it is listed, but the step compares 155.0.1 against 155.0, not
         # against a version whose "rate" is 1 of 3 being 33%.
-        out = sigage.summarize_version_rates(_response(), min_reports=5)
+        out = _summary(min_reports=5)
         self.assertIn("154.0.1", [r["version"] for r in out["versions"]])
         self.assertEqual(out["step"]["from_version"], "155.0")
 
     def test_a_drift_is_not_a_step(self):
-        self.assertIsNone(sigage.summarize_version_rates(_response(), step_ratio=6.0)["step"])
+        self.assertIsNone(_summary(step_ratio=8.0)["step"])
+
+    def test_without_denominators_there_are_counts_and_no_step(self):
+        # THE 2070489 RULE. Reports per day per version is a population count while a version
+        # replaces its predecessor; with no denominator no step may be read off it.
+        out = sigage.summarize_version_rates(_response())
+        self.assertFalse(out["normalized"])
+        self.assertIsNone(out["step"])
+        self.assertIsNone(out["date_event"])
+        self.assertEqual([r["version"] for r in out["versions"]], ["154.0.1", "155.0", "155.0.1"])
+        self.assertNotIn("share", out["versions"][2])
+        self.assertAlmostEqual(out["versions"][2]["per_day"], 74 / 3.0, places=2)
+
+    def test_a_rise_inside_the_versions_life_is_a_date_event_not_a_step(self):
+        # Bug 2070489: 155.0.1's share sat at or below 155.0's for four days, then the train-hop
+        # deployment of 09-08. At `step_ratio` 3 the overall ratio (2.7x) is not even a step;
+        # at 2 it is, and the timing says where it came from.
+        out = sigage.summarize_version_rates(_trainhop_response(), totals=_trainhop_totals(),
+                                             step_ratio=2.0)
+        self.assertIsNone(out["step"])
+        event = out["date_event"]
+        self.assertEqual((event["version"], event["from_version"], event["day"]),
+                         ("155.0.1", "155.0", "2026-09-08"))
+        self.assertLess(event["share_before"], event["from_share"])   # 3.97 vs 5.96 per 1000
+        self.assertGreater(event["share_after"], 25.0)
+        strict = sigage.summarize_version_rates(_trainhop_response(), totals=_trainhop_totals())
+        self.assertIsNone(strict["step"])
+        self.assertIsNone(strict["date_event"])
+
+    def test_step_timing_pools_the_first_days_and_needs_min_reports_there(self):
+        row = {"daily": [["d1", 1, 1000], ["d2", 1, 1000], ["d3", 1, 1000], ["d4", 60, 1000]]}
+        # Three early reports at 1 per 1000 do not clear 3x a 0.2 baseline WITH min_reports 5.
+        self.assertEqual(sigage.step_timing(row, 0.2, 3.0, 5), ("inside", "d4"))
+        self.assertEqual(sigage.step_timing(row, 0.2, 3.0, 1), ("boundary", None))
+        # A rise no single day carries (2 per 1000 each day against a 3.0 bar, and under
+        # min_reports every day) is located nowhere: "inside", no day.
+        spread = {"daily": [["d1", 2, 1000], ["d2", 2, 1000], ["d3", 2, 1000], ["d4", 2, 1000]]}
+        self.assertEqual(sigage.step_timing(spread, 1.0, 3.0, 5), ("inside", None))
 
     def test_an_empty_response_is_no_versions_and_no_step(self):
         self.assertEqual(sigage.summarize_version_rates({"facets": {}}),
-                         {"versions": [], "step": None, "days": sigage.VERSION_RATES_DAYS})
+                         {"versions": [], "step": None, "date_event": None,
+                          "days": sigage.VERSION_RATES_DAYS, "since": None,
+                          "normalized": False})
         self.assertEqual(sigage.summarize_version_rates(None)["versions"], [])
 
 
@@ -136,17 +232,28 @@ class TestVersionRatesLookup(unittest.TestCase):
                         h(payload, d)
         return FakeSearch
 
-    def test_one_query_scoped_to_the_channel_with_a_per_day_version_histogram(self):
+    def test_two_queries_the_signatures_and_the_denominators_in_one_round_trip(self):
         seen = []
         with mock.patch.object(sigage.socorro, "SuperSearch", self._fake(seen, _response())):
             out = sigage.version_rates("sig", channel="release", days=60)
-        self.assertEqual(len(seen), 1)
-        p = seen[0]
+        self.assertEqual(len(seen), 2)
+        p, d = seen
         self.assertEqual(p["signature"], "=sig")
         self.assertEqual(p["release_channel"], sigage.utils.get_search_channel("release"))
         self.assertEqual((p["_histogram.date"], p["_histogram_interval.date"]), ("version", "1d"))
         self.assertEqual(p["_aggs.version"], "build_id")
-        self.assertEqual(out["step"]["version"], "155.0.1")
+        # The denominator query is the same histogram with NO signature: every crash report of
+        # the product on the channel, per version per day.
+        self.assertNotIn("signature", d)
+        self.assertNotIn("_aggs.version", d)
+        for k in ("product", "release_channel", "date", "_histogram.date",
+                  "_histogram_interval.date"):
+            self.assertEqual(d[k], p[k], k)
+        self.assertTrue(out["normalized"])
+        self.assertEqual(out["since"], p["date"][2:])
+        # The fake answers both queries with the SAME payload, so every share is 1000 and
+        # nothing steps -- which is the point: a step needs the two to differ.
+        self.assertIsNone(out["step"])
 
     def test_failure_is_unknown_not_no_change(self):
         with mock.patch.object(sigage.socorro, "SuperSearch", self._fake([], None)):
@@ -161,26 +268,78 @@ class TestVersionRatesLookup(unittest.TestCase):
 class TestVersionRateLines(unittest.TestCase):
     def _crash(self, **over):
         c = {"uuid": "0027161c", "signature": "sig", "channel": "release", "version": "155.0.1",
-             "version_rates": sigage.summarize_version_rates(_response())}
+             "version_rates": _summary()}
         c.update(over)
         return c
 
     def test_the_block_names_the_step_and_marks_this_crashs_version(self):
         text = "\n".join(triage._version_rate_lines(self._crash()))
         self.assertIn("CRASH RATE BY VERSION on release", text)
-        self.assertIn("155.0: 4.8/day over 5 days (24 reports)", text)
-        self.assertIn("155.0.1: 24.7/day over 3 days (74 reports)   <- this crash's version", text)
-        self.assertIn("STEP: 155.0.1 runs at 5.1x the rate of 155.0", text)
+        self.assertIn("per 1000 crash reports of the SAME version", text)
+        self.assertIn("155.0: 0.88 per 1000 (24 of 27374 reports, 2026-09-02..2026-09-06)", text)
+        self.assertIn("155.0.1: 5.37 per 1000 (74 of 13784 reports, 2026-09-04..2026-09-06)"
+                      "   <- this crash's version", text)
+        # The per-day rows, so a rise inside a version's life is visible to the reader.
+        self.assertIn("per day: 09-04: 9/969, 09-05: 35/5522, 09-06: 30/7293", text)
+        self.assertIn("STEP AT THE VERSION BOUNDARY: 155.0.1 has run at 6.1x 155.0's share", text)
         self.assertIn("build 20260903215306", text)
         # The two sentences the 0027161c skeptic needed.
         self.assertIn("never a refutation", text)
-        self.assertIn("mitigation can still be the regressor", text)
+        self.assertIn("fix, cap or mitigation can still be the one", text)
         self.assertIn("This report is on the step version", text)
+        # And the sentence that wrote bug 2070489 is gone: the block says what a step is
+        # evidence OF, never which candidate it belongs to.
+        self.assertNotIn("explains the step", text)
+        self.assertIn("evidence about the VERSION, not about any one candidate", text)
 
     def test_a_report_on_another_version_is_not_told_its_window_is_the_step(self):
         text = "\n".join(triage._version_rate_lines(self._crash(version="155.0")))
-        self.assertIn("155.0: 4.8/day over 5 days (24 reports)   <- this crash's version", text)
+        self.assertIn("155.0: 0.88 per 1000 (24 of 27374 reports, 2026-09-02..2026-09-06)"
+                      "   <- this crash's version", text)
         self.assertNotIn("This report is on the step version", text)
+
+    def test_a_date_event_is_named_as_such_and_credits_no_candidate(self):
+        rates = sigage.summarize_version_rates(_trainhop_response(), totals=_trainhop_totals(),
+                                               step_ratio=2.0)
+        text = "\n".join(triage._version_rate_lines(self._crash(version_rates=rates)))
+        self.assertIn("DATE EVENT, NOT A BUILD STEP: 155.0.1's share rose", text)
+        self.assertIn("from 2026-09-08", text)
+        self.assertIn("No changeset in this version's window explains it", text)
+        self.assertNotIn("STEP AT THE VERSION BOUNDARY", text)
+        self.assertNotIn("This report is on the step version", text)
+        # Both versions' per-day rows are printed, so the reader can see the 09-08 jump.
+        self.assertIn("09-07: 45/10670, 09-08: 204/12765, 09-09: 449/8804", text)
+
+    def test_only_the_recent_versions_are_listed(self):
+        rates = _summary()
+        stale = [{"version": "14{}.0".format(i), "reports": 1, "first_day": "2026-08-01",
+                  "last_day": "2026-08-01", "days": 1, "per_day": 1.0, "build_ids": [],
+                  "all_reports": 1000, "share": 1.0} for i in range(8)]
+        rates = {**rates, "versions": stale + rates["versions"]}
+        text = "\n".join(triage._version_rate_lines(self._crash(version_rates=rates)))
+        self.assertIn("(5 older versions with reports in the window not listed)", text)
+        self.assertNotIn("140.0:", text)
+        self.assertIn("147.0:", text)
+        self.assertIn("155.0.1: 5.37 per 1000", text)
+        # The step's versions are always shown, however far back they sit.
+        old_step = {**rates, "step": {**rates["step"], "from_version": "140.0"}}
+        text = "\n".join(triage._version_rate_lines(self._crash(version_rates=old_step)))
+        self.assertIn("140.0:", text)
+
+    def test_no_step_says_the_frequency_claim_has_no_support(self):
+        rates = sigage.summarize_version_rates(_trainhop_response(), totals=_trainhop_totals())
+        text = "\n".join(triage._version_rate_lines(self._crash(version_rates=rates)))
+        self.assertIn("No step: this crash's version is within 3x", text)
+        self.assertIn("has no support in these numbers", text)
+
+    def test_counts_without_denominators_are_labelled_counts_and_carry_no_step(self):
+        rates = sigage.summarize_version_rates(_response())
+        text = "\n".join(triage._version_rate_lines(self._crash(version_rates=rates)))
+        self.assertIn("CRASH REPORTS BY VERSION on release", text)
+        self.assertIn("COUNTS, not rates", text)
+        self.assertIn("No step can be read off these numbers", text)
+        self.assertIn("155.0.1: 74 reports over 3 days (2026-09-04..2026-09-06)", text)
+        self.assertNotIn("STEP", text)
 
     def test_nothing_to_compare_prints_nothing(self):
         self.assertEqual(triage._version_rate_lines(self._crash(version_rates=None)), [])
@@ -188,7 +347,8 @@ class TestVersionRateLines(unittest.TestCase):
             self._crash(version_rates=dict(sigage.NO_VERSION_RATES))), [])
         one = {"versions": [{"version": "155.0.1", "reports": 74, "first_day": "2026-09-04",
                              "last_day": "2026-09-06", "days": 3, "per_day": 24.67,
-                             "build_ids": []}], "step": None, "days": 60}
+                             "build_ids": []}], "step": None, "date_event": None, "days": 60,
+               "since": None, "normalized": True}
         self.assertEqual(triage._version_rate_lines(self._crash(version_rates=one)), [])
 
     def test_the_block_reaches_the_shared_crash_facts(self):
@@ -220,14 +380,26 @@ class TestSeedWiring(unittest.TestCase):
 
     def test_record_version_step_flags_the_step_and_whether_this_crash_is_on_it(self):
         d = Dossier(crash={"uuid": "u", "signature": "sig", "frames": []})
-        seed = {"version": "155.0.1", "version_rates": sigage.summarize_version_rates(_response())}
+        seed = {"version": "155.0.1", "version_rates": _summary()}
         orch._record_version_step(d, seed)
-        self.assertEqual(d.corroborations["version_step"], "155.0.1 at 5.1x the rate of 155.0")
-        self.assertAlmostEqual(d.corroborations["version_step_ratio"], 5.1)
+        self.assertEqual(d.corroborations["version_step"], "155.0.1 at 6.1x the share of 155.0")
+        self.assertAlmostEqual(d.corroborations["version_step_ratio"], 6.1)
+        self.assertEqual(d.corroborations["version_step_kind"], "boundary")
         self.assertTrue(d.corroborations["crash_in_step_version"])
+        self.assertNotIn("version_date_event", d.corroborations)
         d2 = Dossier(crash={"uuid": "u", "signature": "sig", "frames": []})
         orch._record_version_step(d2, {**seed, "version": "155.0"})
         self.assertFalse(d2.corroborations["crash_in_step_version"])
+
+    def test_record_version_step_records_a_date_event_and_no_step(self):
+        d = Dossier(crash={"uuid": "u", "signature": "sig", "frames": []})
+        rates = sigage.summarize_version_rates(_trainhop_response(), totals=_trainhop_totals(),
+                                               step_ratio=2.0)
+        orch._record_version_step(d, {"version": "155.0.1", "version_rates": rates})
+        self.assertEqual(d.corroborations["version_date_event"],
+                         "155.0.1 rose 2.5x over 155.0 on 2026-09-08")
+        for key in ("version_step", "version_step_ratio", "crash_in_step_version"):
+            self.assertNotIn(key, d.corroborations)
 
     def test_record_version_step_is_a_no_op_without_a_step(self):
         d = Dossier(crash={"uuid": "u", "signature": "sig", "frames": []})
@@ -332,6 +504,16 @@ class TestTheSkepticIsToldWhy(unittest.TestCase):
         self.assertIn("never a refutation", prompt)
         self.assertIn("ABSENT from the build", prompt)
         self.assertIn("mitigation can still be the regressor", prompt)
+        # 2026-09-09: "a rate that stepped up in the version that shipped the change is evidence
+        # FOR it" is gone; a frequency claim is checked on its timing and its controls.
+        self.assertNotIn("evidence FOR it", prompt)
+        self.assertIn("checked on TIMING", prompt)
+        self.assertIn("versions and rollouts WITHOUT the change", prompt)
+
+    def test_the_prompt_says_what_a_pass_means(self):
+        prompt = roles._ROLES["skeptic"]["prompt"]
+        self.assertIn("equally true for an innocent candidate is not a pass", prompt)
+        self.assertIn("no link OBSERVED in this report", prompt)
 
     def test_the_clause_stays_short(self):
         self.assertLess(len(roles._PRESENCE.split()), 110)
@@ -353,7 +535,7 @@ from crashclouseau.agent import second_opinion  # noqa: E402
 def _step_seed(**over):
     seed = {"uuid": "0027161c", "signature": "sig", "channel": "release", "version": "155.0.1",
             "candidates": [{"node": "ab9673b0a48d", "bug": 2066155}, {"node": "c5f2a83e6d14"}],
-            "version_rates": sigage.summarize_version_rates(_response())}
+            "version_rates": _summary()}
     seed.update(over)
     return seed
 
@@ -443,7 +625,28 @@ class TestTheBlindReviewerIsToldAboutTheStep(unittest.TestCase):
         crash = _step_seed(raw_crash={"json_dump": {}})
         text = second_opinion._user_prompt(crash, {"node": "ab9673b0a48d", "bug": 2066155})
         self.assertIn("CRASH RATE BY VERSION on release", text)          # the shared facts
-        self.assertIn("this report is on 155.0.1, which runs at 5.1x the rate of 155.0", text)
+        self.assertIn("this report is on 155.0.1, whose share of crash reports has run at 6.1x "
+                      "155.0's since its first days", text)
+        self.assertIn("say whether THIS change is the part of it", text)
+
+    def test_a_date_event_is_told_not_to_credit_the_candidate(self):
+        rates = sigage.summarize_version_rates(_trainhop_response(), totals=_trainhop_totals(),
+                                               step_ratio=2.0)
+        crash = _step_seed(version_rates=rates, raw_crash={"json_dump": {}})
+        text = second_opinion._user_prompt(crash, {"node": "c5f2a83e6d14", "bug": 2067488})
+        self.assertIn("whose share rose only on 2026-09-08", text)
+        self.assertIn("do not credit the candidate with it", text)
+        self.assertNotIn("has run at", text)
+
+    def test_the_system_prompt_no_longer_says_a_step_belongs_to_a_window_candidate(self):
+        # The sentences that made two 2026-09-09 filings: "that empirical step outweighs" and
+        # "refute only when the change cannot touch the awaited path at all".
+        self.assertNotIn("empirical step outweighs", second_opinion._SYSTEM)
+        self.assertNotIn("cannot touch the awaited path at all", second_opinion._SYSTEM)
+        self.assertIn("AT THE VERSION BOUNDARY", second_opinion._SYSTEM)
+        self.assertIn("DATE EVENT", second_opinion._SYSTEM)
+        self.assertIn("under a rollout that had already deployed the same value",
+                      second_opinion._SYSTEM)
 
     def test_no_note_off_the_step_version_or_without_a_candidate(self):
         crash = _step_seed(version="155.0", raw_crash={"json_dump": {}})

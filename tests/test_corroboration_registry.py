@@ -339,6 +339,17 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # first question it exists to answer has been read off the persisted dossiers: how often
         # a candidate inside a step version's window is vetoed anyway (crash 0027161c).
         "version_step", "version_step_ratio",
+        # 2026-09-09: the step is now a SHARE and is TIMED. `version_step_kind` says the step sat
+        # at the version boundary (the only kind recorded as a step); `version_date_event` is
+        # the rise that came inside the version's life instead -- bug 2070489's train-hop
+        # deployment. Write-only until the count of date events, and of what the old block
+        # would have called steps, has been read off prod.
+        "version_step_kind", "version_date_event",
+        # A hang whose age clamp the watchdog prong would have waived before 2026-09-09 and no
+        # longer does (the prong now needs `rate` or `step` beside it). Write-only until a
+        # module owner confirms or refutes a regressor this flag sat on -- three unanswered
+        # filings (2069191, 2069353, 2070489) are the reason it exists.
+        "stale_signature_watchdog_unwaived",
         # The blind reviewer refuted a lead the version step ties to its window; the lead was
         # kept at `low`. Write-only until `Feedback` can say which of the two was right.
         "second_opinion_refuted_step_kept",

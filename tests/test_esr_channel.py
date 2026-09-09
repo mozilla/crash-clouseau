@@ -396,19 +396,36 @@ class TestVersionRates(unittest.TestCase):
                 {"term": "153.2.0esr", "facets": {"build_id": [{"term": "20260826022508"}]}},
             ]}}
 
+    @staticmethod
+    def _totals():
+        """The denominators: every ESR crash report per version per day. 153.2.0esr's share
+        (64 of 2,000 = 32 per 1000) steps 3.6x over 153.1.0esr's (18 of 2,000 = 9)."""
+        def day(d, counts):
+            return {"term": d, "facets": {"version": [{"term": v, "count": c}
+                                                      for v, c in counts.items()]}}
+        return {"facets": {"histogram_date": [
+            day("2026-08-27T00:00:00", {"140.15.0esr": 10000, "153.1.0esr": 1000,
+                                        "153.2.0esr": 1000}),
+            day("2026-08-28T00:00:00", {"140.15.0esr": 10000, "153.1.0esr": 1000,
+                                        "153.2.0esr": 1000}),
+        ], "version": []}}
+
     def test_a_line_sees_only_its_own_versions(self):
         """Without the cut the "preceding version" of 153.1.0esr is 140.15.0esr, and a "step"
         between two lines' populations is not a step. `version_rates` passes the line's major;
         the family-wide series is what a caller with no line gets, as before."""
-        whole = sigage.summarize_version_rates(self._result(), min_reports=10)
+        whole = sigage.summarize_version_rates(self._result(), min_reports=10,
+                                               totals=self._totals())
         self.assertEqual([r["version"] for r in whole["versions"]],
                          ["140.15.0esr", "153.1.0esr", "153.2.0esr"])
-        line = sigage.summarize_version_rates(self._result(), min_reports=10, major=153)
+        line = sigage.summarize_version_rates(self._result(), min_reports=10, major=153,
+                                              totals=self._totals())
         self.assertEqual([r["version"] for r in line["versions"]], ["153.1.0esr", "153.2.0esr"])
         self.assertEqual(line["step"]["version"], "153.2.0esr")
         self.assertEqual(line["step"]["from_version"], "153.1.0esr")
         self.assertEqual(line["step"]["build_ids"], ["20260826022508"])
-        other = sigage.summarize_version_rates(self._result(), min_reports=10, major=140)
+        other = sigage.summarize_version_rates(self._result(), min_reports=10, major=140,
+                                               totals=self._totals())
         self.assertEqual([r["version"] for r in other["versions"]], ["140.15.0esr"])
         self.assertIsNone(other["step"])
         self.assertEqual(sigage.summarize_version_rates(self._result(), major=115)["versions"], [])
@@ -434,8 +451,9 @@ class TestVersionRates(unittest.TestCase):
             self.assertEqual(summ.call_args.kwargs["major"], 153)
             sigage.version_rates("Foo::Bar", channel="release")
             self.assertIsNone(summ.call_args.kwargs["major"])
-        self.assertEqual(asked[0]["release_channel"], "esr")
-        self.assertEqual(asked[1]["release_channel"], "release")
+        # Two queries per call (the signature's histogram and the denominators), both on the
+        # family channel.
+        self.assertEqual([a["release_channel"] for a in asked], ["esr", "esr", "release", "release"])
 
 
 if __name__ == "__main__":

@@ -1969,6 +1969,7 @@ class UUID(db.Model):
                 Build.buildid,
                 Build.product,
                 Build.channel,
+                Build.version,
                 Node.node,
             )
             .select_from(UUID)
@@ -1987,6 +1988,9 @@ class UUID(db.Model):
                 "buildid": r.buildid.astimezone(pytz.utc),
                 "channel": r.channel,
                 "product": r.product,
+                # The build's version ("155.0.1"), so the filer can read the bug status flag of
+                # the crash's own train (`bugzilla_apply._known_on_train_bug`).
+                "version": r.version,
                 "java": bool(r.jstackhash),
                 "node": r.node,
             }

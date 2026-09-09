@@ -564,6 +564,8 @@ def build_signature_age_note(corroborations, buildid=None):
                         "the build above" if str(ever) == str(buildid)
                         else "less than a day before the build above" if age_ever < 1
                         else "{:.0f} days before the build above".format(age_ever)))
+        if age_ever <= sigage.NEW_SIGNATURE_DAYS:
+            note += _novelty_caveat(c)
         disagree = drift is not None and drift >= sigage.CLOCK_DISAGREEMENT_DAYS
         if windowed and age_win is not None and disagree:
             note += (" (A 364-day crash-stats search only reaches {}, because Socorro's search "
@@ -579,6 +581,35 @@ def build_signature_age_note(corroborations, buildid=None):
                 "all-time signature index has no entry for it yet — as far as we can tell it is "
                 "new with this build.")
     return ""
+
+
+def _novelty_caveat(c):
+    """The sentence(s) that take "new" back when the NAME's age is not the crash's, or ``""``.
+
+    ``signature_novelty_unreliable`` (``sigage.novelty_facts``) names the reason. Bug 2070554
+    said "This signature is new: its first report anywhere is in build 20260903215306" about a
+    name minted by a Windows update's symbol gap four days into 155.0.1's life; a reader with the
+    two facts below would not have needed Ryan's comment 1 to see it."""
+    reasons = str(c.get("signature_novelty_unreliable") or "").split(",")
+    out = ""
+    mods = c.get("signature_module_frames") or []
+    if "module_frames" in reasons and mods:
+        out += (" The name is not a reliable clock, though: it carries unsymbolicated module "
+                "frames ({}), which Socorro writes only when it lacks that module's symbols — "
+                "typically for a few days after an OS update — so the name's first appearance "
+                "dates a symbol gap, and the same crash is likely older under a symbolicated "
+                "name.".format(", ".join("`{}`".format(m) for m in mods)))
+    if "late_first_report" in reasons and c.get("signature_first_report_date"):
+        share = c.get("version_reports_before_first_report")
+        lag = c.get("signature_first_report_lag_days")
+        out += (" It did not appear with the build either: its first report is dated {}{}{}, so "
+                "whatever started it changed on that date rather than in the build.".format(
+                    c["signature_first_report_date"],
+                    ", {} day{} after this version began reporting".format(
+                        lag, "" if lag == 1 else "s") if lag is not None else "",
+                    ", when {:.0f}% of the version's crash reports had already arrived".format(
+                        100.0 * share) if share is not None else ""))
+    return out
 
 
 def build_stale_signature_note(corroborations):

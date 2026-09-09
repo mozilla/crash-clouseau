@@ -49,7 +49,9 @@ def spike_paragraph(brief):
         parts.append("Over the last week the rate reads the same way: " + trend)
     step = (brief.get("version_step") or {})
     if step.get("version"):
-        parts.append("By version, {} runs at {}x the rate of {}.".format(
+        # A SHARE of the version's own crash reports, stepped from the version's first days
+        # (`sigage.version_rates`): a count per version would read a population shift as a rate.
+        parts.append("By version, {} runs at {}x the share of {} from its first days.".format(
             step["version"], step.get("ratio"), step.get("from_version")))
     age = signature_age_sentence(brief)
     if age:

@@ -114,10 +114,16 @@ def _beta(crash, ages=False):
 # arguments that refuted a confirmed regressor on 2026-08-15 -- "touches no code on the stack"
 # and "the signature predates the change" -- both of which are right for a fault and inverted
 # for a watchdog. The first draft was 700; this ledger sent it back.
+# 2026-09-09, system.md +1947 (17117 -> 19064, and beta with it): three rules bought by bugs
+# 2070489 and 2070554, both filed the same morning naming the same innocent pref flip. "A
+# MECHANISM IS NOT EVIDENCE UNTIL ONE LINK IS OBSERVED" (every link of both stories was a
+# "could"), "A RATE CLAIM IS A MEASUREMENT CLAIM" (the 4.5x was a population shift plus a
+# train-hop deployment) and "A CANDIDATE THAT RESTORES AN EARLIER STATE HAS A CONTROL GROUP"
+# (a Nimbus rollout had already turned the pref off for every 155.0 user, with zero crashes).
 _MEASURED = {
     # +2 on 2026-09-07: "treat `Bash` as a last resort" became "and no shell or file tools here"
     # when the built-in toolset was switched off (`triage.build_options`, `tools=`).
-    "system.md": (17117, 400),
+    "system.md": (19064, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     "crash facts, 40-thread parent hang": (2508, 200),
@@ -125,7 +131,7 @@ _MEASURED = {
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (17657, 400),
+    "system.md, beta": (19604, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.

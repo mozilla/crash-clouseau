@@ -867,7 +867,13 @@ def _signature_age_lines(crash: dict) -> list[str]:
                 " the older figure is the true one.".format(
                     windowed, sigage.buildid_day(windowed), _days_phrase(age_win)))
         if age_ever <= sigage.NEW_SIGNATURE_DAYS:
-            guidance = _NEW_SIGNATURE_GUIDANCE
+            # "New" is only worth saying if the NAME's age is the CRASH's age. Two things break
+            # that -- unsymbolicated module frames in the name, and a first report that came
+            # days into the version's life -- and either replaces the trustworthy-window closer.
+            unreliable, guidance = _novelty_reliability_lines(crash)
+            said.extend(unreliable)
+            if guidance is None:
+                guidance = _NEW_SIGNATURE_GUIDANCE
         else:
             # NEW TO THIS CHANNEL, OLD EVERYWHERE. Off nightly the two are routinely different
             # and the difference is the whole question. A regressor that landed on
@@ -897,9 +903,46 @@ def _signature_age_lines(crash: dict) -> list[str]:
                     " — this crash's own build" if str(windowed) == str(crash.get("buildid"))
                     else ", {} before this one".format(_days_phrase(age_win)))]
         guidance = _UNDATED_SIGNATURE_GUIDANCE
+        unreliable, closer = _novelty_reliability_lines(crash)
+        if unreliable:
+            said.extend(unreliable)
+            guidance = closer
     else:
         return []
     return ["", *said, guidance]
+
+
+def _novelty_reliability_lines(crash: dict) -> tuple[list[str], str | None]:
+    """``(lines, guidance)`` withdrawing a novelty claim the facts do not support, or
+    ``([], None)``. The facts are ``sigage.novelty_facts``; this is only their prose."""
+    facts = sigage.novelty_facts(
+        crash.get("signature"), crash.get("signature_first_report_date"), crash.get("version"),
+        crash.get("version_rates"), crash.get("channel"))
+    reasons = (facts.get("signature_novelty_unreliable") or "").split(",")
+    lines = []
+    if "module_frames" in reasons:
+        lines.append(
+            "BUT THE NAME IS NOT TRUSTWORTHY: it carries unsymbolicated module frames ({}). Socorro"
+            " writes a bare module name into a signature only when it has no symbols for that"
+            " module, which happens for days after every OS update -- so this name's first"
+            " appearance dates a SYMBOL GAP, not a crash. The same crash exists under an older"
+            " name with those frames symbolicated; the Firefox frames and the blocked spin-loop"
+            " stack, if any, are what identify it.".format(
+                ", ".join("`{}`".format(m) for m in facts.get("signature_module_frames") or [])))
+    if "late_first_report" in reasons:
+        lines.append(
+            "BUT IT DID NOT COME WITH THE BUILD: its first report anywhere is dated {}, {} day{}"
+            " after {} began reporting, by which time {:.0f}% of that version's crash reports had"
+            " already arrived. A crash a build introduces shows up with the build's first reports;"
+            " one that appears later was set off by something that changed on that DATE.".format(
+                facts.get("signature_first_report_date"),
+                facts.get("signature_first_report_lag_days"),
+                "" if facts.get("signature_first_report_lag_days") == 1 else "s",
+                crash.get("version"),
+                100.0 * (facts.get("version_reports_before_first_report") or 0.0)))
+    if not lines:
+        return [], None
+    return lines, _UNRELIABLE_NOVELTY_GUIDANCE
 
 
 # The three closers. Split because the first sentence is the one that gets read, and leading a
@@ -968,6 +1011,16 @@ _NEW_TO_CHANNEL_GUIDANCE = (
     " the difference is worth stating explicitly in your mechanism. Note the landing dates below"
     " are the date the change reached {label}, which for anything that arrived with the cycle"
     " merge is the merge date and NOT when the code was written."
+)
+
+_UNRELIABLE_NOVELTY_GUIDANCE = (
+    "What to do with that: do NOT treat the pushlog window below as trustworthy on the strength"
+    " of this signature being new -- the NAME is new, the crash may well not be. Judge the"
+    " candidates as you would for a long-standing signature: what a change did to a crash that"
+    " was already happening, with a measured rate (the CRASH RATE BY VERSION block, when present)"
+    " behind any 'more frequent' claim. 'This changeset introduced this crash' is not a claim"
+    " these dates support, and 'it is the only change in the crash's area' is window membership,"
+    " which is noise."
 )
 
 _UNDATED_SIGNATURE_GUIDANCE = (
@@ -1376,19 +1429,16 @@ def _crash_facts(crash: dict) -> list[str]:
 
 
 def _version_rate_lines(crash: dict) -> list[str]:
-    """This signature's reports per day PER VERSION on the crash's channel, as prompt lines, or
-    ``[]`` when there is nothing to compare (fewer than two versions with enough reports).
+    """This signature's share of each version's crash reports, as prompt lines, or ``[]``.
 
-    Written for crash 0027161c-203a-4bc5-bb1d-efa910260905 (release 155.0.1, 2026-09-06). The
-    facts the run needed and did not have: 154.x ran at 1-2 reports/day, 155.0 at 5-8, 155.0.1
-    at 30-35; the 155.0 -> 155.0.1 diff was 22 changesets with exactly one cookie/storage change
-    (bug 2066155). The principal found that candidate; the skeptic vetoed it as "already
-    present in this exact crash build" and the run abstained. With the step stated, the same
-    presence is what makes the candidate explain the step. Shared with the blind second opinion
-    via ``_crash_facts`` on the ``_hardware_noise_lines`` reasoning: a fact, not a direction.
-
-    Per-day rates count each version's adoption ramp against it, so the block asks for a
-    ``step_ratio``-sized step and says why a drift is not one."""
+    THE BLOCK THAT WROTE BUG 2070489, rewritten. Until 2026-09-09 it printed reports per day per
+    version and closed with "a candidate among them that adds work ... explains the step". Handed
+    "155.0.1 runs at 4.5x the rate of 155.0" -- a population shift, 155.0.1 having replaced 155.0
+    -- plus that sentence, the model wrote a happy-eyeballs latency story about a train-hop
+    deployment. So: the number is a SHARE (`sigage.version_rates`), the per-day series is printed
+    so a rise inside a version's life is visible, and the block says what a step is evidence OF
+    and never which candidate it belongs to. Shared with the blind second opinion via
+    ``_crash_facts``: a fact, not a direction."""
     from crashclouseau import sigage
 
     rates = crash.get("version_rates") or {}
@@ -1397,35 +1447,74 @@ def _version_rate_lines(crash: dict) -> list[str]:
         return []
     own = str(crash.get("version") or "")
     channel = crash.get("channel") or "this"
-    out = [
-        "",
-        "CRASH RATE BY VERSION on {}, last {} days (reports per day between each version's first "
-        "and last report; a version's adoption ramps over its first days, so read a step of "
-        "{:.0f}x or more, not a drift; versions with no report in the window are not listed):"
-        .format(channel, rates.get("days") or sigage.VERSION_RATES_DAYS,
-                config.get_agent_version_rates()["step_ratio"]),
-    ]
-    for r in rows:
+    normalized = bool(rates.get("normalized"))
+    if normalized:
+        head = ("CRASH RATE BY VERSION on {}, last {} days: this signature's reports per 1000 crash "
+                "reports of the SAME version, so a version replacing its predecessor does not read "
+                "as a rate change. Per-day rows are day: signature/all.")
+    else:
+        head = ("CRASH REPORTS BY VERSION on {}, last {} days -- COUNTS, not rates: the population "
+                "denominators were unavailable, and a version replacing its predecessor multiplies "
+                "its count by itself. No step can be read off these numbers.")
+    out = ["", head.format(channel, rates.get("days") or sigage.VERSION_RATES_DAYS)]
+    step = rates.get("step") or {}
+    event = rates.get("date_event") or {}
+    detail = {own, str(step.get("version") or ""), str(step.get("from_version") or ""),
+              str(event.get("version") or ""), str(event.get("from_version") or "")} - {""}
+    recent = {str(r.get("version")) for r in rows[-sigage.VERSION_ROWS:]}
+    shown = [r for r in rows if str(r.get("version")) in recent | detail]
+    if len(shown) < len(rows):
+        out.append("  ({} older version{} with reports in the window not listed)".format(
+            len(rows) - len(shown), "" if len(rows) - len(shown) == 1 else "s"))
+    for r in shown:
         mark = "   <- this crash's version" if own and str(r.get("version")) == own else ""
-        out.append("  {}: {:.1f}/day over {} day{} ({} report{}){}".format(
-            r.get("version"), r.get("per_day") or 0.0, r.get("days"),
-            "" if r.get("days") == 1 else "s", r.get("reports"),
-            "" if r.get("reports") == 1 else "s", mark))
-    step = rates.get("step")
+        if normalized and r.get("share") is not None:
+            out.append("  {}: {} per 1000 ({} of {} reports, {}..{}){}".format(
+                r.get("version"), r["share"], r.get("reports"), r.get("all_reports"),
+                r.get("first_day"), r.get("last_day"), mark))
+            if str(r.get("version")) in detail and r.get("daily"):
+                live = [d for d in r["daily"] if d[2] > 0][-sigage.VERSION_DAILY_ROWS:]
+                out.append("    per day: " + ", ".join(
+                    "{}: {}/{}".format(d[0][5:], d[1], d[2]) for d in live))
+        else:
+            out.append("  {}: {} report{} over {} day{} ({}..{}){}".format(
+                r.get("version"), r.get("reports"), "" if r.get("reports") == 1 else "s",
+                r.get("days"), "" if r.get("days") == 1 else "s",
+                r.get("first_day"), r.get("last_day"), mark))
     if step:
         builds = step.get("build_ids") or []
         out.append(
-            "  STEP: {} runs at {}x the rate of {}. The changes that shipped between those two "
-            "versions are few{}; a candidate among them that adds work, I/O or fsyncs on the "
-            "awaited path explains the step -- and being present in the build is exactly what "
-            "makes it a candidate, never a refutation. A patch described as a fix, cap or "
-            "mitigation can still be the regressor if it shrinks or reverts an earlier one."
-            .format(step.get("version"), step.get("ratio"), step.get("from_version"),
-                    " (build{} {})".format("" if len(builds) == 1 else "s", ", ".join(builds))
-                    if builds else ""))
+            "  STEP AT THE VERSION BOUNDARY: {} has run at {}x {}'s share since its first days "
+            "({} vs {} per 1000){}. A change that shipped WITH the build is present from its "
+            "first reports, so this is the shape a build-borne regression has; being present "
+            "in the build is the precondition for a candidate, never a refutation, and a patch "
+            "described as a fix, cap or mitigation can still be the one. The step is evidence "
+            "about the VERSION, not about any one candidate: a candidate earns it only with a "
+            "mechanism that reaches the crashing or awaited path, and the few changes between "
+            "these versions each deserve that question.".format(
+                step.get("version"), step.get("ratio"), step.get("from_version"),
+                step.get("share"), step.get("from_share"),
+                " (build{} {})".format("" if len(builds) == 1 else "s", ", ".join(builds))
+                if builds else ""))
         if own and own == str(step.get("version")):
             out.append("  This report is on the step version, so this crash's own candidate "
-                       "window (previous build to this one) is that set of changes.")
+                       "window (previous build to this one) is the set of changes that shipped "
+                       "with the step.")
+    elif event:
+        out.append(
+            "  DATE EVENT, NOT A BUILD STEP: {}'s share rose to {}x {}'s, but only from {} -- "
+            "its first days sat at {} per 1000 against {}'s {}. A rise that appears inside a "
+            "version's life was caused by something that changed on that DATE (a server-side or "
+            "Remote Settings deployment, an experiment or add-on rollout, an OS update, a "
+            "signature split), not by the build. No changeset in this version's window explains "
+            "it, and no candidate may be credited with it.".format(
+                event.get("version"), event.get("ratio"), event.get("from_version"),
+                event.get("day") or "later in its life", event.get("share_before"),
+                event.get("from_version"), event.get("from_share")))
+    elif normalized:
+        out.append("  No step: this crash's version is within {}x of the previous version's "
+                   "share. A 'made it more frequent' claim has no support in these numbers."
+                   .format("{:.0f}".format(config.get_agent_version_rates()["step_ratio"])))
     return out
 
 

@@ -89,6 +89,13 @@ leads stay credible:
 Down-rank these (lower confidence, prefer other candidates); do NOT delete them outright — a
 real regressor CAN live in a common file, so if the crash chain genuinely proves one, keep it.
 
+A CANDIDATE THAT RESTORES AN EARLIER STATE HAS A CONTROL GROUP. A backout, a "disable X", a
+"turn off temporarily", a pref returned to its previous default: the builds that already ran in
+that state are the control. If this crash was already happening at the same or a higher rate
+under that state (the previous version's share, or a rollout that had already deployed the same
+value to the previous version), the candidate cannot be what made it frequent, and the story
+that it is must be dropped however well it reads.
+
 ## Mechanism checklist
 Let the crash-interpreter's `failure_class` steer which families you verify first (a
 `uaf` points at lifetime/refcount, an `assertion` at an invariant change, a
@@ -119,6 +126,24 @@ culprit, and SAY in the mechanism which of the two you think it is. Touching the
 function does not settle it — a changeset can touch frame 0 and still only be the thing that
 made an older lifetime bug reachable. Naming an exposer is still useful: Mozilla records
 exposers as `regressed_by` too, so do not abstain over it.
+
+A MECHANISM IS NOT EVIDENCE UNTIL ONE LINK IS OBSERVED. A chain whose every link reads "can",
+"could" or "may" is a hypothesis about the code, and it is equally true if the candidate is
+innocent. Before naming a candidate, ask what you would expect to SEE in this report if it were
+the cause — an annotation, the blocker's state, a facet of the signature, a diff line the
+crashing code executes — and say whether you see it. If nothing in the crash distinguishes
+"this change did it" from "any change in the window did it", the candidate is noise for this
+crash, however well the story reads.
+
+A RATE CLAIM IS A MEASUREMENT CLAIM. "This change made an existing crash more frequent" needs
+three things, or it is not a claim you can make: (1) a denominator — the CRASH RATE BY VERSION
+block's share of the version's reports; a raw count per version is a population count while a
+version replaces its predecessor; (2) timing — the rise sits at the change's arrival (the
+version boundary) and is absent from versions without the change; a rise days into a version's
+life is a DATE EVENT the block names as such; (3) the non-code causes excluded by name:
+adoption ramp, a server-side or Remote Settings deployment of anything the crashing code
+fetches or installs, an OS update, a signature rename or split. Missing any of the three, judge
+the candidate on mechanism alone, and if that is only "could", abstain as `pre_existing`.
 
 ## Final message: one JSON block
 End your final message with EXACTLY ONE fenced ```json block holding the dossier.

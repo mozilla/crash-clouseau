@@ -97,19 +97,57 @@ class TestTheAgeGateWaivesAFrequencyRegression(unittest.TestCase):
         self.assertEqual(d.corroborations["stale_signature_waived"], "rate")
         self.assertNotIn("stale_signature_clamped", d.corroborations)
 
-    def test_a_watchdog_signature_is_waived(self):
+    def test_a_watchdog_signature_alone_is_no_longer_waived(self):
+        # 2026-09-09. The waiver's argument -- "a hang regresses by getting more frequent" --
+        # needs the crash to BE more frequent. Waived on the hang alone it filed bugs 2069191,
+        # 2069353 and 2070489, none confirmed; the case that motivated it (2063892) had a rising
+        # rate and is waived by `rate` on its own.
         d = _lead()
         orch._apply_signature_age_gate(d, _seed(273.0, signature=HANG))
-        self.assertEqual(d.verdict.confidence, Confidence.probable)
-        self.assertEqual(d.corroborations["stale_signature_waived"], "watchdog")
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertTrue(d.corroborations["stale_signature_clamped"])
+        self.assertTrue(d.corroborations["stale_signature_watchdog_unwaived"])
+        self.assertNotIn("stale_signature_waived", d.corroborations)
+
+    def test_a_fault_is_not_counted_as_an_unwaived_watchdog(self):
+        d = _lead()
+        orch._apply_signature_age_gate(d, _seed(273.0))
+        self.assertNotIn("stale_signature_watchdog_unwaived", d.corroborations)
 
     def test_the_report_type_and_the_reason_count_too(self):
         for raw in ({"report_type": "hang"},
                     {"moz_crash_reason": "Quota manager shutdown timed out"},
                     {"json_dump": {"moz_crash_reason": "Shutdown hanging at step AppShutdownQM"}}):
             d = _lead()
-            orch._apply_signature_age_gate(d, _seed(273.0, raw_crash=raw))
-            self.assertEqual(d.corroborations.get("stale_signature_waived"), "watchdog", raw)
+            orch._apply_signature_age_gate(d, _seed(273.0, raw_crash=raw,
+                                                    signature_trend=_facts()))
+            self.assertEqual(d.corroborations.get("stale_signature_waived"), "rate,watchdog", raw)
+
+    def test_a_boundary_step_on_this_version_is_a_frequency_signal(self):
+        step = {"version": "155.0.1", "from_version": "155.0", "ratio": 7.5, "kind": "boundary"}
+        d = _lead()
+        orch._apply_signature_age_gate(d, _seed(
+            273.0, signature=HANG, version="155.0.1", version_rates={"step": step}))
+        self.assertEqual(d.verdict.confidence, Confidence.probable)
+        self.assertEqual(d.corroborations["stale_signature_waived"], "step,watchdog")
+        # A fault with a boundary step is waived by the step alone, like `rate`.
+        d = _lead()
+        orch._apply_signature_age_gate(d, _seed(
+            273.0, version="155.0.1", version_rates={"step": step}))
+        self.assertEqual(d.corroborations["stale_signature_waived"], "step")
+
+    def test_a_step_on_another_version_or_a_date_event_is_not_a_reason(self):
+        step = {"version": "155.0.1", "from_version": "155.0", "ratio": 7.5, "kind": "boundary"}
+        d = _lead()
+        orch._apply_signature_age_gate(d, _seed(
+            273.0, signature=HANG, version="155.0", version_rates={"step": step}))
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        d = _lead()
+        orch._apply_signature_age_gate(d, _seed(
+            273.0, signature=HANG, version="155.0.1",
+            version_rates={"step": None, "date_event": {"version": "155.0.1", "day": "2026-09-08"}}))
+        self.assertEqual(d.verdict.confidence, Confidence.medium)
+        self.assertTrue(d.corroborations["stale_signature_watchdog_unwaived"])
 
     def test_both_reasons_are_named(self):
         d = _lead()

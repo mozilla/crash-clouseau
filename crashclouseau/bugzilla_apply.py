@@ -936,7 +936,8 @@ def _fixed_after_build_bug(signature, buildid, product):
 _FIXED_BUGS_CACHE: dict = {}
 
 
-def _fixed_bugs_about(signature, product, use_cache=False):
+def _fixed_bugs_about(signature, product, use_cache=False, major=None,
+                      resolutions=("FIXED",)):
     """``[(bug_row, resolved_datetime), ...]`` for the bugs on *signature* that are RESOLVED
     FIXED and belong to this crash's own application, lowest id first.
 
@@ -966,17 +967,22 @@ def _fixed_bugs_about(signature, product, use_cache=False):
     # OFF for `_fixed_after_build_bug`, deliberately: that one SUPPRESSES a filing, it runs at
     # most once per filing attempt so it costs nothing to keep live, and a stale "no FIXED bug
     # yet" would let through exactly the duplicate it exists to stop.
-    key = (sig, product or "")
+    key = (sig, product or "", major, tuple(resolutions))
     if use_cache and key in _FIXED_BUGS_CACHE:
         return _FIXED_BUGS_CACHE[key]
 
+    fields = ("id,summary,status,resolution,product,component,"
+              "cf_crash_signature,cf_last_resolved,creation_time,"
+              "assigned_to,assigned_to_detail")
+    if major:
+        # The crash's own train's status flag (`cf_status_firefox155`): the one field that says
+        # whether a FIXED bug's fix is on THIS train. See `_known_on_train_bug`.
+        fields += ",{}".format(_train_flag_field(major))
     params = {
         # `assigned_to` AND `assigned_to_detail`: BMO returns a `*_detail` field only when the
         # BASE field is also requested, and silently omits it otherwise -- which read as
         # "unassigned" here rather than as an error.
-        "include_fields": "id,summary,status,resolution,product,component,"
-                          "cf_crash_signature,cf_last_resolved,creation_time,"
-                          "assigned_to,assigned_to_detail",
+        "include_fields": fields,
         "j_top": "OR",
         "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
         "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
@@ -990,13 +996,72 @@ def _fixed_bugs_about(signature, product, use_cache=False):
         return []
     ours, _theirs = _split_by_application(bugs, product)
     out = []
+    wanted = {r.upper() for r in resolutions}
     for bug in sorted((b for b in ours if b.get("id")), key=lambda b: b["id"]):
-        if (bug.get("resolution") or "").upper() != "FIXED" or not _row_is_about(bug, sig):
+        if (bug.get("resolution") or "").upper() not in wanted or not _row_is_about(bug, sig):
             continue
         out.append((bug, sigage.to_datetime(bug.get("cf_last_resolved"))))
     if use_cache:
         _FIXED_BUGS_CACHE[key] = out
     return out
+
+
+# The `cf_status_firefox<N>` values that say "this train has the bug and not the fix". `fixed`,
+# `verified` and `unaffected` say the opposite; `---` says nothing.
+_TRAIN_HAS_THE_BUG = frozenset({"affected", "wontfix", "fix-optional", "disabled"})
+
+
+def _train_flag_field(major):
+    return "cf_status_firefox{}".format(major)
+
+
+def _major_version(version):
+    """``"155.0.1"`` -> ``155``; ``None`` when there is no leading number to read."""
+    m = re.match(r"\s*(\d+)", str(version or ""))
+    return int(m.group(1)) if m else None
+
+
+def _known_on_train_bug(signature, product, major):
+    """The RESOLVED bug that already tracks this signature ON THIS TRAIN, or ``None``:
+    ``{"id", "field", "flag", "resolution"}``.
+
+    In one line: somebody fixed (or declined to fix) this, the fix is NOT on the train this crash
+    came from, and their bug says so in the crash's own status flag -- so this crash is that bug.
+
+    THE GAP IT CLOSES. Bug 2070489 (2026-09-09): a release 155.0.1 crash on `AsyncShutdownTimeout
+    | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down`,
+    filed as a NEW bug naming a regressor, while bug 2016440 -- the exact signature, RESOLVED
+    FIXED on 09-01 with `cf_status_firefox155 = wontfix` and 156/157 = fixed -- sat there with
+    Ryan's April comment "we're still seeing this spike every time a new trainhop addon ships".
+    All three existing gates let it through, each by design: the venue lookup is open-only
+    (``_open_bugs_for_signature``), ``_fixed_after_build_bug`` compares the RESOLUTION date
+    (09-01) with the build date (09-03) and reads the fix as older than the build, and
+    ``_incomplete_fix_bug`` asks whether the bug OWNS the signature (filed within a week of it),
+    which a 206-day-later bug does not. None of them reads the per-train flag, which is the one
+    field Mozilla maintains for exactly this question.
+
+    A STATUS-FLAG RULE, NOT A THRESHOLD. The flag is set by the people who decided where the fix
+    ships; `wontfix` on the crash's train means "known here, deliberately not fixed here", and
+    `affected` means "known here, fix pending". Either way the crash belongs to that bug and a
+    new bug is a duplicate. ``fixed``/``verified`` on this train is the incomplete-fix question
+    (``_incomplete_fix_bug``) and ``---``/``unaffected``/absent says nothing, so both fall
+    through to the ordinary rules.
+
+    FIXED and WONTFIX resolutions only: an INVALID/WORKSFORME/INCOMPLETE bug's flags describe a
+    bug nobody confirmed. Same application split and exact-signature re-check as its siblings.
+    FAILS OPEN like ``_fixed_after_build_bug``, and for the same reason: the venue lookup
+    already fails closed for the whole path."""
+    sig = (signature or "").strip()
+    if not sig or not major:
+        return None
+    field = _train_flag_field(major)
+    for bug, _resolved in _fixed_bugs_about(sig, product, major=major,
+                                            resolutions=("FIXED", "WONTFIX")):
+        flag = str(bug.get(field) or "").strip().lower()
+        if flag in _TRAIN_HAS_THE_BUG:
+            return {"id": bug["id"], "field": field, "flag": flag,
+                    "resolution": bug.get("resolution")}
+    return None
 
 
 # How far apart a signature's first appearance and its bug's filing may be and still count as
@@ -1443,6 +1508,21 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             return {"filed": False, "bug": fixed_by,
                     "skipped": "already fixed by bug {} (the fix postdates build {})".format(
                         fixed_by, bid)}
+        # KNOWN ON THIS TRAIN, AND NOT FIXED HERE. A RESOLVED bug on the exact signature whose
+        # status flag for the crash's own train reads affected/wontfix/disabled/fix-optional
+        # already IS this crash (bug 2016440 for our 2070489: FIXED in 156/157, wontfix for 155,
+        # filed as a new bug anyway). Skipped rather than commented: the venue lookup's `skip`
+        # policy on this channel applies to a closed venue as much as to an open one.
+        known = _known_on_train_bug(
+            signature, uuid_info.get("product"), _major_version(uuid_info.get("version")))
+        if known:
+            logger.info("autofile: bug %s already tracks %r on this train (%s = %s), so %s is "
+                        "that bug and not a new one — not filing", known["id"], signature,
+                        known["field"], known["flag"], uuid)
+            return {"filed": False, "bug": known["id"], "known_on_train": known,
+                    "skipped": "bug {} already tracks this signature on this train ({} = {}); "
+                               "the fix is not here and this crash is that bug".format(
+                                   known["id"], known["field"], known["flag"])}
 
     # ALREADY HAS A REGRESSOR, so there is nothing for us to say. Our comment makes ONE claim
     # -- this changeset caused it -- and a venue whose `regressed_by` is already set has

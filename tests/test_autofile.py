@@ -112,6 +112,9 @@ class _Base(unittest.TestCase):
             # Asked only on the file-a-new-bug branch, and it is a Bugzilla request: nothing on
             # this signature is already fixed unless a test says so.
             mock.patch.object(bugzilla_apply, "_fixed_after_build_bug", return_value=None),
+            # Its sibling on the same branch, and a Bugzilla request too: no RESOLVED bug tracks
+            # this signature on the crash's train unless a test says so.
+            mock.patch.object(bugzilla_apply, "_known_on_train_bug", return_value=None),
             # RESOLVED by default (it would otherwise ask hg over the network), because that is
             # what production does: the shipped resolver answered 52/52 of the filed candidate
             # nodes. An unresolved date is no longer a neutral default — it now refuses every
@@ -899,6 +902,106 @@ def _closed(bid, resolution, resolved, product="Core", signature=None):
             "resolution": resolution, "cf_last_resolved": resolved,
             "summary": "Crash in [@ {}]".format(signature or _SIG_DEFAULT),
             "cf_crash_signature": "[@ {}]".format(signature or _SIG_DEFAULT)}
+
+
+def _on_train(bid, resolution, flag, product="Core", signature=None, major=155):
+    """One RESOLVED bug as BMO returns it when asked for the crash train's status flag."""
+    row = _closed(bid, resolution, "2026-09-01T04:16:13Z", product=product, signature=signature)
+    if flag is not None:
+        row["cf_status_firefox{}".format(major)] = flag
+    return row
+
+
+class TestABugThatTracksTheSignatureOnThisTrain(unittest.TestCase):
+    """`_known_on_train_bug`: bug 2016440 for our 2070489 (2026-09-09). The exact signature,
+    RESOLVED FIXED on 09-01 with `cf_status_firefox155 = wontfix` and 156/157 = fixed; the venue
+    lookup is open-only, the fixed-after-build gate read the resolution date (09-01) as older than
+    the build (09-03), and the incomplete-fix gate wants the bug to own the signature (filed
+    within a week of it, not 206 days later). The per-train flag is the field that answers."""
+
+    SIG = "mozilla::net::DiagnosticRWLock::CrashWithHolder"
+
+    def _ask(self, *bugs, **kw):
+        bugzilla_apply._FIXED_BUGS_CACHE.clear()
+        bmo = _FakeBMO(*bugs)
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=bmo.get):
+            got = bugzilla_apply._known_on_train_bug(
+                kw.get("signature", self.SIG), kw.get("product", "Firefox"), kw.get("major", 155))
+        return got, bmo
+
+    def test_wontfix_on_the_crashs_train_is_the_venue(self):
+        got, _ = self._ask(_on_train(2016440, "FIXED", "wontfix"))
+        self.assertEqual((got["id"], got["field"], got["flag"], got["resolution"]),
+                         (2016440, "cf_status_firefox155", "wontfix", "FIXED"))
+
+    def test_every_flag_that_says_this_train_has_the_bug(self):
+        for flag in ("affected", "wontfix", "fix-optional", "disabled", "Affected"):
+            got, _ = self._ask(_on_train(2016440, "FIXED", flag))
+            self.assertEqual(got["id"], 2016440, flag)
+
+    def test_fixed_verified_unaffected_or_unset_decide_nothing(self):
+        # `fixed`/`verified` on this train is the incomplete-fix question; `---`, `unaffected`
+        # and an absent field say nothing, and both fall through to the ordinary rules.
+        for flag in ("fixed", "verified", "unaffected", "---", "", None):
+            got, _ = self._ask(_on_train(2016440, "FIXED", flag))
+            self.assertIsNone(got, flag)
+
+    def test_a_wontfix_resolution_counts_but_unconfirmed_resolutions_do_not(self):
+        got, _ = self._ask(_on_train(2016440, "WONTFIX", "wontfix"))
+        self.assertEqual(got["id"], 2016440)
+        for resolution in ("INVALID", "WORKSFORME", "INCOMPLETE", "DUPLICATE", ""):
+            got, _ = self._ask(_on_train(2016440, resolution, "affected"))
+            self.assertIsNone(got, resolution)
+
+    def test_another_applications_bug_and_a_longer_signature_are_not_ours(self):
+        got, _ = self._ask(_on_train(2011814, "FIXED", "wontfix", product="Thunderbird"))
+        self.assertIsNone(got)
+        got, _ = self._ask(_on_train(1996736, "FIXED", "wontfix",
+                                     signature=self.SIG + "_UnknownObject"))
+        self.assertIsNone(got)
+
+    def test_no_major_means_no_request(self):
+        with mock.patch.object(bugzilla_apply.net, "get") as get:
+            self.assertIsNone(bugzilla_apply._known_on_train_bug(self.SIG, "Firefox", None))
+        get.assert_not_called()
+        self.assertEqual(bugzilla_apply._major_version("155.0.1"), 155)
+        self.assertEqual(bugzilla_apply._major_version("156.0b3"), 156)
+        self.assertIsNone(bugzilla_apply._major_version(None))
+        self.assertIsNone(bugzilla_apply._major_version("Trunk"))
+
+    def test_the_query_asks_for_the_trains_flag(self):
+        _, bmo = self._ask(_on_train(2016440, "FIXED", "wontfix"))
+        self.assertIn("cf_status_firefox155", bmo.params[0]["include_fields"])
+        self.assertEqual((bmo.params[0]["f1"], bmo.params[0]["v1"]),
+                         ("cf_crash_signature", self.SIG))
+
+    def test_the_lowest_bug_id_wins(self):
+        got, _ = self._ask(_on_train(2020000, "FIXED", "affected"),
+                           _on_train(2016440, "FIXED", "wontfix"))
+        self.assertEqual(got["id"], 2016440)
+
+
+class TestTheFilerStopsOnABugKnownOnThisTrain(_Base):
+    def test_a_known_bug_stops_the_new_bug(self):
+        known = {"id": 2016440, "field": "cf_status_firefox155", "flag": "wontfix",
+                 "resolution": "FIXED"}
+        with mock.patch.object(bugzilla_apply, "_known_on_train_bug", return_value=known) as k:
+            res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["bug"], 2016440)
+        self.assertIn("already tracks this signature on this train", res["skipped"])
+        self.assertIn("cf_status_firefox155 = wontfix", res["skipped"])
+        self.assertEqual(res["known_on_train"], known)
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.comments, [])
+        # Asked with the crash's own product and major (from `uuid_info["version"]`).
+        k.assert_called_once()
+        self.assertEqual(k.call_args.args[1], "Firefox")
+
+    def test_without_one_the_filing_proceeds(self):
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(len(self.created), 1)
 
 
 class TestAFixThatPostdatesTheBuild(unittest.TestCase):

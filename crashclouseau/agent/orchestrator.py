@@ -789,6 +789,7 @@ def build_seed(uuid):
     sig_first_seen_any = None
     sig_first_seen_channel = None
     sig_first_seen_ever = None
+    sig_first_report_date = None
     sig_report_count = None
     # ONE request serves two gates. `first_seen` is the stale-signature downweight's clock;
     # `total` is how many reports the signature has ever had, which is the bit-flip gate's other
@@ -812,8 +813,10 @@ def build_seed(uuid):
             # SuperSearch), with its own failure mode, and that function's two queries are
             # batched into one round-trip on a contract this would quietly break. Its answer
             # feeds no gate today — see `sigage.first_seen_ever`.
-            sig_first_seen_ever = sigage.first_seen_ever(
-                [info.get("signature", "")]).get(info.get("signature", ""))
+            ever_facts = sigage.first_seen_ever_facts(
+                [info.get("signature", "")]).get(info.get("signature", "")) or {}
+            sig_first_seen_ever = ever_facts.get("first_build")
+            sig_first_report_date = ever_facts.get("first_date")
         except Exception as exc:  # pragma: no cover - defensive; never break a seed
             logger.warning("agent: signature history lookup failed for %s: %s", uuid, exc)
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
@@ -862,6 +865,11 @@ def build_seed(uuid):
         # brand new?") has an instrument that cannot read 2017 as three days ago, and so the
         # error in the windowed clock is measurable in prod.
         "signature_first_seen_ever": sig_first_seen_ever,
+        # The DATE of that first report, from the same row. Not an age clock: `sigage.novelty_facts`
+        # asks whether the signature appeared WITH its version's first reports or days into its
+        # life (bug 2070554: first report 4 days and 53% of 155.0.1's reports after the version
+        # started -- a Windows update's symbol gap, not a build).
+        "signature_first_report_date": sig_first_report_date,
         # The unfloored all-channel value from the SAME query as `signature_first_seen_buildid`,
         # so it is free. Only used to catch a re-signaturing (`_record_signature_age_facts`): the
         # floored value hides exactly the off-channel reports a rename leaves behind.
@@ -1667,23 +1675,29 @@ def _record_sensitivity(dossier, seed):
 
 
 def _record_version_step(dossier, seed):
-    """Record the per-version rate step, when there is one. A RECORDER, not a gate: nothing
-    moves on it yet. What it makes countable is the case of crash 0027161c -- a candidate inside
-    the dot-release window of a version whose rate multiplied, vetoed as "already present in the
-    build" -- so the next prompt or gate change can be measured against prod instead of argued.
-    Mutates ``dossier`` in place."""
+    """Record the per-version SHARE step when there is one, or the DATE EVENT when the rise came
+    inside the version's life. A RECORDER, not a gate: nothing moves on it here. What it makes
+    countable is both directions of crash 0027161c and bug 2070489 -- a candidate inside the
+    dot-release window of a version whose share stepped at the boundary (the cookie WAL cap,
+    7.5x from day one), and a "4.5x" that was a population shift plus a train-hop deployment on
+    day five. Mutates ``dossier`` in place."""
     rates = (seed or {}).get("version_rates") or {}
-    step = rates.get("step")
-    if not step:
-        return
     own = str((seed or {}).get("version") or "")
-    dossier.corroborations = {
-        **(dossier.corroborations or {}),
-        "version_step": "{} at {}x the rate of {}".format(
-            step.get("version"), step.get("ratio"), step.get("from_version")),
-        "version_step_ratio": step.get("ratio"),
-        "crash_in_step_version": bool(own and own == str(step.get("version"))),
-    }
+    flags = {}
+    step = rates.get("step")
+    if step:
+        flags["version_step"] = "{} at {}x the share of {}".format(
+            step.get("version"), step.get("ratio"), step.get("from_version"))
+        flags["version_step_ratio"] = step.get("ratio")
+        flags["version_step_kind"] = step.get("kind") or "boundary"
+        flags["crash_in_step_version"] = bool(own and own == str(step.get("version")))
+    event = rates.get("date_event")
+    if event:
+        flags["version_date_event"] = "{} rose {}x over {} on {}".format(
+            event.get("version"), event.get("ratio"), event.get("from_version"),
+            event.get("day") or "no single day")
+    if flags:
+        dossier.corroborations = {**(dossier.corroborations or {}), **flags}
 
 
 def _classify_exposer(dossier, seed):
@@ -2122,25 +2136,46 @@ _STALE_SIGNATURE_CLAMP = {
 }
 
 
+def _is_watchdog_seed(seed):
+    """``utils.is_watchdog_crash`` read off the seed: nothing faulted, a timeout killed it."""
+    seed = seed or {}
+    raw = seed.get("raw_crash") or {}
+    dump = raw.get("json_dump") or {}
+    return utils.is_watchdog_crash(
+        seed.get("signature") or raw.get("signature"),
+        raw.get("report_type"),
+        raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+    )
+
+
 def _frequency_regression_reasons(seed):
     """Why the signature's AGE says nothing about this crash's candidate, as a list of tags --
     ``rate`` when the rollup shows its exposure-normalised rate rising (``sigtrend.is_rising``),
-    ``watchdog`` when nothing faulted and a timeout killed the process
-    (``utils.is_watchdog_crash``). Empty for an ordinary fault, where the age gate's premise
-    holds. Read off the seed only: no lookup, never raises."""
+    ``step`` when its share of the version's crash reports stepped at THIS version's boundary
+    (``sigage.version_rates``, the crash on the step version), and ``watchdog`` when nothing
+    faulted and a timeout killed the process (``utils.is_watchdog_crash``) -- but ``watchdog``
+    ONLY beside one of the other two. Empty for an ordinary fault, where the age gate's premise
+    holds. Read off the seed only: no lookup, never raises.
+
+    WHY THE WATCHDOG PRONG NO LONGER STANDS ALONE. The waiver's argument is "a hang regresses by
+    getting more frequent, so landing after the signature proves nothing" -- and that argument
+    needs the crash to actually BE more frequent. Waived on the hang alone it produced bugs
+    2069191 and 2069353 (nightly, one crash each, unmeasurable rate, both still unanswered) and
+    bug 2070489 (release, "4.5x" that was a population shift plus a train-hop deployment),
+    against zero confirmed regressors it was needed for: the case that motivated it, bug 2063892,
+    had a RISING rate and is waived by the `rate` prong on its own. A frequency claim needs a
+    frequency measurement; the hang removes the age negative only once one exists."""
     from crashclouseau import sigtrend
 
     seed = seed or {}
     reasons = []
     if sigtrend.is_rising(seed.get("signature_trend") or {}):
         reasons.append("rate")
-    raw = seed.get("raw_crash") or {}
-    dump = raw.get("json_dump") or {}
-    if utils.is_watchdog_crash(
-        seed.get("signature") or raw.get("signature"),
-        raw.get("report_type"),
-        raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
-    ):
+    step = (seed.get("version_rates") or {}).get("step") or {}
+    own = str(seed.get("version") or "")
+    if step and own and own == str(step.get("version")):
+        reasons.append("step")
+    if reasons and _is_watchdog_seed(seed):
         reasons.append("watchdog")
     return reasons
 
@@ -2242,6 +2277,11 @@ def _apply_signature_age_gate(dossier, seed):
             cand.node, landed_after, first_seen, ",".join(waived), (seed or {}).get("uuid"),
         )
         return
+    if _is_watchdog_seed(seed):
+        # A hang with NO frequency signal: the age argument stands. Counted, because until
+        # 2026-09-09 this class was waived and filed three unanswered bugs; if a module owner
+        # ever confirms a regressor this flag sat on, that is the number to revisit.
+        flags["stale_signature_watchdog_unwaived"] = True
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
     if v.decision != Decision.lead:
         # strong-evidence / abstain: record the fact, do not move the band (see the docstring).
@@ -2766,8 +2806,14 @@ def _record_signature_age_facts(dossier, seed):
         # (`other_channel_floor`, 20) is designed to ignore exactly that many.
         observed=seed.get("signature_first_seen_any") or windowed,
     )
-    if facts:
-        dossier.corroborations = {**(dossier.corroborations or {}), **facts}
+    # Whether "new" can be trusted at all: unsymbolicated module frames in the name, or a first
+    # report that came days after the version's first reports. Same arithmetic as the crash
+    # brief (`triage._signature_age_lines`) and the filed bug (`report_bug`), by construction.
+    novelty = sigage.novelty_facts(
+        seed.get("signature"), seed.get("signature_first_report_date"), seed.get("version"),
+        seed.get("version_rates"), seed.get("channel"))
+    if facts or novelty:
+        dossier.corroborations = {**(dossier.corroborations or {}), **facts, **novelty}
 
 
 def _record_offstack_seed_facts(dossier, seed):

@@ -198,8 +198,23 @@ _PRESENCE = (
     "to be the cause, never a refutation -- the only build-timing `fail` is a candidate ABSENT "
     "from the build (landed after it, or backed out before it). A change described as a fix, "
     "cap, tuning or mitigation can still be the regressor: shrinking or reverting an earlier "
-    "mitigation re-exposes the failure it hid, and a rate that stepped up in the version that "
-    "shipped the change is evidence FOR it, not against. "
+    "mitigation re-exposes the failure it hid. A 'more frequent' claim is checked on TIMING: "
+    "the rise must sit at the version boundary and be absent from versions and rollouts "
+    "WITHOUT the change; a rise days into the version, or one the previous version shows too, "
+    "fails it. "
+)
+
+# What a `pass` means. Bugs 2070489 and 2070554 (2026-09-09) each carried four skeptic checks,
+# all `pass` or `unverifiable`, every one of them a TRUE fact that would have been equally true
+# had the candidate been innocent ("the download uses necko", "the pref was on before", "the
+# other window entries are not networking"). A skeptic that passes such facts is not a guardrail.
+_RELEVANCE = (
+    "A `pass` means the claim bears on whether THIS candidate caused THIS crash. A true code "
+    "fact that would be equally true for an innocent candidate is not a pass -- note it as "
+    "irrelevant. A mechanism whose every link is 'can', 'could' or 'may', with no link "
+    "OBSERVED in this report (an annotation, the blocker's state, a facet, a changed line the "
+    "crashing code executes), is `unverifiable` at best, and say that none of its links is "
+    "observed. "
 )
 
 _ROLES: dict[str, dict] = {
@@ -332,8 +347,8 @@ _ROLES: dict[str, dict] = {
         "mechanism you simply cannot verify end-to-end is `unverifiable` (it lowers confidence "
         "but KEEPS the lead) — NOT `fail`: a credible-but-unproven clue is exactly what we "
         "want to surface. Use `unverifiable` for searchfox holes such as virtual/IPC/FFI/"
-        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + "A claim without a fresh citation "
-        "cannot pass. A fault-address↔field "
+        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + _RELEVANCE + "A claim "
+        "without a fresh citation cannot pass. A fault-address↔field "
         "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (with namespaces, no template `<...>` args — "
         "e.g. `mozilla::detail::nsTStringRepr`) and mark it `pass` (with a "

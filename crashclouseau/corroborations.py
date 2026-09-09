@@ -368,12 +368,54 @@ REGISTRY = {
     # -- per-version crash rate (`sigage.version_rates`, `orchestrator._record_version_step`) --
     "version_step": (
         "diagnostic", (),
-        "Which version's per-day rate is >= `step_ratio` times the preceding version's, as one "
-        "readable string. Recorded, not acted on: the first thing to measure is how often a "
-        "candidate inside the step version's window gets vetoed anyway."),
+        "Which version's SHARE of its own crash reports is >= `step_ratio` times the preceding "
+        "version's, AT THE VERSION BOUNDARY, as one readable string. Until 2026-09-09 this was "
+        "reports/day with no denominator, and it read a population shift as '155.0.1 at 4.5x "
+        "the rate of 155.0' (bug 2070489)."),
     "version_step_ratio": (
         "diagnostic", (),
         "The step as a number, so the threshold can be re-derived from prod."),
+    "version_step_kind": (
+        "diagnostic", (),
+        "Where in the version's life the step sits; only `boundary` is recorded as a step at "
+        "all (`sigage.step_timing`). Kept so a later reader can tell a pre-timing dossier from "
+        "a post-timing one."),
+    "version_date_event": (
+        "diagnostic", (),
+        "The version's share rose >= `step_ratio` times the previous version's, but only from a "
+        "DAY inside its life, its first days having matched the previous version: a deployment, "
+        "rollout, OS update or signature split, not the build. Recorded instead of a step; the "
+        "count of these is how often the old block would have handed the model a false step."),
+    "stale_signature_watchdog_unwaived": (
+        "diagnostic", (),
+        "A hang/timeout crash whose candidate landed after the signature existed and which had "
+        "NO frequency signal (`rate` or `step`), so the age gate clamped it. Until 2026-09-09 the "
+        "watchdog alone waived the clamp and filed three unanswered bugs (2069191, 2069353, "
+        "2070489). If a module owner ever confirms a regressor this flag sat on, revisit."),
+    # -- novelty (`sigage.novelty_facts`, `orchestrator._record_signature_age_facts`) -----------
+    "signature_novelty_unreliable": (
+        "evidence", ("agent/triage.py", "report_bug.py"),
+        "Why 'this signature is new' cannot be trusted, comma-joined: `module_frames` (the name "
+        "carries unsymbolicated module frames, i.e. a symbol gap minted it) and/or "
+        "`late_first_report` (its first report came after a tenth of the version's reports were "
+        "in). Read by the crash brief, which swaps the trustworthy-window closer for a warning, "
+        "and by the filed bug's age note. Bug 2070554 is the case."),
+    "signature_module_frames": (
+        "evidence", ("report_bug.py",),
+        "The bare module names in the signature (`ntdll.dll`, `kernelbase.dll`), so the bug can "
+        "say which frames were unsymbolicated."),
+    "signature_first_report_date": (
+        "evidence", ("report_bug.py",),
+        "The signature's first report anywhere, as a DATE (Socorro `SignatureFirstDate`). Not an "
+        "age clock -- the ages use builds -- but the fact the late-first-report test is about."),
+    "signature_first_report_lag_days": (
+        "evidence", ("report_bug.py",),
+        "Days between the crash version's first reporting day and the signature's first report."),
+    "version_reports_before_first_report": (
+        "evidence", ("report_bug.py",),
+        "The share (0..1) of the crash version's crash reports that had already arrived when the "
+        "signature was first reported. A crash the build introduced is in the first few percent; "
+        "bug 2070554 sat at 0.53."),
     "crash_in_step_version": (
         "evidence", ("agent/orchestrator.py",),
         "Is the triaged report ON the step version? When it is, the crash's own pushlog window "
