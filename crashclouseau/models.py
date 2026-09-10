@@ -3201,7 +3201,11 @@ class Dossier(db.Model):
     def already_filed_for_signature(signature, channel=None):
         """``{"uuid", "bug"}`` when we have ALREADY FILED A BUG for *signature*, else ``None``.
 
-        THE GUARD THAT SURVIVES THE TARGET BUG BEING CLOSED, which none of the others do.
+        THE GUARD THAT SURVIVES THE TARGET BUG BEING CLOSED, which none of the others do --
+        except, since bug 2070711, for the one closure that names a successor: a bug of ours
+        resolved DUPLICATE is followed to its open target by
+        ``bugzilla_apply._duplicate_targets_for_signature`` and counts as our comment there. The
+        INVALID / WORKSFORME / INCOMPLETE closures are still this guard's alone.
         ``_open_bugs_for_signature`` filters ``resolution: "---"``, so a bug WE filed from
         nightly and a human then closed is invisible to a later run: ``existing`` is empty, the
         ``comment_on_existing`` branch never fires, ``_bug_for_this_regression`` is never asked,

@@ -22,7 +22,7 @@ import unittest  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import bugzilla_apply, db, models, report_bug  # noqa: E402
+from crashclouseau import bugzilla_apply, db, models, report_bug, sigage  # noqa: E402
 from crashclouseau import config as cconfig  # noqa: E402
 
 
@@ -122,6 +122,9 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply, "_candidate_landed", return_value=_LANDED),
             # Never reopened, unless a test says otherwise (it is a Bugzilla request).
             mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None),
+            # Its sibling rescue, the same request: the signature was on every bug from the
+            # start unless a test says it was attached later.
+            mock.patch.object(bugzilla_apply, "_signature_attached", return_value=None),
             # Read before the needinfo PUT on the comment-on-existing branch, and it is a
             # Bugzilla request: nobody is needinfo'd on the venue unless a test says so.
             mock.patch.object(bugzilla_apply, "_existing_needinfos", return_value=set()),
@@ -2198,3 +2201,311 @@ class TestAlreadyCommentedRoundTrip(unittest.TestCase):
     def test_no_venue_and_no_signature_ask_nothing(self):
         self.assertIsNone(models.Dossier.already_commented(None, self.SIG))
         self.assertIsNone(models.Dossier.already_commented(2062934, ""))
+
+
+# ---------------------------------------------------------------------------------------------
+# Bug 2070711 (2026-09-09): filed past our own 2069647, which :teoxoy had resolved DUPLICATE of
+# 1976766 two days earlier, and past 1976766 itself, which had carried the signature since the
+# same minute. Comment 3 there: "the bot is not checking / tracking previous issues that have
+# been closed as duplicates or other bugs that contain the signature already".
+
+_DUP_LANDED = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)   # 36b14b9bf5f9, bug 2066780
+
+
+def _target(bid=1976766, created="2025-07-10T21:17:31Z", since="2026-09-07T11:37:42Z",
+            via=(2069647,)):
+    row = _bug(bid, created)
+    if since:
+        row["venue_since"] = since
+    row["via_duplicates"] = list(via)
+    return row
+
+
+class TestADuplicateOnTheSignatureIsTheHumansVerdict(_Base):
+    """A bug on this signature that a human resolved DUPLICATE of bug N ties the signature to
+    N, and the tie is dated by the dup — not by N's own filing."""
+
+    def setUp(self):
+        super().setUp()
+        bugzilla_apply._candidate_landed.return_value = _DUP_LANDED
+
+    def test_a_dup_resolved_after_the_cause_landed_makes_its_target_the_venue(self):
+        # 1976766: filed 2025-07-10, fourteen months before the cause. Rejected on creation
+        # time; accepted because our 2069647 was duped into it on 2026-09-07, after the cause.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_target()]
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (1976766, "comment_on_existing"))
+        self.assertEqual(res["venue_via_duplicates"], [2069647])
+        self.assertEqual(self.created, [])
+        self.assertEqual([b for b, _ in self.comments], [1976766])
+
+    def test_a_dup_resolved_long_before_the_cause_rescues_nothing(self):
+        # A 2023 signature duped into a 2023 bug still predates a 2026 regressor: the clock
+        # moved from the bug's filing to the dup, and both are old.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _target(since="2023-03-01T00:00:00Z")]
+        res = self._file()
+        self.assertEqual(res["mode"], "new_bug")
+        self.assertEqual(res["predating_bugs"], [1976766])
+        self.assertNotIn("venue_via_duplicates", res)
+
+    def test_a_target_without_a_dated_tie_is_judged_on_its_own_clock(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_target(since=None)]
+        self.assertEqual(self._file()["mode"], "new_bug")
+
+    def test_our_own_duped_filing_is_our_analysis_on_the_target(self):
+        # 2069647 is OURS (`already_commented(2069647, sig)` is truthy), so the venue already
+        # carries the analysis through its duplicate list: no second comment, no second bug.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_target()]
+        bugzilla_apply.models.Dossier.already_commented.side_effect = (
+            lambda bug, sig: {"uuid": "u-0"} if bug == 2069647 else None)
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["via_duplicate"]), (1976766, 2069647))
+        self.assertIn("duplicate of bug 1976766", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_somebody_elses_dup_does_not_count_as_our_comment(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_target(via=(2059377,))]
+        bugzilla_apply.models.Dossier.already_commented.side_effect = (
+            lambda bug, sig: {"uuid": "u-0"} if bug == 2069647 else None)
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+
+    def test_the_skip_policy_sees_the_target_as_the_open_bug(self):
+        # `skip` means "an open bug exists, write nothing", and a bug the signature was duped
+        # into exists as much as one carrying the signature itself.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_target()]
+        res = self._file(comment_on_existing="skip")
+        self.assertEqual((res["filed"], res["bug"]), (False, 1976766))
+        self.assertEqual((self.created, self.comments), ([], []))
+
+
+def _bmo(bugs, faults=None):
+    resp = mock.Mock()
+    resp.raise_for_status = lambda: None
+    resp.json.return_value = {"bugs": bugs, "faults": faults or []}
+    return resp
+
+
+class TestTheDuplicateLookup(unittest.TestCase):
+    """`_open_bugs_for_signature` with the network faked: the direct open search, then the
+    DUPLICATE search, then the targets by id."""
+
+    SIG = "wgpu_bindings::server::wgpu_server_buffer_get_mapped_range"
+
+    def _serve(self, open_rows, dup_rows, by_id, fail_dups=False):
+        def get(url, params=None, **kw):
+            self.calls.append(dict(params or {}))
+            if "id" in (params or {}):
+                ids = [int(x) for x in params["id"].split(",")]
+                return _bmo([by_id[i] for i in ids if i in by_id],
+                            faults=[{"id": i} for i in ids if i not in by_id])
+            if (params or {}).get("resolution") == "DUPLICATE":
+                if fail_dups:
+                    raise requests.ConnectionError("bmo down")
+                return _bmo(dup_rows)
+            return _bmo(open_rows)
+        self.calls = []
+        return mock.patch.object(bugzilla_apply.net, "get", side_effect=get)
+
+    def _dup(self, bid, dupe_of, resolved, sig=None):
+        return {"id": bid, "dupe_of": dupe_of, "cf_last_resolved": resolved,
+                "cf_crash_signature": "[@ {}]".format(sig or self.SIG),
+                "summary": "Crash in [@ {}]".format(sig or self.SIG)}
+
+    def _open(self, bid, created, product="Core", **more):
+        row = {"id": bid, "creation_time": created, "product": product, "keywords": [],
+               "regressed_by": [], "status": "NEW", "resolution": "", "summary": "x",
+               "cf_crash_signature": "[@ {}]".format(self.SIG)}
+        row.update(more)
+        return row
+
+    def test_a_target_the_direct_search_also_found_gains_the_dated_tie(self):
+        # The real 2070711 state: 1976766 carried the signature AND was 2069647's dup target.
+        t = self._open(1976766, "2025-07-10T21:31:00Z", keywords=["topcrash"])
+        with self._serve([t], [self._dup(2069647, 1976766, "2026-09-07T11:37:42Z")],
+                         {1976766: t}):
+            rows = bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual([r["id"] for r in rows], [1976766])
+        self.assertEqual(rows[0]["via_duplicates"], [2069647])
+        self.assertEqual(sigage.to_datetime(rows[0]["venue_since"]),
+                         datetime(2026, 9, 7, 11, 37, 42, tzinfo=timezone.utc))
+        self.assertEqual(rows[0]["keywords"], ["topcrash"])
+
+    def test_a_target_the_direct_search_missed_is_added_in_id_order(self):
+        # The hygiene failure this is for: the duper never copied the signature onto N.
+        t = self._open(1900000, "2025-01-01T00:00:00Z", cf_crash_signature="[@ Other]")
+        other = self._open(2000000, "2026-09-01T00:00:00Z")
+        with self._serve([other], [self._dup(2050000, 1900000, "2026-09-06T00:00:00Z")],
+                         {1900000: t}):
+            rows = bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual([r["id"] for r in rows], [1900000, 2000000])
+        self.assertEqual(rows[0]["via_duplicates"], [2050000])
+        self.assertNotIn("via_duplicates", rows[1])
+        self.assertEqual(set(rows[0]) - set(rows[1]), {"venue_since", "via_duplicates"})
+
+    def test_several_dups_into_one_target_date_the_tie_by_the_latest(self):
+        t = self._open(1900000, "2025-01-01T00:00:00Z")
+        dups = [self._dup(2050000, 1900000, "2026-05-01T00:00:00Z"),
+                self._dup(2060000, 1900000, "2026-09-06T00:00:00Z")]
+        with self._serve([], dups, {1900000: t}):
+            rows = bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual(rows[0]["via_duplicates"], [2050000, 2060000])
+        self.assertEqual(sigage.to_datetime(rows[0]["venue_since"]),
+                         datetime(2026, 9, 6, tzinfo=timezone.utc))
+
+    def test_a_chain_of_dups_is_followed_to_the_open_bug(self):
+        middle = self._open(1950000, "2026-01-01T00:00:00Z", status="RESOLVED",
+                            resolution="DUPLICATE", dupe_of=1900000,
+                            cf_last_resolved="2026-09-08T00:00:00Z")
+        end = self._open(1900000, "2025-01-01T00:00:00Z")
+        with self._serve([], [self._dup(2050000, 1950000, "2026-09-06T00:00:00Z")],
+                         {1950000: middle, 1900000: end}):
+            rows = bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual([r["id"] for r in rows], [1900000])
+        self.assertEqual(rows[0]["via_duplicates"], [1950000, 2050000])
+        self.assertEqual(sigage.to_datetime(rows[0]["venue_since"]),
+                         datetime(2026, 9, 8, tzinfo=timezone.utc))
+        self.assertEqual(len([c for c in self.calls if "id" in c]), 2)
+
+    def test_a_target_reached_twice_merges_both_ties(self):
+        # Today's real state: 2070711 -> 2069647 -> 1976766 beside 2069647 -> 1976766.
+        end = self._open(1976766, "2025-07-10T21:17:31Z")
+        mid = self._open(2069647, "2026-09-05T19:20:14Z", status="RESOLVED",
+                         resolution="DUPLICATE", dupe_of=1976766,
+                         cf_last_resolved="2026-09-07T11:37:42Z")
+        dups = [self._dup(2069647, 1976766, "2026-09-07T11:37:42Z"),
+                self._dup(2070711, 2069647, "2026-09-10T09:27:31Z")]
+        with self._serve([], dups, {1976766: end, 2069647: mid}):
+            rows = bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual([r["id"] for r in rows], [1976766])
+        self.assertEqual(rows[0]["via_duplicates"], [2069647, 2070711])
+        self.assertEqual(sigage.to_datetime(rows[0]["venue_since"]),
+                         datetime(2026, 9, 10, 9, 27, 31, tzinfo=timezone.utc))
+
+    def test_a_dup_cycle_terminates(self):
+        a = self._open(1, "2026-01-01T00:00:00Z", status="RESOLVED", resolution="DUPLICATE",
+                       dupe_of=2, cf_last_resolved="2026-09-01T00:00:00Z")
+        b = self._open(2, "2026-01-01T00:00:00Z", status="RESOLVED", resolution="DUPLICATE",
+                       dupe_of=1, cf_last_resolved="2026-09-01T00:00:00Z")
+        with self._serve([], [self._dup(3, 1, "2026-09-06T00:00:00Z")], {1: a, 2: b}):
+            self.assertEqual(bugzilla_apply._open_bugs_for_signature(self.SIG), [])
+
+    def test_a_closed_target_is_not_a_venue(self):
+        # FIXED (or INVALID, WORKSFORME...) is a closed bug; the fixed-after-build question
+        # belongs to `_fixed_after_build_bug`, and a restricted target is a fault, not a row.
+        fixed = self._open(1900000, "2025-01-01T00:00:00Z", status="RESOLVED",
+                           resolution="FIXED", cf_last_resolved="2026-09-08T00:00:00Z")
+        dups = [self._dup(2050000, 1900000, "2026-09-06T00:00:00Z"),
+                self._dup(2050001, 1234567, "2026-09-06T00:00:00Z")]   # 1234567 restricted
+        with self._serve([], dups, {1900000: fixed}):
+            self.assertEqual(bugzilla_apply._open_bugs_for_signature(self.SIG), [])
+
+    def test_a_dup_that_only_substring_matches_is_not_about_this_signature(self):
+        t = self._open(1900000, "2025-01-01T00:00:00Z")
+        longer = self._dup(2050000, 1900000, "2026-09-06T00:00:00Z",
+                           sig=self.SIG + " | mozilla::webgpu::WebGPUParent::MapCallback")
+        with self._serve([], [longer], {1900000: t}):
+            self.assertEqual(bugzilla_apply._open_bugs_for_signature(self.SIG), [])
+
+    def test_the_dup_lookup_fails_open_to_the_direct_rows(self):
+        direct = self._open(2000000, "2026-09-01T00:00:00Z")
+        with self._serve([direct], [], {}, fail_dups=True):
+            rows = bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual([r["id"] for r in rows], [2000000])
+
+    def test_no_dups_costs_no_extra_request(self):
+        direct = self._open(2000000, "2026-09-01T00:00:00Z")
+        with self._serve([direct], [], {}):
+            bugzilla_apply._open_bugs_for_signature(self.SIG)
+        self.assertEqual([c.get("resolution") for c in self.calls], ["---", "DUPLICATE"])
+
+
+class TestASignatureAttachedAfterTheCauseLanded(_Base):
+    """The other half of comment 3: 1976766 "contained the signature already" — added by hand on
+    2026-09-07 11:39, after the cause landed. The attachment dates the bug's relationship to the
+    signature the way a reopen dates its life."""
+
+    def setUp(self):
+        super().setUp()
+        bugzilla_apply._candidate_landed.return_value = _DUP_LANDED
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1976766, "2025-07-10T21:17:31Z")]
+
+    def test_a_signature_attached_after_the_cause_rescues_the_bug(self):
+        bugzilla_apply._signature_attached.return_value = datetime(
+            2026, 9, 7, 11, 39, 5, tzinfo=timezone.utc)
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (1976766, "comment_on_existing"))
+        bugzilla_apply._signature_attached.assert_called_once_with(1976766, "Foo::Bar")
+
+    def test_a_signature_attached_long_before_the_cause_rescues_nothing(self):
+        bugzilla_apply._signature_attached.return_value = datetime(
+            2025, 12, 1, tzinfo=timezone.utc)
+        self.assertEqual(self._file()["mode"], "new_bug")
+
+    def test_the_rescue_is_only_asked_about_a_bug_the_age_test_rejected(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2069000, "2026-09-01T00:00:00Z")]
+        self.assertEqual(self._file()["mode"], "comment_on_existing")
+        self.assertFalse(bugzilla_apply._signature_attached.called)
+
+    def test_the_chooser_does_not_ask_without_a_signature(self):
+        # Direct callers that pass no signature (spike escalation's tests, the beta pushdate
+        # study) keep their exact behaviour and their exact request count.
+        got = bugzilla_apply._bug_for_this_regression(
+            [_bug(1976766, "2025-07-10T21:17:31Z")], _DUP_LANDED, 30)
+        self.assertEqual(got, (None, [1976766]))
+        self.assertFalse(bugzilla_apply._signature_attached.called)
+
+
+class TestReadingTheAttachmentOffTheHistory(unittest.TestCase):
+    SIG = "wgpu_bindings::server::wgpu_server_buffer_get_mapped_range"
+
+    @staticmethod
+    def _change(when, removed, added, field="cf_crash_signature"):
+        return {"when": when, "who": "t@example",
+                "changes": [{"field_name": field, "removed": removed, "added": added}]}
+
+    def _attached(self, history):
+        with mock.patch.object(bugzilla_apply, "_bug_history", return_value=history):
+            return bugzilla_apply._signature_attached(1976766, self.SIG)
+
+    def test_the_real_1976766_history(self):
+        # BMO records the WHOLE old and new field, CRLF-joined.
+        history = [
+            self._change("2025-07-11T02:15:24Z", "",
+                         "[@ mozilla::webgpu::WebGPUParent::MapCallback ]"),
+            self._change("2026-09-07T11:34:43Z", "NEW", "ASSIGNED", field="status"),
+            self._change("2026-09-07T11:39:05Z",
+                         "[@ mozilla::webgpu::WebGPUParent::MapCallback ]",
+                         "[@ mozilla::webgpu::WebGPUParent::MapCallback ]\r\n[@ {}]".format(
+                             self.SIG)),
+        ]
+        self.assertEqual(self._attached(history),
+                         datetime(2026, 9, 7, 11, 39, 5, tzinfo=timezone.utc))
+
+    def test_a_signature_there_from_the_start_has_no_attachment(self):
+        history = [self._change("2026-09-07T11:34:43Z", "NEW", "ASSIGNED", field="status"),
+                   self._change("2026-09-08T00:00:00Z", "[@ {}]".format(self.SIG),
+                                "[@ {}]\r\n[@ Other]".format(self.SIG))]
+        self.assertIsNone(self._attached(history))
+        self.assertIsNone(self._attached([]))
+
+    def test_a_removal_is_not_an_attachment_and_the_latest_add_wins(self):
+        history = [
+            self._change("2026-01-01T00:00:00Z", "", "[@ {}]".format(self.SIG)),
+            self._change("2026-02-01T00:00:00Z", "[@ {}]".format(self.SIG), ""),
+            self._change("2026-09-07T00:00:00Z", "[@ Other]",
+                         "[@ Other]\r\n[@ {} ]".format(self.SIG)),        # trailing space form
+        ]
+        self.assertEqual(self._attached(history), datetime(2026, 9, 7, tzinfo=timezone.utc))
+
+    def test_a_longer_signature_is_not_this_one(self):
+        history = [self._change("2026-09-07T00:00:00Z", "",
+                                "[@ {} | mozilla::webgpu::WebGPUParent::MapCallback]".format(
+                                    self.SIG))]
+        self.assertIsNone(self._attached(history))
+
+    def test_an_unreadable_history_is_no_attachment(self):
+        self.assertIsNone(self._attached(None))
+        self.assertIsNone(bugzilla_apply._signature_attached(1976766, ""))

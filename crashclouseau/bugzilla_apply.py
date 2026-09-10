@@ -538,7 +538,19 @@ def _open_bugs_for_signature(signature):
     Oldest first, because among the bugs that could be about this crash the earliest is the
     canonical one, carrying whatever discussion already exists; newest-first would prefer a
     recent duplicate, including one we filed ourselves. Only a tie-break, though —
-    ``_bug_for_this_regression`` decides which of them qualify at all."""
+    ``_bug_for_this_regression`` decides which of them qualify at all.
+
+    PLUS THE OPEN TARGETS OF THE SIGNATURE'S DUPLICATES (``_duplicate_targets_for_signature``).
+    A bug on this signature that a human resolved DUPLICATE of bug N is that human saying "this
+    signature's crashes are bug N", and N is a venue whether or not they also copied the
+    signature onto it — they usually should and often do not. Those rows carry two extra keys,
+    ``venue_since`` (when the dup was resolved: the moment the signature was tied to N) and
+    ``via_duplicates`` (the dup ids on the chain), and a target that the direct search already
+    returned keeps its row and gains the two keys. Bug 2070711 (2026-09-09) is what this costs
+    without it: our own 2069647 on ``wgpu_server_buffer_get_mapped_range`` had been duped into
+    1976766 two days earlier, the DUPLICATE was invisible to ``resolution="---"``, and 1976766
+    was rejected as predating the regressor by fourteen months — so we filed the same analysis
+    a second time, past both, and :teoxoy's comment 3 asked why we track neither."""
     if not signature:
         return []
     sig = signature.strip()
@@ -571,13 +583,193 @@ def _open_bugs_for_signature(signature):
         return None
     # ``regressed_by`` rides along because it decides whether a venue wants our comment at
     # all — see the gate in ``autofile_bug``. Free: same request, one more field.
-    return [
-        {"id": b["id"], "creation_time": b.get("creation_time"),
-         "product": b.get("product"), "keywords": b.get("keywords") or [],
-         "regressed_by": b.get("regressed_by") or []}
+    rows = [
+        _venue_row(b)
         for b in sorted(bugs, key=lambda b: b.get("id", 0))
         if b.get("id") and any(_row_is_about(b, s) for s in spellings)
     ]
+    return _merge_duplicate_targets(rows, _duplicate_targets_for_signature(sig))
+
+
+def _venue_row(bug):
+    """The row shape every venue consumer reads, from one BMO bug dict."""
+    return {"id": bug["id"], "creation_time": bug.get("creation_time"),
+            "product": bug.get("product"), "keywords": bug.get("keywords") or [],
+            "regressed_by": bug.get("regressed_by") or []}
+
+
+def _merge_duplicate_targets(rows, targets):
+    """*rows* (the direct open-bug search) plus *targets* (the open bugs the signature's
+    DUPLICATEs resolve into), one row per bug id, oldest id first.
+
+    A target the direct search already found keeps its row and gains ``venue_since`` (the later
+    of the two, if both know one) and the union of ``via_duplicates``: bug 1976766 carried the
+    signature itself by the time 2070711 was filed AND was the target of our duped 2069647, and
+    it is the second fact that dates the tie."""
+    from crashclouseau import sigage
+
+    by_id = {r["id"]: r for r in rows or []}
+    for t in targets or []:
+        row = by_id.get(t["id"])
+        if row is None:
+            by_id[t["id"]] = dict(t)
+            continue
+        dated = [(sigage.to_datetime(s), s) for s in (row.get("venue_since"), t.get("venue_since"))
+                 if s]
+        dated = [(d, s) for d, s in dated if d is not None]
+        if dated:
+            row["venue_since"] = max(dated)[1]
+        via = {*(row.get("via_duplicates") or []), *(t.get("via_duplicates") or [])}
+        if via:
+            row["via_duplicates"] = sorted(via)
+    return [by_id[k] for k in sorted(by_id)]
+
+
+# How many ``dupe_of`` hops to follow from a DUPLICATE on the signature to an open bug. BMO
+# itself redirects a dup-of-a-dup at resolution time, so real chains are one or two long; the
+# bound is against a cycle, not a budget.
+_DUP_CHAIN_MAX_HOPS = 5
+
+
+def _duplicate_targets_for_signature(signature):
+    """The OPEN bugs that the RESOLVED DUPLICATE bugs on *signature* resolve into, as venue rows
+    (``_venue_row`` plus ``venue_since`` and ``via_duplicates``), oldest id first; ``[]`` when
+    there are none or BMO could not be asked.
+
+    THE DUP IS THE HUMAN'S VERDICT ON THE SIGNATURE, and it is the one verdict the open-only
+    venue search cannot see. When :teoxoy resolved our 2069647 as a duplicate of 1976766
+    (2026-09-07 11:37) they were saying that ``wgpu_server_buffer_get_mapped_range`` crashes are
+    bug 1976766 — a bug filed in July 2025 for the destroy-while-mapping race, which the
+    September regressor re-signatured rather than created. Two minutes later they also copied the
+    signature onto 1976766, which is the hygiene Calixte asks for on every dup; this function
+    exists so the filer does not DEPEND on it, because the duplicate list of a crash bug is full
+    of dups whose signature was never copied (plan 17: 5 of 7 duplicate targets of our filings
+    were our own earlier bugs, and the target carried the variant signature in 2 of them).
+
+    ``venue_since`` IS THE DUP'S RESOLUTION TIME (``cf_last_resolved``), the later one when
+    several dups point at one target, and the latest hop when a chain is followed: it is the
+    moment the signature was tied to the target, and ``_bug_for_this_regression`` reads it as
+    the bug's clock in place of its creation time. So an old dup rescues nothing — a 2022
+    signature duped into a 2022 bug still predates a 2026 regressor — and a dup resolved after
+    the regressor landed is a human who looked at crashes that include this regression's and
+    filed them under that bug. That is the same reasoning as the reopen rescue, on the field
+    that actually records the decision.
+
+    MEASURED over the 106 bugs Clouseau had filed by 2026-09-10, each rewound to its own filing
+    instant against today's BMO (landing approximated by the filing time, which is generous):
+    five filings had a DUPLICATE on their signature pointing at a then-open bug, and the clock
+    rejects four of them — ties 120, 466, 967 days old (two of those targets are ``[meta]``
+    trackers the meta split would drop anyway) — and accepts exactly one, 2070711 into 1976766
+    at 2.4 days. The attachment rescue (``_signature_attached``) saw two and fired on the same
+    one. So neither rule moves a filing a human later kept; both catch the one they were built
+    on, by the clock rather than by a fitted number.
+
+    CHAINS: a target that is itself RESOLVED DUPLICATE is followed (``_DUP_CHAIN_MAX_HOPS``);
+    any other closed target is dropped, because a closed bug is not a comment venue and the
+    FIXED-after-this-build question stays with ``_fixed_after_build_bug``, which does not follow
+    dups. Public, unauthenticated, read-only like every venue lookup, so a restricted target
+    comes back as a ``faults`` entry and is simply not a venue. FAILS OPEN — no rows on any
+    failure — for the reason ``_fixed_after_build_bug`` gives: the direct search already fails
+    closed for the whole path, and a second fail-closed BMO request would make one flaky read
+    a silent filing stop."""
+    sig = (signature or "").strip()
+    if not sig:
+        return []
+    from crashclouseau import sigage
+
+    spellings = sorted(utils.lambda_siblings(sig))
+    params = {
+        "include_fields": "id,summary,cf_crash_signature,dupe_of,cf_last_resolved",
+        "j_top": "OR",
+        "resolution": "DUPLICATE",
+    }
+    for i, spelling in enumerate(spellings):
+        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
+        params["o{}".format(2 * i + 1)] = "substring"
+        params["v{}".format(2 * i + 1)] = spelling
+        params["f{}".format(2 * i + 2)] = "short_desc"
+        params["o{}".format(2 * i + 2)] = "substring"
+        params["v{}".format(2 * i + 2)] = "[@ " + spelling
+    try:
+        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        dups = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: duplicate lookup failed for %r: %s", signature, exc)
+        return []
+
+    def tie(into, target, since, via):
+        cur = into.setdefault(target, {"since": None, "via": []})
+        if since is not None and (cur["since"] is None or since > cur["since"]):
+            cur["since"] = since
+        cur["via"] = sorted({*cur["via"], *via})
+
+    pending = {}
+    for d in dups:
+        if not d.get("id") or not d.get("dupe_of"):
+            continue
+        if not any(_row_is_about(d, s) for s in spellings):
+            continue
+        tie(pending, d["dupe_of"], sigage.to_datetime(d.get("cf_last_resolved")), [d["id"]])
+    out = {}
+    seen = set()
+    for _hop in range(_DUP_CHAIN_MAX_HOPS):
+        # A target reached a second way (2070711 -> 2069647 -> 1976766 beside 2069647 ->
+        # 1976766) merges its tie into the row it already has; anything else already visited
+        # is a cycle and is dropped.
+        for k in [k for k in pending if k in out]:
+            t = pending.pop(k)
+            row = out[k]
+            since = sigage.to_datetime(row.get("venue_since"))
+            if t["since"] is not None and (since is None or t["since"] > since):
+                row["venue_since"] = t["since"].isoformat()
+            row["via_duplicates"] = sorted({*row["via_duplicates"], *t["via"]})
+        pending = {k: v for k, v in pending.items() if k not in seen}
+        if not pending:
+            break
+        seen.update(pending)
+        fetched = _bugs_by_id(sorted(pending))
+        if fetched is None:
+            return []
+        following = {}
+        for b in fetched:
+            t = pending.get(b.get("id"))
+            if t is None:
+                continue
+            resolution = (b.get("resolution") or "").upper()
+            if not resolution:
+                row = _venue_row(b)
+                if t["since"] is not None:
+                    row["venue_since"] = t["since"].isoformat()
+                row["via_duplicates"] = t["via"]
+                out[b["id"]] = row
+            elif resolution == "DUPLICATE" and b.get("dupe_of"):
+                resolved = sigage.to_datetime(b.get("cf_last_resolved"))
+                since = max(x for x in (t["since"], resolved) if x is not None) \
+                    if (t["since"] is not None or resolved is not None) else None
+                tie(following, b["dupe_of"], since, [*t["via"], b["id"]])
+        pending = following
+    return [out[k] for k in sorted(out)]
+
+
+def _bugs_by_id(ids):
+    """The public BMO rows for *ids*, with what a venue row and a dup hop need; ``None`` when
+    BMO could not be asked. A restricted id comes back in ``faults`` rather than failing the
+    request, so it is simply absent from the result."""
+    if not ids:
+        return []
+    params = {
+        "id": ",".join(str(i) for i in ids),
+        "include_fields": "id,status,resolution,dupe_of,cf_last_resolved,creation_time,"
+                          "product,keywords,regressed_by",
+    }
+    try:
+        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        return (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: bug lookup failed for %s: %s", ids, exc)
+        return None
 
 
 def _split_by_application(bugs, product):
@@ -694,12 +886,8 @@ def _last_reopened(bug_id):
     Unauthenticated, like the search that produced ``bug_id``. Raises nothing — this is a rescue
     for a bug we have already decided against, so a failure simply leaves that decision standing
     rather than flipping it."""
-    try:
-        r = net.get("{}/{}/history".format(_bz_rest(), bug_id), timeout=_HTTP_TIMEOUT)
-        r.raise_for_status()
-        history = ((r.json() or {}).get("bugs") or [{}])[0].get("history") or []
-    except Exception as exc:                                   # pragma: no cover - network
-        logger.warning("autofile: history lookup failed for bug %s: %s", bug_id, exc)
+    history = _bug_history(bug_id)
+    if history is None:
         return None
     from crashclouseau import sigage
 
@@ -716,7 +904,64 @@ def _last_reopened(bug_id):
     return last
 
 
-def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
+def _bug_history(bug_id):
+    """``/rest/bug/<id>/history`` as BMO returns it, or ``None`` when it could not be read.
+    Shared by the two history rescues so each stays a one-line question."""
+    try:
+        r = net.get("{}/{}/history".format(_bz_rest(), bug_id), timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        return ((r.json() or {}).get("bugs") or [{}])[0].get("history") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: history lookup failed for bug %s: %s", bug_id, exc)
+        return None
+
+
+def _signature_attached(bug_id, signature):
+    """When *signature* was last ADDED to *bug_id*'s ``cf_crash_signature`` after the bug already
+    existed, or ``None`` if it was there from the start, never there, or we could not tell.
+
+    THE SECOND HISTORY RESCUE, and the same argument as the reopen: a bug's creation time stops
+    dating its relationship to a signature the moment somebody attaches that signature to it.
+    Bug 1976766 was filed 2025-07-10 for ``WebGPUParent::MapCallback``; on 2026-09-07 11:39
+    :teoxoy added ``[@ wgpu_bindings::server::wgpu_server_buffer_get_mapped_range]`` to it,
+    three days AFTER the regressor that produced that signature landed — a human who had looked
+    at the new crashes and filed them under the old bug. Two days later the age test rejected
+    1976766 by fourteen months and we filed 2070711 past it. The signature was attached after
+    the cause landed, so the bug is live for the cause, whatever year it was opened in.
+
+    Read off ``cf_crash_signature`` changes whose ``added`` value carries an EXACT entry for the
+    signature (any lambda spelling, ``_signature_field_entries``) and whose ``removed`` value
+    does not — BMO records the whole old and new field, so that is "this change attached it",
+    and a change that merely reshuffles a field already carrying it is not. Latest such change
+    wins, as with reopens. Only ever asked about a bug the creation-time test has already
+    rejected, and only from the filer (``_bug_for_this_regression`` needs the signature passed
+    to ask it), so the extra request rides on the rare path. Raises nothing, for the same
+    rescue-not-gate reason as ``_last_reopened``."""
+    sig = (signature or "").strip()
+    if not sig:
+        return None
+    history = _bug_history(bug_id)
+    if history is None:
+        return None
+    from crashclouseau import sigage
+
+    spellings = {s.lower() for s in utils.lambda_siblings(sig)}
+    last = None
+    for entry in history:
+        for change in entry.get("changes") or []:
+            if change.get("field_name") != "cf_crash_signature":
+                continue
+            added = {e.lower() for e in _signature_field_entries(change.get("added"))}
+            removed = {e.lower() for e in _signature_field_entries(change.get("removed"))}
+            if not (spellings & added) or (spellings & removed):
+                continue
+            when = sigage.to_datetime(entry.get("when"))
+            if when is not None and (last is None or when > last):
+                last = when
+    return last
+
+
+def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None, signature=None):
     """Which open bug this crash belongs in: ``(bug_id or None, ids that predate the cause)``.
 
     The oldest open bug for a signature is the canonical one only when it can be about the same
@@ -732,6 +977,16 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
     signature acquiring a new cause is a real and common thing, and the new cause deserves a
     bug someone will actually look at. ``max_age_days`` of slack keeps a bug filed at around
     the same time as the regressor — plausibly about it — as the venue.
+
+    THE CLOCK IS THE LAST TIME A HUMAN TIED THIS SIGNATURE TO THE BUG, when that is later than
+    the bug's creation. Three things record such a tie, and each is the reopen argument again on
+    a different field: a REOPEN (below); a DUPLICATE on the signature resolved into this bug
+    (``venue_since``, set by ``_duplicate_targets_for_signature``); and the signature being ADDED
+    to the bug's ``cf_crash_signature`` (``_signature_attached``, asked when *signature* is
+    given). Bug 2070711 is the case all three of the missing ones would have caught: our 2069647
+    duped into 1976766 on 2026-09-07 and the signature attached there two minutes later, both
+    after the regressor landed on 09-04, both invisible to a creation-time test that read
+    1976766 as fourteen months too old and filed the same analysis a second time.
 
     TWO THINGS OUTRANK THE AGE TEST, and both were found by replaying it over every filing the
     canary had already made:
@@ -798,15 +1053,24 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None):
         # cross-references these and says WHY (`report_bug.build_related_bugs_note`), rather
         # than skipping: a silent skip loses the analysis, and this is a hg blip, not evidence.
         return None, ids
+
+    def within(clock):
+        return (landed - clock).total_seconds() / 86400.0 <= max_age_days
+
     predating = []
     for bug in bugs or []:
         created = sigage.to_datetime(bug.get("creation_time"))
         if created is None:
             return bug["id"], []
-        if (landed - created).total_seconds() / 86400.0 <= max_age_days:
+        # A dup resolved into this bug dates the tie, not the bug's own filing.
+        tied = sigage.to_datetime(bug.get("venue_since"))
+        if within(max(created, tied) if tied is not None else created):
             return bug["id"], predating
         reopened = _last_reopened(bug["id"])
-        if reopened is not None and (landed - reopened).total_seconds() / 86400.0 <= max_age_days:
+        if reopened is not None and within(reopened):
+            return bug["id"], predating
+        attached = _signature_attached(bug["id"], signature) if signature else None
+        if attached is not None and within(attached):
             return bug["id"], predating
         predating.append(bug["id"])
     return None, predating
@@ -821,7 +1085,10 @@ def _fixed_after_build_bug(signature, buildid, product):
     ``resolution="---"`` and must keep doing so — a closed bug is not a comment venue — so this
     is a SIBLING asking the other question, not a widening of that one, and the two param dicts
     are deliberately duplicated (30+ tests mock that function by name and one pins the exact
-    three-key row it returns). Keep them in step by hand.
+    three-key row it returns). Keep them in step by hand. (The one closed resolution that search
+    does follow is DUPLICATE, and only to reach the OPEN bug it points at —
+    ``_duplicate_targets_for_signature``; a dup into a FIXED bug is still this function's
+    question, and it does not follow dups.)
 
     (a) THE OBVIOUS PREDICATE is "a closed bug on this signature means the crash was already
     reported", i.e. just drop the filter. (b) IT IS DEAD, measured over the 52 bugs the canary
@@ -1451,6 +1718,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         landed,
         cfg["comment_max_bug_age_days"],
         candidate_bug=((dossier or {}).get("candidate") or {}).get("bug"),
+        signature=signature,
     )
     landing_unresolved = landed is None and bug_id is None and bool(predating)
     # ...AND THEN THE MODE OVERRIDES THE VENUE. Computed in this order on purpose:
@@ -1563,13 +1831,32 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # the two noises.
     prior_comment = (models.Dossier.already_commented(bug_id, signature)
                      if bug_id is not None else None)
+    # ...OR IT SITS THERE UNDER OUR OWN BUG NUMBER. A bug we filed on this signature that a
+    # human then resolved DUPLICATE of the venue IS our analysis on the venue: it is in the
+    # venue's duplicate list, its needinfo was answered by the dup, and the person who duped it
+    # has read it. 2070711 restated 2069647's regressor claim word for word two days after
+    # :teoxoy had duped 2069647 into 1976766. Same (bug, signature) grain as above, one hop out.
+    via_duplicate = None
+    if bug_id is not None and not prior_comment:
+        for dup in venue.get("via_duplicates") or []:
+            prior_comment = models.Dossier.already_commented(dup, signature)
+            if prior_comment:
+                via_duplicate = dup
+                break
     if prior_comment:
-        logger.info("autofile: bug %s already carries our analysis of %r (from %s) — not "
+        logger.info("autofile: bug %s already carries our analysis of %r (from %s%s) — not "
                     "commenting again for %s", bug_id, signature,
-                    prior_comment.get("uuid") or "?", uuid)
-        return {"filed": False, "bug": bug_id,
-                "skipped": "already commented on bug {} for this signature".format(bug_id),
-                "prior_comment": prior_comment}
+                    prior_comment.get("uuid") or "?",
+                    ", via its duplicate bug {}".format(via_duplicate) if via_duplicate else "",
+                    uuid)
+        skipped = "already commented on bug {} for this signature".format(bug_id)
+        if via_duplicate:
+            skipped = "our bug {} on this signature is a duplicate of bug {}, which already " \
+                      "carries the analysis".format(via_duplicate, bug_id)
+        out = {"filed": False, "bug": bug_id, "skipped": skipped, "prior_comment": prior_comment}
+        if via_duplicate:
+            out["via_duplicate"] = via_duplicate
+        return out
 
     from crashclouseau import report_bug
     try:
@@ -1700,6 +1987,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             failed = isinstance(outcome, Exception)
             result.update({"filed": True, "bug": bug_id, "mode": "comment_on_existing",
                            "needinfo": None if failed else (email or None)})
+            # HOW THE VENUE WAS FOUND, when it was through a duplicate rather than the bug's own
+            # signature field: the same audit reason as `predating_bugs` — if a dup ever routes
+            # us into the wrong bug, these rows are how we find out.
+            if venue.get("via_duplicates"):
+                result["venue_via_duplicates"] = venue["via_duplicates"]
             if failed:
                 result["needinfo_failed"] = email
             elif outcome == _NEEDINFO_ALREADY:
