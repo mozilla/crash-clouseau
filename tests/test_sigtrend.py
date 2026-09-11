@@ -231,6 +231,66 @@ class TestTheCollectorRefusesRatherThanTruncates(unittest.TestCase):
         self.assertEqual(seen["_aggs.signature"], ["_cardinality.install_time"])
 
 
+class TestTheBaselineIsTheSignaturesLifetime(unittest.TestCase):
+    """Bug 2068262 (2026-09-11): `RemoteType::WithSiteOrigin` appeared on nightly on 09-01 and
+    ten days later read as an 18.3x rate rise -- 15 installs in the window against 0.82
+    "expected", the 0.82 being two days of the signature's life divided by 56 days of channel
+    exposure. A signature that young has no rate to have changed; its appearance is `sigage`'s
+    and the ordinary path's business (which had filed the bug on 09-01). The baseline starts at
+    the signature's first rollup day, and the coverage bar then refuses a young signature."""
+
+    ASOF = date(2026, 9, 11)
+
+    def _exposure(self, days=63, installs=500):
+        return {self.ASOF - timedelta(days=i): (installs * 2, installs) for i in range(days)}
+
+    def _series(self, first_offset, per_day, window_per_day=None):
+        """The signature at `per_day` installs a day from `first_offset` days ago, and at
+        `window_per_day` (default `per_day`) over the last seven days."""
+        out = {}
+        for i in range(first_offset, -1, -1):
+            n = window_per_day if (window_per_day is not None and i < 7) else per_day
+            out[self.ASOF - timedelta(days=i)] = (n, n)
+        return out
+
+    def test_a_signature_younger_than_the_baseline_bar_has_no_rate(self):
+        # The bug's shape: ten days old, two installs a day since it appeared.
+        series = self._series(9, 2)
+        exposure = self._exposure()
+        without = sigtrend._facts_from_series(series, exposure, self.ASOF)
+        self.assertGreater(without["signature_trend_ratio"], 15,
+                           "without the lifetime rule this is the false 18x")
+        with_first = sigtrend._facts_from_series(series, exposure, self.ASOF,
+                                                 first_day=self.ASOF - timedelta(days=9))
+        self.assertEqual(with_first, {})
+
+    def test_a_signature_born_inside_the_window_has_no_rate_either(self):
+        series = self._series(4, 5)
+        facts = sigtrend._facts_from_series(series, self._exposure(), self.ASOF,
+                                            first_day=self.ASOF - timedelta(days=4))
+        self.assertEqual(facts, {})
+
+    def test_an_older_signature_is_measured_over_its_own_days(self):
+        # Forty days old at one install a day, then five a day in the window: a real rise, and
+        # its expected value is its OWN rate (1/day over 33 baseline days), not 33/56 of it.
+        series = self._series(39, 1, window_per_day=5)
+        facts = sigtrend._facts_from_series(series, self._exposure(), self.ASOF,
+                                            first_day=self.ASOF - timedelta(days=39))
+        self.assertEqual(facts["signature_trend_baseline_days"], 33)
+        self.assertEqual(facts["signature_trend_baseline_installs"], 33)
+        self.assertAlmostEqual(facts["signature_trend_expected_installs"], 7.0, places=1)
+        self.assertAlmostEqual(facts["signature_trend_ratio"], 5.0, places=1)
+        self.assertTrue(sigtrend.is_rising(facts))
+        self.assertIn("preceding 33 days", sigtrend.describe(facts))
+
+    def test_a_signature_older_than_the_baseline_keeps_the_nominal_one(self):
+        series = self._series(62, 1, window_per_day=5)
+        for first in (None, self.ASOF - timedelta(days=62), self.ASOF - timedelta(days=80)):
+            facts = sigtrend._facts_from_series(series, self._exposure(), self.ASOF,
+                                                first_day=first)
+            self.assertEqual(facts["signature_trend_baseline_days"], 56, first)
+
+
 @unittest.skipUnless(_is_postgres(), "the rollup round-trip needs a disposable Postgres backend")
 class TestTrendFactsAgainstARealRollup(unittest.TestCase):
     """The four ways `trend_facts` could lie, each with a row set that would make it."""
@@ -262,8 +322,11 @@ class TestTrendFactsAgainstARealRollup(unittest.TestCase):
 
     def test_the_anchor_reproduces_aryx_sentence(self):
         # 63 days of exposure; 5 installs scattered through the baseline, 9 in the last week --
-        # bug 2063336's real shape.
-        self._exposure(63)
+        # bug 2063336's real shape. The signature is years old, so the rollup saw it before the
+        # baseline too (one more report, a week before the baseline opens): the lifetime rule
+        # (`first_day`) then leaves the nominal 56 days alone.
+        self._exposure(71)
+        self._sig(self.ASOF - timedelta(days=70), 1)
         for offset in (48, 40, 33, 20, 11):
             self._sig(self.ASOF - timedelta(days=offset), 1)
         for offset in range(0, 7):
@@ -290,6 +353,19 @@ class TestTrendFactsAgainstARealRollup(unittest.TestCase):
         self._sig(self.ASOF, 2)
         self.assertEqual(sigtrend.trend_facts("Firefox", "nightly", _SIG, asof=self.ASOF), {})
 
+    def test_a_young_signature_has_no_rate_through_the_rollup(self):
+        """Bug 2068262's shape end to end: full channel exposure, a signature ten days old at two
+        installs a day. `first_day` comes from the rollup, and the answer is no facts."""
+        self._exposure(63)
+        for offset in range(0, 10):
+            self._sig(self.ASOF - timedelta(days=offset), 2)
+        self.assertEqual(sigtrend.trend_facts("Firefox", "nightly", _SIG, asof=self.ASOF), {})
+        self.assertEqual(sigtrend.rising_candidates("Firefox", "nightly", asof=self.ASOF), [])
+        self.assertEqual(models.SignatureDaily.first_day("Firefox", "nightly", _SIG),
+                         self.ASOF - timedelta(days=9))
+        self.assertEqual(models.SignatureDaily.first_days("Firefox", "nightly"),
+                         {_SIG: self.ASOF - timedelta(days=9)})
+
     def test_a_gap_in_the_WINDOW_refuses_rather_than_overstating_coverage(self):
         """The rate would still be right, but the sentence would claim seven days it never saw."""
         self._exposure(63)
@@ -315,17 +391,19 @@ class TestTrendFactsAgainstARealRollup(unittest.TestCase):
         self.assertEqual(facts["signature_trend_window_days"], 6)
         self.assertIn("last 6 days", sigtrend.describe(facts))
 
-    def test_a_signature_with_NO_baseline_gets_no_ratio_and_no_sentence(self):
+    def test_a_signature_with_NO_baseline_gets_no_facts_at_all(self):
         """A signature that did not exist before the window is a NOVELTY, not a rate change, and
         it already has an instrument (`sigage`). Emitting a ratio here would mean dividing by zero
         and calling the answer infinite — which is the from-zero branch of `utils.is_spike`, i.e.
-        88% of the noise this module exists to rank below a real rise."""
+        88% of the noise this module exists to rank below a real rise. Until 2026-09-11 this
+        answered a zero baseline and no ratio; the baseline now starts where the signature does
+        (`first_day`), which here is inside the window, so there is no baseline to speak of and
+        the keys are absent -- the same shape as a baseline too thin to collect."""
         self._exposure(63)
         for offset in range(0, 7):
             self._sig(self.ASOF - timedelta(days=offset), 3)
         facts = sigtrend.trend_facts("Firefox", "nightly", _SIG, asof=self.ASOF)
-        self.assertEqual(facts["signature_trend_baseline_installs"], 0)
-        self.assertNotIn("signature_trend_ratio", facts)
+        self.assertEqual(facts, {})
         self.assertFalse(sigtrend.is_rising(facts))
         self.assertIsNone(sigtrend.describe(facts))
 

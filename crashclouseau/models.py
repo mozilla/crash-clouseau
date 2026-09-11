@@ -4386,6 +4386,44 @@ class SignatureDaily(db.Model):
         return out
 
     @staticmethod
+    def first_day(product, channel, signature):
+        """The earliest day the rollup has a row of this signature on the channel, or ``None``
+        (no row, or the table could not be read). The rate statistic starts a signature's
+        baseline here when it is later than the nominal baseline start: a rate over days the
+        signature did not exist is not its rate (``sigtrend._facts_from_series``)."""
+        try:
+            return (
+                db.session.query(func.min(SignatureDaily.day))
+                .filter(SignatureDaily.product == product,
+                        SignatureDaily.channel == channel,
+                        SignatureDaily.signature == signature[:512])
+                .scalar()
+            )
+        except Exception:
+            logger.error("Cannot read the signature's first rollup day", exc_info=True)
+            db.session.rollback()
+            return None
+
+    @staticmethod
+    def first_days(product, channel):
+        """``{signature: earliest day}`` for every signature the rollup holds on the channel --
+        ``first_day`` for a whole channel in one query, for the rising scan. ``{}`` when the
+        table could not be read, which the caller reads as "no signature is known young"."""
+        try:
+            rows = (
+                db.session.query(SignatureDaily.signature, func.min(SignatureDaily.day))
+                .filter(SignatureDaily.product == product,
+                        SignatureDaily.channel == channel)
+                .group_by(SignatureDaily.signature)
+                .all()
+            )
+            return {sgn: d for sgn, d in rows if d is not None}
+        except Exception:
+            logger.error("Cannot read the signatures' first rollup days", exc_info=True)
+            db.session.rollback()
+            return {}
+
+    @staticmethod
     def prune(days=90):
         return _prune_daily(SignatureDaily, days)
 

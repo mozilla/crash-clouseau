@@ -81,6 +81,16 @@ MIN_INSTALLS = 3
 # fresh database, or one that has been down for a week, must produce NO facts rather than a
 # confident-looking ratio against three days of history — the same rule as `sigage`, which omits a
 # key instead of zeroing it so that an unknown age can never read as a new signature.
+#
+# The same bar is held against the SIGNATURE'S OWN LIFETIME, because the baseline is the days the
+# signature existed on the channel, not the nominal 56 (`_facts_from_series`, `first_day`). Bug
+# 2068262 (2026-09-11): `RemoteType::WithSiteOrigin` appeared on nightly on 09-01 and was read as
+# an 18.3x rate rise on 09-11 -- 15 installs in the window against 0.82 "expected", where the 0.82
+# was 2 days of the signature's life divided by 56 days of channel exposure. A signature 8 days old
+# has no rate to have changed; its appearance is the ordinary path's business (it had already filed
+# that bug on 09-01). Starting the baseline at the signature's first rollup day makes the expected
+# value its actual rate, and this coverage bar then says the rate is not measurable until the
+# signature is `MIN_BASELINE_COVERAGE + WINDOW_DAYS` days old.
 MIN_BASELINE_COVERAGE = 21
 
 # And how much of the WINDOW must have been collected. Separate from the baseline's bar because it
@@ -348,10 +358,12 @@ def trend_facts(product, channel, signature, asof=None,
     if not exposure:
         return {}
     series = models.SignatureDaily.series(product, channel, signature, base_start, win_end)
+    first_day = models.SignatureDaily.first_day(product, channel, signature)
     # Two statements, not `return _facts_from_series(...)`: the corroboration-registry scanner
     # follows a carrier through `x = call()` / `return x`, and a bare `return call()` would hide
     # every `signature_trend_*` write from it.
-    facts = _facts_from_series(series, exposure, asof, window=window, baseline=baseline)
+    facts = _facts_from_series(series, exposure, asof, window=window, baseline=baseline,
+                               first_day=first_day)
     return facts
 
 
@@ -379,6 +391,7 @@ def rising_candidates(product, channel, asof=None, exclude=()):
     if not exposure:
         return []
     all_series = models.SignatureDaily.series_all(product, channel, base_start, asof)
+    first_days = models.SignatureDaily.first_days(product, channel)
     families = {}
     for sgn in all_series:
         families.setdefault(utils.lambda_family(sgn), []).append(sgn)
@@ -394,7 +407,8 @@ def rising_candidates(product, channel, asof=None, exclude=()):
             for d, (reports, installs) in all_series[m].items():
                 r, i = merged.get(d, (0, 0))
                 merged[d] = (r + reports, i + installs)
-        facts = _facts_from_series(merged, exposure, asof)
+        first_day = min((first_days[m] for m in members if m in first_days), default=None)
+        facts = _facts_from_series(merged, exposure, asof, first_day=first_day)
         if not is_rising(facts):
             continue
         out.append((family, sorted(members), facts))
@@ -403,14 +417,25 @@ def rising_candidates(product, channel, asof=None, exclude=()):
     return out
 
 
-def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASELINE_DAYS):
+def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASELINE_DAYS,
+                       first_day=None):
     """``trend_facts``' arithmetic over an already-fetched ``{day: (reports, installs)}`` series
     and exposure -- so a scan over every signature reads the channel once, not once per
-    signature."""
+    signature.
+
+    ``first_day`` is the earliest day the rollup has ever seen the signature on this channel
+    (``SignatureDaily.first_day``; the rollup keeps 90 days, the baseline reads 56). When it falls
+    inside the baseline the baseline starts THERE: the expected count is then the rate the
+    signature actually ran at, not that rate diluted by the days before it existed, and a
+    signature younger than ``MIN_BASELINE_COVERAGE`` days before the window has no facts at
+    all -- a novelty is not a rate change, and it has its own instruments. ``None`` (unknown, or
+    a signature older than the rollup) leaves the nominal baseline."""
     win_end = asof
     win_start = asof - timedelta(days=window - 1)
     base_end = win_start - timedelta(days=1)
     base_start = base_end - timedelta(days=baseline - 1)
+    if first_day is not None and first_day > base_start:
+        base_start = first_day
 
     w_ins, w_rep, w_exp, w_days = _window_sums(series, exposure, win_start, win_end)
     b_ins, b_rep, b_exp, b_days = _window_sums(series, exposure, base_start, base_end)

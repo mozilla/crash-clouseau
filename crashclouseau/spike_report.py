@@ -215,32 +215,14 @@ def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None):
     return "\n\n".join(notes) if notes else None
 
 
-def fixed_venue_note(bug_id, resolved, buildid, channel):
-    """The paragraph that opens a spike comment on a bug already RESOLVED FIXED: why the fixed
-    bug is still the place for it. Only when the resolution POSTDATES the spiking build -- the
-    crashes then come from builds without the fix, which is an uplift question for whoever owns
-    the bug, not a new bug. (A fix that predates the build is in the build; that spike is a new
-    defect or a fix that did not hold, and it files a new bug.)"""
-    when = resolved.strftime("%Y-%m-%d") if hasattr(resolved, "strftime") else str(resolved or "")
-    return (
-        "**Bug {bug} is RESOLVED FIXED, but it was resolved on {when}, after build {build} was "
-        "produced, so the crashes in this spike come from {chan} builds that do not carry the "
-        "fix.** If the fix has not reached {chan} yet, this is what an uplift would address; if "
-        "it has, the fix did not hold and this deserves a new bug. Posted here rather than as a "
-        "new bug because the signature's cause is already named on this one.".format(
-            bug=bug_id, when=when, build=buildid, chan=channel or "these"))
-
-
 def build_spike_comment(brief, findings, *, details=None, stack=None, person=None,
                         author_display=None, link_regressor=False, grounded=True,
                         related_bugs=None, other_app_bugs=None, meta_bugs=None,
-                        as_comment=False, preface=None):
-    """The whole opener (or the comment on an existing bug) as one markdown text. ``preface``
-    is a paragraph that goes first when the venue needs explaining (``fixed_venue_note``)."""
+                        as_comment=False):
+    """The whole opener (or the comment on an existing bug) as one markdown text."""
     uuid = brief.get("uuid", "")
     channel = brief.get("channel")
     sections = [
-        preface,
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         other_reports_line(brief),
         report_bug.build_reason_block(details),

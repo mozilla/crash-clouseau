@@ -204,6 +204,42 @@ class TestTheInvestigator(unittest.TestCase):
         f = spike_agent.parse_findings('```json\n{"summary": "S", "culprit": {"bug": 1}}\n```')
         self.assertIsNone(f.culprit)
 
+    def test_the_verdict_line_is_lifted_out_of_the_summary(self):
+        """Comment 10 on bug 2068262 opened with `Result established; trigger suspected;
+        population newly observed cohort; culprit identified.` -- the prompt's fixed-form verdict,
+        meaningful to the operator's table and to nobody on the bug. It has its own field now,
+        and a model that still writes it at the head of the summary has it moved."""
+        status = ("Result established; trigger suspected; population newly observed cohort; "
+                  "culprit identified.")
+        f = SpikeFindings(summary=status + " The crash is a deliberate abort in `Foo::Bar`.")
+        self.assertEqual(f.summary, "The crash is a deliberate abort in `Foo::Bar`.")
+        self.assertEqual(f.status, status)
+        # Written in its own field, the summary is left alone and the field is kept.
+        f = SpikeFindings(summary="Plain prose.", status=status)
+        self.assertEqual((f.summary, f.status), ("Plain prose.", status))
+        # Both: the field's own value wins, the summary is still cleaned.
+        f = SpikeFindings(summary=status + " Prose.", status="Result partial; trigger unknown; "
+                          "population inconclusive; culprit unknown.")
+        self.assertEqual(f.summary, "Prose.")
+        self.assertTrue(f.status.startswith("Result partial"))
+        # A summary that merely starts with the word is not a verdict line.
+        f = SpikeFindings(summary="Result: the allocator OOMs.")
+        self.assertEqual(f.summary, "Result: the allocator OOMs.")
+        # The rendered analysis never carries it.
+        f = SpikeFindings(summary=status + " Prose.")
+        text = spike_report.analysis_section(f, {"channel": "nightly"})
+        self.assertNotIn("Result established", text)
+        self.assertIn("Prose.", text)
+        # Through the JSON block too.
+        f = spike_agent.parse_findings('```json\n{"summary": "%s S"}\n```' % status)
+        self.assertEqual((f.summary, f.status), ("S", status))
+
+    def test_the_summary_is_written_for_the_bugs_readers(self):
+        prompt = " ".join(spike_agent._SYSTEM.split())  # the file wraps at 95 columns
+        for rule in ('"status"', "it is NOT shown in the bug", "must not also open the summary",
+                     "no status words", "never \"this bug\" as though it were new"):
+            self.assertIn(rule, prompt, rule)
+
     def test_a_run_with_no_tool_call_grounded_nothing(self):
         run = spike_agent.SpikeRun()
         self.assertFalse(run.grounded)
@@ -616,26 +652,24 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
                          ("spike_comment", 71, "own_restricted"))
         self.assertEqual(self.created, [])
 
-    def test_our_fixed_bug_gets_the_spike_when_the_fix_postdates_the_build(self):
+    def test_our_fixed_bug_declines_the_spike_when_the_fix_postdates_the_build(self):
+        """Comment 10 on bug 2068262 (2026-09-11): the spike was the pre-fix population of a bug
+        already fixed, and the comment told the bug's fixer that his bug was fixed, with a
+        needinfo. Nothing is written, on any bug, and the record says which bug and why."""
         esc, brief = self._beta()
         with mock.patch.object(models.Dossier, "already_filed_for_signature",
                                return_value={"uuid": "u-0", "bug": 72}), \
                 mock.patch.object(se, "_bug_state", return_value={
                     "id": 72, "status": "RESOLVED", "resolution": "FIXED",
                     "resolved": datetime(2026, 9, 5, 10, tzinfo=timezone.utc),
-                    "assigned_to": "fixer@moz.example"}), \
-                mock.patch.object(report_bug, "_person_for_account",
-                                  return_value={"nick": "fixer", "account": "fixer@moz.example"}), \
-                mock.patch.object(se, "_needinfo_person_for", return_value={}):
+                    "assigned_to": "fixer@moz.example"}):
             res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
-        self.assertEqual((res["mode"], res["bug"], res["venue_kind"]), ("spike_comment", 72, "fixed"))
-        text = self.comments[0][1]
-        self.assertTrue(text.startswith("**Bug 72 is RESOLVED FIXED"))
-        self.assertIn("after build 20260903093145 was produced", text)
-        self.assertIn("beta builds that do not carry the fix", text)
-        self.assertIn(":fixer, can you have a look please?", text, "the fixer is the one to ask")
-        self.assertEqual(res["needinfo"], "fixer@moz.example")
-        self.assertEqual(self.created, [])
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["venue_kind"]), (72, "fixed"))
+        self.assertIn("bug 72 was fixed on 2026-09-05, after build 20260903093145", res["skipped"])
+        self.assertIn("nothing to add", res["skipped"])
+        self.assertNotIn("retry", res, "a fixed bug does not clear; never retried")
+        self.assertEqual((self.comments, self.created), ([], []))
 
     def test_a_fix_already_in_the_build_means_a_new_bug(self):
         esc, brief = self._beta()
@@ -661,15 +695,16 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
                 res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
             self.assertEqual(res["mode"], "spike_new_bug", resolution)
 
-    def test_anybodys_bug_fixed_after_the_build_gets_the_spike(self):
+    def test_anybodys_bug_fixed_after_the_build_declines_the_spike(self):
         esc, brief = self._beta()
         row = {"id": 88, "assigned_to": "owner@moz.example", "product": "Core"}
         with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
-                (row, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \
-                mock.patch.object(report_bug, "_person_for_account", return_value={}):
+                (row, datetime(2026, 9, 5, tzinfo=timezone.utc))]):
             res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
-        self.assertEqual((res["mode"], res["bug"], res["venue_kind"]), ("spike_comment", 88, "fixed"))
-        # Our own prior filing outranks anybody's fixed bug.
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["venue_kind"]), (88, "fixed"))
+        self.assertEqual((self.comments, self.created), ([], []))
+        # Our own prior filing, still open, outranks anybody's fixed bug: the volume is news there.
         with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
                 (row, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \
                 mock.patch.object(models.SpikeEscalation, "prior_bug_for", return_value=75), \
@@ -677,27 +712,42 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
                     "id": 75, "status": "REOPENED", "resolution": "", "resolved": None,
                     "assigned_to": ""}):
             res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
-        self.assertEqual((res["bug"], res["venue_kind"]), (75, "own_restricted"))
+        self.assertEqual((res["filed"], res["bug"], res["venue_kind"]), (True, 75, "own_restricted"))
 
-    def test_a_memory_safety_crash_never_comments_on_a_public_fixed_bug(self):
+    def test_a_memory_safety_crash_on_a_fixed_bugs_pre_fix_builds_is_declined_too(self):
+        """Before 2026-09-11 this filed a NEW restricted bug saying "probably a duplicate of bug
+        88": a security-grouped duplicate of a fixed bug, about crashes the fix already covers."""
         esc, brief = self._beta()
         brief["raw_crash"] = {"json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
         with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
                 ({"id": 88, "assigned_to": ""}, datetime(2026, 9, 5, tzinfo=timezone.utc))]):
             res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
-        self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 88))
-        self.assertEqual(self.created[0]["groups"], ["core-security"])
-        self.assertIn("Probably a duplicate of bug 88", self.created[0]["description"])
+        self.assertEqual((res["filed"], res["bug"], res["venue_kind"]), (False, 88, "fixed"))
+        self.assertEqual((self.comments, self.created), ([], []))
 
-    def test_skip_mode_writes_on_no_existing_bug_at_all(self):
+    def test_skip_mode_still_declines_a_fixed_bug_and_skips_our_restricted_one(self):
+        """`skip` means "write on no existing bug", not "pretend none exists": a bug fixed after
+        the build is a decline in every mode, our restricted open bug is skipped like a public
+        open one, and only a fix already IN the build (a new defect) files a new bug."""
         esc, brief = self._beta()
-        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
-                ({"id": 88, "assigned_to": ""}, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \
-                mock.patch.object(config, "get_agent_spike_escalation",
-                                  return_value=dict(config.get_agent_spike_escalation(),
-                                                    comment_on_existing="skip")):
-            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
-        self.assertEqual(res["mode"], "spike_new_bug")
+        skip = dict(config.get_agent_spike_escalation(), comment_on_existing="skip")
+        fixed_after = ({"id": 88, "assigned_to": ""}, datetime(2026, 9, 5, tzinfo=timezone.utc))
+        fixed_before = ({"id": 89, "assigned_to": ""}, datetime(2026, 9, 1, tzinfo=timezone.utc))
+        with mock.patch.object(config, "get_agent_spike_escalation", return_value=skip):
+            with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[fixed_after]):
+                res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+            self.assertEqual((res["filed"], res["bug"], res["venue_kind"]), (False, 88, "fixed"))
+            with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[fixed_before]):
+                res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+            self.assertEqual(res["mode"], "spike_new_bug")
+            with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                                   return_value={"uuid": "u-0", "bug": 71}), \
+                    mock.patch.object(se, "_bug_state", return_value={
+                        "id": 71, "status": "NEW", "resolution": "", "resolved": None,
+                        "assigned_to": ""}):
+                res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+            self.assertEqual((res["filed"], res["bug"], res["skipped"]),
+                             (False, 71, "open bug 71 exists"))
         self.assertEqual(self.comments, [])
 
 
@@ -738,6 +788,9 @@ class TestTheSweep(unittest.TestCase):
             mock.patch.object(se, "_trend", return_value={}),
             # The signature's own build history (Socorro): quiet unless a test says otherwise.
             mock.patch.object(spikes, "build_history", return_value=[]),
+            # Bugzilla, asked before spending: no open bug, nothing fixed after the build.
+            mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
+            mock.patch.object(se, "resolve_venue_below_public", return_value=None),
         ]
         for p in patches:
             p.start()
@@ -800,6 +853,50 @@ class TestTheSweep(unittest.TestCase):
         row = self.created[0]
         self.assertEqual(row.status, "done")
         self.assertIn("2069800", row.payload["skipped"])
+
+    def test_a_spike_on_a_fixed_bugs_pre_fix_builds_is_recorded_and_never_investigated(self):
+        """Bug 2068262 again, one stage earlier: the $1 investigator ran, found the fixed bug
+        itself and recommended "treat this as a duplicate of bug 2068262" -- posted on 2068262.
+        The sweep asks Bugzilla first and records the decline in the filing's own shape, so the
+        tasks page reads "not filed (bug 2068262)" and nothing is retried."""
+        fixed = {"id": 2068262, "kind": "fixed", "assigned_to": "nika@example",
+                 "resolved": datetime(2026, 9, 10, 4, 46, tzinfo=timezone.utc)}
+        with mock.patch.object(se, "resolve_venue_below_public", return_value=fixed):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
+        self.assertEqual(self.enqueued, [])
+        row = self.created[0]
+        self.assertEqual(row.status, "done")
+        filing = row.payload["filing"]
+        self.assertEqual((filing["filed"], filing["bug"], filing["venue_kind"]),
+                         (False, 2068262, "fixed"))
+        self.assertIn("bug 2068262 was fixed on 2026-09-10, after build 20260903093145",
+                      filing["skipped"])
+        self.assertNotIn("retry", filing)
+        self.assertNotIn("skipped", row.payload, "not a 'recorded, never run' row: the reason "
+                         "is about a bug, and lives where the tasks page links it")
+        # An OPEN bug outranks the fixed one, as it does in the filer: the run goes ahead and
+        # the volume is commented there.
+        self.created.clear()
+        with mock.patch.object(se, "resolve_venue_below_public", return_value=fixed), \
+                mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                    {"id": 90, "product": "Core", "component": "DOM: Core & HTML",
+                     "summary": "Crash in [@ mozilla::Foo::Bar]",
+                     "cf_crash_signature": "[@ mozilla::Foo::Bar]",
+                     "creation_time": "2026-08-30T00:00:00Z", "keywords": []}]):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 1)
+        # A Bugzilla that could not be read is not a fixed bug: the run goes ahead and the
+        # filer asks again.
+        self.created.clear()
+        self.enqueued.clear()
+        with mock.patch.object(se, "resolve_venue_below_public", return_value=fixed), \
+                mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=None):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 1)
+        # Our own restricted OPEN bug is a venue, not a decline: the run goes ahead.
+        self.created.clear()
+        self.enqueued.clear()
+        with mock.patch.object(se, "resolve_venue_below_public", return_value={
+                "id": 91, "kind": "own_restricted", "assigned_to": ""}):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 1)
 
     def test_one_escalation_per_episode(self):
         with mock.patch.object(models.SpikeEscalation, "latest_for_signature",

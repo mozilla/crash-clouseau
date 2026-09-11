@@ -36,6 +36,18 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    ``Core :: General`` -- a spike is filed into a component that can move it rather than not
    filed. Memory-safety crashes follow the ordinary filer's security branch.
 
+   ONE THING IS NEVER WRITTEN: a spike whose signature has a bug RESOLVED FIXED after the spiking
+   build was produced (``resolve_venue_below_public``, kind ``fixed``). Those crashes are the
+   pre-fix population of a defect somebody has already found, diagnosed and fixed; the fix
+   reaches the channel with its next build, and the bug's people already watch the signature.
+   Comment 10 on bug 2068262 (2026-09-11) was that case written out: "bug 2068262 is RESOLVED
+   FIXED, but it was resolved after build 20260909211052 was produced, so the crashes come from
+   builds that do not carry the fix" -- posted ON bug 2068262, with a needinfo to the fixer, and
+   read by two engineers as "pretty useless". It is decided in the sweep, BEFORE the investigator
+   is paid for (``_fixed_before_spending``), and again at filing time for a fix that landed while
+   the run was in flight. The ordinary filer has held the same rule since 09-05
+   (``bugzilla_apply._fixed_after_build_bug`` suppresses its new bug).
+
 WHAT IS DELIBERATELY NOT HERE. No skeptic, no second opinion: the investigator's output is
 validated mechanically and published as an offer under the volume facts, which stand on their own.
 No stamping of ``Dossier.payload['filed_bug']``: that key is the ordinary filer's idempotence and
@@ -250,6 +262,17 @@ def _sweep_channel(product, channel, cfg, room):
             logger.info("spike: %s on %s is a real spike but %s-%s has spent today's %d runs",
                         signature, day, product, channel, cfg["max_runs_per_day"])
             break
+        fixed = _fixed_before_spending(signature, siblings, product, picked)
+        if fixed is not None:
+            reason = _fixed_decline(fixed, picked)
+            row = models.SpikeEscalation.create(
+                signature, product, channel, day, buildid=picked, kind=spike["kind"],
+                payload=dict(payload, filing={"filed": False, "bug": fixed["id"],
+                                              "skipped": reason, "venue_kind": "fixed"}))
+            row.set_status("done")
+            logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
+                        day, reason)
+            continue
         uuid = representative_uuid(siblings, picked, channel, product, runs)
         if uuid is None:
             row = models.SpikeEscalation.create(
@@ -281,6 +304,35 @@ def _enqueue(escalation_id, cfg):
         # ordinary run's 1800s, and RQ's default would kill it at 180s.
         timeout=cfg["job_timeout"],
     )
+
+
+def _fixed_before_spending(signature, siblings, product, buildid):
+    """The bug that makes this spike not worth an investigator: one on the signature RESOLVED
+    FIXED after the spiking build (``resolve_venue_below_public``'s ``fixed`` kind), when no open
+    bug outranks it -- the filer's precedence, asked before the run instead of after it.
+    ``None`` when there is none, or when Bugzilla could not be read: a lookup that failed must
+    not turn into a run that was never made, and the filer asks again with the same rules."""
+    existing = bugzilla_apply._open_bugs_for_signature(signature)
+    if existing is None:
+        return None
+    existing, _other_app = bugzilla_apply._split_by_application(existing, product)
+    existing, _metas = bugzilla_apply._split_out_metas(existing)
+    if existing:
+        return None
+    below = resolve_venue_below_public(siblings or [signature], product, buildid,
+                                       config.get_bugzilla_token())
+    if below is not None and below.get("kind") == "fixed":
+        return below
+    return None
+
+
+def _fixed_decline(fixed, buildid):
+    """Why nothing is written about a spike on a fixed bug's pre-fix builds, for the record."""
+    resolved = fixed.get("resolved")
+    when = resolved.strftime("%Y-%m-%d") if hasattr(resolved, "strftime") else str(resolved or "?")
+    return ("bug {} was fixed on {}, after build {} was produced: the spike is the pre-fix "
+            "population of a crash already diagnosed and fixed, and there is nothing to add"
+            .format(fixed.get("id"), when, buildid))
 
 
 def _reap_stale(cfg):
@@ -934,14 +986,17 @@ def _own_prior_bugs(signatures):
 
 
 def resolve_venue_below_public(signatures, product, buildid, token):
-    """Where a spike goes when no OPEN public bug on the signature exists, in order:
+    """What decides a spike's fate when no OPEN public bug on the signature exists, in order:
 
     1. a bug WE filed on the signature (any channel) that is still open but invisible to the
        public lookup -- a human restricted it -- gets the comment (``kind`` ``own_restricted``);
-    2. a bug we filed that was RESOLVED FIXED after the spiking build was produced gets it: the
-       spike is on builds without the fix (``kind`` ``fixed``);
+    2. a bug we filed that was RESOLVED FIXED after the spiking build was produced means NOTHING
+       IS WRITTEN (``kind`` ``fixed``): the spike is the pre-fix population of a defect already
+       found and fixed, the fix reaches the channel with its next build, and the bug's people
+       are watching the signature. Written out, this is comment 10 on bug 2068262, which
+       explained to the bug's own fixer that his bug was fixed;
     3. any public same-application bug RESOLVED FIXED after the build, the ordinary filer's
-       ``_fixed_after_build_bug`` question, gets it the same way.
+       ``_fixed_after_build_bug`` question, is the same ``fixed`` decline.
 
     ``None`` means a new bug: no bug, a bug resolved before the build (its fix is in the build,
     so this is a new defect or a fix that did not hold) or one closed INVALID / WORKSFORME /
@@ -1039,24 +1094,25 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         return dict(result, bug=venue["id"], skipped=(
             "bug {} was filed for this spike and already names its regressor ({})".format(
                 venue["id"], ", ".join("bug {}".format(b) for b in venue["regressed_by"]))))
-    # BELOW THE PUBLIC OPEN BUGS: a bug we filed ourselves that a human restricted or resolved,
-    # or anybody's bug fixed AFTER this build -- see `resolve_venue_below_public`. Not in `skip`
-    # mode (nothing is written on an existing bug there), and a memory-safety crash declines a
-    # public fixed bug the way it declines a public open one.
+    # BELOW THE PUBLIC OPEN BUGS: a bug we filed ourselves that a human restricted, or a bug --
+    # ours or anybody's -- fixed AFTER this build; see `resolve_venue_below_public`. The fixed
+    # one is a DECLINE whatever the mode and whatever the crash: there is nothing to say about
+    # the pre-fix crashes of a fixed defect, on a public bug, on a restricted one or in a new
+    # bug. The restricted one is a venue like a public open bug, so `skip` mode skips it too.
     venue_kind = "open" if venue is not None else None
-    preface = None
-    if venue is None and mode != "skip":
+    if venue is None:
         siblings = brief.get("siblings") or [signature]
         below = resolve_venue_below_public(siblings, product, esc.buildid, token)
-        if below is not None and withheld and below["kind"] != "own_restricted":
-            public_venue_declined = public_venue_declined or below["id"]
-        elif below is not None:
+        if below is not None and below["kind"] == "fixed":
+            return dict(result, bug=below["id"], venue_kind="fixed",
+                        skipped=_fixed_decline(below, esc.buildid))
+        if below is not None and mode == "skip":
+            return dict(result, bug=below["id"],
+                        skipped="open bug {} exists".format(below["id"]))
+        if below is not None:
             venue = {"id": below["id"], "assigned_to": below.get("assigned_to") or ""}
             venue_kind = below["kind"]
             for_spike = False
-            if below["kind"] == "fixed":
-                preface = spike_report.fixed_venue_note(
-                    below["id"], below.get("resolved"), esc.buildid, channel)
     person = _needinfo_person_for(findings, brief) if grounded else {}
     if not person and venue is not None and venue.get("assigned_to"):
         # Nobody to ask about a culprit: the bug's own assignee is the human who knows the fix.
@@ -1080,8 +1136,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             text = spike_report.build_spike_comment(
                 brief, findings, details=details, stack=stack, person=person,
                 author_display=report_bug._person_display(person) if person else None,
-                link_regressor=link_regressor, grounded=grounded, as_comment=True,
-                preface=preface)
+                link_regressor=link_regressor, grounded=grounded, as_comment=True)
             bugzilla_apply._post_comment(venue["id"], text, False, token)
             email = (person or {}).get("account") or ""
             outcome = bugzilla_apply._set_needinfo(venue["id"], email, token) if email else None

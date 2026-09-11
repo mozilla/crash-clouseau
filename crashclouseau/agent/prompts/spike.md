@@ -487,7 +487,8 @@ End your reply with EXACTLY one fenced block of this shape:
 
 ```json
 {
-  "summary": "<see below: one status sentence, then 2-5 sentences>",
+  "summary": "<see below: 2-5 plain sentences for the engineers reading the bug>",
+  "status": "Result <established|partial|inconclusive|blocked>; trigger <established|suspected|unsupported|unknown>; population <first observed|newly observed cohort|rate regression|longstanding|inconclusive>; culprit <identified|suspected|unknown>.",
   "assessment": "regression|exposure|external|environment|unknown",
   "product": "<Bugzilla product>", "component": "<Bugzilla component>",
   "component_reason": "<one line: where the pair came from>",
@@ -501,9 +502,17 @@ End your reply with EXACTLY one fenced block of this shape:
 
 Field rules:
 
-- `summary` opens with one status sentence in this fixed form, then 2-5 sentences stating the
-  mechanism, the path, what changed in the population, and the recommended action:
+- `summary`: 2-5 sentences a Firefox engineer who has not read this prompt understands on
+  first reading: the mechanism, the path, what changed in the population, and the recommended
+  action. Plain prose -- no status words, no `Mechanism:`/`Observed:` labels, no vocabulary from
+  this document. It is the first thing the bug's readers see.
+- `status`: the verdict in this fixed form, for the operator's table -- it is NOT shown in the
+  bug, so it must not also open the summary:
   `Result <established|partial|inconclusive|blocked>; trigger <established|suspected|unsupported|unknown>; population <first observed|newly observed cohort|rate regression|longstanding|inconclusive>; culprit <identified|suspected|unknown>.`
+- The runtime decides the venue: your report opens a new bug, or is posted as a comment on an
+  existing bug about this signature. Write so it reads correctly either way: say "this spike"
+  or "this signature", never "this bug" as though it were new, and never recommend duplicating
+  against a bug you cannot know is not the one you are being posted on.
 - `assessment`: regression = a Firefox change made this crash happen or happen more; exposure =
   a change exposed an older defect; external = the cause is outside Firefox (an OS update, a
   driver, an antivirus, web content); environment = a collection or signature artefact, not a

@@ -42,6 +42,7 @@ has grounded nothing, and the filer publishes only the volume facts from it.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -163,12 +164,24 @@ class SpikeEvidence(BaseModel):
         return self
 
 
+# The prompt's fixed-form verdict line: `Result established; trigger suspected; population newly
+# observed cohort; culprit identified.` It belongs to the operator's table (`status`), and the
+# model has put it at the head of `summary` since the prompt was adopted -- comment 10 on bug
+# 2068262 opened its analysis with it, and nobody on the bug could read it. Lifted out here when
+# the model still writes it there, so the bug's first sentence is a sentence.
+_STATUS_LINE = re.compile(
+    r"^\s*Result\s+[\w-]+\s*;\s*trigger\s+[\w -]+?\s*;\s*population\s+[\w -]+?\s*;\s*"
+    r"culprit\s+[\w-]+\s*\.?\s*", re.IGNORECASE)
+
+
 class SpikeFindings(BaseModel):
     """What the investigator concluded. Lenient on purpose: one malformed optional field must
     not destroy the whole handoff -- the volume facts file the bug, and a summary is all the
     analysis strictly needs."""
 
     summary: str = ""
+    # The verdict line for the operator, never rendered in the bug (see `_STATUS_LINE`).
+    status: str = ""
     assessment: str = "unknown"
     product: str | None = None
     component: str | None = None
@@ -185,7 +198,22 @@ class SpikeFindings(BaseModel):
         s = str(v or "").strip().lower()
         return s if s in ASSESSMENTS else "unknown"
 
-    @field_validator("summary", "trigger_path", "component_reason", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def _status_line_out_of_the_summary(cls, data):
+        if not isinstance(data, dict):
+            return data
+        summary = str(data.get("summary") or "")
+        m = _STATUS_LINE.match(summary)
+        if m is None:
+            return data
+        data = dict(data)
+        data["summary"] = summary[m.end():].strip()
+        if not str(data.get("status") or "").strip():
+            data["status"] = m.group(0).strip()
+        return data
+
+    @field_validator("summary", "status", "trigger_path", "component_reason", mode="before")
     @classmethod
     def _text(cls, v):
         return str(v or "").strip()
@@ -233,7 +261,7 @@ def parse_findings(text: str | None) -> SpikeFindings | None:
         return SpikeFindings.model_validate(obj)
     except Exception:
         pass
-    keep = {k: obj.get(k) for k in ("summary", "assessment", "product", "component",
+    keep = {k: obj.get(k) for k in ("summary", "status", "assessment", "product", "component",
                                     "component_reason", "trigger_path")}
     try:
         return SpikeFindings.model_validate(keep)
