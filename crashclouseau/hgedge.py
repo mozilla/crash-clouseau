@@ -44,16 +44,26 @@ def _edge_base(channel: str) -> str:
     return base.replace("hg.mozilla.org", "hg-edge.mozilla.org")
 
 
-def _get(url, params=None, as_json=False):
+def _get(url, params=None, as_json=False, retries=None, timeout=None):
     """GET through the concurrency gate, retrying transient throttles (406/429/5xx) with
     backoff+jitter. Returns parsed json / text, or None on 404 / a hard error / exhausted
-    retries. ``net.get`` stamps our allowlisted UA."""
+    retries. ``net.get`` stamps our allowlisted UA.
+
+    ``retries`` / ``timeout`` default to the module constants (5 tries, 60 s), which are sized
+    for the agent's off-stack window reads: a run is ~20 minutes and one slow file is cheap
+    against it. A caller on a SHORT chain passes its own -- ``java._locate_methods`` runs on
+    the serial ingestion path shared with desktop (and on the web dyno for a trigger), where
+    the same 5 tries + 1+2+4+8 s backoff turn one 5xx blip into ~17 s per file."""
+    if retries is None:
+        retries = _MAX_RETRIES
+    if timeout is None:
+        timeout = _TIMEOUT
     backoff = 1.0
-    for attempt in range(_MAX_RETRIES):
+    for attempt in range(retries):
         resp = None
         with _SEM:
             try:
-                resp = net.get(url, params=params, timeout=_TIMEOUT)
+                resp = net.get(url, params=params, timeout=timeout)
             except Exception as exc:  # network blip -> retry
                 logger.debug("hgedge: get %s failed (attempt %d): %s", url, attempt, exc)
         if resp is not None:
@@ -69,20 +79,21 @@ def _get(url, params=None, as_json=False):
                 return None
         # No sleep after the final attempt (the loop is about to exit with no further
         # request) — that would waste the whole backoff during an hg-edge outage.
-        if attempt < _MAX_RETRIES - 1:
+        if attempt < retries - 1:
             time.sleep(backoff + random.random() * 0.5)
             backoff = min(backoff * 2, 20)
     logger.warning("hgedge: %s exhausted retries", url)
     return None
 
 
-def raw_file(path, rev, channel="nightly"):
+def raw_file(path, rev, channel="nightly", retries=None, timeout=None):
     """Full text of a source file AS OF ``rev`` (hg-edge ``raw-file/<rev>/<path>``), or
-    None. The path keeps its slashes; ``rev`` is a plain hg hash / ``tip``."""
+    None. The path keeps its slashes; ``rev`` is a plain hg hash / ``tip``. ``retries`` /
+    ``timeout`` as in ``_get`` (None = the module defaults)."""
     if not path or not rev:
         return None
     url = "{}/raw-file/{}/{}".format(_edge_base(channel), rev, path.lstrip("/"))
-    return _get(url, as_json=False)
+    return _get(url, as_json=False, retries=retries, timeout=timeout)
 
 
 def annotate(path, rev, channel="nightly"):

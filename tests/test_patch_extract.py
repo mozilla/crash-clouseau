@@ -122,6 +122,61 @@ _REAL_CHANGE = """diff --git a/r.cpp b/r.cpp
 """
 
 
+# A Kotlin hunk (Fenix / android-components; `.kt` is an interesting extension since plan 16).
+# hg's funcname heuristic emits the last column-0 line as the `@@` context, which in a .kt file
+# is the class header -- so the first hunk's context names the class and only the second, with
+# a `fun` in it, can name the method.
+_KOTLIN = """diff --git a/mobile/android/ac/Keystore.kt b/mobile/android/ac/Keystore.kt
+--- a/mobile/android/ac/Keystore.kt
++++ b/mobile/android/ac/Keystore.kt
+@@ -221,6 +221,8 @@ open class Keystore(
+     fun generateKey(): Boolean {
+         val key = wrapper.getKeyFor(label)
+-        if (key != null) {
++        val existing = key
++        if (existing != null) {
+             when (key) {
++                is SecretKey -> return false
+@@ -259,3 +261,4 @@     open fun encryptBytes(plain: ByteArray): ByteArray {
+         synchronized(this) {
++            override val cipherSpec = createEncryptCipher()
+             val cipher = createEncryptCipher()
+"""
+
+
+class TestKotlin(unittest.TestCase):
+    def test_lang_for(self):
+        self.assertEqual(pe.lang_for("Foo.kt"), "kotlin")
+        self.assertEqual(pe.lang_for("mobile/android/fenix/app/build.gradle.kts"), "kotlin")
+        self.assertEqual(pe.lang_for("dom/base/nsFoo.cpp"), "cpp")
+
+    def test_kotlin_keywords_are_not_identifiers(self):
+        files = pe.parse_hunks(_KOTLIN)
+        idents = pe.touched_identifiers(files)
+        for kw in ("fun", "val", "when", "override", "is", "return"):
+            self.assertNotIn(kw, idents, kw)
+        self.assertIn("existing", idents)
+        self.assertIn("SecretKey", idents)
+        self.assertIn("cipherSpec", idents)
+
+    def test_func_name_recovers_the_fun_from_a_kotlin_context(self):
+        self.assertEqual(pe._func_name("fun generateKey(): Boolean {"), "generateKey")
+        self.assertEqual(pe._func_name("    override fun getString(key: String) = impl"),
+                         "getString")
+        self.assertEqual(pe._func_name("private suspend fun <T> Foo.bar(x: T)"), "bar")
+        self.assertEqual(pe._func_name("internal fun Keystore.available()"), "available")
+        # a class header context still names the class (hg's heuristic; documented limitation)
+        self.assertEqual(pe._func_name("open class Keystore("), "Keystore")
+        # and C++ is untouched
+        self.assertEqual(pe._func_name("NS_IMETHODIMP HTMLEditor::NotifySelectionChanged("),
+                         "HTMLEditor::NotifySelectionChanged")
+
+    def test_enclosing_functions_of_a_kotlin_patch(self):
+        files = pe.parse_hunks(_KOTLIN)
+        names = pe.enclosing_functions(files)
+        self.assertEqual(list(names.values()), [["Keystore", "encryptBytes"]])
+
+
 class TestRealFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

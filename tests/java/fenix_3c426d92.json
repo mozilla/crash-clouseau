@@ -1,0 +1,330 @@
+{
+ "product": "Fenix",
+ "build": "20260910214118",
+ "release_channel": "nightly",
+ "signature": "java.security.ProviderException: at android.security.keystore2.AndroidKeyStoreKeyGeneratorSpi.engineGenerateKey(AndroidKeyStoreKeyGeneratorSpi.java)",
+ "java_stack_trace": "java.security.ProviderException\n\tat android.security.keystore2.AndroidKeyStoreKeyGeneratorSpi.engineGenerateKey(AndroidKeyStoreKeyGeneratorSpi.java:413)\n\tat javax.crypto.KeyGenerator.generateKey(KeyGenerator.java:612)\n\tat mozilla.components.lib.dataprotect.Keystore.generateKey(Keystore.kt:269)\n\tat mozilla.components.lib.dataprotect.Keystore.<init>(Keystore.kt:51)\n\tat mozilla.components.lib.dataprotect.SecurePreferencesImpl23$$ExternalSyntheticLambda0.invoke(R8$$SyntheticClass:14)\n\tat kotlin.SynchronizedLazyImpl.getValue(LazyJVM.kt:21)\n\tat mozilla.components.lib.dataprotect.SecurePreferencesImpl23.getString(SecureAbove22Preferences.kt:5)\n\tat mozilla.components.service.fxa.SecureAbove22AccountStorage.read(AccountStorage.kt:10)\n\tat mozilla.components.compose.base.button.IconButtonKt$$ExternalSyntheticLambda3.invoke(R8$$SyntheticClass:43)\n\tat kotlin.SynchronizedLazyImpl.getValue(LazyJVM.kt:21)\n\tat mozilla.components.service.fxa.manager.FxaAccountManager$$ExternalSyntheticLambda9.invoke(R8$$SyntheticClass:5)\n\tat kotlin.SynchronizedLazyImpl.getValue(LazyJVM.kt:21)\n\tat mozilla.components.service.fxa.manager.FxaAccountManager.getAccount(FxaAccountManager.kt:3)\n\tat mozilla.components.service.fxa.manager.FxaAccountManager.processQueue(FxaAccountManager.kt:365)\n\tat mozilla.components.service.fxa.manager.FxaAccountManager$start$2.invokeSuspend(FxaAccountManager.kt:30)\n\tat kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:8)\n\tat kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:120)\n\tat java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1137)\n\tat java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:637)\n\tat java.lang.Thread.run(Thread.java:1012)",
+ "java_exception": {
+  "exception": {
+   "values": [
+    {
+     "stacktrace": {
+      "frames": [
+       {
+        "module": "android.security.KeyStore2",
+        "function": "getKeyStoreException",
+        "in_app": true,
+        "lineno": 336,
+        "filename": "KeyStore2.java"
+       },
+       {
+        "module": "android.security.KeyStoreSecurityLevel",
+        "function": "handleExceptions",
+        "in_app": true,
+        "lineno": 57,
+        "filename": "KeyStoreSecurityLevel.java"
+       },
+       {
+        "module": "android.security.KeyStoreSecurityLevel",
+        "function": "generateKey",
+        "in_app": true,
+        "lineno": 145,
+        "filename": "KeyStoreSecurityLevel.java"
+       },
+       {
+        "module": "android.security.keystore2.AndroidKeyStoreKeyGeneratorSpi",
+        "function": "engineGenerateKey",
+        "in_app": true,
+        "lineno": 400,
+        "filename": "AndroidKeyStoreKeyGeneratorSpi.java"
+       },
+       {
+        "module": "javax.crypto.KeyGenerator",
+        "function": "generateKey",
+        "in_app": true,
+        "lineno": 612,
+        "filename": "KeyGenerator.java"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.Keystore",
+        "function": "generateKey",
+        "in_app": true,
+        "lineno": 269,
+        "filename": "Keystore.kt"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.Keystore",
+        "function": "<init>",
+        "in_app": true,
+        "lineno": 51,
+        "filename": "Keystore.kt"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.SecurePreferencesImpl23$$ExternalSyntheticLambda0",
+        "function": "invoke",
+        "in_app": true,
+        "lineno": 14,
+        "filename": "R8$$SyntheticClass"
+       },
+       {
+        "module": "kotlin.SynchronizedLazyImpl",
+        "function": "getValue",
+        "in_app": true,
+        "lineno": 21,
+        "filename": "LazyJVM.kt"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.SecurePreferencesImpl23",
+        "function": "getString",
+        "in_app": true,
+        "lineno": 5,
+        "filename": "SecureAbove22Preferences.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.SecureAbove22AccountStorage",
+        "function": "read",
+        "in_app": true,
+        "lineno": 10,
+        "filename": "AccountStorage.kt"
+       },
+       {
+        "module": "mozilla.components.compose.base.button.IconButtonKt$$ExternalSyntheticLambda3",
+        "function": "invoke",
+        "in_app": true,
+        "lineno": 43,
+        "filename": "R8$$SyntheticClass"
+       },
+       {
+        "module": "kotlin.SynchronizedLazyImpl",
+        "function": "getValue",
+        "in_app": true,
+        "lineno": 21,
+        "filename": "LazyJVM.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager$$ExternalSyntheticLambda9",
+        "function": "invoke",
+        "in_app": true,
+        "lineno": 5,
+        "filename": "R8$$SyntheticClass"
+       },
+       {
+        "module": "kotlin.SynchronizedLazyImpl",
+        "function": "getValue",
+        "in_app": true,
+        "lineno": 21,
+        "filename": "LazyJVM.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager",
+        "function": "getAccount",
+        "in_app": true,
+        "lineno": 3,
+        "filename": "FxaAccountManager.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager",
+        "function": "processQueue",
+        "in_app": true,
+        "lineno": 365,
+        "filename": "FxaAccountManager.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager$start$2",
+        "function": "invokeSuspend",
+        "in_app": true,
+        "lineno": 30,
+        "filename": "FxaAccountManager.kt"
+       },
+       {
+        "module": "kotlin.coroutines.jvm.internal.BaseContinuationImpl",
+        "function": "resumeWith",
+        "in_app": true,
+        "lineno": 8,
+        "filename": "ContinuationImpl.kt"
+       },
+       {
+        "module": "kotlinx.coroutines.DispatchedTask",
+        "function": "run",
+        "in_app": true,
+        "lineno": 120,
+        "filename": "DispatchedTask.kt"
+       },
+       {
+        "module": "java.util.concurrent.ThreadPoolExecutor",
+        "function": "runWorker",
+        "in_app": true,
+        "lineno": 1137,
+        "filename": "ThreadPoolExecutor.java"
+       },
+       {
+        "module": "java.util.concurrent.ThreadPoolExecutor$Worker",
+        "function": "run",
+        "in_app": true,
+        "lineno": 637,
+        "filename": "ThreadPoolExecutor.java"
+       },
+       {
+        "module": "java.lang.Thread",
+        "function": "run",
+        "in_app": true,
+        "lineno": 1012,
+        "filename": "Thread.java"
+       }
+      ],
+      "type": "KeyStoreException",
+      "module": "android.security"
+     }
+    },
+    {
+     "stacktrace": {
+      "frames": [
+       {
+        "module": "android.security.keystore2.AndroidKeyStoreKeyGeneratorSpi",
+        "function": "engineGenerateKey",
+        "in_app": true,
+        "lineno": 413,
+        "filename": "AndroidKeyStoreKeyGeneratorSpi.java"
+       },
+       {
+        "module": "javax.crypto.KeyGenerator",
+        "function": "generateKey",
+        "in_app": true,
+        "lineno": 612,
+        "filename": "KeyGenerator.java"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.Keystore",
+        "function": "generateKey",
+        "in_app": true,
+        "lineno": 269,
+        "filename": "Keystore.kt"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.Keystore",
+        "function": "<init>",
+        "in_app": true,
+        "lineno": 51,
+        "filename": "Keystore.kt"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.SecurePreferencesImpl23$$ExternalSyntheticLambda0",
+        "function": "invoke",
+        "in_app": true,
+        "lineno": 14,
+        "filename": "R8$$SyntheticClass"
+       },
+       {
+        "module": "kotlin.SynchronizedLazyImpl",
+        "function": "getValue",
+        "in_app": true,
+        "lineno": 21,
+        "filename": "LazyJVM.kt"
+       },
+       {
+        "module": "mozilla.components.lib.dataprotect.SecurePreferencesImpl23",
+        "function": "getString",
+        "in_app": true,
+        "lineno": 5,
+        "filename": "SecureAbove22Preferences.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.SecureAbove22AccountStorage",
+        "function": "read",
+        "in_app": true,
+        "lineno": 10,
+        "filename": "AccountStorage.kt"
+       },
+       {
+        "module": "mozilla.components.compose.base.button.IconButtonKt$$ExternalSyntheticLambda3",
+        "function": "invoke",
+        "in_app": true,
+        "lineno": 43,
+        "filename": "R8$$SyntheticClass"
+       },
+       {
+        "module": "kotlin.SynchronizedLazyImpl",
+        "function": "getValue",
+        "in_app": true,
+        "lineno": 21,
+        "filename": "LazyJVM.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager$$ExternalSyntheticLambda9",
+        "function": "invoke",
+        "in_app": true,
+        "lineno": 5,
+        "filename": "R8$$SyntheticClass"
+       },
+       {
+        "module": "kotlin.SynchronizedLazyImpl",
+        "function": "getValue",
+        "in_app": true,
+        "lineno": 21,
+        "filename": "LazyJVM.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager",
+        "function": "getAccount",
+        "in_app": true,
+        "lineno": 3,
+        "filename": "FxaAccountManager.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager",
+        "function": "processQueue",
+        "in_app": true,
+        "lineno": 365,
+        "filename": "FxaAccountManager.kt"
+       },
+       {
+        "module": "mozilla.components.service.fxa.manager.FxaAccountManager$start$2",
+        "function": "invokeSuspend",
+        "in_app": true,
+        "lineno": 30,
+        "filename": "FxaAccountManager.kt"
+       },
+       {
+        "module": "kotlin.coroutines.jvm.internal.BaseContinuationImpl",
+        "function": "resumeWith",
+        "in_app": true,
+        "lineno": 8,
+        "filename": "ContinuationImpl.kt"
+       },
+       {
+        "module": "kotlinx.coroutines.DispatchedTask",
+        "function": "run",
+        "in_app": true,
+        "lineno": 120,
+        "filename": "DispatchedTask.kt"
+       },
+       {
+        "module": "java.util.concurrent.ThreadPoolExecutor",
+        "function": "runWorker",
+        "in_app": true,
+        "lineno": 1137,
+        "filename": "ThreadPoolExecutor.java"
+       },
+       {
+        "module": "java.util.concurrent.ThreadPoolExecutor$Worker",
+        "function": "run",
+        "in_app": true,
+        "lineno": 637,
+        "filename": "ThreadPoolExecutor.java"
+       },
+       {
+        "module": "java.lang.Thread",
+        "function": "run",
+        "in_app": true,
+        "lineno": 1012,
+        "filename": "Thread.java"
+       }
+      ],
+      "type": "ProviderException",
+      "module": "java.security"
+     }
+    }
+   ]
+  }
+ }
+}

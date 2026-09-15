@@ -223,6 +223,9 @@ def parse_hunks(raw_diff_text):
 # Cheap derived signals (no LLM / searchfox)
 # --------------------------------------------------------------------------- #
 _FUNC_NAME_RE = re.compile(r"([A-Za-z_][\w:~]*)\s*\(")
+# Kotlin: `fun name(`, `fun <T> name(`, `fun Receiver.name(` -- the generic `ident(` rule below
+# would return `fun` (or the receiver) for these.
+_KT_FUN_RE = re.compile(r"\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?(\w+)\s*\(")
 
 
 def _func_name(ctx):
@@ -230,9 +233,15 @@ def _func_name(ctx):
     'NS_IMETHODIMP HTMLEditor::NotifySelectionChanged(...)' -> 'HTMLEditor::NotifySelectionChanged'.
     hg truncates the context to ~40 chars, so the paren is often cut off; fall back to
     the last qualified/long identifier (the truncated name). Empty for non-code
-    contexts (e.g. a TOML 'skip-if = [' table header)."""
+    contexts (e.g. a TOML 'skip-if = [' table header). A Kotlin ``fun`` in the context is
+    the one case where a member function is recoverable at all: hg's funcname heuristic
+    emits the last column-0 line, which in a .kt file is usually ``class Foo(`` -- the
+    generic rule below then names the class, not the method."""
     if not ctx:
         return ""
+    kt = _KT_FUN_RE.search(ctx)
+    if kt:
+        return kt.group(1)
     paren = _FUNC_NAME_RE.findall(ctx)
     if paren:
         return paren[0]
@@ -261,7 +270,7 @@ def enclosing_functions(files):
 _LANG_BY_EXT = {
     "cpp": "cpp", "cc": "cpp", "cxx": "cpp", "h": "cpp", "hpp": "cpp", "c": "cpp",
     "mm": "cpp", "m": "cpp", "rs": "rust", "js": "js", "jsm": "js", "mjs": "js",
-    "jsx": "js", "ts": "js", "tsx": "js",
+    "jsx": "js", "ts": "js", "tsx": "js", "kt": "kotlin", "kts": "kotlin",
 }
 _KEYWORDS = {
     "cpp": {"if", "else", "for", "while", "do", "switch", "case", "break", "continue",
@@ -280,6 +289,18 @@ _KEYWORDS = {
            "this", "super", "import", "export", "default", "try", "catch", "finally",
            "throw", "typeof", "instanceof", "true", "false", "null", "undefined",
            "void", "async", "await", "yield", "of", "in"},
+    # Fenix / android-components (`.kt` is an interesting extension since plan 16). Without
+    # this a Kotlin hunk fell through to the cpp set and `fun`, `val`, `when`, `override`,
+    # `suspend` came out as "identifiers" the call-graph pre-filter then looked for.
+    "kotlin": {"fun", "val", "var", "when", "object", "data", "sealed", "override",
+               "suspend", "companion", "init", "lateinit", "by", "is", "in", "as",
+               "typealias", "reified", "crossinline", "noinline", "vararg", "operator",
+               "infix", "tailrec", "inline", "internal", "open", "abstract", "enum",
+               "annotation", "const", "expect", "actual", "external", "value", "if",
+               "else", "for", "while", "do", "return", "class", "interface", "import",
+               "package", "this", "super", "null", "true", "false", "try", "catch",
+               "finally", "throw", "break", "continue", "private", "public", "protected",
+               "final", "where", "out", "get", "set", "constructor", "field", "it"},
 }
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 

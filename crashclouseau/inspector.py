@@ -61,12 +61,15 @@ def get_crash_data(uuid):
     return data[uuid]
 
 
-def get_crash(uuid, buildid, channel, mindate, chgset, filelog, interesting_chgsets):
-    """Get the a crash with its uuid"""
+def get_crash(
+    uuid, buildid, channel, mindate, chgset, filelog, interesting_chgsets, source_reads=True
+):
+    """Get the a crash with its uuid. ``source_reads`` as in ``get_crash_info``."""
     logger.info("Get {} for analyzis".format(uuid))
     data = get_crash_data(uuid)
     return get_crash_info(
-        data, uuid, buildid, channel, mindate, chgset, filelog, interesting_chgsets
+        data, uuid, buildid, channel, mindate, chgset, filelog, interesting_chgsets,
+        source_reads=source_reads,
     )
 
 
@@ -86,19 +89,46 @@ def get_crash_by_uuid(uuid, mindate, filelog):
 
 
 def get_crash_info(
-    data, uuid, buildid, channel, mindate, chgset, filelog, interesting_chgsets
+    data, uuid, buildid, channel, mindate, chgset, filelog, interesting_chgsets,
+    source_reads=True,
 ):
-    """Inspect the crash stack (Java's one too if present)"""
+    """Inspect the crash stack (Java's one too if present).
+
+    ``source_reads`` False skips the hg-edge reads that locate a JVM frame's method in the
+    source at the build revision (``java.inspect_java_stacktrace(locate_methods=False)``): the
+    method rung of ``Changeset._fuzzy_score`` is a refinement, not a prerequisite, and up to
+    ``java.MAX_SOURCE_SECONDS`` of serial HTTP is more than a web request (the trigger API on
+    the single-worker web dyno, killed by the router at 30 s) can spend on it."""
     res = {}
     java_st = data.get("java_stack_trace")
-    jframes, files = java.inspect_java_stacktrace(java_st, chgset)
+    jframes, files = java.inspect_java_stacktrace(
+        java_st, chgset, java_exception=data.get("java_exception"), channel=channel,
+        locate_methods=source_reads,
+    )
 
-    if jframes:
+    if jframes and any(f["internal"] for f in jframes):
+        # A JVM stack with at least one of OUR frames (`config.is_java_package`). Stored under
+        # the same rule as the native branch below: on-stack (a candidate scored onto a frame)
+        # OR off-stack when that path is enabled -- the old `amend() or nothing` dropped every
+        # Fenix Java crash whose regressor touched no frame file, with no agent run and no
+        # trace. Desktop never carries `java_stack_trace` (0 Firefox reports since 2026-08-15,
+        # SuperSearch), so this branch is Fenix's alone.
         files = filelog(files, mindate, buildid, channel)
-        if amend(jframes, files, interesting_chgsets):
-            res["java"] = {"frames": jframes, "hash": get_simplified_hash(jframes)}
+        interesting = amend(jframes, files, interesting_chgsets)
+        if interesting or config.get_agent_offstack()["enabled"]:
+            res["java"] = {
+                "frames": jframes,
+                "hash": get_simplified_hash(jframes),
+                "offstack": not interesting,
+            }
     else:
+        # No JVM frame of ours: a platform-only Java stack (or none) -- read the native
+        # stack when there is one, otherwise there is nothing to score and `put_report`
+        # marks the report analysed.
         if "json_dump" not in data:
+            if jframes:
+                logger.info("%s: %d Java frames, none in our packages, no json_dump: "
+                            "nothing to score", uuid, len(jframes))
             return None
         frames, files = inspect_stacktrace(data, chgset)
         if frames:
@@ -122,13 +152,21 @@ def get_crash_info(
 
 
 def get_simplified_hash(frames):
-    """Get a hash from the frames we have in the crash stack"""
+    """Get a hash from the frames we have in the crash stack.
+
+    A frame whose line cannot be trusted (a JVM frame under `java.trust_line_numbers`
+    false: R8 renumbers per build) is hashed by what IS stable -- its file, class and method
+    -- instead of the line; every other frame hashes exactly as before."""
     res = ""
     for frame in frames:
         if frame["line"] != -1:
             res += str(frame["stackpos"]) + "\n"
             res += frame["filename"] + "\n"
-            res += str(frame["line"]) + "\n"
+            if frame.get("line_trusted", True) is False:
+                res += frame["module"] + "\n"
+                res += frame["function"] + "\n"
+            else:
+                res += str(frame["line"]) + "\n"
     if res != "":
         return utils.hash(res)
     return ""
