@@ -226,10 +226,10 @@ def dropped_day_records(numbers, dead_days):
     return records
 
 
-def ignored_day_records(numbers):
-    """``Selection``-shaped records, outcome ``ignored``, for every build-day an ignored
-    signature (``config.ignored_signatures``) was reported on. Same key set as
-    ``dropped_day_records``, and the same "never placed in a series" markers."""
+def _day_records(numbers, outcome):
+    """``Selection``-shaped records carrying *outcome* for every build-day a signature removed
+    BEFORE the spike test was reported on. Same key set as ``dropped_day_records``, and the same
+    "never placed in a series" markers."""
     return [
         {
             "day": day,
@@ -241,11 +241,21 @@ def ignored_day_records(numbers):
             "bids": dict(info["bids"]),
             "installs": dict(info["installs"]),
             "picked": None,
-            "outcome": utils.IGNORED,
+            "outcome": outcome,
         }
         for day, info in sorted(numbers.items())
         if info["count"]
     ]
+
+
+def ignored_day_records(numbers):
+    """Outcome ``ignored``: a signature ``config.ignored_signatures`` names."""
+    return _day_records(numbers, utils.IGNORED)
+
+
+def no_stack_day_records(numbers):
+    """Outcome ``no_stack``: an ``EMPTY: ...`` signature (``utils.signature_class``)."""
+    return _day_records(numbers, utils.NO_STACK)
 
 
 def get_new_signatures(product, channel, date):
@@ -261,7 +271,10 @@ def get_new_signatures(product, channel, date):
     spike today", which is what a human means by the word.
 
     Returns ``(data, selection)``: the signatures to analyse, and one record per near-miss
-    build-day for ``models.Selection``, so a declined signature leaves a trace."""
+    build-day for ``models.Selection``, so a declined signature leaves a trace. ``data`` holds
+    only pairs with at least one report to ingest: an ``EMPTY: ...`` signature is declined
+    ``no_stack`` before the test, a kept pair Socorro then holds no proto cluster or Java report
+    for is dropped and its record rewritten ``no_protos`` (``declare_no_protos``)."""
 
     limit = config.get_limit_facets()
     bids, search_date = get_builds(product, channel, date)
@@ -334,6 +347,17 @@ def get_new_signatures(product, channel, date):
         selection.extend(dict(rec, signature=sgn) for rec in ignored_day_records(data.pop(sgn)))
         logger.info("Ignoring {} on {}-{}: a signature config.ignored_signatures names".format(
             sgn, product, channel))
+    # `EMPTY: no frame data available` leaves the series here too, ON EVERY PRODUCT: no native
+    # stack and no Java stack means nothing could ever be scored, so the spike test could only
+    # hand it to a report fetch that comes back empty. Before this it was logged `selected`
+    # (ever_selected, offered to the spike sweep) and `put_crashes` wrote a Stats row with
+    # installs=0 and no uuid -- a Fenix matter at scale (20-40% of its nightly reports, five
+    # signatures, plans/16 §5) and desktop's rare EmptyMinidump spikes did exactly the same.
+    empty = {sgn for sgn in data if utils.signature_class(sgn) == "empty"}
+    for sgn in sorted(empty):
+        selection.extend(dict(rec, signature=sgn) for rec in no_stack_day_records(data.pop(sgn)))
+        logger.info("Declining {} on {}-{}: no stack to score ({})".format(
+            sgn, product, channel, utils.NO_STACK))
 
     shift = config.get_ndays() if channel == "nightly" else 1
     threshold = config.get_threshold("installs", product, channel)
@@ -449,13 +473,24 @@ def get_new_signatures(product, channel, date):
             declined[sgn] = numbers
 
     rising_data = _rising_picks(
-        product, channel, date, declined, set(big_data) | set(small_data) | ignored, threshold,
-        selection,
+        product, channel, date, declined,
+        set(big_data) | set(small_data) | ignored | empty, threshold, selection,
     )
     del data
     del declined
 
     logger.info("Get crash numbers for {}-{}: finished.".format(product, channel))
+    # What the spike test and the rate path KEPT, before Socorro is asked for reports. A pair
+    # that comes back without one cluster is removed by its fetcher (`drop_unresolved`) and its
+    # record is rewritten below.
+    kept = set(big_data) | set(small_data) | set(rising_data)
+    # A Java signature has no proto_signature facet -- the two columns are mutually exclusive
+    # (Fenix nightly, 14 d: 17,143 reports with java_stack_trace, 7,764 with proto_signature,
+    # 0 with both; plans/16 §5) -- so it is read from the java_stack_trace column instead,
+    # under the cap its pick kind gives a native signature.
+    java_data = _split_java(big_data)
+    java_data.update(_split_java(small_data))
+    java_rising = _split_java(rising_data)
     if big_data:
         get_proto_big(product, big_data, search_date, channel)
 
@@ -468,15 +503,79 @@ def get_new_signatures(product, channel, date):
             proto_cap=config.get_spike("rising_protos", product, channel),
         )
 
-    small_data.update(big_data)
-    small_data.update(rising_data)
-    data = small_data
+    if java_data:
+        get_uuids_java(
+            product, java_data, search_date, channel,
+            config.get_threshold("protos", product, channel),
+        )
 
-    if product == "Fennec":
-        # Java crashes don't have any proto-signature...
-        get_uuids_fennec(data, search_date, channel)
+    if java_rising:
+        get_uuids_java(
+            product, java_rising, search_date, channel,
+            config.get_spike("rising_protos", product, channel),
+        )
+
+    data = {}
+    for part in (small_data, big_data, rising_data, java_data, java_rising):
+        data.update(part)
+    declare_no_protos(kept - set(data), selection, product, channel)
 
     return data, selection
+
+
+def _split_java(signatures):
+    """Pop the Java-class signatures (``utils.signature_class``) out of *signatures*, in place,
+    into a dict of their own. The native fetchers would spend a query per chunk on them and
+    return before their signature loop (``get_proto_small``'s handler exits on an empty
+    proto_signature facet), leaving ``protos=[]`` and ``installs=0``."""
+    return {
+        sgn: signatures.pop(sgn)
+        for sgn in list(signatures)
+        if utils.signature_class(sgn) == "java"
+    }
+
+
+def drop_unresolved(signatures, product, channel, what):
+    """Remove from *signatures* (in place) every signature the fetch just run yielded no
+    cluster for on ANY of its builds, and return the set removed. Each fetcher calls this on
+    the dict it handled, because the fetcher is the one that knows it asked.
+
+    What is removed never reaches ``update.put_crashes``, which used to write a Stats row with
+    installs=0 (``Stats.get_for`` reads 0 as a known count -- "0 installations" on the crash
+    page) and no uuid for it. 37.8% of Fenix's non-Java nightly reports carry no proto_signature
+    (the Android stackwalker failed on them, plans/16 §5), so on Fenix this is the common case,
+    not the corner."""
+    gone = {sgn for sgn, info in signatures.items() if not any(info["protos"].values())}
+    for sgn in sorted(gone):
+        del signatures[sgn]
+        logger.info("No {} for {} on {}-{}: nothing to ingest".format(
+            what, sgn, product, channel))
+    return gone
+
+
+def declare_no_protos(signatures, selection, product, channel):
+    """Rewrite the ``selected`` / ``rising_rate`` records of *signatures* -- pairs the selector
+    kept and the report fetch then removed (``drop_unresolved``) -- to ``no_protos``, ``picked``
+    cleared. Returns the number of records rewritten.
+
+    ``selected`` sets ``ever_selected`` (``models.SELECTED_OUTCOMES``), which claimed an
+    analysis that never happened and made ``Selection.escalation_candidates`` offer the pair to
+    the spike sweep -- one ``build_history`` SuperSearch per pair per sweep before
+    ``representative_uuid`` found no ingested report and parked it. ``no_protos`` is outside
+    that set, so the sweep never sees the pair and the rate path does not count it as taken
+    (``_rising_picks`` reads the ``no_protos`` rows instead, so it does not re-pick it every
+    tick either)."""
+    if not signatures:
+        return 0
+    rewritten = 0
+    for rec in selection:
+        if rec["signature"] in signatures and rec["outcome"] in models.SELECTED_OUTCOMES:
+            rec["outcome"] = utils.NO_PROTOS
+            rec["picked"] = None
+            rewritten += 1
+    logger.info("{} kept signature(s) on {}-{} yielded no report to ingest ({}): {}".format(
+        len(signatures), product, channel, utils.NO_PROTOS, ", ".join(sorted(signatures))))
+    return rewritten
 
 
 def _rising_picks(product, channel, date, declined, already, threshold, selection):
@@ -509,6 +608,7 @@ def _rising_picks(product, channel, date, declined, already, threshold, selectio
     covered = models.Selection.covered_recently(
         product, channel, [m for _, members, _ in candidates for m in members]
     )
+    covered |= _no_protos_recently(product, channel)
     picks = {}
     for family, members, facts in candidates:
         if room <= 0:
@@ -550,6 +650,26 @@ def _rising_picks(product, channel, date, declined, already, threshold, selectio
             )
         )
     return picks
+
+
+def _no_protos_recently(product, channel, days=7):
+    """The signatures whose pick came back with nothing to ingest (``no_protos``) on a build-day
+    of the last ``days``. ``covered_recently`` reads ``ever_selected``, which ``no_protos`` does
+    not set, and a rate pick that is rewritten does not count as ``taken_today`` either -- so
+    without this a rising signature Socorro holds no report for would be picked again on every
+    20-minute tick for the week its rise lasts, ahead of every other candidate. Fails toward
+    "not covered", i.e. the pre-existing behaviour."""
+    try:
+        rows = models.Selection.recent(
+            outcome=utils.NO_PROTOS, days=days, product=product, channel=channel)
+    except Exception:
+        logger.error("Cannot read the no_protos rows for %s-%s", product, channel, exc_info=True)
+        # Like `covered_recently` / `taken_today`: on Postgres a failed statement leaves the
+        # transaction aborted, and the next one on this session is the tick's selection-log
+        # upsert, which would then fail whole (`InFailedSqlTransaction`).
+        models.db.session.rollback()
+        return set()
+    return {row["signature"] for row in rows}
 
 
 def get_proto_small(product, signatures, search_date, channel, proto_cap=None):
@@ -618,6 +738,7 @@ def get_proto_small(product, signatures, search_date, channel, proto_cap=None):
 
         socorro.SuperSearch(queries=queries).wait()
 
+    drop_unresolved(signatures, product, channel, "proto-signature")
     logger.info(
         "Get proto-signatures (small) for {}-{}: finished.".format(product, channel)
     )
@@ -675,66 +796,145 @@ def get_proto_big(product, signatures, search_date, channel):
 
         socorro.SuperSearch(queries=queries).wait()
 
+    drop_unresolved(signatures, product, channel, "proto-signature")
     logger.info(
         "Get proto-signatures (big) for {}-{}: finished.".format(product, channel)
     )
 
 
-def get_uuids_fennec(signatures, search_date, channel):
-    """Get the uuids for Fennec java crashes"""
-    logger.info("Get uuids for Fennec-{}: started.".format(channel))
+# One frame of a Socorro ``java_stack_trace``, after ``strip()``:
+# ``at pkg.Class.method(File.kt:123)``, ``at pkg.Class.method(Native Method)``,
+# ``at pkg.Class$$ExternalSyntheticLambda4.invoke(R8$$SyntheticClass:5)``. Group 1 is the
+# dotted ``pkg.Class.method``, group 2 the file; the line, when present, is matched and DROPPED.
+_JAVA_FRAME = re.compile(r"^at ([^\(]+)\(([^:\)]+)(?::\d+)?\)$")
+# How many of OUR frames make a shape, and how many of anyone's when none is ours.
+JAVA_PROTO_FRAMES = 6
+JAVA_PROTO_FALLBACK_FRAMES = 3
 
-    def handler(json, data):
-        if json["errors"] or not json["facets"]["signature"]:
+
+def java_proto(stack_trace):
+    """A LINE-FREE pseudo proto-signature for a Java report: ``java | pkg.Class.method(File.kt)
+    | ...`` over the first ``JAVA_PROTO_FRAMES`` frames in our packages
+    (``config.is_java_package``), else the first ``JAVA_PROTO_FALLBACK_FRAMES`` frames of any
+    package; ``""`` when no frame parses.
+
+    Line numbers are left out because R8 remaps them (``java.trust_line_numbers``): two reports
+    of one exception site differ only in their remapped lines, and a shape carrying them would
+    split one cluster per line. The frame set is capped for the same reason the native proto
+    is: deeper frames are the framework's, not the site's. Measured 2026-09-15 on Fenix nightly:
+    20 hits of ``java.lang.OutOfMemoryError: at java.util.Arrays.copyOf`` = 1 shape; 20 hits of
+    the ``IllegalBlockSizeException`` at ``AndroidKeyStoreCipherSpiBase.engineDoFinal`` = 2 raw
+    traces (one had more coroutine frames below ours) = 1 shape.
+
+    ``utils.hash(proto)`` is what ``UUID.add`` dedups on per build and what
+    ``proto_already_analyzed`` closes per channel, so identical shapes on two builds share one
+    cluster and two exception sites of one signature do not. The dead Fennec path used
+    ``proto=""`` and hashed every Java report of a signature into ONE cluster forever."""
+    ours, anyone = [], []
+    for line in (stack_trace or "").splitlines():
+        m = _JAVA_FRAME.match(line.strip())
+        if not m:
+            continue
+        frame = "{}({})".format(m.group(1), m.group(2))
+        if len(anyone) < JAVA_PROTO_FALLBACK_FRAMES:
+            anyone.append(frame)
+        if config.is_java_package(m.group(1)):
+            ours.append(frame)
+            if len(ours) == JAVA_PROTO_FRAMES:
+                break
+    frames = ours or anyone
+    if not frames:
+        return ""
+    return "java | " + " | ".join(frames)
+
+
+def get_uuids_java(product, signatures, search_date, channel, cap):
+    """The uuids of the Java-class signatures in *signatures*: ONE SuperSearch per (signature,
+    build) reading the ``uuid`` and ``java_stack_trace`` columns, clustered client-side by
+    ``java_proto`` into at most *cap* shapes per pair (loudest first), each entered as
+    ``{"proto", "count", "uuid"}`` exactly like a native proto-signature cluster. ``installs``
+    comes from a ``_cardinality.install_time`` facet on the same query, 0 coerced to 1 the way
+    the native fetchers do.
+
+    A column read, not a facet, because Socorro has no ``java_stack_trace`` aggregation and a
+    ``uuid`` facet gives one arbitrary report per signature. The sample is
+    ``max(4 * cap, 20)`` hits (a 20-hit signature collapsed to 1 shape live), so ``count`` is a
+    within-sample figure that nothing downstream reads -- ``UUID.add`` stores the uuid under
+    ``hash(proto)``. *cap* is the caller's: ``thresholds.protos`` for a spike pick,
+    ``spike.rising_protos`` for a rate pick, mirroring the native path. A report whose trace
+    yields no frame is skipped; a pair left without a shape is removed (``drop_unresolved``)."""
+    logger.info("Get uuids (java) for {}-{}: started.".format(product, channel))
+
+    def handler(bid, sgn, cap, json, data):
+        if json.get("errors"):
+            logger.warning("SuperSearch errors on the java uuids of {} / {}: {}".format(
+                sgn, utils.get_buildid(bid), json["errors"]))
             return
-        bid = json["facets"]["build_id"][0]["term"]
-        bid = utils.get_build_date(bid)
-        for facets in json["facets"]["signature"]:
-            sgn = facets["term"]
-            count = facets["count"]
-            facets = facets["facets"]
-            uuid = facets["uuid"][0]["term"]
-            protos = data[sgn]["protos"][bid]
-            if not protos:
-                protos.append({"proto": "", "count": count, "uuid": uuid})
+        shapes = {}
+        for hit in json["hits"]:
+            proto = java_proto(hit.get("java_stack_trace"))
+            if not proto:
+                continue
+            if proto in shapes:
+                shapes[proto][0] += 1
+            else:
+                shapes[proto] = [1, hit["uuid"]]
+        protos = data[sgn]["protos"][bid]
+        ranked = sorted(shapes.items(), key=lambda kv: -kv[1][0])
+        for proto, (count, uuid) in ranked[:cap]:
+            protos.append({"proto": proto, "count": count, "uuid": uuid})
+        installs = json["facets"]["cardinality_install_time"]["value"]
+        data[sgn]["installs"][bid] = 1 if installs == 0 else installs
 
     base_params = {
-        "product": "Fennec",
+        "product": product,
         "release_channel": utils.get_search_channel(channel),
         "date": search_date,
         "build_id": "",
         "signature": "",
-        "_aggs.signature": "uuid",
-        "_results_number": 0,
-        "_facets": "build_id",
-        "_facets_size": 100,
+        "_columns": ["uuid", "java_stack_trace"],
+        "_results_number": max(4 * cap, 20),
+        "_facets": "_cardinality.install_time",
     }
 
-    queries = []
     sgns_by_bids = utils.get_sgns_by_bids(signatures)
-
     for bid, all_signatures in sgns_by_bids.items():
-        params = copy.deepcopy(base_params)
-        params["build_id"] = utils.get_buildid(bid)
-
-        for sgns in Connection.chunks(all_signatures, 10):
-            params = copy.deepcopy(params)
-            params["signature"] = ["=" + s for s in sgns]
+        queries = []
+        for sgn in all_signatures:
+            params = copy.deepcopy(base_params)
+            params["build_id"] = utils.get_buildid(bid)
+            params["signature"] = "=" + sgn
             queries.append(
                 Query(
                     socorro.SuperSearch.URL,
                     params=params,
-                    handler=handler,
+                    handler=functools.partial(handler, bid, sgn, cap),
                     handlerdata=signatures,
                 )
             )
-    socorro.SuperSearch(queries=queries).wait()
 
-    logger.info("Get uuids for Fennec-{}: finished.".format(channel))
+        socorro.SuperSearch(queries=queries).wait()
+
+    drop_unresolved(signatures, product, channel, "Java report")
+    logger.info("Get uuids (java) for {}-{}: finished.".format(product, channel))
+
+
+# The source URI Socorro's symbolication stamps on a frame since the hg->git move:
+# ``git:github.com/mozilla-firefox/firefox:<path>:<40-hex git sha>`` (``inspector.GIT_PAT``;
+# no slash after the repository). Live 2026-09-15: 240 reports voted on Firefox nightly
+# 20260912093409, 33 on Fenix nightly 20260912211859, one sha each.
+_GIT_TOPMOST_FILENAMES = '@"git:github.com/mozilla-firefox/firefox:".*:[0-9a-f]+'
 
 
 def get_changeset(buildid, channel, product):
-    """Trick to get changeset for a particular buildid/channel/product"""
+    """The hg revision of a build by VOTING on the ``topmost_filenames`` of its reports -- the
+    last resort behind the ``builds`` table and the build source (``tools.get_changeset``).
+
+    Frames carry the GIT sha of the source they were built from, so the vote is over git shas
+    and the winner goes through ``inspector.git2hg`` (Lando) before ``utils.short_rev``; a sha
+    Lando does not map (or a build with no such frame) answers ``None``. The hg-shaped filter
+    this used to send matched nothing built after 2025-11-10, so this returned ``None`` for
+    every build for ten months while its callers fell through it in silence."""
     search_date = ">=" + lmdutils.get_date_str(buildid)
     buildid = utils.get_buildid(buildid)
     logger.info("Get changeset for {}-{}-{}.".format(buildid, product, channel))
@@ -759,7 +959,7 @@ def get_changeset(buildid, channel, product):
         "release_channel": utils.get_search_channel(channel),
         "build_id": buildid,
         "date": search_date,
-        "topmost_filenames": '@"hg:hg.mozilla.org/".*:[0-9a-f]+',
+        "topmost_filenames": _GIT_TOPMOST_FILENAMES,
         "_aggs.build_id": "topmost_filenames",
         "_results_number": 0,
         "_facets": "product",
@@ -770,9 +970,13 @@ def get_changeset(buildid, channel, product):
     socorro.SuperSearch(params=params, handler=handler, handlerdata=data).wait()
     chgset = None
     if data:
-        chgset, _ = max(data.items(), key=lambda p: p[1])
-        chgset = utils.short_rev(chgset)
+        sha, _ = max(data.items(), key=lambda p: p[1])
+        # Imported here: `tools` imports this module and `inspector` imports `tools`.
+        from . import inspector
 
-    logger.info("Get changeset: finished.")
+        hg_rev = inspector.git2hg(sha)
+        chgset = utils.short_rev(hg_rev) if hg_rev else None
+
+    logger.info("Get changeset: finished ({}).".format(chgset))
 
     return chgset

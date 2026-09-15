@@ -53,11 +53,14 @@ def _facts(ratio=3.5, installs=40, score=1e-6):
             "signature_trend_window_days": 7, "signature_trend_score": score}
 
 
-def _rate_path(candidates, taken=0, covered=frozenset()):
+def _rate_path(candidates, taken=0, covered=frozenset(), no_protos=()):
     return (
         mock.patch.object(sigtrend, "rising_candidates", return_value=candidates),
         mock.patch.object(models.Selection, "taken_today", return_value=taken),
         mock.patch.object(models.Selection, "covered_recently", return_value=set(covered)),
+        # The `no_protos` rows of the week (`datacollector._no_protos_recently`).
+        mock.patch.object(models.Selection, "recent",
+                          return_value=[{"signature": s} for s in no_protos]),
     )
 
 
@@ -105,6 +108,32 @@ class TestTheRatePath(unittest.TestCase):
         extra = _rate_path([(sig, [sig], _facts())], covered={sig})
         data, _, _ = run_selector(_steady(sig), extra=extra)
         self.assertEqual(data, {})
+
+    def test_a_pick_that_yielded_no_report_this_week_is_not_picked_again(self):
+        """A rate pick Socorro then held no report for is rewritten `no_protos`
+        (`datacollector.declare_no_protos`), which sets neither `ever_selected` nor counts as
+        `taken_today` -- so without its own read the path would pick the same uuid-less
+        signature on every tick for the week its rise lasts, ahead of every other candidate."""
+        sig, other = "mozilla::Old::Hang", "mozilla::Other::Rise"
+        pop = {bid: {sig: (5, 5), other: (5, 5)} for bid in BIDS}
+        cands = [(sig, [sig], _facts(score=1e-9)), (other, [other], _facts(score=1e-3))]
+        recent = mock.Mock(return_value=[{"signature": sig}])
+        extra = _rate_path(cands, taken=2)[:3] + (
+            mock.patch.object(models.Selection, "recent", recent),)
+        data, selection, _ = run_selector(pop, extra=extra)
+        self.assertEqual(set(data), {other})
+        self.assertEqual([r["signature"] for r in selection
+                          if r["outcome"] == utils.RISING_RATE], [other])
+        self.assertEqual(recent.call_args.kwargs["outcome"], utils.NO_PROTOS)
+        self.assertEqual((recent.call_args.kwargs["product"], recent.call_args.kwargs["channel"]),
+                         ("Firefox", "nightly"))
+
+    def test_a_no_protos_read_that_fails_changes_nothing(self):
+        sig = "mozilla::Old::Hang"
+        extra = _rate_path([(sig, [sig], _facts())])[:3] + (
+            mock.patch.object(models.Selection, "recent", side_effect=RuntimeError("db")),)
+        data, _, _ = run_selector(_steady(sig), extra=extra)
+        self.assertEqual(set(data), {sig})
 
     def test_a_rise_with_nothing_current_is_skipped_and_costs_no_budget(self):
         sig = "mozilla::Old::Hang"

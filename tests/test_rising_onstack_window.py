@@ -55,7 +55,7 @@ def _put_report(channel="nightly", trend=None, signature=SIG, prev=None, broken=
     the mindate and the network, and return None ("no json_dump") so `put_report` stops there."""
     seen = {}
 
-    def fake_get_crash(uuid, bid, chan, mindate, chgset, filelog, interesting):
+    def fake_get_crash(uuid, bid, chan, mindate, chgset, filelog, interesting, **kw):
         seen["mindate"] = mindate
         return None
 
@@ -64,8 +64,12 @@ def _put_report(channel="nightly", trend=None, signature=SIG, prev=None, broken=
                                   side_effect=RuntimeError("rollup down"))
     else:
         facts = mock.patch.object(update.sigtrend, "trend_facts", return_value=trend or {})
+    # `put_report` now marks a report `get_crash` answers None for as analysed (a Fenix
+    # no-stack report would otherwise be re-fetched on every spin of the scoring chain); that
+    # is a `uuids` UPDATE, and this harness has no table -- stand it down, it is not the subject.
     with mock.patch.object(update.inspector, "get_crash", side_effect=fake_get_crash), \
          mock.patch.object(update.models.Build, "get_pushdate_before", return_value=prev), \
+         mock.patch.object(update.models.UUID, "set_analyzed"), \
          facts as trend_facts:
         update.put_report("u-1", BUILD, channel, "Firefox", "buildnode", signature=signature)
     return seen["mindate"], trend_facts
@@ -165,11 +169,12 @@ class TestTheChainHandsOverTheSignature(unittest.TestCase):
         """The shape the chain relies on: six positional arguments, the last the signature."""
         seen = {}
 
-        def fake_get_crash(uuid, bid, chan, mindate, chgset, filelog, interesting):
+        def fake_get_crash(uuid, bid, chan, mindate, chgset, filelog, interesting, **kw):
             seen["mindate"] = mindate
             return None
 
         with mock.patch.object(update.inspector, "get_crash", side_effect=fake_get_crash), \
+             mock.patch.object(update.models.UUID, "set_analyzed"), \
              mock.patch.object(update.sigtrend, "trend_facts", return_value=_rising()):
             update.put_report("u-1", BUILD, "nightly", "Firefox", "buildnode", SIG)
         self.assertEqual(seen["mindate"], BUILD - relativedelta(days=10))

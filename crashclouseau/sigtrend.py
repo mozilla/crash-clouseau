@@ -525,12 +525,24 @@ def describe(facts):
 
 
 def collect_all(products=None, channels=None, asof=None, budget=None):
-    """Backfill every configured product/channel. Called from the daily update."""
-    products = products if products is not None else config.get_products()
+    """Backfill every INGESTED product on the channels it exists on, then prune. The operator's
+    whole-rollup entry point; the tick itself calls ``backfill`` per pair from
+    ``update.put_crashes``.
+
+    Products default to ``config.get_ingest_products`` and each product's channels are cut to
+    ``config.get_product_channels(product)``, the same pairing ``update.update_all`` runs:
+    Fenix is nightly-only, and a Fenix x beta rollup would be ~70 SuperSearches once and one a
+    day for ever, answering a rate question no selector asks (``SUPPORTED_CHANNELS`` already
+    keeps release/esr out; it would not keep beta out)."""
+    products = products if products is not None else config.get_ingest_products()
     channels = channels if channels is not None else config.get_channels()
     total = 0
     for product in products:
+        allowed = set(config.get_product_channels(product))
         for channel in channels:
+            if channel not in allowed:
+                logger.info("Skipping %s-%s: the product has no such channel", product, channel)
+                continue
             total += backfill(product, channel, asof=asof, budget=budget)
     models.SignatureDaily.prune()
     models.ChannelDaily.prune()
