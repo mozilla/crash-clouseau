@@ -21,14 +21,17 @@ was false in both directions. This is that claim, executable:
   the counts are printed so that a reader prices each one instead of a threshold nobody fit
   doing it for them.
 
-IT FAILS TODAY, AND THAT IS THE POINT. 2026-08-21 over 30d: check 1 clean; check 2 names
+IT FAILS TODAY, AND THAT IS THE POINT. 2026-08-21 over 30d: check 1 clean; check 2 named
 ``Fenix`` (458,043 reports), ``Focus`` (5,804) and ``ReferenceBrowser`` (125) as unmapped, and
-``SeaMonkey`` as mapped-but-silent (0 reports in the whole ~180d retention). Those three are
-deliberately unmapped and the evidence is above ``config._OTHER_APP_PRODUCTS`` and in
-``spike/other_app_products/RESULTS.json``: mapping them moves the venue on 0 of 51 filings and 0
-of the 300 loudest desktop-nightly signatures, and costs bug 1855806. This exists so that the
-day that stops being true, somebody learns it from one command instead of from a crash reported
-into another team's product.
+``SeaMonkey`` as mapped-but-silent (0 reports in the whole ~180d retention). Since plans/16
+(2026-09-15) ``Fenix`` is OURS -- in ``config.products``, ingested and triaged on nightly -- so
+check 2 prints it as ``ours (config.products)`` with no edit here (``ours`` is read from the
+config; tests/test_other_app_products.py pins that adding it to the list is enough). ``Focus``
+and ``ReferenceBrowser`` (and ``MozillaVPN`` at 180d) remain deliberately unmapped and the
+evidence is above ``config._OTHER_APP_PRODUCTS`` and in ``spike/other_app_products/RESULTS.json``:
+mapping them moves the venue on 0 of 51 filings and 0 of the 300 loudest desktop-nightly
+signatures, and costs bug 1855806. This exists so that the day that stops being true, somebody
+learns it from one command instead of from a crash reported into another team's product.
 
 WHERE IT DELIBERATELY DOES **NOT** RUN. Its two inputs are live BMO and live Socorro, so
 anywhere it runs automatically it can fail a build for a reason unrelated to the change being
@@ -48,8 +51,10 @@ shipped:
 * not in ``bin/schedule.py`` — nothing would act on the result, and BMO rate-limits an IP for
   ~45 minutes when pushed, a budget the filer needs more than this does.
 
-So: by hand, when the map is edited and when plans/16-fenix-nightly-support.md lands. Run it
-from the REPO ROOT — ``config._get_global`` opens the relative path ``./config/global.json``:
+So: by hand, when the map is edited, and ONCE after the deploy that turns Fenix on (DEPLOY.md
+"Turning Fenix on"): check 2 should then list Fenix as ours and only Focus/ReferenceBrowser as
+unmapped -- paste that table into the deploy notes. Run it from the REPO ROOT —
+``config._get_global`` opens the relative path ``./config/global.json``:
 
     uv run python bin/audit_products.py             # exit 1 = the map no longer matches reality
     uv run python bin/audit_products.py --days 180  # full retention; also names MozillaVPN

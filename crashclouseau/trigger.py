@@ -16,7 +16,10 @@ A uuid the pipeline never ingested is fetched from Socorro and put through the s
 a selected crash (``update.put_report``), forced past the proto-signature and stack dedups --
 this is one explicit crash somebody asked for. Its build has to be in the ``builds`` table:
 outside the ingested window there is no pushlog to score against and the run would have nothing
-to say, so that is refused with the reason rather than run blind.
+to say, so that is refused with the reason rather than run blind. The reply names the PRODUCT
+along with the channel (plans/16): a Fenix uuid is accepted the moment ``Fenix`` is a configured
+product, and its run files nothing whatever ``file_bug`` says (``config.autofile_product_held``,
+honoured by the filer), so the caller has to be able to see which product they triggered.
 
 Born 2026-09-08, when "can you trigger an analysis of SplitSingleCharHelper out of curiosity"
 needed a one-off dyno with ``AUTOFILE_BUGS=0`` in its environment and a hand-rolled ingest.
@@ -65,8 +68,8 @@ def channel_label(socorro_channel, version=None):
 
 def ingest(uuid):
     """Put one crash the pipeline never selected into the database, scored, ready for a run.
-    Returns ``{channel, signature, buildid}``; raises ``TriggerError`` with the reason it
-    cannot be done."""
+    Returns ``{product, channel, signature, buildid}``; raises ``TriggerError`` with the reason
+    it cannot be done."""
     try:
         data = inspector.get_crash_data(uuid)
     except Exception as exc:  # noqa: BLE001 - Socorro's failure IS the reason
@@ -80,6 +83,13 @@ def ingest(uuid):
     if channel is None:
         raise TriggerError("channel {!r} (version {!r}) is not one of the configured channels".format(
             data.get("release_channel"), data.get("version")))
+    allowed = config.get_product_channels(product)
+    if channel not in allowed:
+        # Fenix is nightly-only (`product_channels`): there is no build source for the pair,
+        # so "not in the ingested window" would blame the window for a channel that never has
+        # one. Same refusal `update.update` gives a queued job for the pair.
+        raise TriggerError("{} is ingested on {} only; {!r} is not one of its channels".format(
+            product, "/".join(allowed), channel))
     buildid = str(data["build"])
     bid = utils.get_build_date(buildid)
     bidid = models.Build.get_id(bid, channel, product)
@@ -96,10 +106,39 @@ def ingest(uuid):
     # `enqueue=False`: the run is enqueued by the caller, FORCED and with its options recorded
     # first; an ordinary enqueue here would race it with a run that has neither.
     scored = update.put_report(uuid, bid, channel, product, chgset, signature,
-                               enqueue=False, force=True)
+                               enqueue=False, force=True,
+                               # Synchronous, on the web dyno, behind the 30 s router timeout:
+                               # no hg-edge reads to locate a JVM frame's method (a scoring
+                               # refinement; the forced run still gets the stack and its files).
+                               source_reads=False)
     if not scored:
-        raise TriggerError("no usable stack for {} (Socorro has no json_dump for it)".format(uuid))
-    return {"channel": channel, "signature": signature, "buildid": buildid}
+        # Both stack shapes, since plans/16: a native `json_dump`, or a `java_stack_trace` with
+        # a frame in one of our packages (`config.java_packages`) -- a Java-only crash whose
+        # frames are all framework's is as unreadable to us as a dump-less native one.
+        raise TriggerError(
+            "no usable stack for {} (Socorro has neither a json_dump nor a java_stack_trace "
+            "we can read for it)".format(uuid))
+    return {"product": product, "channel": channel, "signature": signature, "buildid": buildid}
+
+
+def _known(uuid):
+    """``{product, channel, signature}`` of a uuid the pipeline already has, for the reply.
+    ``UUID.get_info`` joins ``builds`` INNER and indexes its one row, so a uuid without a build
+    (``uuids.buildid`` is nullable) has none; that used to be answered by the two single-column
+    reads, which tolerate it, and still is -- with a log line, because a trigger on such a row
+    cannot be scored and the run's own refusal will be the next thing the operator looks for."""
+    try:
+        info = models.UUID.get_info(uuid)
+    except Exception as exc:  # noqa: BLE001 - the reply is informational; the run decides
+        logger.warning("trigger: %s has no build row to read (%s); channel/signature only",
+                       uuid, exc)
+        info = None
+    if info is None:
+        logger.warning("trigger: %s has no build row; channel/signature only", uuid)
+        return {"product": None, "channel": models.UUID.get_channel(uuid),
+                "signature": models.UUID.get_signature(uuid)}
+    return {"product": info.get("product"), "channel": info.get("channel"),
+            "signature": info.get("signature")}
 
 
 def trigger_one(uuid, file_bug=False, show_in_tasks=True):
@@ -114,11 +153,12 @@ def trigger_one(uuid, file_bug=False, show_in_tasks=True):
         return out
     try:
         if models.UUID.exists(uuid):
-            out["channel"] = models.UUID.get_channel(uuid)
-            out["signature"] = models.UUID.get_signature(uuid)
+            info = _known(uuid)
         else:
             info = ingest(uuid)
-            out.update(ingested=True, channel=info["channel"], signature=info["signature"])
+            out["ingested"] = True
+        out.update(product=info["product"], channel=info["channel"],
+                   signature=info["signature"])
         options = {
             "autofile": bool(file_bug),
             "show_in_tasks": bool(show_in_tasks),
@@ -130,8 +170,9 @@ def trigger_one(uuid, file_bug=False, show_in_tasks=True):
         out.update(ok=True, action="queued", run_options=options,
                    cancelled_running=bool(res.get("cancelled")),
                    already_filed=res.get("already_filed"))
-        logger.info("trigger: %s queued (file_bug=%s, show_in_tasks=%s, ingested=%s)",
-                    uuid, file_bug, show_in_tasks, out["ingested"])
+        logger.info("trigger: %s queued (%s/%s, file_bug=%s, show_in_tasks=%s, ingested=%s)",
+                    uuid, out.get("product"), out.get("channel"), file_bug, show_in_tasks,
+                    out["ingested"])
     except TriggerError as exc:
         out["error"] = str(exc)
         _rollback()

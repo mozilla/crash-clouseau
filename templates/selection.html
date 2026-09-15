@@ -47,6 +47,18 @@
         <option value="{{ o }}" {% if o == outcome %}selected{% endif %}>{{ o }}</option>
         {% endfor %}
       </select>
+      {#- Which product (plans/16). Fenix nightly and Firefox nightly both log under the
+          channel `nightly`, so without this the feed mixed them and nothing on the page could
+          narrow to one -- while `/api/selection?product=Fenix` could. The options are every
+          product the enum knows (`models.PRODUCT_TYPE.enums`), `all` by default. `?channel=`
+          is not a widget yet; it rides along hidden so a channel-narrowed URL survives Show. -#}
+      <select name="product" title="Fenix nightly and Firefox nightly share the channel label; this tells them apart">
+        <option value="">all products</option>
+        {% for p in products or [] %}
+        <option value="{{ p }}" {% if p == product %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+      {% if channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
       <input type="submit" value="Show">
     </form>
 
@@ -66,6 +78,7 @@
         <tr>
           <th>build day</th>
           <th>signature</th>
+          <th>product</th>
           <th>chan</th>
           <th>count</th>
           <th>outcome</th>
@@ -83,6 +96,7 @@
           <td>
             <a href="/selection.html?signature={{ row.signature | urlencode }}">{{ row.signature }}</a>
           </td>
+          <td>{{ row.product }}</td>
           <td>{{ row.channel }}</td>
           <td>{{ row.number }}</td>
           <td class="sel-{{ row.outcome }}">{{ row.outcome }}</td>
@@ -99,7 +113,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="10">No recorded decisions.</td></tr>
+        <tr><td colspan="11">No recorded decisions.</td></tr>
         {% endfor %}
       </tbody>
     </table>

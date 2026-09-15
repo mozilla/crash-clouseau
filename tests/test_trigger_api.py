@@ -114,8 +114,10 @@ class TestAnIngestedCrash(_WithToken):
         super().setUp()
         self.options = []
         for p in (mock.patch.object(models.UUID, "exists", return_value=True),
-                  mock.patch.object(models.UUID, "get_channel", return_value="nightly"),
-                  mock.patch.object(models.UUID, "get_signature", return_value="sig"),
+                  mock.patch.object(models.UUID, "get_info",
+                                    return_value={"buildid": "20260906093052",
+                                                  "product": "Firefox", "channel": "nightly",
+                                                  "version": "156.0a1", "signature": "sig"}),
                   mock.patch.object(models.Dossier, "set_run_options",
                                     side_effect=lambda u, o, commit=True: self.options.append((u, o)) or True)):
             p.start()
@@ -129,6 +131,7 @@ class TestAnIngestedCrash(_WithToken):
         res = body["results"][0]
         self.assertEqual((res["ok"], res["action"], res["ingested"], res["channel"]),
                          (True, "queued", False, "nightly"))
+        self.assertEqual(res["product"], "Firefox")     # plans/16: the reply names it
         uuid, opts = self.options[0]
         self.assertEqual((uuid, opts["autofile"], opts["show_in_tasks"], opts["source"]),
                          (_UUID, False, True, "api"))
@@ -169,7 +172,8 @@ class TestIngest(unittest.TestCase):
 
     def test_the_happy_path(self):
         info = trigger.ingest(_UUID)
-        self.assertEqual(info, {"channel": "release", "signature": "SplitSingleCharHelper",
+        self.assertEqual(info, {"product": "Firefox", "channel": "release",
+                                "signature": "SplitSingleCharHelper",
                                 "buildid": "20260903215306"})
         (args, kw), = self.added
         self.assertEqual(args[:2], (_UUID, 3))
@@ -218,7 +222,8 @@ class TestIngest(unittest.TestCase):
                                   side_effect=lambda u, o, commit=True: options.append(o) or True), \
                 mock.patch.object(orchestrator, "retrigger_agent", rt):
             out = trigger.trigger_one(_UUID, file_bug=False, show_in_tasks=False)
-        self.assertEqual((out["ok"], out["ingested"], out["channel"]), (True, True, "release"))
+        self.assertEqual((out["ok"], out["ingested"], out["channel"], out["product"]),
+                         (True, True, "release", "Firefox"))
         self.assertEqual(rt.calls, [(_UUID, "release")])
         self.assertEqual((options[0]["autofile"], options[0]["show_in_tasks"]), (False, False))
 

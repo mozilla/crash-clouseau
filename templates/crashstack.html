@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=11">
+    <link rel="stylesheet" href="/clouseau.css?v=12">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script src="/clouseau.js"></script>
@@ -486,14 +486,22 @@
       <tbody>
         {% for pos, info in enumerate(stack['frames']) -%}
         {% if info['line'] != -1 -%}
+        {#- `line_trusted` is False for a Java frame under `java.trust_line_numbers: false`
+            (plans/16 D7): the number is what the JVM reported through the R8 obfuscation map,
+            not a line of the source -- Keystore.kt:269 of the motivating crash is a KDoc
+            comment. Shown, because it is what Socorro shows, but marked `~` with the reason on
+            hover, and the links go to the FILE: the annotate URL already has no `#l` anchor
+            (`CrashStack.get_by_uuid`) and the codeview link gets no `&line=`. A native frame
+            carries `line_trusted` True and renders exactly as before. -#}
+        {% set _trusted = info.get('line_trusted', True) -%}
         <tr>
           <td>{{ pos }}</td>
           <td>{{ info['function']|e }}</td>
           <td>
             {% if info['url'] -%}
-            <a href="{{ info['url'] }}"><span id="filename-{{ pos }}">{{ info['filename']|e }}</span>:<span id="line-{{ pos }}">{{ info['line'] }}</span></a>
+            <a href="{{ info['url'] }}"><span id="filename-{{ pos }}">{{ info['filename']|e }}</span>:{% if _trusted %}<span id="line-{{ pos }}">{{ info['line'] }}</span>{% else %}<span id="line-{{ pos }}" class="line-untrusted" title="R8-remapped line, not the real source line">~{{ info['line'] }}</span>{% endif %}</a>
             {% else -%}
-            {{ info['original']|e }}{% if info['line'] -%}:{{ info['line'] }}{% endif -%}
+            {{ info['original']|e }}{% if info['line'] -%}:{% if _trusted %}{{ info['line'] }}{% else %}<span class="line-untrusted" title="R8-remapped line, not the real source line">~{{ info['line'] }}</span>{% endif %}{% endif -%}
             {% endif -%}
           </td>
           <td>
@@ -503,7 +511,7 @@
                 <div class="cell" style="width:25%">
                   <span>
                     <a href="{{ repo_url }}/rev?node={{ chgset }}" target="_blank" rel="noopener">{{ chgset }}</a>
-                    <a href="/codeview.html?uuid={{ uuid_info['uuid']|urlencode }}&filename={{ info['filename']|urlencode }}&node={{ chgset }}&line={{ info['line'] }}&channel={{ channel }}&rev={{ uuid_info['node'] }}" target="_blank" rel="noopener" title="View this file in searchfox + the changed lines"><span class="glass"></span></a>
+                    <a href="/codeview.html?uuid={{ uuid_info['uuid']|urlencode }}&filename={{ info['filename']|urlencode }}&node={{ chgset }}{% if _trusted %}&line={{ info['line'] }}{% endif %}&channel={{ channel }}&rev={{ uuid_info['node'] }}" target="_blank" rel="noopener" title="View this file in searchfox + the changed lines{% if not _trusted %} (the file, not the line: it is R8-remapped){% endif %}"><span class="glass"></span></a>
                   </span>
                 </div>
                 <div style="background-color:{{ colors[i['score']] }};width:15%;"

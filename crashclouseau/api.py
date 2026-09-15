@@ -293,6 +293,12 @@ def trigger():
     Bugzilla; ``show_in_tasks`` (default true) whether it is listed on tasks.html. Both are
     recorded on the dossier (``run_options``) and honoured by the run and by later re-runs.
 
+    ``file_bug: true`` lets the run through the ordinary filing gates; it does not ARM a product
+    whose filing is held (``agent.autofile.products.<product>.enabled: false`` -- Fenix, plans/16
+    D4): ``autofile_bug`` refuses those with ``autofile held for product`` the way it refuses a
+    held channel, so a Fenix uuid triggered with ``file_bug: true`` is analysed and files
+    nothing. Each result names its ``product`` and ``channel`` so that is visible from the reply.
+
     Per-uuid outcomes come back in ``results``; a uuid that cannot be analysed says why there
     (``ok: false``, ``error``) rather than failing the whole call. Requires the WRITE token in
     the ``X-Clouseau-Token`` header: this is for scripts, it spends money per uuid and it can

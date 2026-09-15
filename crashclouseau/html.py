@@ -190,7 +190,8 @@ def _task_view(rows, stale_after_s, now, spike_filings=None):
     the run time for finished tasks (done/error) and elapsed-so-far for live ones.
 
     ``spike_filings`` (``_spike_filings``) is what the SPIKE path filed, keyed by uuid and by
-    ``(signature, channel)``. A run the ordinary filer did not file, on a crash or signature the
+    ``(signature, channel, product)`` -- and by ``(signature, channel)`` for a row that does not
+    say which product it is. A run the ordinary filer did not file, on a crash or signature the
     spike escalation then filed, rendered a dash in the Bug column: 7fcc1b79 sat on the page as
     ``lead 50 / --`` while bug 2070034 existed for exactly that uuid (2026-09-08). The spike
     filing is shown there as a fallback, marked as the spike path's and NOT counted in
@@ -240,8 +241,19 @@ def _task_view(rows, stale_after_s, now, spike_filings=None):
 
         spike = None
         if spike_filings:
-            spike = spike_filings.get(r.uuid) or spike_filings.get(
-                (r.signature, getattr(r, "channel", None)))
+            channel = getattr(r, "channel", None)
+            product = getattr(r, "product", None)
+            # By uuid first, then by signature on the same channel AND the same product when
+            # the row says which one it is: Fenix nightly and Firefox nightly are both
+            # `nightly` and share native signatures (plans/16 §6.2 measured ~22% of Fenix's on
+            # desktop too), so a channel-only key would put a Fenix spike filing in the Bug
+            # column of a desktop run of the same signature. The spike table has carried its
+            # product from the start; a task row without one (no build, or the tests' rows)
+            # keeps the channel-only key.
+            spike = spike_filings.get(r.uuid)
+            if spike is None:
+                key = (r.signature, channel, product) if product else (r.signature, channel)
+                spike = spike_filings.get(key)
 
         tasks.append(
             {
@@ -257,6 +269,12 @@ def _task_view(rows, stale_after_s, now, spike_filings=None):
                 # operator at for the beta rollout, and at ~4-6 beta dossiers a day against
                 # nightly's 85-120 an unlabelled beta row is not findable by eye.
                 "channel": getattr(r, "channel", None),
+                # AND WHICH PRODUCT (plans/16): a Fenix nightly run and a Firefox nightly run
+                # are both `nightly`, and they differ in what the page exists to show -- the
+                # spend (Fenix has its own `AGENT_PRODUCTS` lever) and the filing policy (held
+                # for Fenix). `Dossier.list_tasks` selects `Build.product`; `getattr` with a
+                # default for the same reason as `channel`.
+                "product": getattr(r, "product", None),
                 "version": getattr(r, "version", None),
                 "signature": r.signature or "",
                 "status": status,
@@ -338,9 +356,10 @@ def _spike_rows():
 
 def _spike_filings(spike_rows):
     """What the spike path FILED, keyed by the crash it was built around and by every
-    ``(signature, channel)`` it covered (the merged lambda siblings too), for the ordinary
-    table's Bug column. Rows the sweep recorded because the ordinary triage filed are not
-    here: that bug is already on the ordinary row."""
+    ``(signature, channel, product)`` it covered (the merged lambda siblings too), for the
+    ordinary table's Bug column -- plus the ``(signature, channel)`` key, for a task row whose
+    product is unknown (``_task_view``). Rows the sweep recorded because the ordinary triage
+    filed are not here: that bug is already on the ordinary row."""
     out = {}
     for r in spike_rows:
         filing = r.get("filing") or {}
@@ -351,6 +370,7 @@ def _spike_filings(spike_rows):
             out.setdefault(r["uuid"], info)
         for sig in [r.get("signature")] + list(r.get("siblings") or []):
             if sig:
+                out.setdefault((sig, r.get("channel"), r.get("product")), info)
                 out.setdefault((sig, r.get("channel")), info)
     return out
 
@@ -537,6 +557,10 @@ def selection():
             outcome=outcome,
             outcomes=sorted(models.SELECTION_OUTCOMES),
             product=product,
+            # The <select>'s options: every product the enum knows, so the page can narrow to
+            # Fenix the way `/api/selection?product=Fenix` can -- both products log to the same
+            # `nightly` rows and were indistinguishable here (plans/16).
+            products=list(models.PRODUCT_TYPE.enums),
             channel=channel,
             rows=rows,
             summary=summary,

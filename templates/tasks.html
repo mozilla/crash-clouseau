@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=10">
+    <link rel="stylesheet" href="/clouseau.css?v=11">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
     <script src="/clouseau.js"></script>
@@ -111,7 +111,9 @@
         {% for s in spikes -%}
         <tr>
           <td>{% if s.uuid %}<a href="/crashstack.html?uuid={{ s.uuid }}" title="{{ s.uuid }}">{{ s.uuid[:8] }}</a>{% else %}&mdash;{% endif %}</td>
-          <td title="{{ s.channel or 'unknown' }}{% if s.buildid %} {{ s.buildid }}{% endif %}">{{ (s.channel or '?')[:1]|upper }}</td>
+          {#- The channel initial, and the product under it when it is not Firefox: see the
+              same cell of the triage table below. -#}
+          <td title="{% if s.product %}{{ s.product }} {% endif %}{{ s.channel or 'unknown' }}{% if s.buildid %} {{ s.buildid }}{% endif %}">{{ (s.channel or '?')[:1]|upper }}{% if s.product and s.product != 'Firefox' %}<span class="task-prod task-prod-{{ s.product|lower }}">{{ s.product|lower }}</span>{% endif %}</td>
           <td class="task-sgn" title="{{ s.signature }}">{{ s.signature }}</td>
           <td>
             <span class="status-badge status-{{ s.status }}"{% if s.error %} title="{{ s.error }}"{% endif %}>{{ s.status }}</span>
@@ -159,7 +161,7 @@
             {%- else -%}&mdash;{%- endif -%}
           </td>
           <td class="task-ts">{% if s.created %}{{ s.created.strftime('%Y-%m-%d&nbsp;%H:%M') | safe }}{% endif %}</td>
-          <td><a class="spike-json" href="/api/spikes?signature={{ s.signature|urlencode }}{% if s.channel %}&amp;channel={{ s.channel|urlencode }}{% endif %}" title="the escalation's record: the spike, the findings, the filing">json</a></td>
+          <td><a class="spike-json" href="/api/spikes?signature={{ s.signature|urlencode }}{% if s.channel %}&amp;channel={{ s.channel|urlencode }}{% endif %}{% if s.product %}&amp;product={{ s.product|urlencode }}{% endif %}" title="the escalation's record: the spike, the findings, the filing">json</a></td>
         </tr>
         {% endfor -%}
         {% if not spikes -%}
@@ -192,8 +194,14 @@
           <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
           {# Which channel this run is on. With one channel it was implicit; with two, "is that
              stalled run beta or nightly?" is a question this view could not answer, and the two
-             have different costs and different filing policies. #}
-          <td title="{{ t.channel or 'unknown' }}{% if t.version %} {{ t.version }}{% endif %}">{{ (t.channel or '?')[:1]|upper }}</td>
+             have different costs and different filing policies. And WHICH PRODUCT (plans/16):
+             Fenix nightly and Firefox nightly are both `nightly`, so the initial alone read the
+             same for an Android run whose filing is held and a desktop run that may file. The
+             product leads the tooltip whenever the row knows it; a product that is not Firefox
+             also gets its name, small, under the initial -- the column is 3% wide, room for one
+             letter and one short word, not for a twelfth column. Firefox stays the bare letter
+             it always was, so nothing on a desktop-only page moves. #}
+          <td title="{% if t.product %}{{ t.product }} {% endif %}{{ t.channel or 'unknown' }}{% if t.version %} {{ t.version }}{% endif %}">{{ (t.channel or '?')[:1]|upper }}{% if t.product and t.product != 'Firefox' %}<span class="task-prod task-prod-{{ t.product|lower }}">{{ t.product|lower }}</span>{% endif %}</td>
           <td class="task-sgn" title="{{ t.signature }}">{{ t.signature }}</td>
           <td>
             <span class="status-badge status-{{ t.status }}"{% if t.error %} title="{{ t.error }}"{% endif %}>{{ t.status }}</span>

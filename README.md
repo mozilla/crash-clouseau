@@ -52,7 +52,9 @@ Could not parse SQLAlchemy URL`) and the ~135 tests in them never load at all.
 
 ## UI Documentation
 
-See [HOWTO](/HOWTO.md).
+See [HOWTO](/HOWTO.md). Every page is per product: Firefox (nightly, beta, release, ESR) and
+Fenix nightly, the latter triaged but filing nothing -- see "Turning Fenix on" in
+[DEPLOY.md](/DEPLOY.md).
 
 ## Bugs
 

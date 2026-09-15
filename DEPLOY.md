@@ -16,22 +16,27 @@ the family's filing policy (`channels.esr`: `skip`, cap 2, `[new in esr]`,
 `cf_tracking_firefox_esr<major>` nominated) -- **and only runs where the two env vars name it**
 (see "Turning the ESR channel on"). A
 channel can still be held with `agent.autofile.channels.<ch>.enabled: false`, which beats the
-global arm. Read "Cost controls" below as what bounds the spend, not as evidence that there is
-none.
+global arm. Since 2026-09-15 the deployment also ingests and triages **Fenix nightly** -- a second
+PRODUCT on the `nightly` label, not a channel -- and files nothing for it
+(`agent.autofile.products.Fenix.enabled: false`; see "Turning Fenix on"). Read "Cost controls"
+below as what bounds the spend, not as evidence that there is none.
 
 Several things are automated by the repo now; the rest are one-time app setup.
 
 ## Automated by the repo (no action needed)
 - **DB schema** — the `release:` phase runs `bin/release.py` on every deploy
   (`models.create()` is idempotent and adds any enum value the long-lived DB is missing: the
-  `lead` verdict, the ESR channel label -- `models._ENUM_ADDITIONS`; no ingestion is run).
+  `lead` verdict, the ESR channel label on `CHANNEL_TYPE`, the `Fenix` product label on
+  `PRODUCT_TYPE` -- `models._ENUM_ADDITIONS`; no ingestion is run).
   Until 2026-09-07 that ALTER had never actually run (it re-used a connection already in a
   transaction and the failure was logged, not raised); the first deploy carrying the ESR labels
   is the first time it matters. The same phase widens `builds.version` from VARCHAR(10) to 24
   (`153.10.0esr` will be 11 characters; `models._WIDENED_COLUMNS`). Check the release log for
-  `enum CHANNEL_TYPE: added value 'esr153'` and `widened builds.version`, or `psql` for
+  `enum CHANNEL_TYPE: added value 'esr153'` / `enum PRODUCT_TYPE: added value 'Fenix'` and
+  `widened builds.version`, or `psql` for
   `SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname =
-  'CHANNEL_TYPE'` and `\d builds`, before setting `INGEST_CHANNELS`.
+  'CHANNEL_TYPE'` (or `'PRODUCT_TYPE'`) and `\d builds`, before setting `INGEST_CHANNELS`. A
+  Postgres enum label is never dropped again: adding one is the irreversible half of a switch-on.
 - **`searchfox-cli`** — `bin/post_compile` fetches the pinned static-musl binary at
   build time and exports `$SEARCHFOX_CLI` via `.profile.d` (the agent needs it for
   call-graph grounding; it queries searchfox.org over the network).
@@ -66,9 +71,21 @@ Several things are automated by the repo now; the rest are one-time app setup.
      only field that tells a WebExtensions process from a web content process (`process_type`
      is `content` for both, and has no `extension` value), which is how bug 2066201 was
      filed against an extension API for a `webIsolated` crash. Tracked in bug 2066600.
-   - Do **NOT** set a Bugzilla token (observe-only): with none, the apply route
-     hard-fails safe and Clouseau is strictly read-only. Enabling Bugzilla writes wants
-     product-owner sign-off (the app is unauthenticated + CORS-open).
+   - `heroku config:set GITHUB_TOKEN=…` — **optional, recommended with Fenix**: a read-only
+     personal token for the one GitHub request per new Fenix build that indexes
+     `mobile/android/**.{kt,java}` (`java.refresh_file_index`, the tree of
+     `mozilla-firefox/firefox` at the build's git sha). Unauthenticated the limit is 60 requests
+     an hour PER ORIGINATING IP, and Heroku dynos share egress IPs, so the budget may be spent by
+     other tenants; a token gets 5,000 an hour of its own. Without it a 403 is retried on the
+     next 20-minute tick (3 requests an hour at worst) and the Kotlin frames of a Java crash keep
+     resolving through the paths the pushlog already recorded (~500 `.kt` files over 8 days).
+   - `heroku config:set LIBMOZDATA_CFG_BUGZILLA_TOKEN=…` (or `BUGZILLA_TOKEN`) — the filer's
+     API key (`clouseau-bot`). Read from the environment first because libmozdata cannot
+     (`config.get_bugzilla_token`). Without it every Bugzilla write hard-fails safe and Clouseau
+     is read-only whatever `AUTOFILE_BUGS` says; with it AND `AUTOFILE_BUGS=1` it files
+     unattended as the header describes. "Do NOT set a Bugzilla token (observe-only)" stood here
+     until 2026-09-15 and had been false since the first filing; the product-level way to
+     observe without writing is a per-product hold (Fenix, below), not a missing token.
 3. **Scale every dyno** (only `web` auto-starts; the rest default to 0):
    ```
    heroku ps:scale web=1 worker=1 agentworker=1 clock=1
@@ -119,6 +136,8 @@ The two levers are different kinds of thing, which is why they are separate:
 |---|---|---|
 | `INGEST_CHANNELS` | free (Socorro + hg reads) | env var, next tick. Absent or empty = **ingest nothing** (logged) |
 | `AGENT_CHANNELS` | ~$1-3 per crash | env var, next tick (it used to need a deploy, and a deploy kills in-flight runs at ~$3 each). Absent = the config file's value; **empty = triage nothing** (logged) |
+| `INGEST_PRODUCTS` | free | env var, next tick. Absent = the config's `ingest_products` (`Firefox Fenix`); **set-but-empty = ingest nothing** (logged). See "Turning Fenix on" for why it does not fail closed |
+| `AGENT_PRODUCTS` | ~$1-3 per crash | env var, next tick. Absent = `agent.products` (`Firefox Fenix`); **set-but-empty = triage nothing** (logged). `AGENT_PRODUCTS=Firefox` stops the Fenix spend without a deploy |
 | `AUTOFILE_BUGS` | Bugzilla writes, **global** | env var, immediate |
 
 `AUTOFILE_BUGS` is global on purpose (a kill switch that only stops one channel is not a
@@ -200,6 +219,94 @@ What to watch on the first ESR days:
   `channel = 'esr153'`.
 - ESR has no measured population rates (`sigage._POPULATION_RATES`), like release: prompts drop
   the hardware comparison. `sigtrend` refuses it, like release (rate path off).
+
+## Turning Fenix on (plan #16)
+
+Fenix (Firefox for Android) nightly is a second PRODUCT on the channel label `nightly`, not a
+channel: `config.products` and `ingest_products` are `["Firefox", "Fenix"]`, `product_channels`
+pins Fenix to `["nightly"]`, `agent.products` triages both, and filing is HELD for Fenix
+(`agent.autofile.products.Fenix.enabled: false`). Its builds come from the TaskCluster index
+(`crashclouseau/buildsource.py` -> `tcindex`, the `mobile.fenix-nightly` leaf; Buildhub-as-firefox
+missed 1 of 15 recent Fenix builds and only cross-checks), its Java/Kotlin stacks are read
+(`java_stack_trace`, frames in `java.packages`) with the R8-remapped line numbers IGNORED behind
+a pref (step 5), its native stacks as before. Unlike beta and ESR there is NO ingest-only canary
+step: the product levers default ON in the config, so the deploy that carries the code is the
+deploy that starts it -- the order below is what makes that safe.
+
+1. **Deploy first, and check the enum.** The release phase runs
+   `ALTER TYPE "PRODUCT_TYPE" ADD VALUE IF NOT EXISTS 'Fenix'` (`models._ENUM_ADDITIONS`);
+   without it the first Fenix write (`Build.put_data`, or `ChannelDaily.upsert` from
+   `sigtrend.backfill`, which runs first in `put_crashes`) raises `invalid input value for
+   enum`. Look for `enum PRODUCT_TYPE: added value 'Fenix'` in the release log, or run
+   `SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname =
+   'PRODUCT_TYPE';`. **The label is irreversible** (Postgres never drops an enum value), and
+   **`config.products` is NOT a kill switch**: that list DEFINES the enum, and editing it is a
+   deploy that leaves the label and every Fenix row in place. The switches are the two env vars
+   in step 2, effective on the next tick with nothing deployed.
+
+2. **The two product levers.** Both default to the config's two-entry list; the channel
+   variables fail closed. The difference is deliberate: `INGEST_CHANNELS` bought its fail-closed
+   rule with the 2026-07-06 release incident above, where "absent" meant "every channel including
+   one nobody could read". Here the list is `Firefox Fenix` and the danger runs the other way: a
+   deploy that introduces a lever must not stop DESKTOP ingestion or triage for a tick because
+   nobody set a new variable first. Set-but-empty still means NOTHING, with a warning, so each is
+   a real kill switch:
+
+   ```sh
+   heroku config:set AGENT_PRODUCTS=Firefox       # stop the Fenix SPEND: next tick, no deploy
+   heroku config:set INGEST_PRODUCTS=Firefox      # stop Fenix INGESTION too (builds, uuids, selection)
+   heroku config:unset AGENT_PRODUCTS INGEST_PRODUCTS   # back to the config's "Firefox Fenix"
+   ```
+
+   As with the channel variables, `run_evidence_agent` re-checks the product before a non-forced
+   run and `update.update` refuses a (channel, product) pair the deployment does not ingest, so
+   dropping Fenix from a variable turns its already-queued jobs into no-ops.
+
+3. **Filing is HELD.** `agent.autofile.products.Fenix.enabled: false` binds the ordinary filer,
+   the spike filer (the sweep SKIPS a product whose filing is held -- an escalation exists to
+   file -- and `file_spike_bug` honours the hold too) AND `POST /api/tasks/trigger` with
+   `file_bug: true`: a Fenix run is analysed and declines with `autofile held for product 'Fenix'
+   (triage-only)`, recorded on the dossier like a held channel and distinct from `autofile
+   disabled`, so the declines can be counted. Why held (plans/16 §11.4): ~40% of Fenix changeset
+   authors cannot be needinfo'd and Clouseau would out-file the organic `Firefox for Android`
+   rate ~15x. Arming it later is a config edit (`enabled: true`; the android venue map already
+   excludes the BMO `Firefox` product) and a deploy. `AUTOFILE_BUGS` stays the global switch.
+
+4. **What to watch on the first Fenix days.**
+   - `tasks.html`: a Fenix run shows `N` with `fenix` under it in the Ch. column and the tooltip
+     leads with the product; Firefox stays the bare letter. Projected ~11-12 native pairs a day
+     plus a few Java ones (`thresholds.protos` 5 for Fenix; the proto-cluster dedup is per
+     product, so a signature both products crash on costs one run per product).
+   - `selection.html?product=Fenix` (the page has a product select) and `/api/spikes?product=Fenix`.
+     Two outcomes are new for every product: `no_stack` (an `EMPTY: *` signature, declined before
+     the spike test) and `no_protos` (a kept pair that yielded no proto/uuid).
+   - The worker log: `Update builds for nightly/Fenix`, the `firefox-ci-tc.services.mozilla.com`
+     index requests (one namespace POST per day, a GET per leaf) and, for a build whose task gave
+     no revision, hg-edge `json-pushes` in a two-second window. A cold `builds` table pays the
+     30-day lookback once (~30 POST + ~150 GET); after that, from the newest Fenix build minus a
+     day. A 404 leaf is "not a CI APK" and no row, not an error.
+   - The "N% worth investigating" badge is BLANK on a Fenix verdict
+     (`agent.calibration.products.Fenix: {}`): the table was fit on desktop nightly and says
+     nothing about Android. A number there is a bug.
+   - `uv run python bin/audit_products.py`, once: CHECK 2 lists Fenix as `ours
+     (config.products)` and only Focus/ReferenceBrowser (MozillaVPN at `--days 180`) as unmapped.
+   - Expected, not a stall: `lastdate` is keyed by channel only, so Firefox nightly and Fenix
+     nightly share one ingestion clock row; `cpu_info` is `unknown` on 40% of Fenix reports, so
+     the hardware-noise prong says nothing there; `sigage` has no Fenix population rates.
+
+5. **Java stacks and the line-number pref.** Fenix's JVM crashes carry a `java_stack_trace`
+   whose line numbers went through R8's obfuscation map: `Keystore.kt:269` of the motivating
+   crash is a KDoc comment line. `java.trust_line_numbers` in `config/global.json` (a top-level
+   `java` block, because `java.py` runs on the INGESTION path) is `false`: frames carry
+   `line_trusted: false`, scoring falls back to file/method matches (`Changeset._fuzzy_score`:
+   new file 10, method 8, file 5), the stack hash uses file + function instead of the line, the
+   prompts say the lines are R8-remapped, and `crashstack.html` shows the line as `~269` with the
+   reason on hover and links the FILE (no `#l` anchor, no `&line=` on the codeview link). `true`
+   restores line-proximity scoring, line citations and the anchors everywhere -- a config edit
+   and a deploy; the flag is derived at read time, so history is relabelled consistently. Our
+   packages are `java.packages` (`org.mozilla.`, `mozilla.components.`, `mozilla.appservices.`,
+   `mozilla.telemetry.`); a crash whose frames are all the framework's is `no usable stack` to
+   the trigger, exactly like a native crash without a `json_dump`.
 
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
@@ -296,4 +403,9 @@ curl -s -X POST https://<app>.herokuapp.com/api/tasks/trigger \
 
 The result is on `crashstack.html?uuid=<uuid>` (and `/api/evidence?uuid=`) whatever
 `show_in_tasks` says; a run with `file_bug: false` shows "Not filed: filing disabled for this
-run" in the Bug column when it is listed.
+run" in the Bug column when it is listed. Each result names the crash's `product` and `channel`.
+`file_bug: true` lets the run through the ordinary filing gates; it does NOT arm a product whose
+filing is held (`agent.autofile.products.<product>.enabled: false` -- Fenix): that run is
+analysed and declines with `autofile held for product 'Fenix' (triage-only)`. A Java-only crash
+whose frames are all outside `java.packages` is refused as `no usable stack`, like a native crash
+Socorro has no `json_dump` for.

@@ -212,6 +212,10 @@ ul.experts li { margin: 0.15em 0; }
 .model-tag.warn { background-color: #f2c94c; }
 
 .muted { color: #666; }
+/* An R8-remapped Java line (`java.trust_line_numbers` false, plans/16 D7): the number is what
+   the JVM reported through the obfuscation map, not a line of the source, so crashstack.html
+   shows it marked `~` with the reason on hover and links the FILE, never the line. */
+.line-untrusted { color: #8a6d1f; border-bottom: 1px dotted #8a6d1f; cursor: help; }
 
 /* Readability: long prose (data-flow summary, mechanism/consistency, abstain
  * rationale, reasoning) is easier to read at a bounded measure with more leading. */
@@ -550,6 +554,19 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
    the gate's exact reason. Muted: the bug link is still the thing worth clicking. */
 .task-bug-declined { color: #777; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
+/* The product under the channel initial, for a product that is NOT Firefox (plans/16): Fenix
+   nightly and Firefox nightly are both `N`, and at 3% the column has room for one letter and
+   one small word, not for a twelfth column (the nth-child widths above). Firefox stays the bare
+   letter it always was; the full product + channel + version is the cell's tooltip. */
+.task-prod {
+    display: block;
+    font-size: 0.65em;
+    line-height: 1.2;
+    color: #33691e;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 /* Spike escalations: the second table on tasks.html (agent.spike_escalation). Same eleven
    columns as the triage table so the .tasks nth-child widths above apply to it unchanged;

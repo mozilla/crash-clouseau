@@ -8,8 +8,10 @@
 #
 # models.create() only builds tables when they are missing (gated on the "lastdate"
 # table) and runs _ensure_enum_values() to add any new enum values (the "lead" verdict, the
-# ESR channel label esr153) to a long-lived DB, so it is a safe no-op once the schema exists
-# and every label is present. HGAuthor.get_default_id()
+# ESR channel label esr153, the product label Fenix -- PRODUCT_TYPE, plans/16; a Postgres enum
+# label is never dropped again) to a long-lived DB, so it is a safe no-op once the schema exists
+# and every label is present. Each addition prints `enum <TYPE>: added value '<label>'`, which
+# DEPLOY.md tells the operator to look for in the release log. HGAuthor.get_default_id()
 # seeds the default (empty) author row that Node.hgauthor references. It deliberately
 # does NOT run ingestion (update_all) -- the clock dyno owns that -- so the release
 # phase stays fast and never blocks a deploy on the network.

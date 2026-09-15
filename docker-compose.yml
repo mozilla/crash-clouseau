@@ -20,6 +20,14 @@ services:
     # `releases/mozilla-esr153`, the `153\.[0-9]+(\.[0-9]+)?esr` Buildhub pattern, Socorro's
     # one `esr` channel) — add it here the same way. Production's value is the Heroku config
     # var, set per DEPLOY.md.
+    #
+    # PRODUCTS are the other axis and the OTHER default (plans/16): a local run ingests every
+    # product in the config's `ingest_products` (Firefox AND Fenix nightly, so `bin/init.py`
+    # also walks the TaskCluster index and the mobile/android file tree) unless `INGEST_PRODUCTS`
+    # is set -- `INGEST_PRODUCTS=Firefox` for a desktop-only database; set-but-empty ingests no
+    # product at all, with a warning, like the channel variable. Not fail-closed like
+    # `INGEST_CHANNELS` on purpose: the product list is two entries long and a deploy that
+    # introduced the lever must not stop desktop for a tick because nobody set a new variable.
     environment:
       - INGEST_CHANNELS=nightly beta
     command: >
