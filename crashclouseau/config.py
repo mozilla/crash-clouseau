@@ -58,12 +58,93 @@ def get_ignored_signatures():
     reporting, and it was spike-selected on nightly and analysed four times ($1.25) before this
     list existed (Calixte, 2026-09-08: "always exclude it whatever the numbers are"). Nothing
     about a test crash is a regression, so it is dropped at the selector, kept out of the rate
-    path, refused by the spike sweep and refused by a queued agent run."""
+    path, refused by the spike sweep and refused by a queued agent run.
+
+    THE FENIX CASE NEEDS A PATTERN, NOT AN ENTRY (``ignored_signature_patterns``, read by
+    ``get_ignored_signature_patterns``). Fenix's debug drawer has one crash button, ``throw
+    ArithmeticException("Debug drawer triggered exception.")`` inside a lambda of
+    ``org.mozilla.fenix.debugsettings.crashtools.CrashToolsKt`` (CrashTools.kt line 86 on
+    2026-09-15; the other button opens StartupCrashActivity, a screen, not a crash). Its Socorro
+    signature carries the R8-synthesised lambda class and its remapped line, and BOTH change
+    from build to build: over 90 days to 2026-09-15 the 29 reports (nightly 14, release 14,
+    beta 1) spelled it three ways -- ``java.lang.ArithmeticException: at
+    org.mozilla.fenix.debugsettings.crashtools.CrashToolsKt$$ExternalSyntheticLambda4.invoke(R8$$SyntheticClass:5)``
+    (19), ``...CrashToolsKt$$ExternalSyntheticLambda3.invoke(R8$$SyntheticClass:5)`` (9) and
+    ``...CrashToolsKt$$ExternalSyntheticLambda3.invoke(R8$$SyntheticClass:52)`` (1) -- so an
+    exact list would trail every nightly by one entry. The pattern is anchored at the start:
+    any JVM exception class, ``: at ``, then that package. It was selected and scored in the
+    2026-09-15 smoke (crash c46ba2e4) before this existed (Calixte: "we can exclude the fenix
+    auto-crash menu thing").
+
+    BOTH LISTS ARE FOR DELIBERATE CRASHES ONLY -- a button somebody pressed to crash the
+    browser on purpose. Neither is a denylist for a noisy real signature: a signature that is
+    loud and boring is a selector or gate problem, and hiding it here would hide the day it
+    stops being boring."""
     return frozenset(_get_global().get("ignored_signatures") or ())
 
 
+# ``get_ignored_signature_patterns``'s cache: ``None`` until first read, then the tuple of
+# compiled regexes for the process's lifetime. ``is_ignored_signature`` runs once per signature
+# on every selector tick (thousands of calls), so the patterns are compiled ONCE, not per call.
+# Single underscore so a test can reset it by name from inside a class body.
+_IGNORED_PATTERNS = None
+# Two ordinary signatures no deliberate-crash pattern may match: a C++ one and Socorro's OOM
+# bucket. A pattern that matches either matches everything.
+_IGNORED_PATTERN_CANARIES = ("mozilla::dom::Document::GetDocShell", "OOM | small")
+
+
+def get_ignored_signature_patterns():
+    """``ignored_signature_patterns`` in ``config/global.json`` compiled, as a tuple, cached on
+    first use. Anchored at the START of the signature by the caller (``re.match``), so a
+    pattern says "a signature that begins like this" and needs its own ``.*`` to say anything
+    else.
+
+    A pattern that does not compile is LOGGED AND SKIPPED, never raised: the reader is the
+    selector's tick, the spike sweep and every queued agent run, and a typo in a config list
+    must not be able to stop any of them (the ``_ENUM_ADDITIONS`` failure shape). The typo
+    ignores nothing; the other entries still bite.
+
+    SO IS A PATTERN THAT MATCHES EVERYTHING, which is the worse typo because it is VALID: an
+    empty string, ``^``, ``.`` or a trailing ``""`` left in the list -- or the key written as a
+    bare string, which Python iterates as characters -- would pop every signature on every
+    product and channel as ``ignored``, enqueue nothing and escalate nothing, with the
+    selection log as the only trace. A pattern that matches the empty string or either of two
+    desktop canaries below is that outage, and is dropped with an error."""
+    global _IGNORED_PATTERNS
+    if _IGNORED_PATTERNS is None:
+        raw = _get_global().get("ignored_signature_patterns") or ()
+        if not isinstance(raw, (list, tuple)):
+            logger.error("ignored_signature_patterns must be a list of regular expressions, "
+                         "got %r; the whole key is ignored", raw)
+            raw = ()
+        compiled = []
+        for pattern in raw:
+            try:
+                p = re.compile(pattern)
+            except (re.error, TypeError) as e:
+                logger.error(
+                    "ignored_signature_patterns: %r is not a valid regular expression (%s); "
+                    "skipped, it ignores nothing", pattern, e)
+                continue
+            if p.match("") or any(p.match(c) for c in _IGNORED_PATTERN_CANARIES):
+                logger.error(
+                    "ignored_signature_patterns: %r matches an ordinary desktop signature, i.e. "
+                    "EVERYTHING; skipped, it ignores nothing", pattern)
+                continue
+            compiled.append(p)
+        _IGNORED_PATTERNS = tuple(compiled)
+    return _IGNORED_PATTERNS
+
+
 def is_ignored_signature(signature):
-    return bool(signature) and signature in get_ignored_signatures()
+    """Is *signature* a deliberate test crash: named exactly by ``ignored_signatures`` or
+    matched at its start by one of ``ignored_signature_patterns``? The ONE chokepoint the four
+    gates ask (the selector, the rate path, the spike sweep, a queued agent run)."""
+    if not signature:
+        return False
+    if signature in get_ignored_signatures():
+        return True
+    return any(p.match(signature) for p in get_ignored_signature_patterns())
 
 
 # THE ESR FAMILY. Socorro has ONE `esr` release_channel, but Mozilla ships several ESR lines at

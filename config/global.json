@@ -24,6 +24,10 @@
     [
         "CrashChannel::OpenContentStream"
     ],
+    "ignored_signature_patterns":
+    [
+        "^java\\.lang\\.ArithmeticException: at org\\.mozilla\\.fenix\\.debugsettings\\.crashtools\\.CrashToolsKt"
+    ],
     "facets_limit": 10000,
     "build_facets_limit": 500,
     "backward_lookup_ndays": 3,

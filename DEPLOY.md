@@ -50,6 +50,11 @@ Several things are automated by the repo now; the rest are one-time app setup.
   crashes (about:crashparent / about:crashcontent both sign as
   `CrashChannel::OpenContentStream`) are never selected, never rate-picked, never escalated
   and never run, whatever their numbers. The selection log records them as `ignored`.
+  `ignored_signature_patterns` beside it holds start-anchored regexes for a test crash whose
+  exact signature moves per build: Fenix's debug-drawer `ArithmeticException` signs with an
+  R8 lambda index and line that took three spellings in 90 days, so one pattern on its
+  `org.mozilla.fenix.debugsettings.crashtools.` package covers every spelling. Both lists are
+  for deliberate crashes only, never a denylist for a noisy real signature.
 
 ## One-time app setup (required)
 1. **Add-ons:** Heroku Postgres + Heroku Redis. (`DATABASE_URL`/`REDIS_URL` are set
