@@ -52,7 +52,10 @@ class _LenientEnum(TypeDecorator):
 
 
 CHANNEL_TYPE = _LenientEnum(*config.get_channels(), name="CHANNEL_TYPE")
-PRODUCT_TYPE = db.Enum(*config.get_products(), name="PRODUCT_TYPE")
+# Lenient for the same reason: `Fenix` (2026-09-15) is the first product label added since the
+# initial deploy, and a Postgres enum label is forever. Should the product ever be retired the
+# way esr115/esr140 were, its builds/chandaily/sigdaily rows must still READ.
+PRODUCT_TYPE = _LenientEnum(*config.get_products(), name="PRODUCT_TYPE")
 
 # Evidence-agent persistence (#04). The dossier JSON content schema is owned by
 # the dossier-builder sub-plan (#03); this layer stores the envelope + verdict.
@@ -195,10 +198,31 @@ class File(db.Model):
 
     @staticmethod
     def get_full_path(name):
-        m = db.session.query(File.name).filter(File.name.like("%/" + name)).first()
-        if m:
-            return m[0]
-        return name
+        """The in-tree path whose suffix is ``name`` (``mozilla/components/lib/dataprotect/
+        Keystore.kt`` -> ``mobile/android/android-components/.../Keystore.kt``), or ``name``
+        unchanged when no row matches -- callers rely on that contract.
+
+        Escaped (a Kotlin path can carry ``_``, a LIKE wildcard) and DETERMINISTIC: measured on
+        the live mobile/android tree, 11 package-path+file suffixes resolve to more than one
+        row, every one a test / androidTest / samples copy of a ``src/main`` file, and
+        ``.first()`` picked one in undefined order. The shipping source wins, then the shortest
+        path."""
+        if not name:
+            return name
+        pat = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = db.session.query(File.name).filter(
+            File.name.like("%/" + pat, escape="\\")
+        ).all()
+        if not rows:
+            return name
+
+        def rank(path):
+            test_dir = any(
+                t in path for t in ("/src/test/", "/src/androidTest/", "/samples/", "/test/")
+            )
+            return (0 if "/src/main/" in path else 1, 1 if test_dir else 0, len(path), path)
+
+        return min((r[0] for r in rows), key=rank)
 
     @staticmethod
     def populate(files, check=False):
@@ -589,9 +613,30 @@ class Changeset(db.Model):
         return res
 
     @staticmethod
-    def get_scores(filename, line, chgsets, csid, channel=None):
+    def _fuzzy_score(chg, method_lines):
+        """The score for a changeset when the frame's LINE cannot be trusted (an R8-remapped
+        JVM frame, ``config.java_trust_line_numbers`` false): ``method_match`` when any line the
+        changeset touched, added or deleted falls inside the frame's METHOD span at the build
+        revision (``method_lines`` = ``(first, last)``, located by ``java`` from the source),
+        ``file_match`` when it touched the file at all, 0 for a changeset that recorded no
+        lines. Line proximity is never consulted: measured at the build revision, the reported
+        line of a Fenix frame lands in another method or in a comment."""
+        lines = set(chg.touched_lines or ()) | set(chg.added_lines or ())
+        lines |= set(chg.deleted_lines or ())
+        if not lines:
+            return 0
+        if method_lines:
+            start, end = method_lines
+            if any(start <= ln <= end for ln in lines):
+                return config.get_method_match_score()
+        return config.get_file_match_score()
+
+    @staticmethod
+    def get_scores(filename, line, chgsets, csid, channel=None, line_trusted=True,
+                   method_lines=None):
         """Line-proximity scores for one crash frame against the candidate changesets
-        ``find`` produced for it.
+        ``find`` produced for it -- or, when ``line_trusted`` is False, the file/method-level
+        scores of ``_fuzzy_score`` (``method_lines`` is the frame's method span, or None).
 
         ``channel`` MUST be passed by anything that scores a real crash. ``find`` is
         channel-filtered and this was not, and the same changeset hash legitimately has a
@@ -620,6 +665,8 @@ class Changeset(db.Model):
         for chg in chgs:
             if chg.isnew:
                 res.append((chg.id, csid, M))
+            elif not line_trusted:
+                res.append((chg.id, csid, Changeset._fuzzy_score(chg, method_lines)))
             else:
                 added = chg.added_lines
                 deleted = chg.deleted_lines
@@ -819,6 +866,21 @@ class Build(db.Model):
         if q:
             return q[0]
         return None
+
+    @staticmethod
+    def get_max_buildid(channel, product):
+        """The newest stored build of *product* on *channel* (tz-aware) or None. What lets a
+        build source that has no server-side range query (``tcindex``) probe only the days
+        newer than what the table already holds instead of the whole lookback every tick."""
+        q = (
+            db.session.query(func.max(Build.buildid))
+            .filter(Build.product == product, Build.channel == channel)
+            .first()
+        )
+        bid = q[0] if q else None
+        if bid is not None and bid.tzinfo is None:
+            bid = pytz.utc.localize(bid)
+        return bid
 
     @staticmethod
     def get_products(channel):
@@ -1092,6 +1154,8 @@ SELECTION_OUTCOMES = frozenset(
         utils.DROPPED_NO_USERS,
         utils.RISING_RATE,
         utils.IGNORED,
+        utils.NO_STACK,
+        utils.NO_PROTOS,
     }
 )
 # The outcomes that mean "we analysed this pair" -- what `ever_selected` records and what the
@@ -1502,7 +1566,7 @@ def _unusable_verdict():
     return or_(by_prefix, by_kind)
 
 
-def _cluster_dossiers(signatureid, protohash, channel):
+def _cluster_dossiers(signatureid, protohash, channel, product=None):
     """Query of the ``done`` dossiers on one proto-signature cluster that are allowed to speak
     for it: instance-suppressed runs (``_INSTANCE_SUPPRESSED``) are excluded, since a broken
     machine or a corrupted fault address says nothing about the next report of the same
@@ -1523,7 +1587,13 @@ def _cluster_dossiers(signatureid, protohash, channel):
     needs the nightly cluster to hold a ``status=done`` dossier.
 
     ``channel`` may be a plain string or a SQL column expression, so ``untriaged`` can
-    correlate it against its own ``builds`` row.
+    correlate it against its own ``builds`` row. So may ``product``, and it is the same defect
+    one axis over: 21.8% of Fenix nightly's native signatures also occur on Firefox nightly
+    with at least one byte-identical protohash measured (plans/16 §6.2), so without the clause
+    whichever PRODUCT was analysed first would close the cluster for the other -- and the
+    dangerous direction is again the new one silently reducing DESKTOP coverage. Decided
+    (plans/16 §11.1): the two are independent clusters; the price is one run per product on a
+    shared cluster. ``None`` (legacy callers) keeps the channel-only cluster.
 
     The sibling join is ALIASED, which is load-bearing for the second caller: ``untriaged``
     correlates this as a subquery against its own ``uuids`` row, and without an alias
@@ -1533,6 +1603,7 @@ def _cluster_dossiers(signatureid, protohash, channel):
     corrob = Dossier.payload["dossier"]["corroborations"]
     sib = aliased(UUID)
     sib_build = aliased(Build)
+    product_clause = [sib_build.product == product] if product is not None else []
     return (
         db.session.query(Dossier.id)
         .join(sib, Dossier.uuidid == sib.id)
@@ -1541,6 +1612,7 @@ def _cluster_dossiers(signatureid, protohash, channel):
             sib.signatureid == signatureid,
             sib.protohash == protohash,
             sib_build.channel == channel,
+            *product_clause,
             Dossier.status == "done",
             *[
                 or_(corrob[flag].astext.is_(None), corrob[flag].astext != "true")
@@ -1662,6 +1734,10 @@ class UUID(db.Model):
             .join(Signature)
         )
         q = q.filter(UUID.uuid == uuid).first()
+        if q is None:
+            # An unknown uuid, or one whose builds row is gone (the INNER join above):
+            # callers (`trigger._known`, `enqueue_agent`'s product lookup) guard for None.
+            return None
 
         return {
             "buildid": utils.get_buildid(q.buildid),
@@ -1773,7 +1849,7 @@ class UUID(db.Model):
         breaks the schema would otherwise re-pay ~$3 for every new uuid in it forever. Once
         that many broken runs have accumulated the cluster is treated as triaged, loudly."""
         row = (
-            db.session.query(UUID.signatureid, UUID.protohash, Build.channel)
+            db.session.query(UUID.signatureid, UUID.protohash, Build.channel, Build.product)
             .select_from(UUID)
             .join(Build, Build.id == UUID.buildid)
             .filter(UUID.uuid == uuid)
@@ -1781,7 +1857,7 @@ class UUID(db.Model):
         )
         if not row or not row.protohash:
             return False
-        q = _cluster_dossiers(row.signatureid, row.protohash, row.channel)
+        q = _cluster_dossiers(row.signatureid, row.protohash, row.channel, row.product)
         if db.session.query(q.filter(not_(_unusable_verdict())).exists()).scalar():
             return True
         broken = q.filter(_unusable_verdict()).count()
@@ -1802,10 +1878,11 @@ class UUID(db.Model):
         return False
 
     @staticmethod
-    def untriaged(after_id, min_age_s, max_age_s, limit, channels=None):
+    def untriaged(after_id, min_age_s, max_age_s, limit, channels=None, products=None):
         """Ingested crashes that have NO dossier at all and whose proto-signature cluster has
         never been usably triaged — i.e. the ones the pipeline would analyse if it were offered
-        them again. Returns ``[(id, uuid, channel)]`` in id order.
+        them again. Returns ``[(id, uuid, channel)]`` in id order. ``products`` restricts like
+        ``channels`` (None = no filter, [] = nothing), for ``config.get_agent_products``.
 
         Measured on prod 2026-08-12: 86 of these, ~3.4/day, arriving in bursts (8 on 07-24, 8 on
         08-07). 16 carried an on-stack score, which means ``build_seed`` would have produced a
@@ -1850,11 +1927,14 @@ class UUID(db.Model):
                 # ...and per CHANNEL: `Build` is already joined here as the candidate's own
                 # build, so `Build.channel` correlates and a nightly dossier can no longer
                 # answer for a beta crash (or the reverse).
-                ~_cluster_dossiers(UUID.signatureid, UUID.protohash, Build.channel)
+                ~_cluster_dossiers(UUID.signatureid, UUID.protohash, Build.channel,
+                                   Build.product)
                 .filter(not_(_unusable_verdict()))
                 .exists(),
             )
         )
+        if products is not None:
+            rows = rows.filter(Build.product.in_(list(products)))
         # `None` is "caller did not ask" (the tests, and any legacy caller); an empty LIST is
         # "no channel" and matches nothing. This used to be `if channels:`, which collapsed the
         # two -- so `AGENT_CHANNELS=""` left the sweep wide open even once `enqueue_agent`'s gate
@@ -2275,9 +2355,11 @@ class CrashStack(db.Model):
                 uuidid,
                 frame["stackpos"],
                 java,
-                frame["original"],
-                frame["module"],
-                frame["filename"],
+                # Clamped to their columns: a JVM `original` line or FQCN module can exceed
+                # 512 / 128 where a native frame never does, and Postgres aborts the commit.
+                _fit_column(CrashStack, "original", frame["original"]),
+                _fit_column(CrashStack, "module", frame["module"]),
+                _fit_column(CrashStack, "filename", frame["filename"]),
                 frame["function"],
                 frame["line"],
                 frame["node"],
@@ -2292,7 +2374,13 @@ class CrashStack(db.Model):
             csets = frame["changesets"]
             if csets:
                 scores = Changeset.get_scores(
-                    frame["filename"], frame["line"], csets, cs.id, channel=channel
+                    frame["filename"], frame["line"], csets, cs.id, channel=channel,
+                    # A JVM frame under `java.trust_line_numbers: false` carries
+                    # `line_trusted: False` (and, when `java` located the method in the
+                    # source at the build revision, its `method_lines` span); a native frame
+                    # carries neither and scores by line proximity exactly as before.
+                    line_trusted=frame.get("line_trusted", True),
+                    method_lines=frame.get("method_lines"),
                 )
                 if scores:
                     Score.set(scores)
@@ -2316,6 +2404,10 @@ class CrashStack(db.Model):
         uuidid = uuid_info["id"]
         repo_url = Mercurial.get_repo_url(uuid_info["channel"])
         is_java = uuid_info["java"]
+        # Derived at read time from the pref rather than stored, so flipping
+        # `java.trust_line_numbers` re-labels history consistently. A native stack's lines are
+        # always trusted (the compiler-drift caveat is the prompt's, not this flag's).
+        line_trusted = (not is_java) or config.java_trust_line_numbers()
 
         iframes = (
             db.session.query(
@@ -2346,11 +2438,15 @@ class CrashStack(db.Model):
             url, filename = utils.get_file_url(
                 repo_url, frame.filename, frame.node, frame.line, frame.original
             )
+            if not line_trusted and url and frame.filename and frame.node:
+                # No `#l<line>` anchor onto a line the frame does not really point at.
+                url = url.split("#l")[0]
             stack.append(
                 {
                     "stackpos": frame.stackpos,
                     "filename": filename,
                     "function": frame.function,
+                    "line_trusted": line_trusted,
                     # The binary the frame is in (e.g. ``xul.dll``) -- Socorro puts it
                     # between the frame number and the function in the stack it pre-fills
                     # into a crash bug, so the bug comment (report_bug) needs it too.
@@ -2885,6 +2981,8 @@ class Dossier(db.Model):
                 # that stalled run beta or nightly?" at all -- and the two have different costs,
                 # different filing policies and different expected volumes.
                 Build.channel.label("channel"), Build.version.label("version"),
+                # ...and WHICH PRODUCT, since Fenix nightly and Firefox nightly are both 'N'.
+                Build.product.label("product"),
                 Dossier.created, Dossier.updated, Dossier.cost_usd,
                 Dossier.input_tokens, Dossier.output_tokens, Dossier.cache_read_tokens,
                 Dossier.worker_models, Verdict.verdict, Verdict.confidence,
@@ -3271,7 +3369,7 @@ class Dossier(db.Model):
         return {"uuid": row.uuid, "bug": row.bug} if row else None
 
     @staticmethod
-    def filed_bugs_since(when, channel=None):
+    def filed_bugs_since(when, channel=None, product=None):
         """How many bugs the autofiler has FILED since *when* — the daily-cap counter.
 
         TWO FIXES IN ONE SIGNATURE, both of which only bite once there is more than one channel.
@@ -3288,19 +3386,23 @@ class Dossier(db.Model):
         predates the channel key is counted for EVERY channel rather than none: under-counting a
         cap is the direction that files too much.
 
-        ``Build.channel`` rather than the payload, so pre-existing rows need no backfill."""
+        ``Build.channel`` rather than the payload, so pre-existing rows need no backfill.
+
+        ``product`` makes it per product as well, because Fenix nightly and Firefox nightly
+        share the channel label: without it the two would spend one cap of 10 in both
+        directions the day Fenix files (plans/16 §6.2)."""
         fb = Dossier.payload["filed_bug"]
         q = (
             db.session.query(func.count(Dossier.id))
             .select_from(Dossier)
             .filter(fb["filed"].astext == "true", Dossier.updated >= when)
         )
+        if channel or product:
+            q = q.join(UUID, Dossier.uuidid == UUID.id).join(Build, Build.id == UUID.buildid)
         if channel:
-            q = (
-                q.join(UUID, Dossier.uuidid == UUID.id)
-                .join(Build, Build.id == UUID.buildid)
-                .filter(Build.channel == channel)
-            )
+            q = q.filter(Build.channel == channel)
+        if product:
+            q = q.filter(Build.product == product)
         return q.scalar() or 0
 
     @staticmethod
@@ -3784,7 +3886,7 @@ class Feedback(db.Model):
         return row
 
     @staticmethod
-    def scoreboard(channel=None):
+    def scoreboard(channel=None, product=None):
         """``{attribution -> count}`` plus per-archetype tallies, for the page and the CLI.
 
         ``channel`` STRATIFIES IT, joining through ``uuid`` -> ``uuids`` -> ``builds`` rather
@@ -3797,15 +3899,18 @@ class Feedback(db.Model):
         about neither. The same denominator argument as ``sigage.hardware_noise``'s.
 
         A row whose uuid is unknown (or NULL) drops out of a channel-scoped call and stays in the
-        unscoped one, which is the honest direction: it cannot be attributed."""
+        unscoped one, which is the honest direction: it cannot be attributed.
+
+        ``product`` stratifies the same way, through the same join: Fenix nightly and Firefox
+        nightly share the channel label, so a channel-only scoreboard would pool them."""
         out = {"total": 0, "by_attribution": {}, "by_archetype": {}}
         q = db.session.query(Feedback)
+        if channel or product:
+            q = q.join(UUID, UUID.uuid == Feedback.uuid).join(Build, Build.id == UUID.buildid)
         if channel:
-            q = (
-                q.join(UUID, UUID.uuid == Feedback.uuid)
-                .join(Build, Build.id == UUID.buildid)
-                .filter(Build.channel == channel)
-            )
+            q = q.filter(Build.channel == channel)
+        if product:
+            q = q.filter(Build.product == product)
         for row in q.all():
             out["total"] += 1
             out["by_attribution"][row.attribution] = (
@@ -4087,6 +4192,12 @@ _ENUM_ADDITIONS = {
     # esr140, retired the same day) stay in the type forever and read back through
     # `_LenientEnum`.
     "CHANNEL_TYPE": tuple(config.get_channels()),
+    # Every configured product label, for the same reason. `Fenix` is the first one added
+    # since the initial deploy; without it the first Fenix write (`Build.put_data`, or
+    # `ChannelDaily.upsert` from `sigtrend.backfill`, which runs FIRST in `put_crashes`) raises
+    # `invalid input value for enum "PRODUCT_TYPE"` and so does every `Build.product == 'Fenix'`
+    # read behind reports.html / tasks.html / the API.
+    "PRODUCT_TYPE": tuple(config.get_products()),
 }
 
 # The only strings ever interpolated into the ALTER below. Our own config labels, and still

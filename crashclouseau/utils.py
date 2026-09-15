@@ -259,11 +259,13 @@ def is_interesting_file(filename):
     ``StaticPrefList.yaml`` AND five C++ files and was scored — 45.2% of pref-touching
     window changesets are visible for that reason, and a pref-ONLY flip is 2.0% of them.
 
-    The one excluded family that CAN reach a frame is Kotlin, via
-    ``java.inspect_java_stacktrace`` (``(Foo.kt:56)``): 20 of 72 ``org.mozilla.*`` frames
-    in a Fenix nightly java-stack sample. Adding ``.kt`` here is inert on its own — the
-    blocker is ``java.get_java_files`` (scrapes the ARCHIVED mozilla/gecko-dev, filters
-    ``.java`` only, and runs from ``create.py`` rather than the schedule). See plans/16.
+    Kotlin IS in the list since Fenix nightly landed (2026-09-15): a ``(Foo.kt:56)`` frame from
+    ``java.inspect_java_stacktrace`` resolves to its in-tree path through ``models.File``,
+    whose rows come from this filter over the pushlog AND from ``java.refresh_file_index``
+    (the GitHub tree of ``mobile/android`` at the build's git sha, called by
+    ``update.update_builds`` after a new Fenix build). Measured before the switch: ``.kt`` adds
+    ~69% more ``changesets`` rows on the shared nightly pushlog and 0 desktop candidates — a
+    cost for desktop, not an output change. See plans/16 §13.
 
     If you came here looking for on-stack RECALL, it is not in this list:
     ``inspector.get_path_node`` drops 17.6% of frame file URIs, and ~9% of those are real
@@ -368,6 +370,32 @@ RISING_RATE = "rising_rate"
 # series before any test could pick it. Logged per build-day it was reported on, so "why was
 # CrashChannel::OpenContentStream not analysed" has an answer in the selection log.
 IGNORED = "ignored"
+# An `EMPTY: no frame data available` signature: no native stack and no Java stack, so nothing
+# could ever be scored. Declined before the spike test. 20-40% of Fenix nightly reports
+# (Socorro's Android stackwalker fails at scale, plans/16 §5); the odd desktop EmptyMinidump.
+NO_STACK = "no_stack"
+# A pair the spike test KEPT for which Socorro then yielded no proto-signature cluster and no
+# Java report -- nothing to ingest. Recorded instead of `selected`, which used to claim an
+# analysis that never happened (a Stats row with installs=0 and no uuid).
+NO_PROTOS = "no_protos"
+
+# A Socorro JVM signature: a dotted exception class, `: at ` and the top frame --
+# `java.lang.OutOfMemoryError: at java.util.Arrays.copyOf(Arrays.java)`,
+# `mozilla.appservices.fxaclient.FxaException$Forbidden: at ...`. Native signatures never carry
+# `: at ` after a dotted identifier.
+_JAVA_SIGNATURE = re.compile(r"^[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)+: at ")
+
+
+def signature_class(signature):
+    """``"empty"`` (no frame data), ``"java"`` (a JVM exception) or ``"native"``. What decides
+    how a selected signature is turned into uuids: native pairs come from the proto-signature
+    facet, Java pairs from the java_stack_trace column, empty ones from nowhere."""
+    sgn = signature or ""
+    if sgn.startswith("EMPTY: "):
+        return "empty"
+    if _JAVA_SIGNATURE.match(sgn):
+        return "java"
+    return "native"
 
 
 def pick_latest_build(numbers, threshold):

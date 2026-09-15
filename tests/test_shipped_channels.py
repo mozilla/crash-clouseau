@@ -269,6 +269,11 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         # test_bit_flip_gate.py:235; test_bad_machine_gate.py:180,185) honest after the
         # signature grew a parameter.
         self.assertEqual(config.get_agent_autofile(), nightly)
+        # ...and after it grew a SECOND one (`product`, Fenix 2026-09-15): no product merges
+        # nothing, and Firefox -- the product the top-level block describes -- is the same as
+        # naming none. Every one-argument caller is a Firefox path.
+        self.assertEqual(config.get_agent_autofile(), config.get_agent_autofile(None, None))
+        self.assertEqual(config.get_agent_autofile(), config.get_agent_autofile("nightly", "Firefox"))
 
     def test_every_triaged_channel_has_a_filing_decision(self):
         """A channel we spend money analysing must be a channel somebody DECIDED about filing.
@@ -307,6 +312,29 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
                     [], {}, "lead", 90)
                 self.assertFalse(res["filed"])
                 self.assertIn("no autofile configuration", res["skipped"])
+
+    def test_every_product_has_a_filing_decision(self):
+        """The product analog, and it is needed for the same reason one axis over: a Fenix
+        dossier lands on channel `nightly`, which IS declared and ARMED, so without a product
+        decision Fenix would inherit nightly's filing policy by default -- comment mode, cap
+        10, on `Firefox for Android`, whose changeset authors ~40% cannot be needinfo'd
+        (plans/16 §11.4). ITERATES `get_products()` (the `PRODUCT_TYPE` universe), not
+        `get_agent_products()` (an environment variable), for the reason the channel loop gives.
+
+        Fenix is DECLARED AND HELD (`products.Fenix.enabled: false`, 2026-09-15): a decision,
+        not a gap. Firefox is declared by `default_product` and not held."""
+        for product in config.get_products():
+            with self.subTest(product=product):
+                self.assertTrue(
+                    config.autofile_product_declared(product),
+                    "{} can appear in Build.product but nobody has decided about filing "
+                    "on it".format(product))
+        self.assertTrue(config.autofile_product_held("Fenix"))
+        self.assertFalse(config.autofile_product_held("Firefox"))
+        # Under prod's live value: Firefox files on nightly, Fenix does not, on the same label.
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            self.assertTrue(config.get_agent_autofile("nightly", "Firefox")["enabled"])
+            self.assertFalse(config.get_agent_autofile("nightly", "Fenix")["enabled"])
 
     def test_every_channel_is_armed_and_a_per_channel_false_still_vetoes(self):
         """WHAT IS SHIPPED: with `AUTOFILE_BUGS=1` live in production, nightly, beta AND release
@@ -383,6 +411,21 @@ class TestBetaPublishesNoCalibratedProbability(unittest.TestCase):
                     self.assertIn(channel, declared,
                                   "a triaged channel with no calibration entry silently "
                                   "publishes nightly's fit to Bugzilla")
+        # The product analog (Fenix, 2026-09-15). A Fenix run lands on channel `nightly` ==
+        # `fit_channel`, so the channel guard above cannot protect it: every triaged product
+        # other than `fit_product` (Firefox, the 90 rows' product) must name itself in
+        # `calibration.products`, and Fenix's entry is `{}` -- named and unmeasured.
+        cal = config.get_agent().get("calibration", {})
+        fit_product = cal.get("fit_product") or "Firefox"
+        products = set(cal.get("products") or {})
+        for product in config.get_agent_products():
+            if product != fit_product:
+                with self.subTest(product=product):
+                    self.assertIn(product, products,
+                                  "a triaged product with no calibration entry silently "
+                                  "publishes Firefox nightly's fit to Bugzilla")
+        self.assertEqual(config.get_agent_calibration("nightly", "Fenix"), {})
+        self.assertEqual(config.get_agent_calibration("nightly", "Firefox"), shipped)
 
     def test_a_beta_bug_comment_carries_no_worth_investigating_number(self):
         """End to end, because the config value alone is not the claim: the seed's channel has

@@ -119,7 +119,48 @@ def _channel_value(table, channel, default):
 
 
 def get_products():
+    """Every Socorro product this build KNOWS -- the list that defines the ``PRODUCT_TYPE``
+    enum, so every product ever contemplated. Not an action list: what gets INGESTED is
+    ``get_ingest_products`` and what gets ANALYSED is ``get_agent_products``."""
     return _get_global()["products"]
+
+
+def get_ingest_products():
+    """Products to INGEST (free): ``INGEST_PRODUCTS`` (space-separated) when set, else the
+    config's ``ingest_products``, else every configured product.
+
+    The SAME shape as ``get_agent_channels``, not ``get_ingest_channels``: a JSON default and
+    an env override. The channel lever fails closed because its list also defines an enum of
+    every channel ever contemplated; the product list is two entries long and a deploy that
+    introduces the lever must not stop desktop ingestion for a tick because nobody set a new
+    variable first. Set-but-empty still means NOTHING, with a warning, so the variable is a
+    real kill switch. Restricted to ``get_products()``: a product the enum does not know cannot
+    be ingested, and a mocked ``get_products`` keeps ruling the tests."""
+    env = os.getenv("INGEST_PRODUCTS")
+    if env is not None:
+        products = env.split()
+        if not products:
+            logger.warning(
+                "INGEST_PRODUCTS is set but empty, so NO product will be ingested. Unset "
+                "the variable to fall back to ingest_products in the config."
+            )
+    else:
+        products = _get_global().get("ingest_products") or get_products()
+    known = get_products()
+    return [p for p in products if p in known]
+
+
+def get_product_channels(product):
+    """The channels *product* exists on: ``product_channels.<product>`` in ``config/global.json``,
+    else every configured channel.
+
+    Fenix is nightly-only for now (``{"Fenix": ["nightly"]}``): its build source
+    (``tcindex``) serves one leaf, and pairing it with beta/release/esr153 would run
+    ``put_filelog`` + ``sigtrend.backfill`` + the selector against Socorro for channels that
+    can never yield a build row. Firefox has no entry and keeps every channel."""
+    table = _get_global().get("product_channels") or {}
+    chans = table.get(product)
+    return list(chans) if chans is not None else list(get_channels())
 
 
 def get_limit_facets():
@@ -191,6 +232,52 @@ def get_max_score():
 
 def get_num_lines():
     return _get_global()["score"]["number_of_lines"]
+
+
+def get_file_match_score():
+    """The score a candidate changeset gets for TOUCHING THE FILE of a frame whose line number
+    cannot be trusted (``java.trust_line_numbers`` false): the file-level rung of the fuzzy
+    scorer, ``models.Changeset.get_scores``. 5 is the literal ``sc < 5`` boundary the
+    line-proximity scorer already uses as "near"."""
+    return _get_global()["score"].get("file_match", 5)
+
+
+def get_method_match_score():
+    """The score for a changeset that touched the frame's METHOD (its span located in the
+    source at the build revision) when the line is untrusted. Above ``file_match``, below the
+    ``max`` a new file or an exact line gets."""
+    return _get_global()["score"].get("method_match", 8)
+
+
+# JVM (Java/Kotlin) crash stacks. Fenix nightly APKs are R8-minified and Socorro's
+# ``java_stack_trace`` carries the REMAPPED line numbers: at the build revision of crash
+# 3c426d92 (2026-09-11), ``Keystore.generateKey(Keystore.kt:269)`` points inside a different
+# method (``fun generateKey`` is line 221) and ``FxaAccountManager.kt:3`` is the licence header.
+# The FILE and METHOD are right; the LINE is not. ``trust_line_numbers`` is the pref Calixte
+# asked for: false ignores every JVM line (file+method matching, no line citations in prompts,
+# no ``#l<line>`` anchors), true restores line-proximity scoring the day the per-build R8
+# mapping is consumed. ``packages`` are the FQCN prefixes that make a frame OURS -- the old
+# ``org.mozilla.`` literal rejected every ``mozilla.components.*`` frame of the example.
+_JAVA_DEFAULTS = {"trust_line_numbers": False, "packages": ["org.mozilla."]}
+
+
+def get_java():
+    cfg = dict(_JAVA_DEFAULTS)
+    cfg.update(_get_global().get("java") or {})
+    return cfg
+
+
+def java_trust_line_numbers():
+    return bool(get_java().get("trust_line_numbers", False))
+
+
+def java_packages():
+    return tuple(get_java().get("packages") or ())
+
+
+def is_java_package(fqcn):
+    """Is this fully-qualified class (or ``pkg.Class.method``) one of our packages?"""
+    return bool(fqcn) and fqcn.startswith(java_packages())
 
 
 def get_database():
@@ -305,17 +392,32 @@ _OTHER_APP_PRODUCTS = {
     "SeaMonkey": ["SeaMonkey"],
 }
 
+# THE FIRST HALF OF THAT SHAPE CHANGE, asymmetric on purpose (2026-09-15, Fenix nightly): a
+# Socorro product -> triage FAMILY, and per family the BMO products that family can NEVER file
+# in, ON TOP of the map above. Only the android family has an entry, and it names desktop
+# ``Firefox`` -- so bug 1681745 ``Firefox :: Installer`` stops being a venue for a Fenix crash
+# and ``report_bug.resolve_product_component`` cannot adopt a desktop-front-end component for
+# one. Desktop's and ``None``'s sets are byte-identical to before: there is no ``desktop``
+# family entry, ``Firefox for Android`` / ``GeckoView`` / ``Focus`` stay non-foreign to a
+# desktop crash (bug 1855806 remains a venue, see above), and GeckoView stays shared. The Focus
+# half (one family, two Socorro products) lands when Focus is ingested.
+_PRODUCT_FAMILY = {"Fenix": "android", "Focus": "android"}
+_FAMILY_ONLY_FOREIGN = {"android": ["Firefox"]}
+
 
 def get_other_app_products(product=None):
     """The BMO products a bug about *product*'s crashes cannot belong to.
 
     *product* is the crash's own Socorro product (``uuid_info["product"]``). A product the map
     does not name — Firefox, Fenix — gets every entry, and so does ``None``: an unknown product
-    exempts nothing, so a missing one can never silently switch the check off.
+    exempts nothing, so a missing one can never silently switch the check off. A product with a
+    FAMILY (Fenix -> android) additionally excludes what its family never files in.
     """
-    return frozenset(
+    foreign = {
         p for app, products in _OTHER_APP_PRODUCTS.items() if app != product for p in products
-    )
+    }
+    foreign.update(_FAMILY_ONLY_FOREIGN.get(_PRODUCT_FAMILY.get(product), ()))
+    return frozenset(foreign)
 
 
 def describe_other_applications(product=None):
@@ -339,6 +441,9 @@ def describe_other_applications(product=None):
         app if products == [app] else "{} (``{}``)".format(app, "``, ``".join(products))
         for app, products in _OTHER_APP_PRODUCTS.items() if app != product
     ]
+    extra = _FAMILY_ONLY_FOREIGN.get(_PRODUCT_FAMILY.get(product), ())
+    if extra:
+        bits.append("desktop Firefox (``{}``)".format("``, ``".join(extra)))
     if len(bits) > 1:
         return "{} and {}".format(", ".join(bits[:-1]), bits[-1])
     return bits[0] if bits else ""
@@ -602,6 +707,26 @@ def get_agent_channels():
     return get_agent().get("channels", ["nightly"])
 
 
+def get_agent_products():
+    """Products the evidence agent runs on: ``AGENT_PRODUCTS`` (space-separated) when set,
+    else ``agent.products``, default Firefox only.
+
+    The product half of ``get_agent_channels``, and it exists for the same reason: Fenix
+    nightly and Firefox nightly share the channel label ``nightly``, so ``AGENT_CHANNELS`` could
+    not stop spending on one without stopping the other. Set-but-empty means NO product, with a
+    warning, exactly like the channel variable."""
+    env = os.getenv("AGENT_PRODUCTS")
+    if env is not None:
+        products = env.split()
+        if not products:
+            logger.warning(
+                "AGENT_PRODUCTS is set but empty, so NO product will be triaged. Unset the "
+                "variable to fall back to agent.products in the config."
+            )
+        return products
+    return get_agent().get("products", ["Firefox"])
+
+
 def get_agent_queue():
     return get_agent().get("queue", "agent")
 
@@ -854,7 +979,40 @@ def autofile_channel_held(channel):
     return bool(over) and over.get("enabled") is False
 
 
-def get_agent_autofile(channel=None):
+def _autofile_product_overlay(product):
+    """The per-product filing overlay: ``agent.autofile.products.<product>``, ``{}`` without."""
+    products = get_agent().get("autofile", {}).get("products") or {}
+    return dict(products.get(product or "") or {})
+
+
+def autofile_product_declared(product):
+    """Is *product* a product somebody has DECIDED about filing on? True for the product the
+    top-level block describes (``agent.autofile.default_product``, Firefox) and for any product
+    with an ``agent.autofile.products.<product>`` entry -- the ``autofile_channel_declared``
+    rule, per product. A Fenix dossier lands on channel ``nightly``, which IS declared, so
+    without this predicate the product would inherit nightly's armed policy by default."""
+    a = get_agent().get("autofile", {})
+    if not product:
+        return False
+    if product == (a.get("default_product") or "Firefox"):
+        return True
+    return product in (a.get("products") or {})
+
+
+def autofile_product_held(product):
+    """Is *product*'s filing held by an EXPLICIT ``products.<product>.enabled: false``?
+
+    Fenix ships HELD: ingested, scored and triaged, filing nothing, so that a week of Fenix
+    verdicts at the filing rung can be counted before anything is written to
+    ``Firefox for Android`` (plans/16 §11.4: ~40% of its changeset authors cannot be
+    needinfo'd, and Clouseau would out-file the organic rate ~15x). Unlike the per-channel
+    hold, this one ALSO binds the spike filer: "this product writes nothing" is a statement
+    about the product, not about culprit filings' yield on a channel."""
+    over = _autofile_product_overlay(product)
+    return bool(over) and over.get("enabled") is False
+
+
+def get_agent_autofile(channel=None, product=None):
     """Automatic bug FILING knobs (the only unattended write to Bugzilla).
 
     ``enabled`` is a genuine kill-switch, not dead config: this posts to production BMO
@@ -877,7 +1035,10 @@ def get_agent_autofile(channel=None):
     # ``INGEST_CHANNELS`` gained ``beta`` one retrigger click would have filed a beta bug under
     # the nightly rules.
     over = _autofile_overlay(channel)
-    a = {**a, **{k: v for k, v in over.items() if k != "channels"}}
+    # ...and the per-PRODUCT overlay on top of it, so a product may tighten or hold a channel's
+    # policy. ``product=None`` merges nothing and returns exactly what ``channel`` alone did.
+    over = {**over, **_autofile_product_overlay(product)}
+    a = {**a, **{k: v for k, v in over.items() if k not in ("channels", "products")}}
     # THE STRICTEST OF THE TWO WINS, IN BOTH DIRECTIONS, and that needs saying because they are
     # different kinds of statement. `AUTOFILE_BUGS=0` is a KILL SWITCH and must beat any JSON --
     # a switch a config file can defeat is not one. But an explicit `channels.<ch>.enabled:
@@ -1284,7 +1445,7 @@ def _normalize_calibration_table(raw):
 __CALIBRATION_CACHE = {}
 
 
-def get_agent_calibration(channel=None):
+def get_agent_calibration(channel=None, product=None):
     """The fitted worth-investigating calibration table (Phase-2): ``{rung score (int) ->
     P(worth-investigating)}`` mapping a verdict's confidence rung (``CONFIDENCE_SCORE`` * 100)
     to its empirical calibrated probability. Sourced from ``agent.calibration.table`` (an inline
@@ -1415,6 +1576,16 @@ def get_agent_calibration(channel=None):
     # `agent.calibration.fit_channel`. A NAMED channel with no entry gets `{}` and publishes no
     # sentence at all. Nightly still keeps its table without naming itself in `channels`, which
     # is the property the asymmetry existed to protect.
+    # PER PRODUCT FIRST, same rule: the 90 rows were Firefox nightly, and a Fenix run lands on
+    # channel `nightly` == fit_channel, so the channel guard below cannot protect it. A NAMED
+    # product other than `fit_product` (Firefox) gets its own `products.<p>` entry or `{}`.
+    products = cal.get("products") or {}
+    if product:
+        over = products.get(product)
+        if over is not None:
+            cal = over
+        elif product != (cal.get("fit_product") or "Firefox"):
+            return {}
     channels = cal.get("channels") or {}
     ch = (channel or "").lower()
     over = channels.get(ch)

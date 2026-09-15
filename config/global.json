@@ -1,8 +1,18 @@
 {
     "products":
     [
-        "Firefox"
+        "Firefox",
+        "Fenix"
     ],
+    "ingest_products":
+    [
+        "Firefox",
+        "Fenix"
+    ],
+    "product_channels":
+    {
+        "Fenix": ["nightly"]
+    },
     "channels":
     [
         "nightly",
@@ -23,7 +33,20 @@
     "score":
     {
         "max": 10,
-        "number_of_lines": 5
+        "number_of_lines": 5,
+        "file_match": 5,
+        "method_match": 8
+    },
+    "java":
+    {
+        "trust_line_numbers": false,
+        "packages":
+        [
+            "org.mozilla.",
+            "mozilla.components.",
+            "mozilla.appservices.",
+            "mozilla.telemetry."
+        ]
     },
     "thresholds":
     {
@@ -35,6 +58,10 @@
                 "beta": 6,
                 "release": 50,
                 "esr": 50
+            },
+            "Fenix":
+            {
+                "nightly": 1
             }
         },
         "protos":
@@ -45,6 +72,10 @@
                 "beta": 5,
                 "release": 20,
                 "esr": 20
+            },
+            "Fenix":
+            {
+                "nightly": 5
             }
         }
     },
@@ -58,6 +89,10 @@
                 "beta": 10,
                 "release": 50,
                 "esr": 50
+            },
+            "Fenix":
+            {
+                "nightly": 3
             }
         },
         "ratio":
@@ -68,6 +103,10 @@
                 "beta": 3,
                 "release": 3,
                 "esr": 3
+            },
+            "Fenix":
+            {
+                "nightly": 3
             }
         },
         "mature_after_days":
@@ -78,6 +117,10 @@
                 "beta": 5,
                 "release": 5,
                 "esr": 5
+            },
+            "Fenix":
+            {
+                "nightly": 5
             }
         },
         "history_days":
@@ -88,6 +131,10 @@
                 "beta": 21,
                 "release": 42,
                 "esr": 42
+            },
+            "Fenix":
+            {
+                "nightly": 21
             }
         },
         "mature_installs":
@@ -98,6 +145,10 @@
                 "beta": 4,
                 "release": 4,
                 "esr": 4
+            },
+            "Fenix":
+            {
+                "nightly": 4
             }
         },
         "min_build_installs":
@@ -108,6 +159,10 @@
                 "beta": 15,
                 "release": 15,
                 "esr": 15
+            },
+            "Fenix":
+            {
+                "nightly": 0
             }
         },
         "rising_per_day":
@@ -118,6 +173,10 @@
                 "beta": 2,
                 "release": 0,
                 "esr": 0
+            },
+            "Fenix":
+            {
+                "nightly": 0
             }
         },
         "rising_protos":
@@ -128,6 +187,10 @@
                 "beta": 3,
                 "release": 3,
                 "esr": 3
+            },
+            "Fenix":
+            {
+                "nightly": 3
             }
         },
         "real_installs":
@@ -138,6 +201,10 @@
                 "beta": 6,
                 "release": 50,
                 "esr": 50
+            },
+            "Fenix":
+            {
+                "nightly": 3
             }
         },
         "real_alert_rate":
@@ -148,6 +215,10 @@
                 "beta": 0.00015,
                 "release": 0.00015,
                 "esr": 0.00015
+            },
+            "Fenix":
+            {
+                "nightly": 0.00015
             }
         }
     },
@@ -169,6 +240,7 @@
         "abstain_below_confidence": 0.85,
         "enabled": true,
         "channels": ["nightly", "beta"],
+        "products": ["Firefox", "Fenix"],
         "queue": "agent",
         "job_timeout": 1800,
         "handoff_repair_turns": 1,
@@ -189,11 +261,16 @@
         {
             "table": {"25": 0.5, "50": 0.5714, "70": 0.7234, "85": 0.7234},
             "fit_channel": "nightly",
+            "fit_product": "Firefox",
             "channels":
             {
                 "beta": {},
                 "release": {},
                 "esr": {}
+            },
+            "products":
+            {
+                "Fenix": {}
             }
         },
         "offstack":
@@ -232,6 +309,14 @@
             "daily_cap": 10,
             "comment_on_existing": "comment",
             "default_channel": "nightly",
+            "default_product": "Firefox",
+            "products":
+            {
+                "Fenix":
+                {
+                    "enabled": false
+                }
+            },
             "channels":
             {
                 "beta":

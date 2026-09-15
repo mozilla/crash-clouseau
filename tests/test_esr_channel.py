@@ -137,6 +137,14 @@ class TestTheShippedChannels(unittest.TestCase):
         for label in models._ENUM_ADDITIONS["CHANNEL_TYPE"]:
             self.assertRegex(label, models._ENUM_LABEL)
         self.assertIsNone(models._ENUM_LABEL.match("esr'; DROP TYPE"))
+        # The PRODUCT mirror (Fenix, 2026-09-15): `Fenix` is the first product label added since
+        # the initial deploy, carried by the same migration and lenient for the same reason --
+        # should it ever be retired the way esr115/esr140 were, its rows must still read.
+        self.assertEqual(models._ENUM_ADDITIONS["PRODUCT_TYPE"], tuple(config.get_products()))
+        for label in models._ENUM_ADDITIONS["PRODUCT_TYPE"]:
+            self.assertRegex(label, models._ENUM_LABEL)
+        self.assertIsInstance(models.PRODUCT_TYPE, models._LenientEnum)
+        self.assertEqual(list(models.PRODUCT_TYPE.enums), config.get_products())
 
     def test_each_line_is_declared_and_armed_by_the_family(self):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):

@@ -236,7 +236,8 @@ class TestGateRunsLast(unittest.TestCase):
                 "comment_max_bug_age_days": 30}), \
              mock.patch.object(bugzilla_apply, "_incomplete_fix_bug") as fix:
             res = bugzilla_apply.autofile_bug(
-                "u-1", {"uuid": "u-1", "signature": "S", "channel": "nightly"}, {},
+                "u-1", {"uuid": "u-1", "signature": "S", "channel": "nightly",
+                        "product": "Firefox"}, {},
                 dossier, "abstain", 70)
         return res, fix
 

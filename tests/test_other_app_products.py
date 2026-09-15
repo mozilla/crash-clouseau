@@ -113,6 +113,49 @@ class TestTheAuditOfTheMap(unittest.TestCase):
             ["Calendar", "Chat Core", "MailNews Core", "SeaMonkey", "Thunderbird"])
 
 
+class TestTheAndroidFamilyExcludesDesktopFirefox(unittest.TestCase):
+    """The first half of the shape change the evidence block above `config._OTHER_APP_PRODUCTS`
+    prescribes (Fenix nightly, 2026-09-15): a Socorro product -> triage FAMILY, and per family
+    the BMO products it can never file in, ON TOP of the map. Asymmetric on purpose: only the
+    android family has an entry, so desktop's and `None`'s answers are byte-identical to the
+    map alone, and the audit constant this file pins in `test_the_shipped_map_is_the_default`
+    is untouched."""
+
+    # The map's answer for a desktop crash and for an unknown product, as it was before the
+    # family layer existed. `None` exempts nothing and must never start stripping BMO `Firefox`
+    # venues: `_split_by_application(bugs, None)` may only drop what it can positively identify
+    # as somebody else's.
+    _PINNED = frozenset({"Thunderbird", "MailNews Core", "Calendar", "Chat Core", "SeaMonkey"})
+
+    def test_firefox_and_none_are_byte_identical_to_the_pinned_set(self):
+        self.assertEqual(config.get_other_app_products("Firefox"), self._PINNED)
+        self.assertEqual(config.get_other_app_products(None), self._PINNED)
+        self.assertEqual(config.get_other_app_products(), self._PINNED)
+        # Bug 1855806's shape is preserved: `Firefox for Android` and `GeckoView` stay venues
+        # for a desktop crash.
+        for venue in ("Firefox", "Firefox for Android", "GeckoView", "Focus"):
+            self.assertNotIn(venue, config.get_other_app_products("Firefox"), venue)
+
+    def test_a_fenix_crash_additionally_excludes_desktop_firefox(self):
+        # The pinned case: bug 1681745 `Firefox :: Installer` is NOT a venue for a Fenix crash.
+        fenix = config.get_other_app_products("Fenix")
+        self.assertEqual(fenix, self._PINNED | {"Firefox"})
+        self.assertEqual(config.get_other_app_products("Focus"), fenix)   # one family
+        # GeckoView deliberately still shared; the family's own BMO products are of course venues.
+        for venue in ("Firefox for Android", "GeckoView", "Focus"):
+            self.assertNotIn(venue, fenix, venue)
+        # The map's own applications keep exempting themselves and gain nothing.
+        self.assertNotIn("Thunderbird", config.get_other_app_products("Thunderbird"))
+        self.assertNotIn("Firefox", config.get_other_app_products("Thunderbird"))
+
+    def test_the_prose_follows_the_family_layer(self):
+        self.assertIn("desktop Firefox", config.describe_other_applications("Fenix"))
+        for product in ("Firefox", "Thunderbird", None):
+            self.assertNotIn("desktop Firefox", config.describe_other_applications(product))
+        # The import-time rendering (no product) is what the agent tool description carries.
+        self.assertNotIn("desktop Firefox", _signature_bugs_description())
+
+
 class TestTheAgentProseIsRenderedFromTheMap(unittest.TestCase):
     """`agent/tools/bugzilla.py:signature_bugs` was a second hand-written copy of the map."""
 

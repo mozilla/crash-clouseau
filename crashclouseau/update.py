@@ -9,7 +9,7 @@ import pytz
 from .logger import logger
 from .pushlog import pushlog
 from . import datacollector as dc
-from . import buildhub, config, inspector, models, sigtrend, utils, worker, patch
+from . import buildsource, config, inspector, java, models, sigtrend, utils, worker, patch
 
 
 def put_build(buildid, product, channel, version, node=None):
@@ -130,16 +130,19 @@ def rising_rate_mindate(mindate, buildid, channel, product, signature):
 
 
 def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=True,
-               force=False):
+               force=False, source_reads=True):
     """Put a report in the database. Returns ``True`` when a stack was stored for it (the run
     has something to read), ``False`` when every stack was already known on this build, and
-    ``None`` when Socorro has no ``json_dump`` for it.
+    ``None`` when Socorro has neither a ``json_dump`` nor a Java stack with a frame of ours
+    (the report is then marked analysed, so the chain moves on).
 
     *signature* is what ``rising_rate_mindate`` reads the rate of; ``None`` scores the report
     inside the deployed window exactly as before. ``enqueue=False`` scores without firing the
     evidence agent, and ``force`` stores the frames even when the same stack hash is already
     on the build: both for ``trigger.ingest``, which enqueues its own forced run with the run's
-    options recorded first, on THIS uuid."""
+    options recorded first, on THIS uuid. ``source_reads=False`` skips the hg-edge reads that
+    locate a JVM frame's method in the source at the build revision (a scoring refinement): the
+    trigger API scores synchronously on the web dyno, behind a 30 s router timeout."""
     if channel == "nightly":
         mindate = buildid - relativedelta(days=config.get_ndays())
     else:
@@ -176,9 +179,16 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=
         chgset,
         models.Changeset.find,
         interesting_chgsets,
+        source_reads=source_reads,
     )
     if res is None:
-        # 'json_dump' is not in crash data
+        # Neither a json_dump nor a readable java_stack_trace: nothing to score. MARK IT, or
+        # the serial scoring chain livelocks -- `UUID.to_analyze` re-selects analyzed=False
+        # rows in id order and `analyze_one_report` re-enqueues itself, so an unmarked report
+        # is fetched from Socorro again on every spin, forever. Unreachable for desktop (a
+        # proto-selected crash has a json_dump); routine on Fenix, where Socorro's Android
+        # stackwalker fails on 38-72% of native reports (plans/16 §5).
+        models.UUID.set_analyzed(uuid, True)
         return None
 
     useless = True
@@ -222,7 +232,7 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=
         try:
             from .agent.orchestrator import enqueue_agent
 
-            enqueue_agent(uuid, channel)
+            enqueue_agent(uuid, channel, product=product)
         except Exception as e:
             logger.warning("could not enqueue evidence agent for %s: %s", uuid, e)
     return not useless
@@ -310,14 +320,48 @@ def update_builds(date, channel, product):
     ``on_conflict_do_nothing``), so the wider window costs one larger POST, not duplicate
     rows."""
     logger.info("Update builds for {}/{}: started.".format(channel, product))
+    source = buildsource.for_product(product)
     if not date:
         _, date = models.LastDate.get(channel)
         if date is None:
             date = pytz.utc.localize(datetime.utcnow())
         date -= relativedelta(days=config.get_buildhub_lookback_ndays())
-    data = buildhub.get(date, channel, prods=product)
+        if source is not buildsource.buildhub:
+            # No server-side range query behind this source (the TaskCluster index is probed
+            # one day namespace and one leaf at a time), so the builds table IS the cache:
+            # start a day before the newest stored build -- a leaf attaches ~18 minutes after
+            # its push, so the children newer than that build are re-probed each tick until
+            # they resolve. A cold table pays the whole lookback once. ONLY on the derived
+            # date: an explicit one is a backfill -- the repair for a day the index lost to a
+            # 5xx -- and is honoured untouched, the way `put_filelog` honours an explicit
+            # `start_date`.
+            newest = models.Build.get_max_buildid(channel, product)
+            if newest is not None:
+                date = max(date, newest - relativedelta(days=1))
+    if source is buildsource.buildhub:
+        data = source.get(date, channel, prods=product)
+    else:
+        # The source promises never to raise; this is the belt for the promise. update_builds
+        # runs outside update()'s try/except, so an exception here would end the product's
+        # tick before `put_crashes` and before the chain is re-seeded.
+        try:
+            data = source.get(date, channel, prods=product)
+        except Exception:
+            logger.error("Update builds: %s/%s source failed", product, channel, exc_info=True)
+            data = {}
     if data:
         models.Build.put_data(data)
+    if source is not buildsource.buildhub:
+        # The JVM file index at the newest Fenix build, so a `mozilla.components...Keystore`
+        # frame resolves to its in-tree .kt path. EVERY tick: the refresh is idempotent per
+        # build (it remembers the build it indexed), so this is one DB read when nothing is
+        # new and one GitHub request per new build -- and a 403 (GitHub's per-IP limit, shared
+        # egress) is retried on the next tick rather than at the next build, ~12 h later.
+        # Wrapped: an index miss costs a frame its path, never the tick.
+        try:
+            java.refresh_file_index(channel, product)
+        except Exception as e:
+            logger.warning("java file index not refreshed for %s/%s: %s", product, channel, e)
     logger.info("Update builds: finished.")
 
 
@@ -382,6 +426,15 @@ def update(date, channel, product, analyze=True):
     if channel not in config.get_ingest_channels():
         logger.warning("update: channel %r is not in INGEST_CHANNELS; ignoring the job", channel)
         return
+    # The product half of the same guard (`INGEST_PRODUCTS` / `ingest_products`), and the
+    # (product, channel) pairing: Fenix is nightly-only, and a queued Fenix/beta job must be a
+    # no-op rather than a Socorro sweep for a channel with no Fenix build source.
+    if product not in config.get_ingest_products():
+        logger.warning("update: product %r is not ingested; ignoring the job", product)
+        return
+    if channel not in config.get_product_channels(product):
+        logger.warning("update: %r has no %r channel; ignoring the job", product, channel)
+        return
     logger.info("Update data: started.")
     put_filelog(channel)
     if date:
@@ -426,9 +479,19 @@ def update_all(products=None, channels=None, date=None):
 
     Still not a kill switch for SPEND: ``INGEST_CHANNELS`` decides what is ingested (free);
     ``AGENT_CHANNELS`` decides what is analysed (~$1-3 a crash). See
-    ``config.get_agent_channels``."""
+    ``config.get_agent_channels``.
+
+    THE PRODUCT AXIS (2026-09-15): products come from ``config.get_ingest_products``
+    (``INGEST_PRODUCTS``, else the config's ``ingest_products``, default both -- a JSON default
+    on purpose, so introducing the lever cannot stop desktop for a tick), and each product is
+    paired only with the channels ``config.get_product_channels`` allows (Fenix: nightly). The
+    spend half is ``AGENT_PRODUCTS`` / ``config.get_agent_products``."""
     if products is None:
-        products = config.get_products()
+        # NOT `config.get_products()`: that list defines the PRODUCT_TYPE enum, the same way
+        # `config.get_channels()` defines CHANNEL_TYPE, and is the wrong list to default an
+        # action to. `get_ingest_products` reads `INGEST_PRODUCTS`, else the config's
+        # `ingest_products`, else every product.
+        products = config.get_ingest_products()
     if channels is None:
         channels = config.get_ingest_channels()
         if not channels:
@@ -444,5 +507,10 @@ def update_all(products=None, channels=None, date=None):
             )
             return
     for product in products:
+        allowed = config.get_product_channels(product)
         for channel in channels:
+            if channel not in allowed:
+                # Fenix x beta/release/esr153: no build source, so no job (and no second
+                # `put_filelog` + `sigtrend.backfill` + selector sweep per tick for nothing).
+                continue
             update_in_queue(channel, product)

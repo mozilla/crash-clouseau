@@ -143,6 +143,9 @@ class TestWindowPinsTheIncident(unittest.TestCase):
 
 class TestOutcomeVocabulary(unittest.TestCase):
     def test_models_and_utils_agree(self):
+        # `no_stack` / `no_protos` (Fenix nightly, plans/16 §13.1 D11): an `EMPTY: *` signature
+        # is declined before the spike test, and a kept pair that yields no proto and no uuid is
+        # recorded as what it was rather than as `selected` (tests/test_fenix_product.py).
         self.assertEqual(
             models.SELECTION_OUTCOMES,
             frozenset(
@@ -155,6 +158,8 @@ class TestOutcomeVocabulary(unittest.TestCase):
                     utils.DROPPED_NO_USERS,
                     utils.RISING_RATE,
                     utils.IGNORED,
+                    utils.NO_STACK,
+                    utils.NO_PROTOS,
                 }
             ),
         )

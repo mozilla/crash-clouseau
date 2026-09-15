@@ -34,6 +34,7 @@ from sqlalchemy import inspect, text  # noqa: E402
 from crashclouseau import db, hgauthors, models, utils  # noqa: E402
 
 _OLD_CHANNELS = ("nightly", "beta", "release")   # the enum production's DB was created with
+_OLD_PRODUCTS = ("Firefox",)                      # likewise; `Fenix` is the first label added
 _UTC = datetime.timezone.utc
 
 
@@ -53,9 +54,12 @@ def _labels(enum):
 class TestTheEnumMigrationOnPostgres(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # A database as production's was created: every table gone, and the channel enum with
-        # only the three original labels. `create_all` keeps an existing type (checkfirst), so
-        # the tables come back bound to the OLD enum and only `_ensure_enum_values` can grow it.
+        # A database as production's was created: every table gone, and the channel and product
+        # enums with only their original labels. `create_all` keeps an existing type
+        # (checkfirst), so the tables come back bound to the OLD enums and only
+        # `_ensure_enum_values` can grow them. Before the product type was pre-created here,
+        # `create_all` rebuilt it from the current config and the PRODUCT_TYPE widening path --
+        # the one the first Fenix tick depends on -- was unproved.
         db.session.remove()
         db.drop_all()
         with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
@@ -63,6 +67,8 @@ class TestTheEnumMigrationOnPostgres(unittest.TestCase):
                 conn.execute(text('DROP TYPE IF EXISTS "{}" CASCADE'.format(t)))
             conn.execute(text('CREATE TYPE "CHANNEL_TYPE" AS ENUM ({})'.format(
                 ", ".join("'{}'".format(c) for c in _OLD_CHANNELS))))
+            conn.execute(text('CREATE TYPE "PRODUCT_TYPE" AS ENUM ({})'.format(
+                ", ".join("'{}'".format(p) for p in _OLD_PRODUCTS))))
         cls.fresh = models.create()
         # ...and as production's `builds` table still is: `version` at the width it was created
         # with. The second `create()` is the release phase on a long-lived DB.
@@ -91,10 +97,81 @@ class TestTheEnumMigrationOnPostgres(unittest.TestCase):
         self.assertIn("lead", _labels("VERDICT_TYPE"))
 
     def test_the_migration_is_idempotent(self):
-        before = _labels("CHANNEL_TYPE")
+        before = _labels("CHANNEL_TYPE"), _labels("PRODUCT_TYPE")
         models._ensure_enum_values()
         models._ensure_enum_values()
-        self.assertEqual(_labels("CHANNEL_TYPE"), before)
+        self.assertEqual((_labels("CHANNEL_TYPE"), _labels("PRODUCT_TYPE")), before)
+
+    def test_the_pre_fenix_product_enum_gained_the_fenix_label(self):
+        """The release-phase line to look for is `enum PRODUCT_TYPE: added value 'Fenix'`
+        (DEPLOY.md "Turning Fenix on"). Irreversible, like every enum label."""
+        self.assertTrue(self.fresh)
+        # The first two in enum order; the lenient-read test (alphabetically earlier) adds a
+        # `Focus` after them when it runs first.
+        self.assertEqual(_labels("PRODUCT_TYPE")[:2], list(_OLD_PRODUCTS) + ["Fenix"])
+        self.assertLessEqual(set(_labels("PRODUCT_TYPE")) - {"Focus"},
+                             set(_OLD_PRODUCTS) | {"Fenix"})
+
+    def test_a_product_label_the_type_has_and_the_config_does_not_still_reads(self):
+        """The v166 failure one axis over: should Fenix ever be retired the way esr115/esr140
+        were, its `builds` / `chandaily` / `sigdaily` rows outlive the label in
+        `config.products`, and `PRODUCT_TYPE` -- a plain `db.Enum` until 2026-09-15 -- would
+        have raised `LookupError` on every read of them. Against a real Postgres, the dialect
+        that adapted the Enum SUBCLASS away."""
+        with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text('ALTER TYPE "PRODUCT_TYPE" ADD VALUE IF NOT EXISTS \'Focus\''))
+        self.assertNotIn("Focus", models.PRODUCT_TYPE.enums)          # not a configured product
+        db.session.execute(text(
+            "INSERT INTO chandaily (product, channel, day, reports, installs) "
+            "VALUES ('Focus', 'nightly', '2026-09-01', 7, 3)"))
+        db.session.commit()
+        try:
+            self.assertIn("Focus", {r.product for r in db.session.query(models.ChannelDaily).all()})
+            # A labelled enum column among other columns: the `Dossier.list_tasks` shape.
+            rows = db.session.query(models.ChannelDaily.product.label("product"),
+                                    models.ChannelDaily.installs).all()
+            self.assertIn("Focus", {r.product for r in rows})
+            self.assertIsInstance([r.product for r in rows if r.product == "Focus"][0], str)
+            # ...and the bind side passes the raw label through, so a reader keyed on the
+            # retired product still finds its rows.
+            day = datetime.date(2026, 9, 1)
+            self.assertEqual(models.ChannelDaily.series("Focus", "nightly", day, day),
+                             {day: (7, 3)})
+        finally:
+            db.session.execute(text("DELETE FROM chandaily WHERE product = 'Focus'"))
+            db.session.commit()
+
+    def test_the_fenix_label_is_usable_through_the_production_writers(self):
+        """The two writers the first Fenix tick reaches, in the order `put_crashes` runs them:
+        `ChannelDaily.upsert` (from `sigtrend.backfill`, which runs FIRST) and `Build.put_data`
+        keyed the way `tcindex.get` keys it. Both raised `invalid input value for enum
+        "PRODUCT_TYPE"` before the migration carried the label."""
+        day = datetime.date(2026, 9, 14)
+        self.assertTrue(models.ChannelDaily.upsert("Fenix", "nightly", day, 1200, 640))
+        try:
+            self.assertEqual(models.ChannelDaily.series("Fenix", "nightly", day, day),
+                             {day: (1200, 640)})
+            # Firefox nightly reads nothing from a Fenix row: the product axis is honoured.
+            self.assertEqual(models.ChannelDaily.series("Firefox", "nightly", day, day), {})
+        finally:
+            db.session.execute(text("DELETE FROM chandaily WHERE product = 'Fenix'"))
+            db.session.commit()
+        when = datetime.datetime(2026, 9, 14, 0, 10, tzinfo=_UTC)
+        end = datetime.datetime(2026, 9, 15, tzinfo=_UTC)
+        models.Changeset.add([{"node": "fe41c0ffee01", "date": when, "backedout": False,
+                               "merge": False, "bug": 1,
+                               "author": hgauthors.analyze_author("A <a@example.com>"),
+                               "files": ["mobile/android/fenix/app/src/main/java/org/mozilla/"
+                                         "fenix/HomeActivity.kt"]}],
+                             end, "nightly")
+        # A real Fenix nightly build id: 38 reports on Socorro, 2026-09-13..15 (checked 09-15).
+        bid = utils.get_build_date("20260914102627")
+        models.Build.put_data({"Fenix": {"nightly": {
+            bid: {"revision": "fe41c0ffee01", "version": "160.0a1"}}}})
+        self.assertIsNotNone(models.Build.get_id(bid, "nightly", "Fenix"))
+        # The cache `update_builds` starts from (`get_max_buildid - 1 day`), per product.
+        self.assertEqual(models.Build.get_max_buildid("nightly", "Fenix"), bid)
+        self.assertIsNone(models.Build.get_id(bid, "nightly", "Firefox"))
 
     def test_a_label_the_type_has_and_the_config_does_not_still_reads(self):
         """v166 500'd tasks.html with `LookupError: 'esr115' is not among the defined enum
