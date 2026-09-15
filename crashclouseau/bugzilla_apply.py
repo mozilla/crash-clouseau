@@ -20,11 +20,16 @@ This module has two jobs:
   outside ``apply.enabled_types``, skips already-applied actions (idempotent), and
   records the outcome so a partial failure leaves landed writes marked applied.
 
-* ``autofile_bug(...)`` files a bug for a reported crash with NO human in the loop —
-  the one unattended write in the product. Every gate lives in that function and each
-  fails closed; ``AUTOFILE_BUGS`` is its kill-switch.
+* ``autofile_bug(...)`` files a bug for a reported crash with NO human in the loop.
+  Every gate lives in that function and each fails closed; ``AUTOFILE_BUGS`` is its
+  kill-switch.
 
-This module remains the ONLY place in the product that writes to Bugzilla.
+Every Bugzilla write in the product goes through this module's REST helpers
+(``_post_comment``, ``_create_bug_keeping_the_bug``, ``_put_bug`` and their wrappers) -- but
+it is no longer the only FILER: ``agent.spike_escalation.file_spike_bug`` is a second
+unattended one (a real spike is filed culprit or not) and calls the helpers here. The two
+share the global switch (``config.autofile_globally_enabled``) and the per-PRODUCT hold
+(``config.autofile_product_held``); only the per-channel hold is the ordinary filer's alone.
 """
 from __future__ import annotations
 
@@ -133,7 +138,8 @@ def build_evidence(uuid, public=True):
 
 
 # --------------------------------------------------------------------------- #
-# Bugzilla REST writes (the ONLY place the product writes to Bugzilla)
+# Bugzilla REST writes (every write in the product, the spike filer's included, is one of
+# these)
 # --------------------------------------------------------------------------- #
 def _post_comment(bug_id, text, is_private, token):
     """POST /rest/bug/<id>/comment -> new comment id."""
@@ -1480,9 +1486,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     """File a Bugzilla bug for a reported crash, unattended. Returns a result dict; NEVER
     raises — a filing failure must not lose an analysis that is already persisted.
 
-    This is the only write to Bugzilla with no human in the loop, so every gate is here
-    rather than at the call site, and each one fails CLOSED except where marked otherwise:
+    This is a write to Bugzilla with no human in the loop (the spike filer is the other), so
+    every gate is here rather than at the call site, and each one fails CLOSED except where
+    marked otherwise:
 
+    * held for a PRODUCT whose filing is held (``agent.autofile.products.<p>.enabled: false``
+      -- Fenix, plans/16 D4) before any other gate, the operator's per-run instruction
+      included, and refused for a product nobody has decided about (fails closed, like the
+      channel gate);
     * disabled unless ``AUTOFILE_BUGS`` is on (a real kill-switch: it writes to production
       BMO on a schedule, so it has to be stoppable without a deploy);
     * verdict must be reported and at/above ``min_confidence`` (70 = the ``probable`` rung);
@@ -1514,14 +1525,40 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     write the field the feedback loop reads, ``models.Feedback.classify`` is told what we claimed:
     our own write agreeing with us is ``unconfirmed``, not ``correct``."""
     channel = uuid_info.get("channel")
-    # THE OPERATOR'S INSTRUCTION FOR THIS CRASH comes first: a run triggered through
+    product = uuid_info.get("product")
+    # THE PRODUCT HOLD OUTRANKS EVERYTHING, the operator's per-run instruction included. Fenix
+    # ships triaged with its filing held (`agent.autofile.products.Fenix.enabled: false`,
+    # plans/16 D4) and the hold has to bind a `POST /api/tasks/trigger` with `file_bug: true`
+    # as much as the sweep: `run_options` is read right below because `file_bug: false` must
+    # beat an armed channel, so a hold placed after that read would be one HTTP call away from
+    # a bug in `Firefox for Android` in a reader's eyes -- a `True` there is only "no
+    # instruction", but the ORDER is what gets checked, so the hold comes first. Its string is
+    # distinct from "autofile disabled" so `orchestrator._autofile` RECORDS the decline: a
+    # week of held Fenix verdicts at the filing rung is the number the arm decision needs, and
+    # a hold that leaves no trace measures nothing (beta's hold was the same instrument).
+    if config.autofile_product_held(product):
+        return {"filed": False, "channel": channel, "product": product,
+                "skipped": "autofile held for product {!r} (triage-only)".format(product)}
+    # THE OPERATOR'S INSTRUCTION FOR THIS CRASH comes next: a run triggered through
     # `/api/tasks/trigger` with `file_bug: false` writes nothing whatever the channel's policy
     # says, and this is the reason its Bug column should carry. Sticky on the dossier, so the
     # reaper's re-run and a retrigger click honour it too (`Dossier._STICKY_PAYLOAD_KEYS`).
     if models.Dossier.run_options(uuid).get("autofile") is False:
         return {"filed": False, "channel": channel,
                 "skipped": "filing disabled for this run (triggered with file_bug: false)"}
-    cfg = config.get_agent_autofile(channel)
+    # The crash's own channel AND product: `product=None` is byte-identical to the one-argument
+    # call, and a product overlay may one day tighten a channel's policy (`daily_cap`, `skip`)
+    # the day Fenix is armed -- read now so arming is a config edit, not a code edit.
+    cfg = config.get_agent_autofile(channel, product=product)
+    # THE PRODUCT GATE, and it fails CLOSED like the channel gate under it: a product nobody
+    # has DECIDED about -- Focus the day it is ingested, or a `uuid_info` with no product at
+    # all -- files nothing. It is needed even with the hold above because Fenix nightly and
+    # Firefox nightly share the channel label: `autofile_channel_declared("nightly")` says yes
+    # to a Fenix dossier, so without a product predicate any new product would inherit
+    # nightly's ARMED policy by default (`config.autofile_product_declared`).
+    if not config.autofile_product_declared(product):
+        return {"filed": False, "channel": channel, "product": product,
+                "skipped": "product {!r} has no autofile configuration".format(product)}
     # THE CHANNEL GATE, and it fails CLOSED. `get_agent_channels()` inside `enqueue_agent` was
     # the ONLY thing keeping filing nightly-only -- and `enqueue_agent(..., force=True)` bypasses
     # it by design, which is precisely what `retrigger_agent` (a tasks.html click, and a BULK
@@ -1590,15 +1627,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
 
     since = datetime.now(timezone.utc) - timedelta(days=1)
     try:
-        # PER CHANNEL. A shared cap lets one channel's burst spend another's budget, and beta's
-        # selections are 48% concentrated in the 4 days after a merge -- exactly when a freshly
-        # uplifted regression is worth filing.
-        recent = models.Dossier.filed_bugs_since(since, channel=channel)
+        # PER CHANNEL AND PER PRODUCT. A shared cap lets one channel's burst spend another's
+        # budget, and beta's selections are 48% concentrated in the 4 days after a merge --
+        # exactly when a freshly uplifted regression is worth filing. The product because Fenix
+        # nightly and Firefox nightly share the channel label, so without it the two would
+        # spend one cap of 10 in both directions the day Fenix files (plans/16 §6.2).
+        recent = models.Dossier.filed_bugs_since(since, channel=channel, product=product)
     except Exception as exc:                                # pragma: no cover - defensive
         return {"filed": False, "skipped": "cap check failed: {}".format(exc)}
     if recent >= cfg["daily_cap"]:
-        logger.warning("autofile: daily cap %s reached for %s (%s in 24h) — not filing for %s",
-                       cfg["daily_cap"], channel or "?", recent, uuid)
+        logger.warning("autofile: daily cap %s reached for %s/%s (%s in 24h) — not filing for %s",
+                       cfg["daily_cap"], product or "?", channel or "?", recent, uuid)
         return {"filed": False, "skipped": "daily cap {} reached on {}".format(
             cfg["daily_cap"], channel or "?")}
 
@@ -1940,14 +1979,18 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         public_venue_declined, bug_id = bug_id, None
 
     email = preview.get("needinfo_email") if cfg["needinfo"] else ""
-    # THE CHANNEL AND THE BUILD, on every result. Without them nothing downstream can answer
-    # "how is beta doing": `feedback._filed_bugs` builds its ReviewNote row from exactly these
-    # keys and `_NOTE_MODES = ("new_bug",)` is precisely beta's mode, so beta filings would enter
-    # the review corpus pooled with nightly's -- and retuning either against a pooled denominator
-    # is the mistake the hardware-noise work was written up to prevent ("the denominator is the
-    # whole rule"). `Dossier.list_tasks` reads the channel for the ops view too.
+    # THE CHANNEL, THE PRODUCT AND THE BUILD, on every result. Without them nothing downstream
+    # can answer "how is beta doing": `feedback._filed_bugs` builds its ReviewNote row from
+    # exactly these keys and `_NOTE_MODES = ("new_bug",)` is precisely beta's mode, so beta
+    # filings would enter the review corpus pooled with nightly's -- and retuning either against
+    # a pooled denominator is the mistake the hardware-noise work was written up to prevent
+    # ("the denominator is the whole rule"). The product for the same reason one axis over:
+    # Fenix nightly and Firefox nightly share the channel label, so "how is Fenix doing" is
+    # unanswerable from the channel alone. `Dossier.list_tasks` reads the channel for the ops
+    # view too.
     result = {"filed": False, "uuid": uuid, "signature": signature,
-              "channel": channel, "buildid": utils.get_buildid(uuid_info.get("buildid")),
+              "channel": channel, "product": product,
+              "buildid": utils.get_buildid(uuid_info.get("buildid")),
               "at": datetime.now(timezone.utc).isoformat()}
     if withhold:
         # Persisted so the choice is auditable from the dossier, and so that "how often does the

@@ -124,7 +124,10 @@ class TestAnEsrFilingIsTitledAndNominatedLikeRelease(_Base):
 
     def test_the_filer_asks_for_the_lines_own_policy(self):
         self._file_esr()
-        bugzilla_apply.config.get_agent_autofile.assert_called_once_with("esr153")
+        # The line's label, not its family (`get_agent_autofile` resolves the family itself),
+        # and the crash's product (byte-identical policy for Firefox; see test_fenix_filing).
+        bugzilla_apply.config.get_agent_autofile.assert_called_once_with(
+            "esr153", product="Firefox")
 
 
 if __name__ == "__main__":

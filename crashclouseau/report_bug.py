@@ -230,7 +230,16 @@ def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES, details=None):
     main thread stopped making progress, so these frames are what the main thread is WAITING on
     and they read outside-in. Bug 2064436 was filed showing the watchdog thread's seven frames of
     boilerplate under a bare "Top 9 frames:", which told the reviewer nothing about which thread he
-    was looking at — `inspector.thread_for_analysis` now picks the hung thread, and this says so."""
+    was looking at — `inspector.thread_for_analysis` now picks the hung thread, and this says so.
+
+    PRINTS NO LINE FOR A FRAME WHOSE LINE IS NOT TRUSTED (``line_trusted: False``, stamped by
+    ``CrashStack.get_by_uuid`` on a JVM stack while ``java.trust_line_numbers`` is off). The
+    number Socorro reports for a Kotlin frame is R8's remapped line: on Fenix crash 3c426d92
+    (2026-09-15) ``Keystore.generateKey`` reports ``Keystore.kt:269``, which on main is
+    ``val nonce = cipher.iv`` in the encrypt path ~50 lines below ``generateKey``, and
+    ``Keystore.<init>`` reports ``:51``, which is ``fun getKeyStore()``. ``file:line`` in a bug
+    comment reads as fact, so the file goes in alone. A native frame carries no flag and is
+    printed as before."""
     frames = (stack or {}).get("frames") or []
     top = frames[:max_frames]
     lines = []
@@ -241,7 +250,8 @@ def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES, details=None):
         module = (f.get("module") or "").strip()
         fname = (f.get("filename") or "").strip()
         line = f.get("line")
-        loc = "{}:{}".format(fname, line) if (fname and line and line > 0) else fname
+        show_line = fname and line and line > 0 and f.get("line_trusted", True)
+        loc = "{}:{}".format(fname, line) if show_line else fname
         desc = "  ".join(x for x in (module, fn, loc) if x)
         if not desc:
             desc = (f.get("original") or "").strip()
@@ -729,7 +739,7 @@ def build_trend_note(corroborations):
     return "Crash rate for this signature has risen: " + sentence
 
 
-def build_hardware_note(corroborations, channel=None):
+def build_hardware_note(corroborations, channel=None, product=None):
     """One paragraph on how much of this signature is hardware error, or ``""``.
 
     WHAT BUG 2064600 SHOULD HAVE SAID. We filed a display-list crash at 97% worth-investigating;
@@ -773,9 +783,9 @@ def build_hardware_note(corroborations, channel=None):
     # An unmeasured population says nothing at all rather than borrowing nightly's -- this whole
     # paragraph exists to tell a reviewer the crash may be hardware, and a wrong denominator
     # there is the `hardware-noise-denominator` mistake with a Bugzilla comment attached.
-    pop_flip = sigage.population_bit_flip_rate(channel)
-    pop_cpu = sigage.population_broken_cpu_rate(channel)
-    pop_name = sigage.population_label(channel)
+    pop_flip = sigage.population_bit_flip_rate(channel, product)
+    pop_cpu = sigage.population_broken_cpu_rate(channel, product)
+    pop_name = sigage.population_label(channel, product)
     if flip is not None and pop_flip is not None and flip >= _HARDWARE_NOTE_LIFT * pop_flip:
         parts.append("{:.0f}% carry a possible-bit-flip annotation ({} population: "
                      "{:.0f}%)".format(100 * flip, pop_name, 100 * pop_flip))
@@ -795,13 +805,13 @@ def build_hardware_note(corroborations, channel=None):
     if parts:
         note = ("Hardware-error share of this signature: of its {} reports on this channel over "
                 "the last year, {}.{}".format(sample, "; and ".join(parts), tail))
-    spread = _cpu_spread_sentence(c, channel)
+    spread = _cpu_spread_sentence(c, channel, product)
     if spread:
         note = (note + " " + spread) if note else spread
     return note
 
 
-def _cpu_spread_sentence(corroborations, channel=None):
+def _cpu_spread_sentence(corroborations, channel=None, product=None):
     """The CPU-model concentration for the filed bug, when it is unusual, or ``""``.
 
     THE SAME NUMBER THE CRASH BRIEF GAVE THE MODEL (`triage._cpu_spread_line`), stated with the
@@ -839,7 +849,7 @@ def _cpu_spread_sentence(corroborations, channel=None):
     # decides whether to print at all, and the "the median signature sits at N%" clause. With no
     # median there is no claim to make, so the note is omitted rather than published against the
     # wrong population.
-    median = sigage.population_top_cpu_share_median(channel)
+    median = sigage.population_top_cpu_share_median(channel, product)
     if median is None or share < _HARDWARE_NOTE_LIFT * median:
         return ""
     return ("CPU-model spread: {:.0f}% of the {} reports that carry a cpu_info string are on "
@@ -849,7 +859,7 @@ def _cpu_spread_sentence(corroborations, channel=None):
                 100 * share, seen, c.get("signature_top_cpu_term") or "one model",
                 ", the only model seen" if terms == 1
                 else ", one of {} models seen".format(terms),
-                sigage.population_label(channel), 100 * median))
+                sigage.population_label(channel, product), 100 * median))
 
 
 def build_exposer_note(corroborations):
@@ -962,7 +972,8 @@ def build_bug_comment(
         # question a reader asks first: how long has this existed, and did it just get worse.
         build_trend_note((dossier or {}).get("corroborations")),
         build_stale_signature_note((dossier or {}).get("corroborations")),
-        build_hardware_note((dossier or {}).get("corroborations"), channel),
+        build_hardware_note((dossier or {}).get("corroborations"), channel,
+                            product=info.get("product")),
         build_exposer_note((dossier or {}).get("corroborations")),
         # ABOVE the analysis, because on this path it is the reason the bug exists at all and
         # the analysis below it may be an abstain with nothing in it.
@@ -1308,9 +1319,15 @@ def security_group(product):
     ``None`` is a REFUSAL, not a default: ``autofile_bug`` declines to file rather than filing
     a memory-safety analysis publicly. That matches Treeherder's own behaviour -- its filer
     answers HTTP 400 "Cannot file security bug for product without default security group"
-    instead of falling through -- and it is the direction the asymmetry demands. Note this is
-    reachable for Fenix only if BMO returns the product anonymously; it did not on 2026-08-24,
-    so Fenix support (plans/16) must fail closed here rather than fall through."""
+    instead of falling through -- and it is the direction the asymmetry demands.
+
+    The Android products ARE readable this way: measured anonymously 2026-09-15 (UA
+    crash-clouseau), ``GET /rest/product/Firefox%20for%20Android`` answers
+    ``default_security_group: mobile-core-security``, and so do ``GeckoView`` and ``Focus``
+    (an earlier 2026-08-24 probe had returned nothing, which this docstring used to read as
+    "Fenix must fail closed here"). So a future ARMED Fenix filer can restrict a memory-safety
+    bug like desktop's does; the ``None`` -> refuse rule is unchanged and still what stops a
+    product BMO does not answer for."""
     if not product:
         return None
     if product in _SEC_GROUP_CACHE:
@@ -2278,8 +2295,10 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     first, stats = fetch_signature_stats(uuid, uuid_info)
     # The channel's filing marks (`config.get_agent_autofile`): release titles its bugs
     # "[new in release] Crash in [@ ...]" and nominates the crash's version for tracking; every
-    # other channel has neither. Read here so the page preview shows the bug the filer will post.
-    policy = config.get_agent_autofile(channel)
+    # other channel has neither. Read here so the page preview shows the bug the filer will post
+    # -- for the crash's own product too, as the filer does (a product overlay carries no mark
+    # today, so `product=` changes nothing for Firefox).
+    policy = config.get_agent_autofile(channel, product=uuid_info.get("product"))
     suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
     # May the bug make a STRUCTURED claim about the regressor at all: a candidate from outside
     # this build's pushlog window is named in the prose and nowhere else.

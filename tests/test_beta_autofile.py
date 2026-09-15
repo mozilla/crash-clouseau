@@ -388,10 +388,15 @@ class TestTheChannelGate(_BetaBase):
         the suite would notice: every mock of `get_agent_autofile` is argument-insensitive
         (`return_value`), and nothing uses `autospec=True`."""
         self._file_beta()
-        bugzilla_apply.config.get_agent_autofile.assert_called_once_with("beta")
+        # ...and of its own PRODUCT (2026-09-15): `product="Firefox"` merges no overlay, so the
+        # policy is byte-identical to the one-argument call's, but the day a Fenix overlay
+        # carries a `daily_cap` or a `skip` the filer must already be asking for it.
+        bugzilla_apply.config.get_agent_autofile.assert_called_once_with(
+            "beta", product="Firefox")
         bugzilla_apply.config.get_agent_autofile.reset_mock()
         bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}}, "lead", 70)
-        bugzilla_apply.config.get_agent_autofile.assert_called_once_with("nightly")
+        bugzilla_apply.config.get_agent_autofile.assert_called_once_with(
+            "nightly", product="Firefox")
 
     def test_the_result_carries_the_channel_and_the_buildid(self):
         """Nothing downstream could answer "how is beta doing" without them.
@@ -595,7 +600,7 @@ class TestTheDailyCapIsPerChannel(_BetaBase):
     nightly's whole budget, and nightly's ordinary 2.86 bugs/day would eat beta's 3."""
 
     def _counter(self, **per_channel):
-        def count(when, channel=None):
+        def count(when, channel=None, product=None):
             return per_channel.get(channel, 0)
         bugzilla_apply.models.Dossier.filed_bugs_since.side_effect = count
 
@@ -604,9 +609,11 @@ class TestTheDailyCapIsPerChannel(_BetaBase):
         res = self._file_beta(comment_on_existing="file_new")
         self.assertTrue(res["filed"], res.get("skipped"))
         # ...and the counter was asked about THIS crash's channel. Without the argument the
-        # nightly count answers for beta and beta is dead every day nightly hits its cap.
+        # nightly count answers for beta and beta is dead every day nightly hits its cap. And
+        # about its PRODUCT (2026-09-15): Fenix nightly shares the label with Firefox nightly,
+        # so a channel-only count would let the two spend one cap in both directions.
         bugzilla_apply.models.Dossier.filed_bugs_since.assert_called_once_with(
-            mock.ANY, channel="beta")
+            mock.ANY, channel="beta", product="Firefox")
         # The mirror: beta's own cap of 3 still binds, and it is beta's cap, not nightly's 10.
         self._reset()
         self._counter(beta=3, nightly=0)

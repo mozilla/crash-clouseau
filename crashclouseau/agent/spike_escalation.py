@@ -101,8 +101,16 @@ def sweep_real_spikes():
             channels = config.get_agent_channels()
             room = cfg["max_per_tick"]
             enqueued = 0
-            for product in config.get_products():
+            # The products the agent TRIAGES, not every product the enum knows
+            # (`get_products` also defines `PRODUCT_TYPE`, so Fenix had to enter it before it
+            # could be ingested at all), and only their own channels: Fenix is nightly-only
+            # and a beta/release/esr153 sweep for it would read an empty selection log.
+            for product in config.get_agent_products():
+                if _filing_held(product):
+                    continue
                 for channel in channels or []:
+                    if channel not in config.get_product_channels(product):
+                        continue
                     if room <= 0:
                         break
                     n = _sweep_channel(product, channel, cfg, room)
@@ -112,6 +120,28 @@ def sweep_real_spikes():
     except Exception:  # pragma: no cover - defensive; the clock must survive
         logger.error("spike: sweep failed", exc_info=True)
         return 0
+
+
+def _filing_held(product):
+    """Is *product* one whose spike is NOT worth a run because nothing could be filed for it?
+
+    An escalation exists to FILE -- the volume is the finding -- so investigating a Fenix spike
+    at Opus xhigh cost (up to `max_cost_usd` a run) while ``file_spike_bug`` would decline
+    every result buys a brief nobody reads. A product whose filing is HELD
+    (``agent.autofile.products.<p>.enabled: false``, Fenix while its verdicts are counted) and
+    a product nobody has DECIDED about (no entry, not the default) are both skipped, and each
+    is logged: a sweep that silently leaves a product out is the silent-no-op shape this
+    codebase keeps being bitten by, and the log line is the only trace on a tick."""
+    if config.autofile_product_held(product):
+        logger.info("spike: %s is not swept: its filing is held "
+                    "(agent.autofile.products.%s.enabled: false) and an escalation exists "
+                    "to file", product, product)
+        return True
+    if not config.autofile_product_declared(product):
+        logger.info("spike: %s is not swept: product has no autofile configuration, so "
+                    "nothing could be filed for its spikes", product)
+        return True
+    return False
 
 
 def _parse_ts(value):
@@ -477,6 +507,8 @@ def _frames_from_dump(raw):
     from crashclouseau import inspector
 
     dump = (raw or {}).get("json_dump") or {}
+    if not dump and (raw or {}).get("java_exception"):
+        return _frames_from_java_exception(raw)
     threads = dump.get("threads") or []
     n = inspector.thread_for_analysis(raw or {})
     if not isinstance(n, int) or not 0 <= n < len(threads):
@@ -490,10 +522,72 @@ def _frames_from_dump(raw):
     return out
 
 
+def _frames_from_java_exception(raw):
+    """The JVM stack of a Fenix Java/Kotlin report, in the native frame shape, for the prompt.
+
+    A Java report has no ``json_dump``: Socorro's ``java_exception.exception.values`` lists the
+    exception chain innermost cause first, and the LAST value is the exception that was thrown
+    -- on crash 3c426d92 (2026-09-15) ``values[0]`` is the ``KeyStoreException`` cause and
+    ``values[-1]`` the ``ProviderException`` whose frames are ``java_stack_trace``'s. The
+    function is ``module.function`` (``mozilla.components.lib.dataprotect.Keystore.generateKey``)
+    because that is the symbol searchfox resolves; the binary-module column is a native notion
+    and stays empty. R8's ``R8$$SyntheticClass`` frames (a lambda's synthetic class, no source
+    file) are dropped: these frames are for the PROMPT only, and a frame with no file to read
+    is one the investigator cannot act on (the stored stack, ``java.inspect_java_stacktrace``,
+    keeps them under a borrowed file because its frames feed the hash). The line is what
+    Socorro reports -- R8-remapped while ``java.trust_line_numbers`` is off, so each frame says
+    ``line_trusted`` and the seed's ``line_numbers_trusted`` follows the pref."""
+    values = (((raw or {}).get("java_exception") or {}).get("exception") or {}).get("values")
+    if not values:
+        return []
+    frames = ((values[-1] or {}).get("stacktrace") or {}).get("frames") or []
+    trusted = config.java_trust_line_numbers()
+    out = []
+    for frame in frames[:50]:
+        filename = (frame.get("filename") or "").strip()
+        if filename == "R8$$SyntheticClass":
+            continue
+        module = (frame.get("module") or "").strip()
+        function = (frame.get("function") or "").strip()
+        out.append({"stackpos": len(out), "filename": filename,
+                    "function": ".".join(x for x in (module, function) if x),
+                    "line": frame.get("lineno") or -1, "module": "", "node": "",
+                    "changesets": {}, "line_trusted": trusted})
+    return out
+
+
+def _is_java_report(raw):
+    """A JVM report: a Java exception (or its text) and NO minidump. A native Fenix crash
+    carries ``json_dump`` like desktop's and is not one, even when Java frames sit around it."""
+    raw = raw or {}
+    return bool(raw.get("java_exception") or raw.get("java_stack_trace")) and not raw.get(
+        "json_dump")
+
+
+def _stack_text_for(frames, line_numbers_trusted=True):
+    """``orchestrator._stack_text`` with the line-trust flag passed ONLY when it is off, so the
+    desktop call stays byte-identical to what it always was (the flag is the orchestrator's
+    Fenix contract, plans/16 §13.3: untrusted lines are rendered as R8-remapped, not as the
+    source line the model may cite)."""
+    from crashclouseau.agent import orchestrator
+
+    if not frames:
+        return ""
+    if line_numbers_trusted:
+        return orchestrator._stack_text(frames)
+    return orchestrator._stack_text(frames, line_numbers_trusted=False)
+
+
 def _minimal_seed(uuid, uuid_info, esc):
     """What ``build_seed`` would have handed the ordinary agent, when it refused (no frames, or
     an off-stack crash with the off-stack path switched off): the report, its stack and the
-    signature-level facts, with no candidates. Never lets one lookup failure lose the brief."""
+    signature-level facts, with no candidates. Never lets one lookup failure lose the brief.
+
+    Carries the two Fenix keys ``build_seed`` carries: ``java`` (a JVM report -- the stored
+    stack is Java, or the processed crash has an exception and no minidump) and
+    ``line_numbers_trusted`` (always for a native stack; the ``java.trust_line_numbers`` pref
+    for a Java one). Every prompt consumer reads the seed dict, so a spike brief without them
+    would print an R8 line as the crashing line."""
     from crashclouseau import inspector
     from crashclouseau.agent import orchestrator
 
@@ -505,16 +599,19 @@ def _minimal_seed(uuid, uuid_info, esc):
     stack, _info = models.CrashStack.get_by_uuid(uuid)
     frames = (stack or {}).get("frames") or _frames_from_dump(raw)
     frames = frames[: config.get_agent_max_seed_frames()]
+    java = bool((uuid_info or {}).get("java")) or _is_java_report(raw)
+    line_numbers_trusted = (not java) or config.java_trust_line_numbers()
     info = {"signature": esc.signature, "product": esc.product, "channel": esc.channel}
     seed = {
         "uuid": uuid, "signature": esc.signature, "channel": esc.channel,
         "product": esc.product, "buildid": esc.buildid,
         "version": (raw or {}).get("version"), "frames": frames,
-        "stack": orchestrator._stack_text(frames) if frames else "", "candidates": [],
+        "stack": _stack_text_for(frames, line_numbers_trusted), "candidates": [],
         "experts": [], "raw_crash": raw, "is_offstack": True, "offstack_reason": None,
         "build_node": (uuid_info or {}).get("node", ""), "pin_rev": (uuid_info or {}).get("node", ""),
         "prior_regressor_bugs": [], "prior_hints": [], "candidate_pushdates": {},
         "archetypes": [], "install_history": {}, "candidate_window": None,
+        "java": java, "line_numbers_trusted": line_numbers_trusted,
     }
     seed["signature_trend"] = orchestrator._signature_trend(info, uuid_info or {}, esc.channel)
     seed["version_rates"] = orchestrator._version_rates(info, esc.channel)
@@ -632,7 +729,7 @@ def _stacks(uuid, siblings, esc, seed):
     the same spike, each with its report-level facts -- a spike that is one defect under three
     stacks reads very differently from three unrelated crashes sharing a signature."""
     from crashclouseau import inspector
-    from crashclouseau.agent import orchestrator, triage
+    from crashclouseau.agent import triage
 
     reports = reports_for(siblings, esc.buildid, esc.channel, esc.product)
     by_proto = {}
@@ -665,7 +762,9 @@ def _stacks(uuid, siblings, esc, seed):
             logger.warning("spike: could not fetch %s for the brief: %s", other, exc)
         stacks.append({
             "uuid": other, "protohash": proto, "facts": facts,
-            "stack": orchestrator._stack_text(frames) if frames else "",
+            # `CrashStack.get_by_uuid` stamps `line_trusted` per frame; one untrusted frame
+            # makes the whole stack a Java one.
+            "stack": _stack_text_for(frames, all(f.get("line_trusted", True) for f in frames)),
             "share": "{} of the {} ingested reports share this stack".format(len(uuids), total),
         })
     return stacks
@@ -1052,10 +1151,21 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     signature = (esc.signature or "").strip()
     cfg = config.get_agent_spike_escalation()
     now = datetime.now(timezone.utc)
+    # No Socorro product on the record: `product` HERE is the BMO product the spike was filed
+    # into (`html.py` renders it as the component column); the crash's product is the row's.
     result = {"filed": False, "at": now.isoformat(), "signature": signature, "channel": channel,
               "buildid": esc.buildid, "uuid": esc.uuid}
     if not config.autofile_globally_enabled():
         return dict(result, skipped="autofile disabled")
+    # THE PRODUCT HOLD BINDS THE SPIKE FILER TOO, unlike the per-channel hold (see
+    # `config.autofile_globally_enabled`): "this product writes nothing" is a statement about
+    # the product, not about culprit filings' yield on a channel. Fenix ships held (plans/16
+    # D4); the sweep already skips it, and this is what makes `_retry_filings` -- which re-calls
+    # this function for a row escalated BEFORE the hold, or by hand -- honour it as well. A
+    # product nobody has decided about gets the same answer, in the same direction. Not a
+    # `retry`: a hold clears by a config edit, not by waiting.
+    if not config.autofile_product_declared(product) or config.autofile_product_held(product):
+        return dict(result, skipped="autofile held for product {!r} (triage-only)".format(product))
     token = config.get_bugzilla_token()
     if not token:
         return dict(result, skipped="no Bugzilla API token configured")

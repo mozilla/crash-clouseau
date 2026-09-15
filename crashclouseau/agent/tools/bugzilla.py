@@ -178,6 +178,15 @@ TOOLS = tools_in(__name__)
 # which runs per RUN. That is also the seam for Fenix day: ``second_opinion.build_options``
 # already knows the crash's product (second_opinion.py:125), so a per-crash clause is a
 # ``dataclasses.replace`` of this one tool there, not a change here.
+#
+# RENDERED WITH NO PRODUCT, deliberately still (2026-09-15, Fenix nightly triaged with filing
+# held). ``config.describe_other_applications("Fenix")`` now also names desktop ``Firefox`` as
+# foreign (the android family's extra clause, plans/16 D14), but this import-time render
+# describes a DESKTOP crash's foreign set to every run, a Fenix run included: the tool's
+# rows still show ``product :: component`` for the model to read, and the venue decision the
+# clause is about is the FILER's (``bugzilla_apply._split_by_application``, which is
+# per-crash and product-correct). The per-crash wording is the second-opinion owner's
+# ``dataclasses.replace`` above, when a Fenix filing can happen at all.
 for _defn in TOOLS:
     _defn.description = _defn.description.replace(
         "{other_applications}", config.describe_other_applications())

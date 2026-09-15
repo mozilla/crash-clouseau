@@ -111,6 +111,11 @@ def _filed_bugs():
             # describes neither -- the denominator IS the rule.
             "channel": info.get("channel"),
             "buildid": info.get("buildid"),
+            # ...and WHICH PRODUCT, for the same reason one axis over: Fenix nightly and
+            # Firefox nightly share the channel label, so a channel slice of the corpus still
+            # pools the two. Absent on anything filed before the filer recorded it (2026-09-15;
+            # every one of those is Firefox). `Feedback.scoreboard` cannot slice on it yet.
+            "product": info.get("product"),
         })
     return out
 
