@@ -7,7 +7,7 @@ from libmozdata.hgmozilla import Mercurial, Revision
 from libmozdata import utils as lmdutils
 import re
 from . import net
-from . import buildhub, hgauthors, models, utils
+from . import buildsource, hgauthors, models, utils
 from .logger import logger
 
 
@@ -221,7 +221,7 @@ def pushlog_for_buildid(
     buildid, channel, product, file_filter=utils.is_interesting_file
 ):
     """Get the pushlog for a buildid/channel/product"""
-    data = buildhub.get_two_last(buildid, channel, product)
+    data = buildsource.for_product(product).get_two_last(buildid, channel, product)
     if data:
         startrev = data[0]["revision"]
         endrev = data[1]["revision"]
@@ -235,7 +235,15 @@ def pushlog_for_buildid_url(buildid, channel, product):
     """Get the pushlog url for a buildid/channel/product"""
     data = models.Build.get_two_last(utils.get_build_date(buildid), channel, product)
     if len(data) != 2:
-        data = buildhub.get_two_last(buildid, channel, product)
+        source = buildsource.for_product(product)
+        if source is not buildsource.buildhub:
+            # A URL helper runs on the web dyno (ONE gunicorn worker, router timeout 30 s),
+            # and the TaskCluster source's fallback is a walk-back of up to 15 day namespaces
+            # (a leaf GET per child) -- and the OLDEST stored build never has a predecessor
+            # row, since `Node.clean` cascades the older ones. Buildhub's fallback is one
+            # POST; the index's is not affordable here. No link rather than a stalled site.
+            return None
+        data = source.get_two_last(buildid, channel, product)
     if data:
         startrev = data[0]["revision"]
         endrev = data[1]["revision"]
@@ -245,8 +253,10 @@ def pushlog_for_buildid_url(buildid, channel, product):
 
 def pushlog_for_pushdate_url(pushdate, channel, product):
     """Get the pushlog url for the build containing pushdate"""
-    data = buildhub.get_enclosing_builds(pushdate, channel, product)
-    if data:
+    data = buildsource.for_product(product).get_enclosing_builds(pushdate, channel, product)
+    # `data[0]` may be None: a TaskCluster product answers from the `builds` table only, and a
+    # pushdate older than its oldest row has no build before it (`[None, after]`).
+    if data and data[0] is not None:
         startrev = data[0]["revision"]
         if data[1] is None:
             endrev = "tip"
