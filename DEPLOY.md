@@ -16,10 +16,11 @@ the family's filing policy (`channels.esr`: `skip`, cap 2, `[new in esr]`,
 `cf_tracking_firefox_esr<major>` nominated) -- **and only runs where the two env vars name it**
 (see "Turning the ESR channel on"). A
 channel can still be held with `agent.autofile.channels.<ch>.enabled: false`, which beats the
-global arm. Since 2026-09-15 the deployment also ingests and triages **Fenix nightly** -- a second
-PRODUCT on the `nightly` label, not a channel -- and files nothing for it
-(`agent.autofile.products.Fenix.enabled: false`; see "Turning Fenix on"). Read "Cost controls"
-below as what bounds the spend, not as evidence that there is none.
+global arm. Since 2026-09-15 the deployment also ingests, triages **and files** **Fenix nightly**
+-- a second PRODUCT on the `nightly` label, not a channel -- at cap 2 with `skip`
+(`agent.autofile.products.Fenix`; shipped held that afternoon, armed the same evening on the
+first tick's first culprit; see "Turning Fenix on"). Read "Cost controls" below as what bounds
+the spend, not as evidence that there is none.
 
 Several things are automated by the repo now; the rest are one-time app setup.
 
@@ -234,8 +235,8 @@ What to watch on the first ESR days:
 
 Fenix (Firefox for Android) nightly is a second PRODUCT on the channel label `nightly`, not a
 channel: `config.products` and `ingest_products` are `["Firefox", "Fenix"]`, `product_channels`
-pins Fenix to `["nightly"]`, `agent.products` triages both, and filing is HELD for Fenix
-(`agent.autofile.products.Fenix.enabled: false`). Its builds come from the TaskCluster index
+pins Fenix to `["nightly"]`, `agent.products` triages both, and filing is ARMED for Fenix at
+`skip` / cap 2 (`agent.autofile.products.Fenix`; step 3). Its builds come from the TaskCluster index
 (`crashclouseau/buildsource.py` -> `tcindex`, the `mobile.fenix-nightly` leaf; Buildhub-as-firefox
 missed 1 of 15 recent Fenix builds and only cross-checks), its Java/Kotlin stacks are read
 (`java_stack_trace`, frames in `java.packages`) with the R8-remapped line numbers IGNORED behind
@@ -272,15 +273,21 @@ deploy that starts it -- the order below is what makes that safe.
    run and `update.update` refuses a (channel, product) pair the deployment does not ingest, so
    dropping Fenix from a variable turns its already-queued jobs into no-ops.
 
-3. **Filing is HELD.** `agent.autofile.products.Fenix.enabled: false` binds the ordinary filer,
-   the spike filer (the sweep SKIPS a product whose filing is held -- an escalation exists to
-   file -- and `file_spike_bug` honours the hold too) AND `POST /api/tasks/trigger` with
-   `file_bug: true`: a Fenix run is analysed and declines with `autofile held for product 'Fenix'
-   (triage-only)`, recorded on the dossier like a held channel and distinct from `autofile
-   disabled`, so the declines can be counted. Why held (plans/16 §11.4): ~40% of Fenix changeset
-   authors cannot be needinfo'd and Clouseau would out-file the organic `Firefox for Android`
-   rate ~15x. Arming it later is a config edit (`enabled: true`; the android venue map already
-   excludes the BMO `Firefox` product) and a deploy. `AUTOFILE_BUGS` stays the global switch.
+3. **Filing: ARMED at `skip`, cap 2** (`agent.autofile.products.Fenix`, a per-product overlay on
+   nightly's policy; `AUTOFILE_BUGS` stays the global switch). It shipped HELD
+   (`enabled: false`) on 2026-09-15 afternoon -- plans/16 §11.4: ~40% of Fenix changeset authors
+   cannot be needinfo'd and Clouseau would out-file the organic `Firefox for Android` rate ~15x
+   -- and Calixte armed it the same evening, when the first tick's first culprit
+   (35e32be2, `nsTSubstring<T>::Truncate | gfxPlatform::ReportTelemetry`, 85, second opinion
+   corroborated) declined with `autofile held for product 'Fenix' (triage-only)`. To hold it
+   again: `enabled: false` in that entry and a deploy. A product hold binds the ordinary filer,
+   the spike filer (the sweep SKIPS a held product -- an escalation exists to file) AND `POST
+   /api/tasks/trigger` with `file_bug: true`, and its declines are recorded on the dossier with
+   the product, so they can be counted. KNOWN VENUE GAP, desktop's too: `resolve_product_component`
+   adopts the regressor bug's own component first, so that first culprit's preview reads
+   `Data Platform and Tools :: Monitoring & Alerting` (bug 1879888 is a telemetry-metric bug)
+   where `Core :: Graphics` is meant; the `moz.build` `BUG_COMPONENT` rung is the fix (memory
+   `filer-component-unresolved-out-of-retention-candidate`).
 
 4. **What to watch on the first Fenix days.**
    - `tasks.html`: a Fenix run shows `N` with `fenix` under it in the Ch. column and the tooltip
@@ -415,7 +422,7 @@ The result is on `crashstack.html?uuid=<uuid>` (and `/api/evidence?uuid=`) whate
 `show_in_tasks` says; a run with `file_bug: false` shows "Not filed: filing disabled for this
 run" in the Bug column when it is listed. Each result names the crash's `product` and `channel`.
 `file_bug: true` lets the run through the ordinary filing gates; it does NOT arm a product whose
-filing is held (`agent.autofile.products.<product>.enabled: false` -- Fenix): that run is
-analysed and declines with `autofile held for product 'Fenix' (triage-only)`. A Java-only crash
+filing is held (`agent.autofile.products.<product>.enabled: false`): that run is analysed and
+declines with `autofile held for product '<product>' (triage-only)`. A Java-only crash
 whose frames are all outside `java.packages` is refused as `no usable stack`, like a native crash
 Socorro has no `json_dump` for.

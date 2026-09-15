@@ -318,7 +318,9 @@
             {
                 "Fenix":
                 {
-                    "enabled": false
+                    "enabled": true,
+                    "comment_on_existing": "skip",
+                    "daily_cap": 2
                 }
             },
             "channels":

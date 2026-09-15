@@ -251,16 +251,18 @@ class TestTheShippedFenixNightlyKnobs(unittest.TestCase):
         self.assertEqual(config.get_threshold("protos", "Fenix", "beta"), 1)
 
 
-class TestFenixFilingIsHeld(unittest.TestCase):
-    """D4: HELD. Ingested, scored, triaged, filing NOTHING, so a week of Fenix verdicts at the
-    filing rung can be counted before anything is written to ``Firefox for Android`` (plans/16
-    §11.4: ~40% of its changeset authors cannot be needinfo'd, and Clouseau would out-file the
-    organic rate ~15x). A product hold, not a channel hold: it binds the ordinary filer, the
-    spike filer AND a ``file_bug: true`` trigger, whatever the channel."""
+class TestFenixFilingPolicy(unittest.TestCase):
+    """D4 as shipped on 2026-09-15 afternoon was HELD (ingested, scored, triaged, filing nothing,
+    so a week of verdicts at the rung could be counted -- plans/16 §11.4). Calixte ARMED it the
+    same evening on the first tick's first culprit (35e32be2, ``nsTSubstring<T>::Truncate |
+    gfxPlatform::ReportTelemetry`` at 85, corroborated), at beta's and release's starting
+    policy: ``skip`` and a cap of 2. The hold mechanism stays -- a product hold binds the
+    ordinary filer, the spike filer AND a ``file_bug: true`` trigger, whatever the channel -- and
+    is pinned here through a patched config."""
 
-    def test_fenix_is_declared_and_held_and_firefox_is_neither_held_nor_undeclared(self):
+    def test_fenix_is_declared_and_armed_and_firefox_is_neither_held_nor_undeclared(self):
         self.assertTrue(config.autofile_product_declared("Fenix"))
-        self.assertTrue(config.autofile_product_held("Fenix"))
+        self.assertFalse(config.autofile_product_held("Fenix"))
         # Firefox is the product the top-level block describes (`default_product`): declared
         # without an entry, exactly as nightly is by `default_channel`.
         self.assertTrue(config.autofile_product_declared("Firefox"))
@@ -271,32 +273,44 @@ class TestFenixFilingIsHeld(unittest.TestCase):
             with self.subTest(product=product):
                 self.assertFalse(config.autofile_product_declared(product))
                 self.assertFalse(config.autofile_product_held(product))
-        # The hold is an EXPLICIT `enabled: false` -- the one overlay shape that survives
-        # `AUTOFILE_BUGS=1` (a bare `{}` would arm the product at the top-level policy).
-        self.assertIs(config.get_agent()["autofile"]["products"]["Fenix"]["enabled"], False)
+        # The entry carries an EXPLICIT `enabled` key -- the overlay shape that makes the
+        # decision legible (a bare `{}` would arm the product at the top-level policy).
+        self.assertIs(config.get_agent()["autofile"]["products"]["Fenix"]["enabled"], True)
 
-    def test_the_hold_beats_the_global_arm_and_changes_nothing_else(self):
-        """Under prod's live value: with ``AUTOFILE_BUGS=1`` Firefox nightly files and Fenix
-        nightly does not, and ``enabled`` is the ONLY key the product layer moves."""
+    def test_the_product_layer_moves_exactly_its_two_keys_and_the_kill_switch_still_wins(self):
+        """Under prod's live value: with ``AUTOFILE_BUGS=1`` Firefox nightly files at nightly's
+        policy and Fenix nightly at its own -- ``skip``, cap 2 -- and those are the ONLY keys the
+        product layer moves. ``AUTOFILE_BUGS=0`` kills both."""
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            nightly = config.get_agent_autofile("nightly", "Firefox")
+            fenix = config.get_agent_autofile("nightly", "Fenix")
+            self.assertTrue(nightly["enabled"])
+            self.assertTrue(fenix["enabled"])
+            self.assertEqual({k: v for k, v in fenix.items() if nightly[k] != v},
+                             {"comment_on_existing": "skip", "daily_cap": 2})
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
+            self.assertFalse(config.get_agent_autofile("nightly", "Fenix")["enabled"])
+            self.assertFalse(config.get_agent_autofile("nightly", "Firefox")["enabled"])
+
+    def test_a_held_product_beats_the_global_arm_on_every_channel(self):
+        """The 2026-09-15 afternoon shape, through a patched config: an explicit
+        ``products.Fenix.enabled: false`` survives ``AUTOFILE_BUGS=1`` and ``enabled`` is the
+        ONLY key it moves -- a statement about the PRODUCT, held on any channel, paired or not."""
+        agent = dict(config.get_agent())
+        autofile = dict(agent["autofile"])
+        autofile["products"] = {**autofile["products"], "Fenix": {"enabled": False}}
+        agent["autofile"] = autofile
+        with mock.patch.object(config, "get_agent", return_value=agent), \
+                mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            self.assertTrue(config.autofile_product_held("Fenix"))
             nightly = config.get_agent_autofile("nightly", "Firefox")
             fenix = config.get_agent_autofile("nightly", "Fenix")
             self.assertTrue(nightly["enabled"])
             self.assertFalse(fenix["enabled"])
             self.assertEqual({k: v for k, v in fenix.items() if nightly[k] != v},
                              {"enabled": False})
-            # A statement about the PRODUCT: held on any channel, paired or not.
             for channel in ("beta", "release", "esr153", None):
                 self.assertFalse(config.get_agent_autofile(channel, "Fenix")["enabled"], channel)
-        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
-            self.assertFalse(config.get_agent_autofile("nightly", "Fenix")["enabled"])
-            self.assertFalse(config.get_agent_autofile("nightly", "Firefox")["enabled"])
-        with mock.patch.dict(os.environ):
-            os.environ.pop("AUTOFILE_BUGS", None)
-            # CI's state: the top-level `enabled: false` reaches both, so the diff is empty.
-            nightly = config.get_agent_autofile("nightly", "Firefox")
-            fenix = config.get_agent_autofile("nightly", "Fenix")
-            self.assertEqual({k: v for k, v in fenix.items() if nightly[k] != v}, {})
 
     def test_no_product_is_byte_identical_to_before(self):
         """``product=None`` merges nothing: what keeps every ``return_value=`` mock and every

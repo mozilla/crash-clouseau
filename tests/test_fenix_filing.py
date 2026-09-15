@@ -8,10 +8,12 @@ the bug preview and the venue split do with a product that shares desktop's chan
     DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \\
         uv run python -m unittest tests.test_fenix_filing
 
-Pure logic against the SHIPPED config (`agent.autofile.products.Fenix.enabled: false`,
-`default_product: Firefox`): the two unattended filers hold Fenix and file Firefox exactly as
-before, the sweep does not pay for a spike it could not file, a JVM report's R8 lines are never
-printed as fact, and desktop `Firefox` bugs are foreign to a Fenix crash. No network.
+Pure logic against the SHIPPED config (`agent.autofile.products.Fenix`: armed 2026-09-15 evening
+at `skip`, cap 2, on the first culprit -- 35e32be2, `nsTSubstring<T>::Truncate |
+gfxPlatform::ReportTelemetry` at 85; `default_product: Firefox`) and against a HELD Fenix through
+a patched config: a product hold binds the two unattended filers and the sweep, Firefox files
+exactly as before, a JVM report's R8 lines are never printed as fact, and desktop `Firefox` bugs
+are foreign to a Fenix crash. No network.
 """
 import os
 
@@ -77,12 +79,25 @@ _NATIVE_RAW = {
 }
 
 
+def _held_fenix():
+    """The shipped agent block with Fenix HELD (`enabled: false`), as it shipped on 2026-09-15
+    afternoon before Calixte armed it that evening."""
+    agent = dict(config.get_agent())
+    autofile = dict(agent["autofile"])
+    autofile["products"] = {**autofile["products"], "Fenix": {"enabled": False}}
+    agent["autofile"] = autofile
+    return mock.patch.object(config, "get_agent", return_value=agent)
+
+
 class TestTheShippedConfig(unittest.TestCase):
-    def test_fenix_is_declared_and_held_and_firefox_is_the_default(self):
+    def test_fenix_is_declared_and_armed_and_firefox_is_the_default(self):
         self.assertTrue(config.autofile_product_declared("Fenix"))
-        self.assertTrue(config.autofile_product_held("Fenix"))
+        self.assertFalse(config.autofile_product_held("Fenix"))
         self.assertTrue(config.autofile_product_declared("Firefox"))
         self.assertFalse(config.autofile_product_held("Firefox"))
+        with _held_fenix():
+            self.assertTrue(config.autofile_product_declared("Fenix"))
+            self.assertTrue(config.autofile_product_held("Fenix"))
         # A product nobody has decided about, and no product at all: undeclared, not held --
         # two different silences, and the filer fails closed on the first.
         for product in ("Focus", "Thunderbird", None, ""):
@@ -90,12 +105,16 @@ class TestTheShippedConfig(unittest.TestCase):
                 self.assertFalse(config.autofile_product_declared(product))
                 self.assertFalse(config.autofile_product_held(product))
 
-    def test_the_global_arm_does_not_arm_a_held_product(self):
+    def test_the_global_arm_arms_fenix_at_its_own_policy_and_does_not_arm_a_held_product(self):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
             self.assertTrue(config.autofile_globally_enabled())
             self.assertTrue(config.get_agent_autofile("nightly")["enabled"])
             self.assertTrue(config.get_agent_autofile("nightly", product="Firefox")["enabled"])
-            self.assertFalse(config.get_agent_autofile("nightly", product="Fenix")["enabled"])
+            fenix = config.get_agent_autofile("nightly", product="Fenix")
+            self.assertTrue(fenix["enabled"])
+            self.assertEqual((fenix["comment_on_existing"], fenix["daily_cap"]), ("skip", 2))
+            with _held_fenix():
+                self.assertFalse(config.get_agent_autofile("nightly", product="Fenix")["enabled"])
 
 
 class _FenixBase(_Base):
@@ -107,9 +126,29 @@ class _FenixBase(_Base):
         self.addCleanup(ro.stop)
 
 
+class TestTheOrdinaryFilerFilesFenixAsShipped(_FenixBase):
+    """Armed 2026-09-15 evening: a Fenix lead, against the SHIPPED config, passes the product
+    gate and is filed (every BMO write stubbed by `_Base`)."""
+
+    def test_the_shipped_armed_fenix_files_a_lead(self):
+        with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
+            res = bugzilla_apply.autofile_bug("u-1", _FENIX_INFO, {},
+                                              {"candidate": {"node": "n"}}, "lead", 90)
+        self.assertTrue(res["filed"], res.get("skipped"))
+        self.assertEqual((res["bug"], res["product"]), (999, "Fenix"))
+        self.assertEqual(len(self.created), 1)
+
+
 class TestTheOrdinaryFilerHoldsFenix(_FenixBase):
     """`_Base` arms the policy (`get_agent_autofile` -> enabled) and stubs every BMO request, so
-    what stops a Fenix filing here is the product predicate alone, read from the real config."""
+    what stops a Fenix filing here is the product predicate alone -- read from the 2026-09-15
+    afternoon config (Fenix HELD) through `_held_fenix`; the shipped one is armed."""
+
+    def setUp(self):
+        super().setUp()
+        held = _held_fenix()
+        held.start()
+        self.addCleanup(held.stop)
 
     def _file_fenix(self, verdict="lead", confidence=90):
         return bugzilla_apply.autofile_bug("u-1", _FENIX_INFO, {}, {"candidate": {"node": "n"}},
@@ -195,15 +234,21 @@ class TestTheSpikeFilerHoldsFenix(_FilerBase):
     stands between a Fenix spike and a bug. The per-channel hold is bypassed for spikes by
     design (`config.autofile_globally_enabled`); the per-product one is not."""
 
-    def test_a_fenix_spike_is_held(self):
-        res = se.file_spike_bug(_esc(product="Fenix"), dict(self.brief, product="Fenix"),
-                                self.findings, grounded=True)
+    def test_a_held_fenix_spike_is_held(self):
+        with _held_fenix():
+            res = se.file_spike_bug(_esc(product="Fenix"), dict(self.brief, product="Fenix"),
+                                    self.findings, grounded=True)
         self.assertFalse(res["filed"])
         self.assertEqual(res["skipped"], _HELD)
         self.assertEqual((self.created, self.comments), ([], []))
         # Not a transient decline: `_retry_filings` re-calls this for `retry: True` rows and a
         # hold clears by a config edit, not by waiting.
         self.assertNotIn("retry", res)
+
+    def test_the_shipped_fenix_spike_passes_the_product_gate(self):
+        res = se.file_spike_bug(_esc(product="Fenix"), dict(self.brief, product="Fenix"),
+                                self.findings, grounded=True)
+        self.assertNotEqual(res.get("skipped"), _HELD)
 
     def test_an_undeclared_product_is_held_the_same_way(self):
         res = se.file_spike_bug(_esc(product="Focus"), dict(self.brief, product="Focus"),
@@ -242,18 +287,18 @@ class TestTheSweepSkipsAHeldProduct(unittest.TestCase):
     def test_fenix_is_not_swept_while_its_filing_is_held(self):
         # An escalation exists to FILE: an Opus-xhigh run whose every result `file_spike_bug`
         # would decline is money for a brief nobody reads. Logged, because the tick leaves no
-        # other trace of a product it left out.
-        with self.assertLogs(logger, level="INFO") as logs:
+        # other trace of a product it left out. (The shipped config is armed; this is the
+        # 2026-09-15 afternoon hold, through a patched config.)
+        with _held_fenix(), self.assertLogs(logger, level="INFO") as logs:
             se.sweep_real_spikes()
         self.assertEqual(self.swept, [("Firefox", "nightly"), ("Firefox", "beta")])
         self.assertTrue(any("Fenix is not swept" in line and "held" in line
                             for line in logs.output), logs.output)
 
-    def test_an_armed_fenix_is_swept_on_its_own_channels_only(self):
-        # The day the hold is lifted: Fenix is nightly-only (`product_channels`), so a beta
-        # sweep for it would read an empty selection log.
-        with mock.patch.object(config, "autofile_product_held", return_value=False):
-            se.sweep_real_spikes()
+    def test_the_armed_fenix_is_swept_on_its_own_channels_only(self):
+        # Shipped: Fenix is nightly-only (`product_channels`), so a beta sweep for it would
+        # read an empty selection log.
+        se.sweep_real_spikes()
         self.assertEqual(self.swept,
                          [("Firefox", "nightly"), ("Firefox", "beta"), ("Fenix", "nightly")])
 

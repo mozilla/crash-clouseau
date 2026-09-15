@@ -321,20 +321,28 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         (plans/16 §11.4). ITERATES `get_products()` (the `PRODUCT_TYPE` universe), not
         `get_agent_products()` (an environment variable), for the reason the channel loop gives.
 
-        Fenix is DECLARED AND HELD (`products.Fenix.enabled: false`, 2026-09-15): a decision,
-        not a gap. Firefox is declared by `default_product` and not held."""
+        Fenix is DECLARED AND ARMED (`products.Fenix`: `enabled: true`, `skip`, `daily_cap` 2):
+        shipped HELD on 2026-09-15 afternoon, armed by Calixte the same evening on the first
+        culprit the first tick produced (35e32be2, `nsTSubstring<T>::Truncate |
+        gfxPlatform::ReportTelemetry` at 85) -- beta's and release's starting policy. Firefox
+        is declared by `default_product`."""
         for product in config.get_products():
             with self.subTest(product=product):
                 self.assertTrue(
                     config.autofile_product_declared(product),
                     "{} can appear in Build.product but nobody has decided about filing "
                     "on it".format(product))
-        self.assertTrue(config.autofile_product_held("Fenix"))
+        self.assertFalse(config.autofile_product_held("Fenix"))
         self.assertFalse(config.autofile_product_held("Firefox"))
-        # Under prod's live value: Firefox files on nightly, Fenix does not, on the same label.
+        # Under prod's live value: both file on nightly, each at its own policy on the same label.
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
-            self.assertTrue(config.get_agent_autofile("nightly", "Firefox")["enabled"])
-            self.assertFalse(config.get_agent_autofile("nightly", "Fenix")["enabled"])
+            firefox = config.get_agent_autofile("nightly", "Firefox")
+            fenix = config.get_agent_autofile("nightly", "Fenix")
+            self.assertTrue(firefox["enabled"])
+            self.assertTrue(fenix["enabled"])
+            self.assertEqual((firefox["comment_on_existing"], firefox["daily_cap"]),
+                             ("comment", 10))
+            self.assertEqual((fenix["comment_on_existing"], fenix["daily_cap"]), ("skip", 2))
 
     def test_every_channel_is_armed_and_a_per_channel_false_still_vetoes(self):
         """WHAT IS SHIPPED: with `AUTOFILE_BUGS=1` live in production, nightly, beta AND release
