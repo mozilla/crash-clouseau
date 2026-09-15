@@ -199,15 +199,27 @@ _PROLOGUE_PATTERNS = (
 )
 
 
-def _stack_text(frames):
+def _stack_text(frames, line_numbers_trusted=True):
     """Render the crash stack for the AGENT's prompt. PRESENTATION ONLY — it does NOT touch
     the stored ``frames`` that feed candidate scoring and the stackpos-keyed dedup hash, so
     nothing mechanical changes. It strips the LEADING run of generic abort/panic machinery
     frames (rust_begin_unwind / panic_fmt / MOZ_Crash / ... — the same for every assertion/
     panic crash) so the REAL crashing frame sits on top of what the model reads, keeping the
     original stackpos numbers (a leading ``#3`` still tells the agent how deep it was). Never
-    strips so far that the stack goes empty."""
+    strips so far that the stack goes empty.
+
+    ``line_numbers_trusted=False`` (a Java/Kotlin stack under ``java.trust_line_numbers``
+    false) renders the frame WITHOUT ``file:line``: the reported line is R8-remapped, and on the
+    2026-09-15 example it named a KDoc comment (``Keystore.kt:269`` for a method at line 221) and
+    a licence header (``FxaAccountManager.kt:3``). Printed as ``file:line`` it is the number the
+    model copies into ``stack_frame`` citations and blames, so it is shown as what it is -- a
+    reported, unreliable value -- and separated from the file. The default path is
+    byte-identical."""
     def line(f):
+        if not line_numbers_trusted:
+            return "#{} {}  {}  (reported line {}: R8-remapped, unreliable)".format(
+                f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
+            ) + ("  [inlined: {}]".format(", ".join(f["inlines"])) if f.get("inlines") else "")
         base = "#{} {}  {}:{}".format(
             f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
         )
@@ -618,7 +630,7 @@ def build_seed(uuid):
         return None
 
     try:
-        info = models.UUID.get_info(uuid)
+        info = models.UUID.get_info(uuid) or {}
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("agent: UUID.get_info failed for %s: %s", uuid, exc)
         info = {}
@@ -642,7 +654,17 @@ def build_seed(uuid):
             if fi:
                 f["inlines"] = fi
 
-    stack_text = _stack_text(frames)
+    # THE ONE PLACE THE LANGUAGE FLAG IS BORN. `uuid_info["java"]` (a set `jstackhash`) has been
+    # available here since the Java path existed and was never read: nothing downstream --
+    # prompts, roles, the second opinion, the blame-based experts -- could tell a Kotlin stack
+    # from a C++ one. `line_numbers_trusted` is the pref (`java.trust_line_numbers`, false):
+    # an R8-remapped line is not the source line (the 2026-09-15 example named a KDoc comment
+    # and a licence header), so every consumer that would cite, blame or rank by line reads
+    # this flag instead of the frame. A native stack is always trusted here -- compiler drift
+    # is the prompt's caveat, not this flag's.
+    java = bool(uuid_info.get("java"))
+    line_numbers_trusted = (not java) or config.java_trust_line_numbers()
+    stack_text = _stack_text(frames, line_numbers_trusted=line_numbers_trusted)
     channel = info.get("channel") or uuid_info.get("channel") or "nightly"
     # Read the rate BEFORE the candidate window is built, because it now decides how wide that
     # window is (`_offstack_window`). Two indexed reads of a rolling table, no Socorro call, and
@@ -777,7 +799,13 @@ def build_seed(uuid):
     # Off-stack area-experts: blame the crashing lines (pinned to the build rev when it
     # resolves) so "recently worked in this area" names who actually wrote the crashing
     # code, not the pushlog-window authors.
-    if is_offstack:
+    if is_offstack and not line_numbers_trusted:
+        # `_crashing_area_experts` picks `ann[line - 1]`: on an R8 line that is the author of a
+        # comment or a licence header, so nobody is named rather than the wrong person. The
+        # on-stack route (candidate authors) is line-free and untouched.
+        logger.info("agent: %s has R8-remapped line numbers; skipping the crashing-line blame "
+                    "for area experts", uuid)
+    elif is_offstack:
         experts = _crashing_area_experts(frames, channel, pin_rev)
 
     # When was this signature FIRST seen? One Socorro lookup, done here (once, at seed time)
@@ -837,6 +865,10 @@ def build_seed(uuid):
         "version": info.get("version"),
         "frames": frames,
         "stack": stack_text,
+        # A Java/Kotlin stack, and whether its line numbers may be cited, blamed or ranked by.
+        # Native seeds are exactly False / True; see the flag's birth above.
+        "java": java,
+        "line_numbers_trusted": line_numbers_trusted,
         "candidates": candidates,
         "experts": experts,
         "raw_crash": raw_crash,
@@ -1045,6 +1077,19 @@ def _install_history(raw_crash, channel=None):
         return empty
     raw = raw_crash or {}
     if not raw.get("install_time"):
+        return empty
+    # NOT ASKED FOR A NON-FIREFOX PRODUCT. On Fenix `install_time` is not even a weak machine
+    # id: 8,389 of 16,368 install_times in the week to 2026-09-15 (51%) are clock resets before
+    # 2010, so one value is shared by thousands of devices, and `cpu_info` is the string
+    # "unknown" on 6,489 of them. The gate could never fire honestly (`machine.install_history`
+    # reads that placeholder as unknown), but the query would still be paid and
+    # `machine_distinct_signatures` recorded from colliding ids -- a diagnostic that would
+    # poison any later threshold study. No per-device id exists in Socorro (android_fingerprint
+    # is an OS build string shared by every device of a model), so this is a skip, not a re-key.
+    product = raw.get("product") or "Firefox"
+    if product != "Firefox":
+        logger.info("agent: install history not asked for product %r (install_time is not a "
+                    "machine id there)", product)
         return empty
     try:
         from crashclouseau import machine
@@ -1922,7 +1967,10 @@ def _apply_worth_investigating(dossier, seed=None):
     v = dossier.verdict
     if v.decision == Decision.abstain or v.confidence is None:
         return
-    table = config.get_agent_calibration((seed or {}).get("channel"))
+    # Channel AND product: Fenix nightly shares the label `nightly` with the desktop fit, so
+    # without the product the desktop table would be published on a crash from a population it
+    # was never fit on (`agent.calibration.products.Fenix` is `{}`).
+    table = config.get_agent_calibration((seed or {}).get("channel"), (seed or {}).get("product"))
     if not table:
         return
     score = int(round(CONFIDENCE_SCORE.get(v.confidence, 0.0) * 100))
@@ -3135,9 +3183,10 @@ def _apply_bit_flip_gate(dossier, seed):
         #
         # The clause also has to name WHICH arm fired, or a reader of a suppression whose other
         # rate is unknown cannot see why it was suppressed.
-        pop_flip = sigage.population_bit_flip_rate(channel)
-        pop_cpu = sigage.population_broken_cpu_rate(channel)
-        pop_name = sigage.population_label(channel)
+        product = (seed or {}).get("product")
+        pop_flip = sigage.population_bit_flip_rate(channel, product)
+        pop_cpu = sigage.population_broken_cpu_rate(channel, product)
+        pop_name = sigage.population_label(channel, product)
 
         def _share(rate, what, pop, extra=""):
             """One clause, or None when the rate was never measured.
@@ -4005,6 +4054,9 @@ def _autofile(uuid, payload, row):
                 "at": datetime.now(timezone.utc).isoformat(),
                 "skipped": res.get("skipped"),
                 "channel": uuid_info.get("channel"),
+                # ...and the PRODUCT, because Fenix nightly and Firefox nightly share the
+                # channel label and the held-Fenix count (plans/16 §13.1 D4) is sliced on it.
+                "product": uuid_info.get("product"),
                 # From `uuid_info`, NOT from `res`. `autofile_bug` only ever puts `buildid` on
                 # the WRITE path (`bugzilla_apply.py:1404`); not one of its ~25 skip returns
                 # carries the key, so `res.get("buildid")` was structurally always None -- and
@@ -4069,6 +4121,14 @@ def run_evidence_agent(uuid, force=False):
             if channel is not None and channel not in config.get_agent_channels():
                 logger.info("agent: %s is on channel %r, which AGENT_CHANNELS no longer names; "
                             "not running", uuid, channel)
+                return
+            # The product half of the same switch. Fenix nightly and Firefox nightly share the
+            # channel label, so `AGENT_PRODUCTS=Firefox` is the only deploy-free way to stop
+            # spending on one of them, and like the channel it has to reach a job already queued.
+            product = _product_of(uuid)
+            if product is not None and product not in config.get_agent_products():
+                logger.info("agent: %s is on product %r, which AGENT_PRODUCTS does not name; "
+                            "not running", uuid, product)
                 return
             # A deliberate test crash (`config.ignored_signatures`) whose job was already
             # queued when the list gained it: the selector stopped feeding it, this stops what
@@ -4476,14 +4536,32 @@ def reap_stale_agent_jobs():
         return 0
 
 
-def enqueue_agent(uuid, channel=None, force=False):
-    """Enqueue one triage run on the dedicated queue. No-op when the agent is disabled,
-    when ``channel`` is outside the configured set (nightly only by default), or when
-    this uuid's proto-signature has already been triaged (dedup across builds — the
-    authoritative skip is in ``run_evidence_agent``; this just avoids queueing a job we
-    would drop).
+def _product_of(uuid):
+    """The product of *uuid*'s build, or ``None`` when it cannot be read (unknown uuid, DB
+    error). ``None`` means "not filtered", never "refused": the gates that call this must not
+    turn a lookup failure into a dropped crash. Rolls the session back on failure so the
+    caller's next query is not poisoned."""
+    try:
+        return models.UUID.get_info(uuid).get("product")
+    except Exception:                                      # pragma: no cover - defensive
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return None
 
-    ``force`` (a tasks-view retrigger of one explicit uuid) bypasses the channel and
+
+def enqueue_agent(uuid, channel=None, force=False, product=None):
+    """Enqueue one triage run on the dedicated queue. No-op when the agent is disabled,
+    when ``channel`` is outside the configured set (nightly only by default), when
+    ``product`` is outside ``config.get_agent_products()``, or when this uuid's
+    proto-signature has already been triaged (dedup across builds — the authoritative skip
+    is in ``run_evidence_agent``; this just avoids queueing a job we would drop).
+
+    ``product`` is looked up when the caller does not pass it (the sweep hands over ``(uuid,
+    channel)`` only); a lookup failure filters nothing, as an unknown channel filters nothing.
+
+    ``force`` (a tasks-view retrigger of one explicit uuid) bypasses the channel, product and
     proto-dedup gates and tells ``run_evidence_agent`` to re-run past its own guards."""
     if not config.get_agent_enabled():
         return
@@ -4495,6 +4573,15 @@ def enqueue_agent(uuid, channel=None, force=False):
         # user. `channel is not None` STAYS -- a caller with no channel must not be filtered.
         channels = config.get_agent_channels()
         if channel is not None and channel not in channels:
+            return
+        # The product gate, beside the channel gate and shaped like it: `AGENT_PRODUCTS`
+        # (default `agent.products`) decides which products spend, because Fenix nightly and
+        # Firefox nightly share the channel label and the channel switch cannot separate them.
+        if product is None:
+            product = _product_of(uuid)
+        if product is not None and product not in config.get_agent_products():
+            logger.info("agent: %s is on product %r, which AGENT_PRODUCTS does not name; not "
+                        "enqueuing", uuid, product)
             return
         try:
             if config.is_ignored_signature(models.UUID.get_signature(uuid)):
@@ -4559,6 +4646,9 @@ def sweep_untriaged_crashes():
                 return 0
             after = models.SweepMark.get(_SWEEP_MARK)
             channels = config.get_agent_channels()
+            # And the products, for the same reason the channel filter is applied in SQL: a
+            # per-tick cap spent on rows `enqueue_agent` would drop starves the rows behind them.
+            products = config.get_agent_products()
             # OVER-FETCH, so the per-channel cap below has somewhere to put the slot it takes.
             # `untriaged` applies ONE `LIMIT` in SQL ordered by uuid id, so with a bare
             # `max_per_run` the candidate list is already fixed before the cap runs — capping one
@@ -4568,6 +4658,7 @@ def sweep_untriaged_crashes():
                 after, cfg["min_age_s"], cfg["max_age_s"],
                 cfg["max_per_run"] * max(1, len(channels or ())),
                 channels=channels,
+                products=products,
             )
             if not candidates:
                 return 0

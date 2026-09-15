@@ -101,6 +101,20 @@ _SYSTEM = (
 )
 
 
+# `_SYSTEM` above is the Firefox rendering and stays a readable constant (tests pin sentences in
+# it); the reviewer of a Fenix crash is told which application it is reviewing.
+_SYSTEM_PRODUCT_PHRASE = "second reviewer of a Firefox crash"
+
+
+def _system_prompt(product: str | None = None) -> str:
+    """``_SYSTEM`` with the crash's own product named. Byte-identical for Firefox / None."""
+    product = product or "Firefox"
+    if product == "Firefox":
+        return _SYSTEM
+    return _SYSTEM.replace(_SYSTEM_PRODUCT_PHRASE,
+                           "second reviewer of a {} crash".format(product), 1)
+
+
 def _user_prompt(crash: dict, candidate: dict | None) -> str:
     signature = crash.get("signature", "")
     channel = crash.get("channel", "nightly")
@@ -112,6 +126,10 @@ def _user_prompt(crash: dict, candidate: dict | None) -> str:
     facts = triage._crash_facts(crash)
     if facts:
         lines += ["", "Crash facts:", *facts]
+    # The same R8 rule the principal reads (`triage._java_lines`, empty for a native crash): this
+    # reviewer is the calibrated refuter, and a line mismatch is the first thing it would refute
+    # a correct Kotlin lead on.
+    lines += triage._java_lines(crash)
     if stack:
         lines += ["", "Stack:", str(stack)]
     if candidate and candidate.get("node"):
@@ -186,7 +204,7 @@ def build_options(crash: dict, candidate: dict | None = None, *,
         *roles.bugzilla_tool_ids(), *roles.socorro_tool_ids(),
     ]
     kwargs = dict(
-        system_prompt=_SYSTEM,
+        system_prompt=_system_prompt(product),
         mcp_servers=mcp_servers,
         allowed_tools=allowed,
         # THE REGISTRATION CONTROL the allowlist above is not. `allowed_tools` only decides what

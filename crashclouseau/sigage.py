@@ -428,46 +428,65 @@ POPULATION_LABEL = {
 }
 
 
-def _population(channel):
-    """The rates for *channel*. An ABSENT channel falls back to nightly's; a channel that is
-    NAMED but unmeasured (release) does not.
+# The product every rate and label in this block was measured on. A NAMED other product (Fenix)
+# is unmeasured: `cpu_info` is the string "unknown" on 6,489 of 16,368 Fenix reports in the week
+# to 2026-09-15 and the bit-flip annotation is a native-stackwalker field, so nothing here could
+# be re-measured on it with the same instrument. `None` is a caller that predates products,
+# i.e. Firefox.
+_POPULATION_PRODUCT = "Firefox"
 
-    The two cases are different questions and must not share an answer. "I was not told which
-    channel" is a caller that predates this split -- every one of them is a nightly path, since
-    that is the only channel the pipeline has run on -- so nightly is the behaviour-preserving
-    answer, the same degradation `compiled_out.build_channel` takes. "This is release" is a
-    channel we genuinely have no measurement for, and there the honest answer is to say nothing
-    rather than publish nightly's denominator against it."""
+
+def _population(channel, product=None):
+    """The rates for *channel* on *product*. An ABSENT channel falls back to nightly's; a
+    channel that is NAMED but unmeasured (release) does not; a product that is NAMED and is not
+    Firefox is unmeasured whatever the channel.
+
+    The two channel cases are different questions and must not share an answer. "I was not
+    told which channel" is a caller that predates this split -- every one of them is a nightly
+    path, since that is the only channel the pipeline has run on -- so nightly is the
+    behaviour-preserving answer, the same degradation `compiled_out.build_channel` takes. "This
+    is release" is a channel we genuinely have no measurement for, and there the honest answer
+    is to say nothing rather than publish nightly's denominator against it. The product case is
+    the second kind: Fenix nightly shares the label `nightly` with the population these numbers
+    came from, so without this argument a Fenix run would be told "Firefox-nightly population:
+    2.5%" beside its own share -- the wrong-denominator mistake in the direction that reads as
+    evidence."""
+    if product and product != _POPULATION_PRODUCT:
+        return {}
     if not channel:
         return _POPULATION_RATES["nightly"]
     return _POPULATION_RATES.get(channel.lower(), {})
 
 
-def population_bit_flip_rate(channel=None):
+def population_bit_flip_rate(channel=None, product=None):
     """Share of *channel* reports carrying a bit-flip annotation, or ``None`` if unmeasured."""
-    return _population(channel).get("bit_flip")
+    return _population(channel, product).get("bit_flip")
 
 
-def population_broken_cpu_rate(channel=None):
+def population_broken_cpu_rate(channel=None, product=None):
     """Share of *channel* reports from a known-defective CPU, or ``None`` if unmeasured."""
-    return _population(channel).get("broken_cpu")
+    return _population(channel, product).get("broken_cpu")
 
 
-def population_top_cpu_share_median(channel=None):
+def population_top_cpu_share_median(channel=None, product=None):
     """Median top-``cpu_info`` share across *channel*'s signatures, or ``None`` if unmeasured.
 
     ``None`` on beta, and that is the honest answer: 0.32 was measured over 200 Firefox-NIGHTLY
     signatures and nobody has run the same sample on beta. A consumer with ``None`` must not
     quote "the median Firefox-nightly signature" to a beta run -- it drops the comparison and
     states the share alone."""
-    return _population(channel).get("top_cpu_share")
+    return _population(channel, product).get("top_cpu_share")
 
 
-def population_label(channel=None):
+def population_label(channel=None, product=None):
     """"Firefox-beta" / "Firefox-nightly", for a sentence that quotes one of the rates above.
 
     Same fallback as ``_population``: an absent channel is a nightly caller, so the label must
-    not say "Firefox" while the number beside it is nightly's."""
+    not say "Firefox" while the number beside it is nightly's. A named non-Firefox product is
+    its own name ("Fenix"): no rate exists for it, so the label only ever names WHOSE share a
+    sentence is stating, never whose population it is being compared with."""
+    if product and product != _POPULATION_PRODUCT:
+        return product
     if not channel:
         return POPULATION_LABEL["nightly"]
     return POPULATION_LABEL.get(channel.lower(), "Firefox")
@@ -922,6 +941,12 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
     for row in (facets.get("cpu_info") or []):
         if isinstance(row, dict):
             model = cpu_model(row.get("term"))
+            # Socorro's placeholder is not a processor: `unknown` on 6,489 of 16,368 Fenix
+            # nightly reports (2026-09-08..15) against 10 of a week's desktop reports. Counted,
+            # it would be "one CPU model at 40%" -- a false fact handed to the prompt and to
+            # `signature_top_cpu_term`. Same rule as `machine._known_cpu`.
+            if not model or str(model).strip().lower() in ("", "unknown"):
+                continue
             grouped[model] = grouped.get(model, 0) + (row.get("count") or 0)
     cpu_reports = sum(grouped.values())
     top = max(grouped.items(), key=lambda kv: kv[1], default=None)

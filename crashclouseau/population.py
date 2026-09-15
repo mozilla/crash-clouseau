@@ -47,12 +47,22 @@ from .logger import logger
 # thinned population is never silently presented as the whole one.
 _MIN_INSTALL_TIME = 1104537600  # 2005-01-01
 
+# The bound for FENIX. An Android device that boots before it has network time stamps its
+# install with a reset clock, and those land AFTER 2005: in the week to 2026-09-15, 8,389 of
+# 16,368 Fenix install_times (51%) were before 2010-01-01 and only 48 before 2005. Under the
+# desktop bound the reset values pass `_plausible` and are counted as installations -- thousands
+# of devices collapsed onto a handful of "installs", with `single_install` / `clustered` then
+# describing the clock rather than the devices. Fenix nightly did not exist before 2020, so
+# nothing real is lost to the tighter bound; the count goes to `dropped`, which the page shows.
+_FENIX_MIN_INSTALL_TIME = 1262304000  # 2010-01-01
+_PRODUCT_MIN_INSTALL_TIME = {"Fenix": _FENIX_MIN_INSTALL_TIME}
 
-def _plausible(ts, now):
-    return _MIN_INSTALL_TIME <= ts <= int(now.timestamp()) + 86400
+
+def _plausible(ts, now, min_install_time=_MIN_INSTALL_TIME):
+    return min_install_time <= ts <= int(now.timestamp()) + 86400
 
 
-def _facet_installs(facets, now):
+def _facet_installs(facets, now, min_install_time=_MIN_INSTALL_TIME):
     """``([(install_time, crashes)], dropped)`` from a raw ``install_time`` facet list."""
     kept, dropped = [], 0
     for f in facets or []:
@@ -61,14 +71,15 @@ def _facet_installs(facets, now):
             dropped += 1
             continue
         ts = int(term)
-        if not _plausible(ts, now):
+        if not _plausible(ts, now, min_install_time):
             dropped += 1
             continue
         kept.append((ts, int(f.get("count") or 0)))
     return sorted(kept), dropped
 
 
-def summarize(facets, total=None, own_install_time=None, now=None, cfg=None):
+def summarize(facets, total=None, own_install_time=None, now=None, cfg=None,
+              min_install_time=None):
     """Turn an ``install_time`` facet list into the numbers the page shows. PURE — every
     threshold decision lives here so it is testable without touching the network.
 
@@ -76,10 +87,16 @@ def summarize(facets, total=None, own_install_time=None, now=None, cfg=None):
     is capped: when the sum falls short of the total, the installation count is a floor and the
     page has to say so rather than present a truncated population as the whole one.
 
+    ``min_install_time`` is the oldest install_time read as real (default ``_MIN_INSTALL_TIME``,
+    2005); ``for_crash`` passes the product's own bound (``_PRODUCT_MIN_INSTALL_TIME``). Values
+    below it are counted in ``dropped``, never silently discarded.
+
     Returns None when there is nothing to say (no readable installation at all)."""
     cfg = cfg or config.get_population()
     now = now or datetime.now(timezone.utc)
-    installs, dropped = _facet_installs(facets, now)
+    if min_install_time is None:
+        min_install_time = _MIN_INSTALL_TIME
+    installs, dropped = _facet_installs(facets, now, min_install_time)
     if not installs:
         return None
 
@@ -237,6 +254,7 @@ def for_crash(uuid_info):
         own_install_time=own_install_time,
         now=now,
         cfg=cfg,
+        min_install_time=_PRODUCT_MIN_INSTALL_TIME.get(product, _MIN_INSTALL_TIME),
     )
     if res is None:
         return None

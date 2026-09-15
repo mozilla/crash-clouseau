@@ -150,13 +150,55 @@ def _drift_paragraph(repo, channel):
     )
 
 
+# The heading the Java/Kotlin subsection is inserted in front of, i.e. the section that follows
+# the revision-drift one in `system.md`. An anchor rather than a template marker so the file stays
+# a readable prompt; `tests/test_fenix_agent.py` pins that it is still there.
+_AFTER_DRIFT_HEADING = "## Weighing candidates (be smart, not too smart)"
+
+# The revision-drift rule, INVERTED for an R8 stack. `system.md` tells the model a small line
+# delta is expected drift and must not lower confidence -- true of compiler inlining, and the
+# opposite of what an R8-remapped line is: on the 2026-09-15 Fenix example the reported lines
+# named a KDoc comment (`Keystore.kt:269`, method at 221) and a licence header
+# (`FxaAccountManager.kt:3`). Read with the drift rule, a model would see the mismatch as
+# EXPECTED and go on citing the line; read with nothing, it would blame the comment. So it is
+# told, in the same section, that the file and method are the evidence and the line is not.
+_JAVA_SYSTEM_SECTION = (
+    "## Java/Kotlin stacks (R8-remapped line numbers)\n"
+    "This crash is a JVM (Java/Kotlin) stack from an R8-minified APK, and the LINE NUMBERS on "
+    "its frames are NOT source lines: they are R8-remapped values that nothing here can decode "
+    "(they have pointed at KDoc comments and licence headers). The revision-drift rule above is "
+    "INVERTED for them -- a line mismatch is EXPECTED and is not a signal in either direction. "
+    "So:\n"
+    "- Attribute by FILE and METHOD, never by line. A changeset that touches the frame's file "
+    "and method is a candidate whatever lines it changed; a changeset that only touches the "
+    "reported line is not evidence of anything.\n"
+    "- Never cite, blame or reason from a frame's line number; do not compare it with tip or "
+    "with a diff hunk. `mcp__history__blame` on the reported line names whoever wrote that "
+    "unrelated line.\n"
+    "- `field_layout` does not apply to JVM code. For `define` and the call-graph tools, pass "
+    "the `::`-joined fully-qualified name (`mozilla::components::lib::dataprotect::Keystore::"
+    "generateKey`); the dotted Socorro spelling is converted for you, and `R8$$SyntheticClass` "
+    "/ `$$ExternalSyntheticLambda` frames are compiler artefacts, not source.\n\n"
+)
+
+
 # maxsize 8, not 1: the prompt is now per channel (nightly / beta / aurora / release), and a
-# cache of one would re-read and re-substitute on every alternation.
-@functools.lru_cache(maxsize=8)
-def _system_prompt(channel: str | None = None) -> str:
+# cache of one would re-read and re-substitute on every alternation. Doubled by `java`, which
+# is the second key: an R8 stack gets the inverted drift rule (`_JAVA_SYSTEM_SECTION`).
+@functools.lru_cache(maxsize=16)
+def _system_prompt(channel: str | None = None, java: bool = False) -> str:
     path = os.path.join(os.path.dirname(__file__), "prompts", "system.md")
     with open(path, "r") as handle:
         text = handle.read()
+    if java:
+        # In front of the section that follows revision drift, so the inversion sits right under
+        # the rule it inverts. A missing anchor appends rather than drops the section: an R8
+        # stack must never be triaged with the drift rule alone.
+        if _AFTER_DRIFT_HEADING in text:
+            text = text.replace(_AFTER_DRIFT_HEADING,
+                                _JAVA_SYSTEM_SECTION + _AFTER_DRIFT_HEADING, 1)
+        else:  # pragma: no cover - the anchor is pinned by a test
+            text = text.rstrip("\n") + "\n\n" + _JAVA_SYSTEM_SECTION.rstrip("\n") + "\n"
     if not channel or channel.lower() == "nightly":
         return text
     from crashclouseau.searchfox import repo_for_channel
@@ -584,12 +626,14 @@ def _cpu_spread_line(noise: dict, crash: dict | None = None) -> str:
     # beta, so on beta the share is stated with no "the median signature sits at ..." beside it.
     # Quoting the nightly median to a beta run would be the `hardware-noise-denominator` mistake
     # in the direction that reads as evidence.
-    median = sigage.population_top_cpu_share_median((crash or {}).get("channel"))
+    median = sigage.population_top_cpu_share_median((crash or {}).get("channel"),
+                                                    (crash or {}).get("product"))
     background = (
         " Background: the median {} signature with at least 5 reports sits at {:.0f}%, and 13% "
         "of them (26 of 200 sampled 2026-08-21) sit at 100% — one processor model is ORDINARY, "
         "and every suppression threshold tested on this statistic suppressed a crash that was "
-        "later FIXED.".format(sigage.population_label((crash or {}).get("channel")),
+        "later FIXED.".format(sigage.population_label((crash or {}).get("channel"),
+                                                      (crash or {}).get("product")),
                               100 * median)
         if median is not None else
         " Background: how concentrated a typical signature on this channel is has NOT been "
@@ -710,6 +754,53 @@ def _watchdog_lines(crash: dict) -> list[str]:
     ]
 
 
+def _java_exception_chain(raw: dict) -> str:
+    """The Java exception chain, OUTERMOST FIRST, as ``module.Type caused by module.Type``, or
+    ``""`` when the report carries no ``java_exception``.
+
+    Socorro's ``java_exception.exception.values`` lists the CAUSE first and the outer exception
+    last (live 2026-09-15, 3c426d92: ``[KeyStoreException, ProviderException]`` for a crash whose
+    signature starts ``java.security.ProviderException``), so the list is reversed to read the
+    way a Java stack trace prints. Today a Java crash's facts print Product/Version/Build/OS/CPU
+    and nothing else: the exception type -- the crash's whole identity -- reached no prompt."""
+    values = (((raw or {}).get("java_exception") or {}).get("exception") or {}).get("values")
+    if not isinstance(values, list):
+        return ""
+    names = []
+    for value in values:
+        st = (value or {}).get("stacktrace") or {}
+        typ = st.get("type") or ""
+        if not typ:
+            continue
+        module = st.get("module") or ""
+        names.append("{}.{}".format(module, typ) if module else typ)
+    return " caused by ".join(reversed(names))
+
+
+def _java_lines(crash: dict) -> list[str]:
+    """What an R8-remapped line number is NOT, as prompt lines, or ``[]`` for a native crash.
+
+    Shared with the blind second opinion (``second_opinion._user_prompt``), like the watchdog
+    block: it is a fact about the report, not a direction, and the SO is the calibrated refuter
+    -- handed an R8 stack without it, it would refute a correct Kotlin lead on the line mismatch
+    it is otherwise told to expect. Only when the seed says ``java`` and the pref leaves the
+    lines untrusted; ``java.trust_line_numbers: true`` silences it everywhere at once."""
+    if not crash.get("java") or crash.get("line_numbers_trusted", False):
+        return []
+    return [
+        "",
+        "JAVA/KOTLIN STACK: the line numbers on these frames are R8-remapped and UNRELIABLE "
+        "(they have pointed at KDoc comments and licence headers). Attribute by FILE and METHOD, "
+        "never by line; do not cite a line as evidence, do not blame it, do not compare it with "
+        "tip or with a diff hunk.",
+        "  A changeset that touches the frame's file and method is a candidate whatever lines it "
+        "changed; one that touches only the reported line is not.",
+        "  searchfox `define` and the call-graph tools take the `::`-joined name "
+        "(`mozilla::components::lib::dataprotect::Keystore::generateKey`); `field_layout` does "
+        "not apply to JVM code.",
+    ]
+
+
 def _hardware_noise_lines(crash: dict) -> list[str]:
     """How much of this SIGNATURE is hardware error, as prompt lines, or ``[]``.
 
@@ -750,10 +841,14 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     # signature is 2.6x the population -- immediately before the paragraph that says a high
     # share means any mechanism it constructs "will be fiction that fits". An UNMEASURED
     # population (release) drops the comparison rather than borrowing nightly's.
+    # And its own PRODUCT'S: a Fenix nightly run shares the channel label with the desktop
+    # population these rates were measured on, and `sigage._population` answers "unmeasured"
+    # for it, which the two clauses below then drop rather than borrow.
     channel = crash.get("channel")
-    pop_flip = sigage.population_bit_flip_rate(channel)
-    pop_cpu = sigage.population_broken_cpu_rate(channel)
-    pop_name = sigage.population_label(channel)
+    product = crash.get("product")
+    pop_flip = sigage.population_bit_flip_rate(channel, product)
+    pop_cpu = sigage.population_broken_cpu_rate(channel, product)
+    pop_name = sigage.population_label(channel, product)
     bits = []
     if flip is not None:
         bits.append("{:.0f}% carry a Socorro bit-flip annotation{}".format(
@@ -1357,8 +1452,20 @@ def _crash_facts(crash: dict) -> list[str]:
             sysinfo.get("os"),
         )),
         ("CPU", _cpu_summary(raw, sysinfo)),
+        # ANDROID ONLY -- every one of these is absent on a desktop report, so the desktop
+        # output is byte-identical. The device is what `cpu_info` ("unknown" on 40% of Fenix
+        # reports) is not: a Fenix crash on one manufacturer's model is a lopsided facet the
+        # way a Windows-only GPU-driver crash is.
+        ("Android device", _first_present(
+            " ".join(v for v in (raw.get("android_manufacturer"), raw.get("android_model"))
+                     if v).strip())),
+        ("Android version", raw.get("android_version")),
+        ("Android ABI", raw.get("android_cpu_abi")),
         ("Process type", raw.get("process_type")),
         ("GPU", _gpu_summary(raw)),
+        # The exception chain, outermost first -- a Java crash's `Crash type` (a `json_dump`
+        # field) is empty, and this is its equivalent.
+        ("Java exception chain (outermost first)", _java_exception_chain(raw)),
         ("Crash type", _first_present(info.get("type"), raw.get("reason"))),
         ("Fault address", _first_present(info.get("address"), raw.get("address"))),
         # The instruction that faulted, so "which pointer was this" is a fact rather than an
@@ -1525,15 +1632,17 @@ def _user_prompt(crash: dict) -> str:
     stack = crash.get("stack") or crash.get("stack_text") or ""
     extra = crash.get("notes", "")
     lines = [
-        "Investigate this Firefox crash to get the RIGHT PERSON INVESTIGATING it — your job "
-        "is to surface the changeset/area most worth a human's time, not to prove a culprit. "
-        "Reach off-stack functions through the call graph where needed. Report a cited lead "
-        "whenever you have a CREDIBLE, SPECIFIC reason (a mechanism hypothesis, a domain / "
-        "what-it-enables link, or a corroborating signal) and score how worth-investigating "
-        "it is; use strong-evidence only for a chain verified end to end. ABSTAIN when the "
-        "best you have is noise (mere window-membership or a bare keyword match) — a confident "
-        "'nothing credible here' beats sending someone after noise and losing their trust in "
-        "every future finding.",
+        # The seed's product, not a literal: "Investigate this Firefox crash" on a Fenix report
+        # told the model the wrong application. Byte-identical for Firefox.
+        ("Investigate this {} crash to get the RIGHT PERSON INVESTIGATING it — your job "
+         "is to surface the changeset/area most worth a human's time, not to prove a culprit. "
+         "Reach off-stack functions through the call graph where needed. Report a cited lead "
+         "whenever you have a CREDIBLE, SPECIFIC reason (a mechanism hypothesis, a domain / "
+         "what-it-enables link, or a corroborating signal) and score how worth-investigating "
+         "it is; use strong-evidence only for a chain verified end to end. ABSTAIN when the "
+         "best you have is noise (mere window-membership or a bare keyword match) — a confident "
+         "'nothing credible here' beats sending someone after noise and losing their trust in "
+         "every future finding.").format(crash.get("product") or "Firefox"),
         "",
         f"UUID: {uuid}",
         f"Signature: {signature}",
@@ -1543,6 +1652,8 @@ def _user_prompt(crash: dict) -> str:
     if facts:
         lines += ["", "Crash facts:", *facts]
     lines += _archetype_lines(crash)
+    # Before the stack, so the frames are read with the rule that says what their lines are.
+    lines += _java_lines(crash)
     if stack:
         lines += ["", "Stack:", str(stack)]
     candidates = crash.get("candidates") or []
@@ -1632,9 +1743,19 @@ def _user_prompt(crash: dict) -> str:
                     "verdict.".format(named),
                 ]
         else:
+            # WHAT THE RANKING IS. On a native stack the stored score is line proximity; on an
+            # R8 stack (`line_numbers_trusted` False) it is `Changeset._fuzzy_score` -- did the
+            # changeset touch the frame's FILE (and METHOD) -- and a prompt that said "ranked by
+            # proximity to the crash" would be describing a quantity that does not exist there.
+            ranking = (
+                "already ranked by proximity to the crash"
+                if crash.get("line_numbers_trusted", True) else
+                "ranked by whether they touch a crash frame's FILE and METHOD -- the line "
+                "numbers are R8-remapped, so there is NO line proximity here"
+            )
             lines += [
                 "",
-                "Scored candidate changesets (already ranked by proximity to the crash — "
+                "Scored candidate changesets (" + ranking + " — "
                 "read each with the mcp__patch__diff tool. Treat this seed list as a "
                 "priority queue, not as a closed world: use it first, but if the "
                 "call-graph neighborhood points at off-stack files/functions not covered "
@@ -2006,10 +2127,14 @@ def build_options(
         mcp_servers[ACTIONS_SERVER_NAME] = actions_server
         allowed += actions_to_tool_names(NEEDINFO_ACTIONS)
 
+    # An R8 stack (the seed's `java`) inverts the revision-drift rule in the system prompt and
+    # adds the file+method rule to four of the five roles; a native crash renders both
+    # byte-identically to before.
+    java = bool(crash.get("java"))
     kwargs = dict(
-        system_prompt=_system_prompt(channel),
+        system_prompt=_system_prompt(channel, java),
         mcp_servers=mcp_servers,
-        agents=roles.build_roles(llm_cfg, channel=channel),
+        agents=roles.build_roles(llm_cfg, channel=channel, java=java),
         allowed_tools=allowed,
         # THE REGISTRATION CONTROL: only the subagent-spawning tool from the CLI's built-in set;
         # `Bash`/`Read`/`Grep`/`Glob`/`Write`/`WebFetch` are not offered to the principal or to

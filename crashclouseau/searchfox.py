@@ -376,6 +376,10 @@ def _is_transient(err: Optional[str]) -> bool:
 
 _ARGS_RE = re.compile(r"\(.*$", re.DOTALL)
 _TMPL_RE = re.compile(r"<[^<>]*>")
+# A dotted JVM name as Socorro spells a Java/Kotlin frame: lower-case package segments, then a
+# capitalised class, then at least one more segment (a member, or a nested class). C++ and Rust
+# names never look like this -- they carry `::` -- and a bare C function has no dot at all.
+_JVM_DOTTED_RE = re.compile(r"^[a-z][\w.]*\.[A-Z]\w*(\.\w+)+$")
 
 
 def _clean_symbol(symbol: str) -> str:
@@ -384,7 +388,16 @@ def _clean_symbol(symbol: str) -> str:
     Socorro frame functions look like ``NS_ProcessNextEvent(nsIThread*, bool)``
     or ``mozilla::Maybe<T>::ref``; searchfox resolves the bare qualified name,
     so the parens/templates must go or every query returns nothing.
+
+    A dotted JVM name (``mozilla.components.lib.dataprotect.Keystore.generateKey``, no ``::``
+    and no argument list) becomes the ``::``-joined spelling searchfox-cli resolves: verified
+    2026-09-15, ``searchfox-cli -R mozilla-central --define
+    'mozilla::components::lib::dataprotect::Keystore::generateKey'`` answers line 221 (the
+    Kotlin semantic records are on mozilla-central now, so no repo override is needed). Names
+    with ``::`` or ``(`` are C++/Rust and are left exactly as before.
     """
+    if "::" not in symbol and "(" not in symbol and _JVM_DOTTED_RE.match(symbol.strip()):
+        return symbol.strip().replace(".", "::")
     s = _ARGS_RE.sub("", symbol)
     prev = None
     while prev != s:

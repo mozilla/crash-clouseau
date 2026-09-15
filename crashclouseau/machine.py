@@ -40,6 +40,21 @@ from crashclouseau.logger import logger
 # signatures, and the gate fires on a count being high. It fails toward reporting.
 _MAX_ROWS = 200
 
+# `cpu_info` values that are a PLACEHOLDER, not a processor. Socorro writes the string "unknown"
+# where it has no model string: 6,489 of 16,368 Fenix reports and 10 of a week's desktop reports
+# (2026-09-15). Counted as a value it is ONE distinct CPU, which is exactly what the gate's
+# mechanism test asks for -- so a machine id shared by thousands of Android devices with no CPU
+# string at all read as "one bad machine" on no evidence. Compared case-insensitively and
+# stripped, because the one thing a placeholder is not is carefully spelled.
+_UNKNOWN_CPU = frozenset({"", "unknown"})
+
+
+def _known_cpu(value):
+    """*value* when it names a processor, else ``None``."""
+    if not isinstance(value, str) or value.strip().lower() in _UNKNOWN_CPU:
+        return None
+    return value
+
 
 def _to_dt(value):
     try:
@@ -103,13 +118,14 @@ def install_history(install_time, product="Firefox", channel="nightly", before=N
         # malformed query returns, and this feeds a suppression. Say we do not know.
         return empty
     sigs = {h.get("signature") for h in hits if h.get("signature")}
-    cpus = {h.get("cpu_info") for h in hits if h.get("cpu_info")}
+    cpus = {c for c in (_known_cpu(h.get("cpu_info")) for h in hits) if c}
     stamps = sorted(d for d in (_to_dt(h.get("date")) for h in hits) if d is not None)
     span = (stamps[-1] - stamps[0]).total_seconds() if len(stamps) > 1 else 0.0
     return {
         "distinct_signatures": len(sigs) or None,
-        # An empty cpu_info column is unknown, not "one CPU" — the gate REQUIRES <= 1, so a
-        # zero here would satisfy the de-alias guard on no evidence at all.
+        # An empty or "unknown" cpu_info column is unknown, not "one CPU" — the gate REQUIRES
+        # <= 1, so a zero here would satisfy the de-alias guard on no evidence at all (and the
+        # "unknown" string did, until `_UNKNOWN_CPU`).
         "distinct_cpus": len(cpus) or None,
         "crashes": len(hits),
         "span_seconds": span,

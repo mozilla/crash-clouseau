@@ -99,6 +99,42 @@ def _beta(crash, ages=False):
     return out
 
 
+# A FENIX JAVA crash (the 2026-09-15 live example, 3c426d92): `java` + `line_numbers_trusted`
+# False on the seed, no `json_dump`, a `java_exception` chain and the Android device fields. A
+# separate fixture set for the same reason the beta one exists: the Java prompt is a DIFFERENT
+# prompt (`_system_prompt(channel, java=True)` inserts the inverted drift rule, `_java_lines` and
+# the Java facts print, the candidate wording changes), and none of it adds a byte to a desktop
+# row.
+_JAVA_KT = ("mobile/android/android-components/components/lib/dataprotect/src/main/java/mozilla/"
+            "components/lib/dataprotect/Keystore.kt")
+_JAVA = {
+    "uuid": "u-java", "channel": "nightly", "product": "Fenix", "buildid": "20260910214118",
+    "version": "158.0a1", "java": True, "line_numbers_trusted": False,
+    "signature": "java.security.ProviderException: at android.security.keystore2."
+                 "AndroidKeyStoreKeyGeneratorSpi.engineGenerateKey(AndroidKeyStoreKeyGeneratorSpi"
+                 ".java)",
+    "raw_crash": {
+        "product": "Fenix", "os_name": "Android", "os_version": "33",
+        "os_pretty_version": "Android 33", "cpu_arch": "amd64", "cpu_info": "unknown",
+        "android_manufacturer": "Google", "android_model": "octopus",
+        "android_version": "33 (REL)", "android_cpu_abi": "x86_64", "process_type": "parent",
+        "report_type": "crash", "install_time": 1789110875,
+        "java_exception": {"exception": {"values": [
+            {"stacktrace": {"type": "KeyStoreException", "module": "android.security",
+                            "frames": []}},
+            {"stacktrace": {"type": "ProviderException", "module": "java.security",
+                            "frames": []}},
+        ]}},
+    },
+    # `orchestrator._stack_text(frames, line_numbers_trusted=False)` for the two Keystore frames.
+    "stack": ("#0 mozilla.components.lib.dataprotect.Keystore.generateKey  {kt}  (reported line "
+              "269: R8-remapped, unreliable)\n#1 mozilla.components.lib.dataprotect.Keystore."
+              "<init>  {kt}  (reported line 51: R8-remapped, unreliable)".format(kt=_JAVA_KT)),
+    "candidates": [{"node": "abc", "score": 8, "bug": 1, "backedout": False, "pushdate": None,
+                    "noise": False}],
+}
+
+
 # name -> (measured bytes, tolerance). Nightly rows measured 2026-08-24 at HEAD; the beta rows
 # and the two age rows 2026-08-25. The tolerance is deliberately tight: v109's whole system.md
 # change was +638 bytes and it has to be impossible to make that quietly.
@@ -142,6 +178,15 @@ _MEASURED = {
     "crash facts, beta with two signature ages": (1342, 200),
     "user prompt, beta with two signature ages": (2108, 300),
     "crash facts, nightly with one signature age": (1040, 200),
+    # FENIX / JAVA, measured 2026-09-15. system.md is +1163 over nightly's: the `## Java/Kotlin
+    # stacks` section, which INVERTS the revision-drift rule for an R8 stack (a line mismatch is
+    # expected there, not drift to be forgiven -- and the line is not evidence either way). The
+    # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
+    # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
+    # long Java signature / paths; it carries no line numbers on its frames.
+    "system.md, java": (20227, 400),
+    "crash facts, fenix java": (325, 60),
+    "user prompt, fenix java": (3240, 300),
 }
 
 _HOWTO = (
@@ -165,6 +210,16 @@ class TestPromptBudget(unittest.TestCase):
         a byte here is the most expensive byte in the pipeline."""
         self._check("system.md", len(triage._system_prompt()))
         self._check("system.md, beta", len(triage._system_prompt("beta")))
+
+    def test_the_java_prompt_is_a_different_prompt_and_the_desktop_one_is_not(self):
+        """The Java rows exist for the same reason the beta rows do. And the inverse: a Fenix
+        seed that is NOT Java (a native Fenix crash) must get the desktop system prompt."""
+        self._check("system.md, java", len(triage._system_prompt(None, True)))
+        self._check("crash facts, fenix java", len("\n".join(triage._crash_facts(_JAVA))))
+        self._check("user prompt, fenix java", len(triage._user_prompt(_JAVA)))
+        self.assertIn("## Java/Kotlin stacks", triage._system_prompt(None, True))
+        self.assertNotIn("## Java/Kotlin stacks", triage._system_prompt())
+        self.assertNotIn("## Java/Kotlin stacks", triage._system_prompt("nightly", False))
 
     def test_the_beta_prompt_is_a_different_prompt(self):
         """Not a size assertion -- the reason the beta rows exist. If these three ever stop

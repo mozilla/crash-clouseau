@@ -401,10 +401,30 @@ def role_names() -> list[str]:
     return list(_ROLES)
 
 
-def make_role(name: str, llm_cfg: dict | None = None, channel: str | None = None) -> AgentDefinition:
+# The one sentence a Java/Kotlin crash appends to the four roles that read line numbers or lean
+# on C++-only tools. The crash-interpreter lists frames with lines, the patch scout blames "the
+# crashing line", the tracer and the skeptic call `field_layout` (a C++ struct question) and the
+# skeptic reads a crash-line vs tip-line delta as drift -- every one of those is an assumption an
+# R8-remapped stack breaks (2026-09-15 example: the reported lines named a KDoc comment and a
+# licence header). The call-graph explorer gets nothing: it already asks for fully-qualified
+# symbols and `searchfox._clean_symbol` converts the dotted spelling for it.
+_JAVA_ROLE_NOTE = (
+    " THIS IS A JAVA/KOTLIN STACK: its line numbers are R8-remapped and UNRELIABLE, so match a "
+    "change to a frame by FILE and METHOD, never by line -- do not cite, blame or compare a "
+    "frame's line; `field_layout` does not apply to JVM code; for `define` and the `calls_*` "
+    "tools pass the `::`-joined fully-qualified name "
+    "(`mozilla::components::lib::dataprotect::Keystore::generateKey`)."
+)
+_JAVA_ROLES = ("crash-interpreter", "patch-scout", "data-flow-tracer", "skeptic")
+
+
+def make_role(name: str, llm_cfg: dict | None = None, channel: str | None = None,
+              java: bool = False) -> AgentDefinition:
     """One subagent definition. ``channel`` re-renders the skeptic's compiled-out clause for a
     non-nightly crash (see ``_compiled_out_text``); every other role is channel-independent, and
-    ``channel=None`` reproduces the nightly prompt byte-for-byte."""
+    ``channel=None`` reproduces the nightly prompt byte-for-byte. ``java`` appends
+    ``_JAVA_ROLE_NOTE`` to the four roles that would otherwise read an R8-remapped line as a
+    source line; ``False`` (every native crash) changes nothing."""
     spec = _ROLES[name]
     # Prefer the (possibly swept) llm_cfg passed by build_options so a sweep's per-role
     # model/effort actually reaches the subagent; fall back to the base config.
@@ -416,6 +436,10 @@ def make_role(name: str, llm_cfg: dict | None = None, channel: str | None = None
         # A targeted swap rather than a template, so `_ROLES[...]["prompt"]` stays a real,
         # readable nightly prompt (which is also what the guard tests read).
         prompt = prompt.replace(_COMPILED_OUT, _compiled_out_text(channel))
+    if java and name in _JAVA_ROLES:
+        # Appended, like the compiled-out swap is targeted: the base prompt stays the readable
+        # native one the guard tests read.
+        prompt = prompt + _JAVA_ROLE_NOTE
     kwargs = dict(
         description=spec["description"],
         prompt=prompt,
@@ -475,5 +499,6 @@ def make_role(name: str, llm_cfg: dict | None = None, channel: str | None = None
 
 
 def build_roles(llm_cfg: dict | None = None,
-                channel: str | None = None) -> dict[str, AgentDefinition]:
-    return {name: make_role(name, llm_cfg, channel) for name in _ROLES}
+                channel: str | None = None,
+                java: bool = False) -> dict[str, AgentDefinition]:
+    return {name: make_role(name, llm_cfg, channel, java=java) for name in _ROLES}
