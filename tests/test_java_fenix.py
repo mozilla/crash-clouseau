@@ -779,6 +779,51 @@ class TestRefreshFileIndex(unittest.TestCase):
         self.assertEqual(len(self.headers), 2)
         self.assertNotIn("Authorization", self.headers[1])
 
+    def test_a_refused_token_falls_back_to_the_anonymous_request(self):
+        """Live 2026-09-15, first token set on the app: `/rate_limit` said 5,000 remaining and
+        every repo endpoint answered 403 "The 'Mozilla Corporation' enterprise forbids access
+        via a fine-grained personal access tokens if the token's lifetime is greater than 366
+        days". A refused token must not be worse than none: the tree is public."""
+        message = ("The 'Mozilla Corporation' enterprise forbids access via a fine-grained "
+                   "personal access tokens if the token's lifetime is greater than 366 days.")
+        plain = self._get()
+
+        def get(url, **kw):
+            if "api.github.com" in url and (kw.get("headers") or {}).get("Authorization"):
+                self.urls.append(url)
+                self.headers.append(kw["headers"])
+                r = mock.Mock()
+                r.status_code = 403
+                r.headers = {"X-RateLimit-Remaining": "4996"}
+                r.json.return_value = {"message": message, "status": "403"}
+                return r
+            return plain(url, **kw)
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "github_pat_long_lived"}), \
+                self.assertLogs(java.logger, "WARNING") as logs:
+            self.assertEqual(self._refresh(get), 2)
+        self.assertEqual(len(self._tree_requests()), 2)      # refused with, then without
+        self.assertIn("Authorization", self.headers[0])
+        self.assertNotIn("Authorization", self.headers[1])
+        self.assertTrue(any("366 days" in m and "anonymously" in m for m in logs.output),
+                        logs.output)
+        self.assertEqual(list(self.marks.values()), [self.row_id])
+        # An anonymous 403 (the shared-IP budget) is still a miss, with GitHub's reason.
+        self.marks.clear()
+
+        def refused_twice(url, **kw):
+            r = plain(url, **kw)
+            if "api.github.com" in url:
+                r.status_code = 403
+                r.json.return_value = {"message": "API rate limit exceeded for 1.2.3.4."}
+            return r
+
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "github_pat_long_lived"}), \
+                self.assertLogs(java.logger, "WARNING") as logs:
+            self.assertEqual(self._refresh(refused_twice), 0)
+        self.assertTrue(any("rate limit exceeded" in m for m in logs.output), logs.output)
+        self.assertEqual(self.marks, {})
+
     def test_no_build_row_no_request(self):
         self.assertEqual(self._refresh(self._get(), bid=None), 0)
         self.assertEqual(self.urls, [])

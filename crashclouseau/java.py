@@ -724,6 +724,18 @@ def _github_headers():
     return {"Authorization": "Bearer " + token} if token else {}
 
 
+def _github_message(r):
+    """GitHub's ``message`` for a non-200, or the status text: the one line that says WHY
+    (rate limit, enterprise token policy, unknown commit)."""
+    try:
+        data = r.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and data.get("message"):
+        return str(data["message"])[:200]
+    return getattr(r, "reason", "") or ""
+
+
 def _index_mark(channel, product):
     return "{}:{}/{}".format(FILE_INDEX_MARK, product, channel)
 
@@ -770,14 +782,27 @@ def refresh_file_index(channel, product):
         sha = _git_sha(node, channel)
         if not sha:
             return 0
-        r = net.get(GITHUB_TREE_URL.format(sha), headers=_github_headers())
+        headers = _github_headers()
+        r = net.get(GITHUB_TREE_URL.format(sha), headers=headers)
+        if headers and r.status_code in (401, 403):
+            # THE TOKEN ITSELF WAS REFUSED, which must not be worse than having none: the
+            # tree is public and the anonymous budget (60/h per IP) still applies. Seen live
+            # 2026-09-15 with a valid token: "The 'Mozilla Corporation' enterprise forbids
+            # access via a fine-grained personal access tokens if the token's lifetime is
+            # greater than 366 days" -- rate limit 5,000 remaining 4,996, every repo endpoint
+            # 403. GitHub's `message` is the only thing that says why, so it is logged whole.
+            logger.warning(
+                "java: GitHub refused GITHUB_TOKEN (%d: %s); retrying the tree anonymously",
+                r.status_code, _github_message(r),
+            )
+            r = net.get(GITHUB_TREE_URL.format(sha))
         if r.status_code != 200:
             # 403 is GitHub's rate limit (the remaining budget says whose: 0 = ours or a
             # neighbour's on the shared IP), 404 an unknown commit / path. Retried next tick.
             logger.warning(
-                "java: GitHub tree at %s -> %d (X-RateLimit-Remaining %s); JVM file index "
+                "java: GitHub tree at %s -> %d (X-RateLimit-Remaining %s; %s); JVM file index "
                 "not refreshed, retried next tick",
-                sha, r.status_code, r.headers.get("X-RateLimit-Remaining"),
+                sha, r.status_code, r.headers.get("X-RateLimit-Remaining"), _github_message(r),
             )
             return 0
         data = r.json() or {}

@@ -79,6 +79,11 @@ Several things are automated by the repo now; the rest are one-time app setup.
      other tenants; a token gets 5,000 an hour of its own. Without it a 403 is retried on the
      next 20-minute tick (3 requests an hour at worst) and the Kotlin frames of a Java crash keep
      resolving through the paths the pushlog already recorded (~500 `.kt` files over 8 days).
+     **Lifetime at most 366 days**: Mozilla's GitHub enterprise refuses a fine-grained token
+     with a longer (or no) expiry on every endpoint with a 403 that names the rule, while
+     `/rate_limit` still answers 5,000 -- measured 2026-09-15 on the first token set here. A
+     refused token is logged with GitHub's message and the request is retried anonymously, so
+     a bad token is never worse than none; the fix is the token's expiry on GitHub's side.
    - `heroku config:set LIBMOZDATA_CFG_BUGZILLA_TOKEN=…` (or `BUGZILLA_TOKEN`) — the filer's
      API key (`clouseau-bot`). Read from the environment first because libmozdata cannot
      (`config.get_bugzilla_token`). Without it every Bugzilla write hard-fails safe and Clouseau
