@@ -778,6 +778,82 @@ def _bugs_by_id(ids):
         return None
 
 
+# The resolutions of a bug of ours on a signature that leave room for a NEW bug on it. FIXED:
+# the defect was real and is gone, so a fresh crash on the signature is a fresh regression --
+# `_fixed_after_build_bug` and `_known_on_train_bug` still decide whether it is one. DUPLICATE:
+# the human's verdict moved to the TARGET, which `_duplicate_targets_for_signature` folds into
+# the venue rows while it is open. Everything else -- INVALID, WORKSFORME, INCOMPLETE, WONTFIX,
+# MOVED -- is a human saying the filing was not wanted, and the `skip` channels have treated
+# every one of those as a full stop since the guard shipped.
+_REFILEABLE_RESOLUTIONS = ("FIXED", "DUPLICATE")
+
+
+def _own_bug_out_of_sight(prior, existing):
+    """A ``{"filed": False, ...}`` decline when the bug WE already filed on this signature
+    (*prior*, from ``Dossier.already_filed_for_signature``) is not among the *existing* venue
+    rows and its state says a second bug must not be filed; ``None`` to carry on.
+
+    THE ``comment``-MODE HALF OF THE PRIOR-FILING GUARD. On a ``skip``/``file_new`` channel a
+    prior filing is a full stop before the venue search is made. On a ``comment`` channel our
+    open bug is the ordinary venue -- the search returns it and ``already_commented`` declines
+    the second analysis -- so there is only work to do when the search CANNOT see the bug, and
+    why it cannot decides:
+
+    * RESTRICTED. ``_bugs_by_id`` returns rows for the ids anonymous BMO may read and simply
+      OMITS the rest (live probe 2026-09-16: ``id=2072488,1976766`` came back as one row and an
+      empty ``faults``), so "absent" is the signal. Bug 2072488, 2026-09-16 03:02Z: a
+      poison-address crash on ``core::ptr::drop_in_place | ... | style_traits::owned_slice::
+      impl$1::drop`` filed restricted to core-security; 2072492, 2072493, 2072502 and 2072521
+      followed by 08:01Z, one per proto-signature cluster of the SAME nightly build, each
+      needinfo'ing the same developer, because the unauthenticated venue search sees none of
+      them. ``already_filed_for_signature``'s docstring had named this exact case ("IT ALSO
+      CLOSES A DISCLOSURE CASE") and nightly never called it. Skip, naming the bug -- and the
+      same skip stops a run that is NOT withheld from filing a PUBLIC bug on the signature.
+    * RESOLVED, neither FIXED nor DUPLICATE: a human closed our bug as not wanted. Skip. Never
+      observed on nightly (the only other repeat, 2069647/2070711, was a DUPLICATE and is now
+      followed), so this is the ``skip`` channels' rule applied for consistency, not a measured
+      fix.
+    * OPEN but not returned. Our bug carried the exact ``[@ sig]`` entry and title the day it
+      was filed (``report_bug.bug_title``), so a human has edited both off it. Skip: this is
+      about which way to be wrong, and a duplicate is the worse noise.
+    * BMO unreadable: skip, like the venue search itself. Fails closed.
+    * FIXED or DUPLICATE (``_REFILEABLE_RESOLUTIONS``): carry on; the existing gates own it.
+
+    Not asked when our bug IS a venue row, or is the duplicate a venue row was reached through
+    (``via_duplicates``) -- ``already_commented`` covers both, and asking BMO there would cost a
+    request on every re-crash of every signature we ever filed."""
+    bug = (prior or {}).get("bug")
+    try:
+        bug = int(bug)
+    except (TypeError, ValueError):
+        # The fail-closed sentinel (`{"skipped": ...}`) or a record with no id: silence, not a
+        # possible duplicate, like every sibling guard.
+        return {"filed": False, "skipped": "prior-filing lookup failed; not risking a duplicate",
+                "prior_signature_filing": prior}
+    for row in existing or []:
+        if row.get("id") == bug or bug in (row.get("via_duplicates") or []):
+            return None
+    rows = _bugs_by_id([bug])
+    if rows is None:
+        state, why = "unreadable", "could not be read from Bugzilla"
+    else:
+        row = next((r for r in rows if r.get("id") == bug), None)
+        if row is None:
+            state, why = "restricted", "is restricted, so the venue search cannot see it"
+        else:
+            resolution = (row.get("resolution") or "").upper()
+            if resolution in _REFILEABLE_RESOLUTIONS:
+                return None
+            if not resolution:
+                state, why = "open", "is open but no longer carries the signature"
+            else:
+                state, why = resolution, "was resolved {}".format(resolution)
+    return {"filed": False, "bug": bug,
+            "skipped": "already filed bug {} for this signature; it {} — not filing "
+                       "again".format(bug, why),
+            "prior_signature_filing": prior, "own_bug_state": state}
+
+
 def _split_by_application(bugs, product):
     """``(venues, other_app)`` — the open bugs that can be about a *product* crash, and the
     ones that belong to a different application built on Gecko.
@@ -1499,6 +1575,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     * verdict must be reported and at/above ``min_confidence`` (70 = the ``probable`` rung);
     * never twice for one crash (``Dossier.already_filed``), which matters because the
       orphan reaper re-runs a crashed run and would otherwise re-file on recovery;
+    * never a SECOND bug for one SIGNATURE (``Dossier.already_filed_for_signature``): a full
+      stop on a ``skip``/``file_new`` channel, and on a ``comment`` channel a stop whenever the
+      venue search cannot see the bug we filed -- restricted, resolved as unwanted, or edited
+      off the signature (``_own_bug_out_of_sight``); FIXED and DUPLICATE carry on to the gates
+      that own them;
     * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
       is a nuisance while a bad gate at 300/day is an incident;
     * if an OPEN bug already references the signature AND that bug belongs to this crash's own
@@ -1668,41 +1749,51 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                     uuid, incomplete_fix["id"], incomplete_fix["node"],
                     incomplete_fix["pushdate"], verdict, confidence)
 
-    # ONE BUG PER SIGNATURE PER CHANNEL, on a channel that never writes on existing bugs.
-    # Consulted only when `mode != "comment"`, which is a derivation and not a new knob: a
-    # channel whose policy is "never touch an existing bug" cannot also want to file a SECOND
-    # bug for a signature it has already filed one for -- that is the same duplicate the policy
-    # exists to avoid, wearing our own bug number.
+    # ONE BUG PER SIGNATURE, in two halves that differ by the channel's policy.
     #
-    # It is the only guard that survives the target bug being CLOSED.
-    # `_open_bugs_for_signature` filters `resolution: "---"`, so a bug we filed and a human then
-    # resolved INVALID/DUPLICATE/WORKSFORME is invisible below, `_bug_for_this_regression` is
-    # never asked, and `already_commented` is only consulted for a CHOSEN venue. Measured on our
-    # own 60 filings: 4 of the 18 nightly-filed signatures that also crash on beta would collect
-    # a second bug, and the four resolutions are DUPLICATE / INVALID / INVALID / WORKSFORME.
-    # It also stops a PUBLIC bug being filed on a signature whose nightly bug is RESTRICTED,
-    # which the unauthenticated venue lookup cannot see.
-    if config.comment_mode(cfg["comment_on_existing"]) != "comment":
-        # CHANNEL-BLIND, and that is the entire point: the 22.2% this was measured at is
-        # nightly-filed bugs that a beta run would file a SECOND time (4 of the 18 nightly-filed
-        # signatures that also crash on beta -- 2060922 DUPLICATE, 2061726 INVALID, 2063364
-        # INVALID, 2064066 WORKSFORME). Scoping the lookup to the crash's own channel would make
-        # it blind to exactly that population and leave it asserting nothing. What keeps nightly
-        # byte-identical is the MODE test above, not a channel filter: nightly's mode is
-        # `comment`, so nightly never reaches this line.
-        prior_sig = models.Dossier.already_filed_for_signature(signature)
-        if prior_sig:
-            logger.info("autofile: already filed bug %s for %r on %s (from %s) — not filing "
-                        "again for %s", prior_sig.get("bug") or "?", signature, channel or "?",
-                        prior_sig.get("uuid") or "?", uuid)
-            return {"filed": False, "bug": prior_sig.get("bug"),
-                    "skipped": "already filed bug {} for this signature on {}".format(
-                        prior_sig.get("bug") or "?", channel or "?"),
-                    "prior_signature_filing": prior_sig}
+    # It is the only guard that survives the bug we filed being CLOSED or RESTRICTED.
+    # `_open_bugs_for_signature` is unauthenticated and filters `resolution: "---"`, so a bug we
+    # filed and a human then resolved INVALID/WORKSFORME -- or that WE filed restricted, or that
+    # a human restricted afterwards -- is invisible below, `_bug_for_this_regression` is never
+    # asked, and `already_commented` is only consulted for a CHOSEN venue. Measured on our own
+    # 60 filings: 4 of the 18 nightly-filed signatures that also crash on beta would collect a
+    # second bug (DUPLICATE / INVALID / INVALID / WORKSFORME). And on nightly itself, 2026-09-16:
+    # FIVE restricted bugs in five hours on one signature of one build (2072488, 2072492,
+    # 2072493, 2072502, 2072521), one per proto-signature cluster, each needinfo'ing the same
+    # developer, because this query was then asked only on a `skip` channel.
+    #
+    # The one DB query is made on every channel; what differs is what a hit means.
+    prior_sig = models.Dossier.already_filed_for_signature(signature)
+    # On a channel that never writes on existing bugs a prior filing is a FULL STOP, before the
+    # venue search is even made. A derivation and not a new knob: a policy of "never touch an
+    # existing bug" cannot also want a SECOND bug for a signature it has already filed one for
+    # -- that is the same duplicate the policy exists to avoid, wearing our own bug number.
+    # CHANNEL-BLIND, and that is the entire point: the 22.2% above is nightly-filed bugs that a
+    # beta run would file a second time; scoping the lookup to the crash's own channel would
+    # make it blind to exactly that population and leave it asserting nothing.
+    if prior_sig and config.comment_mode(cfg["comment_on_existing"]) != "comment":
+        logger.info("autofile: already filed bug %s for %r on %s (from %s) — not filing "
+                    "again for %s", prior_sig.get("bug") or "?", signature, channel or "?",
+                    prior_sig.get("uuid") or "?", uuid)
+        return {"filed": False, "bug": prior_sig.get("bug"),
+                "skipped": "already filed bug {} for this signature on {}".format(
+                    prior_sig.get("bug") or "?", channel or "?"),
+                "prior_signature_filing": prior_sig}
 
     existing = _open_bugs_for_signature(signature)
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
+    # On a `comment` channel our own OPEN bug is the ordinary venue -- the search returns it and
+    # `already_commented` declines the second analysis -- so the guard acts only when the search
+    # CANNOT see our bug, and the reason decides (`_own_bug_out_of_sight`): restricted, resolved
+    # as unwanted, or edited off the signature is a skip; FIXED or DUPLICATE carries on to the
+    # gates that own those.
+    if prior_sig:
+        out_of_sight = _own_bug_out_of_sight(prior_sig, existing)
+        if out_of_sight:
+            logger.info("autofile: %s — not filing for %s (our filing was from %s)",
+                        out_of_sight["skipped"], uuid, prior_sig.get("uuid") or "?")
+            return out_of_sight
     # An open bug on this signature that belongs to ANOTHER application built on Gecko is not
     # a venue, however well it matches (``_split_by_application``) — and it must not read as
     # "an open bug exists" to the check below either, or a Thunderbird-only match would skip

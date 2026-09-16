@@ -497,13 +497,16 @@ class TestBetaNeverCommentsOnSomebodyElsesBug(_BetaBase):
         self.assertIn("bug 12345", both)
         self.assertIn("bug 2057980", both)
 
-    def test_the_prior_filing_guard_is_only_consulted_on_a_never_comment_channel(self):
-        """Nightly must stay byte-identical: it files 60 bugs a month under `comment`, and the
-        self-duplication guard is the unshipped half of plan #17 defect A. A guard that starts
-        firing on nightly the day beta lands is a change nobody asked for."""
+    def test_the_prior_filing_guard_is_a_full_stop_only_on_a_never_comment_channel(self):
+        """The guard is asked on EVERY channel since 2026-09-16 -- five restricted bugs on one
+        nightly signature in five hours (tests/test_autofile.py::TestOurOwnBugOutOfSight) --
+        and what differs is what a hit means. Nightly with no prior filing files exactly as it
+        did; on `skip`/`file_new` a hit is a full stop before the venue search is made."""
         guard = bugzilla_apply.models.Dossier.already_filed_for_signature
-        bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}}, "lead", 70)
-        guard.assert_not_called()
+        res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},
+                                          "lead", 70)
+        guard.assert_called_once_with("Foo::Bar")
+        self.assertTrue(res["filed"], res.get("skipped"))
         for mode in ("skip", "file_new", False):
             with self.subTest(mode=mode):
                 guard.reset_mock()
@@ -515,9 +518,9 @@ class TestBetaNeverCommentsOnSomebodyElsesBug(_BetaBase):
                 # would collect a second Clouseau bug, and all four target bugs are CLOSED
                 # (DUPLICATE / INVALID / INVALID / WORKSFORME) so nothing else can see them.
                 # A `channel=` argument here would make the guard blind to exactly that
-                # population. What keeps nightly byte-identical is the MODE test in
-                # `autofile_bug` -- nightly's mode is `comment`, so nightly never reaches the
-                # call at all, which is what `guard.assert_not_called()` above pins.
+                # population. What keeps nightly's ordinary filing unchanged is the MODE test
+                # in `autofile_bug`: on `comment` a hit is only acted on when the venue search
+                # cannot see our bug (`_own_bug_out_of_sight`).
                 guard.assert_called_once_with("Foo::Bar")
 
     def test_a_prior_filing_lookup_failure_produces_silence_not_a_duplicate(self):

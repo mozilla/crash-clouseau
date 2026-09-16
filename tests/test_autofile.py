@@ -2509,3 +2509,117 @@ class TestReadingTheAttachmentOffTheHistory(unittest.TestCase):
     def test_an_unreadable_history_is_no_attachment(self):
         self.assertIsNone(self._attached(None))
         self.assertIsNone(bugzilla_apply._signature_attached(1976766, ""))
+
+
+_OURS = {"uuid": "u-0", "bug": "2072488"}
+
+
+class TestOurOwnBugOutOfSight(_Base):
+    """THE FIVE RESTRICTED BUGS OF 2026-09-16. 2072488 was filed at 03:02Z for a poison-address
+    crash on `core::ptr::drop_in_place | ... | style_traits::owned_slice::impl$1::drop`,
+    restricted to core-security; 2072492, 2072493, 2072502 and 2072521 followed by 08:01Z, one
+    per proto-signature cluster of the same nightly build, each needinfo'ing the same developer.
+    `_open_bugs_for_signature` is unauthenticated by design and so saw none of them, and
+    `already_filed_for_signature` -- whose docstring names this very case -- was consulted only
+    on a `skip` channel. Nightly comments, so nightly never asked."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=[])
+        p.start()
+        self.addCleanup(p.stop)
+        bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = dict(_OURS)
+
+    def _ours_reads(self, resolution):
+        bugzilla_apply._bugs_by_id.return_value = [
+            {"id": 2072488, "status": "RESOLVED" if resolution else "NEW",
+             "resolution": resolution}]
+
+    def test_a_restricted_bug_of_ours_stops_the_second_bug(self):
+        # `_bugs_by_id` OMITS an id anonymous BMO may not read (live probe 2026-09-16:
+        # `id=2072488,1976766` returned one row and an EMPTY `faults`), so "absent" is the
+        # restricted signal. Both the withheld re-crash (the incident) and an ordinary one
+        # (the disclosure case: a PUBLIC bug on a restricted signature) stop here.
+        for dossier in ({"candidate": {"node": "n"}}, _UNSAFE):
+            with self.subTest(withheld=dossier is _UNSAFE):
+                res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, dossier, "lead", 70)
+                self.assertFalse(res["filed"])
+                self.assertEqual((res["bug"], res["own_bug_state"]), (2072488, "restricted"))
+                self.assertIn("already filed bug 2072488", res["skipped"])
+                self.assertIn("restricted", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+        bugzilla_apply._bugs_by_id.assert_called_with([2072488])
+
+    def test_our_open_bug_is_the_venue_and_costs_no_second_lookup(self):
+        # The search sees it: the ordinary comment path, on which `already_commented` (mocked
+        # to None here) owns the second analysis. No BMO request is spent on the guard.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2072488)]
+        res = self._file()
+        self.assertTrue(res["filed"], res.get("skipped"))
+        self.assertEqual((res["bug"], res["mode"]), (2072488, "comment_on_existing"))
+        bugzilla_apply._bugs_by_id.assert_not_called()
+
+    def test_our_bug_duped_into_the_venue_is_not_out_of_sight(self):
+        # 2069647 -> 1976766: the target row carries our bug in `via_duplicates`, and the
+        # via-duplicate `already_commented` check owns that case.
+        bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = {
+            "uuid": "u-0", "bug": "2069647"}
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            {**_bug(1976766), "via_duplicates": [2069647], "venue_since": _RECENT}]
+        res = self._file()
+        self.assertTrue(res["filed"], res.get("skipped"))
+        self.assertEqual(res["bug"], 1976766)
+        bugzilla_apply._bugs_by_id.assert_not_called()
+
+    def test_fixed_and_duplicate_leave_room_for_a_new_bug(self):
+        # FIXED: the defect is gone and a fresh crash is a fresh regression, gated by
+        # `_fixed_after_build_bug` / `_known_on_train_bug` (both mocked to None here). A
+        # DUPLICATE whose target is CLOSED, so no venue row carries us: the same.
+        for resolution in ("FIXED", "DUPLICATE"):
+            with self.subTest(resolution=resolution):
+                self.created.clear()
+                self._ours_reads(resolution)
+                res = self._file()
+                self.assertTrue(res["filed"], res.get("skipped"))
+                self.assertEqual(res["mode"], "new_bug")
+                self.assertEqual(len(self.created), 1)
+
+    def test_a_bug_of_ours_closed_as_unwanted_stops_the_second_bug(self):
+        for resolution in ("INVALID", "WORKSFORME", "INCOMPLETE", "WONTFIX"):
+            with self.subTest(resolution=resolution):
+                self._ours_reads(resolution)
+                res = self._file()
+                self.assertFalse(res["filed"])
+                self.assertEqual((res["bug"], res["own_bug_state"]), (2072488, resolution))
+                self.assertIn(resolution, res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_our_open_bug_the_search_no_longer_returns_stops_the_second_bug(self):
+        # It carried the exact `[@ sig]` entry and title the day we filed it, so a human edited
+        # both off it. Which way to be wrong: a duplicate is the worse noise.
+        self._ours_reads("")
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["own_bug_state"], "open")
+        self.assertEqual(self.created, [])
+
+    def test_an_unreadable_bmo_fails_closed(self):
+        bugzilla_apply._bugs_by_id.return_value = None
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["own_bug_state"], "unreadable")
+        self.assertEqual(self.created, [])
+
+    def test_the_fail_closed_sentinel_is_silence_not_a_duplicate(self):
+        bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = {
+            "skipped": "prior-filing lookup failed"}
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual((self.created, self.comments), ([], []))
+        bugzilla_apply._bugs_by_id.assert_not_called()
+
+    def test_no_prior_filing_files_as_before(self):
+        bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = None
+        res = self._file()
+        self.assertTrue(res["filed"], res.get("skipped"))
+        bugzilla_apply._bugs_by_id.assert_not_called()

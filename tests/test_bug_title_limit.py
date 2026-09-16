@@ -136,6 +136,7 @@ class TestARejectedWriteLeavesARecord(unittest.TestCase):
              mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
              mock.patch.object(ba.config, "get_bugzilla_token", return_value="tok"), \
              mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
+             mock.patch.object(ba.models.Dossier, "already_filed_for_signature", return_value=None), \
              mock.patch.object(ba.models.Dossier, "filed_bugs_since", return_value=0), \
              mock.patch.object(ba, "_open_bugs_for_signature", return_value=[]), \
              mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \

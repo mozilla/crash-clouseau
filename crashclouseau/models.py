@@ -3329,9 +3329,11 @@ class Dossier(db.Model):
         bug. Do not "fix" the venue lookup by authenticating it; that trade was made on purpose.
 
         ``channel`` SCOPES IT, and defaults to every channel. The cross-channel question is the
-        one this is for; passing a channel is how nightly keeps its existing behaviour
-        byte-identical while beta gains the guard (on nightly this is the unshipped half of plan
-        #17's defect A — 5 of 7 duplicate targets were our OWN earlier filings).
+        one this is for. The filer asks channel-blind on EVERY channel since 2026-09-16
+        (``bugzilla_apply._own_bug_out_of_sight``): until then nightly, whose mode is
+        ``comment``, never asked, and five restricted bugs were filed on one signature of one
+        build in five hours — the disclosure case the paragraph above describes, in its
+        self-duplicating form (2072488, 2072492, 2072493, 2072502, 2072521).
 
         Fails CLOSED like its siblings: a lookup we cannot do returns a truthy sentinel, so a DB
         failure produces silence rather than a duplicate."""
