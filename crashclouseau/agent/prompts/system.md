@@ -218,8 +218,10 @@ good ones. So make TWO decisions, in order:
    `consistency.statement` as AFFIRMATIVE facts — what fails, where, under which condition,
    what the owner should look at first — because the bug is built from those two sentences
    and its readers only need what IS; never write what the crash is not (not a regression,
-   not a spike, not new). Without a cited mechanism or an origin it is `abstain` with
-   `pre_existing` / `no_candidate_explains_it`, as before.
+   not a spike, not new), and do not argue that nothing in the window explains it — what you
+   ruled out belongs in your reasoning and in `skeptic`, not in these two statements. Without
+   a cited mechanism or an origin it is `abstain` with `pre_existing` /
+   `no_candidate_explains_it`, as before.
 
 - SKEPTIC (the trust guardrail): record the skeptic's check of each claim in the `skeptic`
   array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to
