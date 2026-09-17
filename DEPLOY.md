@@ -333,6 +333,52 @@ deploy that starts it -- the order below is what makes that safe.
    `mozilla.telemetry.`); a crash whose frames are all the framework's is `no usable stack` to
    the trigger, exactly like a native crash without a `json_dump`.
 
+## Actionable filings (a crash worth filing, no regressor claimed; 2026-09-17)
+
+The principal has a third positive verdict, **`actionable`**: what fails and where is ESTABLISHED
+(a cited source line and the condition that fires it) in code that is ours, the code's owner is
+known, and NO changeset is claimed as the cause. Its `candidate` is the failing code's ORIGIN by
+blame -- how the owner and the product::component are found -- and is accused of nothing. Born
+from crash `0015b3bf` (release 155.0.1, `CheckLogMessage::~CheckLogMessage`, 75-day-old
+signature, 110 installations): two runs on the same evidence said culprit 85 then abstain 25,
+because neither box fit. Schema `agent/schema.py::Decision.actionable`; DB enum value added at
+startup by `_ensure_enum_values` (`_ENUM_ADDITIONS`).
+
+**What it files** (`report_bug.build_actionable_comment`): `Crash in [@ sig]` with no `[new in
+release]` prefix and no tracking nomination (both say "new regression"), keyword `crash` only, no
+`regressed_by`; the crash link, reason, frames, volume, "This signature has been reported since
+build X (date), N days before the build above.", then **"This bug looks actionable because:"** +
+the verdict's mechanism and consistency statements (the prompt asks for them as affirmative
+facts) + "The failing code comes from <changeset> (bug N) by :nick.", the code references,
+":nick, can you have a look please?" (the origin's author, verified account) and the provenance
+footer. Nothing about what the crash is NOT: no skeptic block, no "Starting point", no "% worth
+investigating".
+
+**Gates of its own** in `bugzilla_apply.autofile_bug`, besides the ordinary ones (`min_confidence`
+70 = `probable`, `verdicts`, `already_filed_for_signature` as a full stop, fixed-after-build,
+known-on-train, security venue):
+- a real POPULATION: distinct installations on the analysed build and later >=
+  `spike.real_installs` (nightly 3, beta 6, release/ESR 50; Fenix nightly 3) -- the spike path's own
+  bar for filing on volume alone, read off the same Socorro aggregation the bug's volume sentence
+  quotes. Measured on the last 21 days of cited-mechanism `pre_existing` abstains: nightly median
+  ONE installation (6 of 62 clear 3), release all >=50 -- the floor bites on nightly and is free
+  on release;
+- NO open same-application, non-meta bug on the signature, whatever `comment_on_existing` says:
+  an open bug means someone can already act. Decline reads `open bug N exists; an actionable
+  crash is filed only where no bug is`.
+Upstream, the age gate flips sign for it: an origin that landed AFTER the signature was first
+seen is not the origin -> `pre_existing` abstain (`actionable_origin_postdates_signature`). The
+blind second opinion is not bought for it (`skipped_actionable`); no calibrated probability is
+published (the badge shows the rung).
+
+**To hold it**: take `"actionable"` out of `agent.autofile.verdicts` (a channel or product overlay
+may narrow the list on its own); the verdict still shows on crashstack.html as ACTIONABLE with the
+decline reason. **Expected stream**: ~2/week on nightly, <=1-2/day on release before the open-bug
+rule (83 runs / 48 signatures in 21 days). Read the first week with `verdicts.verdict =
+'actionable'`, `filed_bug`, and `filing_declined.skipped` LIKE `'%actionable floor%'` /
+`'%filed only where no bug is%'`. `Feedback.classify` scores these `unknown` / `crash_invalid`
+only (no regressor claim to confirm); a resolution-based "useful" bucket is a follow-up.
+
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct

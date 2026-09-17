@@ -156,6 +156,13 @@ REGISTRY = {
         "candidate landing after the signature's first appearance disproves nothing -- on "
         "2026-08-15 that argument refuted the lead the module owner confirmed the next day (bug "
         "2063892). Write-only until the waiver's rate is read off the persisted dossiers."),
+    "actionable_origin_postdates_signature": (
+        "diagnostic", (),
+        "An `actionable` verdict named as the ORIGIN of the failing code a changeset that landed "
+        "this many days AFTER the signature was first seen -- so it is not the origin, and the "
+        "age gate turned the verdict into a `pre_existing` abstain (the age argument's sign flips "
+        "when no causation is claimed). The abstain reason carries the sentence; the flag is the "
+        "count, to read once the outcome has a month of runs (2026-09-17)."),
 
     # -- signature crash RATE (`sigtrend.trend_facts`) -----------------------------------------
     # The quantity the build-day spike rule structurally cannot compute, and the reason bug

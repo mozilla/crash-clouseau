@@ -58,7 +58,7 @@ _RECENT = "2026-08-01T00:00:00Z"                       # 6 days before `_LANDED`
 
 
 def _cfg(**over):
-    base = {"enabled": True, "min_confidence": 70, "verdicts": ["lead", "culprit"],
+    base = {"enabled": True, "min_confidence": 70, "verdicts": ["lead", "culprit", "actionable"],
             "needinfo": True, "daily_cap": 10, "comment_on_existing": True,
             "comment_max_bug_age_days": 30}
     base.update(over)

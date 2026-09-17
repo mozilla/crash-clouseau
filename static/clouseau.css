@@ -432,6 +432,8 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
 
 /* verdict colour missing from the confidence-badge set: culprit = "found it" */
 .confidence-badge.culprit { background-color: #2e7d32; }
+/* actionable = "worth filing on its own facts, no regressor claimed" (2026-09-17) */
+.confidence-badge.actionable { background-color: #1565c0; }
 
 .task-cards {
     display: flex;

@@ -165,6 +165,10 @@
         "Suspected regressor". The assertive wording belongs to ``culprit`` only. -#}
     {% set is_culprit = evidence['verdict'] == 'culprit' -%}
     {% set is_abstain = evidence['verdict'] == 'abstain' -%}
+    {#- `actionable` (2026-09-17): a crash worth filing on its own facts. The mechanism is
+        established and the code has an owner; NO changeset is claimed as the cause, and the
+        changeset shown is where the failing code comes from (blame). Its own voice below. -#}
+    {% set is_actionable = evidence['verdict'] == 'actionable' -%}
     {% set cclass = 'high' if (conf is not none and conf >= 85) else ('probable' if (conf is not none and conf >= 65) else ('medium' if (conf is not none and conf >= 50) else 'low')) -%}
     {% set cand = d.get('candidate') -%}
     {% set has_cand = cand and cand.get('node') -%}
@@ -190,6 +194,8 @@
         <span class="confidence-badge {{ cclass }}">{{ evidence['ui']['high_confidence_label'] }}{% if pw_pct is not none %} &middot; <span class="worth" title="{{ worth_help }}">{{ pw_pct }}% worth investigating</span>{% elif conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% elif is_lead -%}
         <span class="confidence-badge {{ 'probable' if is_probable else 'lead' }}">{{ 'PROBABLE CAUSE' if is_probable else evidence['ui']['lead_label'] }}{% if pw_pct is not none %} &middot; <span class="worth" title="{{ worth_help }}">{{ pw_pct }}% worth investigating</span>{% elif conf is not none %} &middot; {{ conf }}%{% endif %}</span>
+        {% elif is_actionable -%}
+        <span class="confidence-badge actionable" title="A crash worth filing on its own facts: what fails and where is established, and the code has an owner to ask. No changeset is claimed as the cause; the changeset shown is where the failing code comes from.">ACTIONABLE{% if conf is not none %} &middot; {{ conf }}%{% endif %}</span>
         {% else -%}
         <span class="confidence-badge abstain">ABSTAIN</span>
         {% endif -%}
@@ -317,7 +323,7 @@
 
       {% if has_cand -%}
       <div class="evidence-section">
-        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% else %}Suspected regressor{% endif %}</h3>
+        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% elif is_actionable %}Where the failing code comes from{% else %}Suspected regressor{% endif %}</h3>
         <p>
           <a href="{{ repo_url }}/rev?node={{ cand['node'] }}" target="_blank" rel="noopener"><code>{{ cand['node'] }}</code></a>
           {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}" target="_blank" rel="noopener">bug {{ cand['bug'] }}</a>{% endif %}
@@ -443,14 +449,14 @@
 
       {% if vd and vd.get('mechanism') and vd['mechanism'].get('statement') -%}
       <div class="evidence-section">
-        <h3>{% if is_culprit %}Mechanism{% else %}Working hypothesis (unverified){% endif %}</h3>
+        <h3>{% if is_culprit %}Mechanism{% elif is_actionable %}What fails and where{% else %}Working hypothesis (unverified){% endif %}</h3>
         <p>{{ vd['mechanism']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['mechanism'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
       {% if vd and vd.get('consistency') and vd['consistency'].get('statement') -%}
       <div class="evidence-section">
-        <h3>{% if is_culprit %}Consistency with the crash{% else %}Why it may be related{% endif %}</h3>
+        <h3>{% if is_culprit %}Consistency with the crash{% elif is_actionable %}The facts behind it{% else %}Why it may be related{% endif %}</h3>
         <p>{{ vd['consistency']['statement']|linkify(repo_url) }}</p>
         <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>

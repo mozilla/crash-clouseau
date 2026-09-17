@@ -28,6 +28,7 @@ from crashclouseau import app, config, db, models, sensitive, utils, worker
 from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
+    AbstainKind,
     AreaExpert,
     CONFIDENCE_SCORE,
     Confidence,
@@ -1945,6 +1946,12 @@ def _verdict_row(result):
         vt = "lead"
         mech = verdict.mechanism.statement if verdict.mechanism else ""
         rationale = mech or verdict.needinfo_draft or "plausible related changeset; mechanism unverified"
+    elif verdict.decision == Decision.actionable:
+        # A crash worth filing on its own facts; the rationale IS the mechanism (schema requires
+        # it cited). Its own DB label, so the filer, the page and the tasks list can tell it
+        # from a regressor claim -- an `else` here would ship it as "abstain" with no trace.
+        vt = "actionable"
+        rationale = (verdict.mechanism.statement if verdict.mechanism else "") or ""
     else:
         vt = "abstain"
         rationale = verdict.abstain_reason or ""
@@ -1965,7 +1972,10 @@ def _apply_worth_investigating(dossier, seed=None):
     if dossier is None or dossier.verdict is None:
         return
     v = dossier.verdict
-    if v.decision == Decision.abstain or v.confidence is None:
+    if v.decision in (Decision.abstain, Decision.actionable) or v.confidence is None:
+        # `actionable` (2026-09-17): the table was fit on regressor leads against the 289-bug
+        # study; a probability read off it for a verdict that claims no regressor would be a
+        # number about something else. The badge shows the rung until one is fit for it.
         return
     # Channel AND product: Fenix nightly shares the label `nightly` with the desktop fit, so
     # without the product the desktop table would be published on a crash from a population it
@@ -2301,6 +2311,35 @@ def _apply_signature_age_gate(dossier, seed):
         return
     landed_after = sigage.days_landed_after_first_seen(first_seen, pushdate)
     if landed_after is None or landed_after <= cfg["min_age_days"]:
+        return
+    if v.decision == Decision.actionable:
+        # THE SIGN FLIPS for an `actionable` verdict. Its candidate is named as the ORIGIN of the
+        # failing code (blame), and a changeset that landed after the signature was already
+        # crashing cannot be that -- the owner and the component would be routed off the wrong
+        # changeset. The mechanism may still be right, so this is `pre_existing`, not noise, and
+        # the cited evidence stays on the page; no waiver applies, because a frequency argument
+        # is about causation and this verdict makes none.
+        dossier.corroborations = {
+            **(dossier.corroborations or {}),
+            "actionable_origin_postdates_signature": landed_after,
+            "signature_first_seen_buildid": first_seen,
+        }
+        dossier.verdict = Verdict(
+            decision=Decision.abstain,
+            confidence=Confidence.low,
+            abstain_reason=("the changeset named as the origin of this code landed {:.0f} days "
+                            "after the signature was first seen (build {}), so it is not where "
+                            "this code comes from; the mechanism stands, the routing does not"
+                            .format(landed_after, first_seen)),
+            abstain_kind=AbstainKind.pre_existing,
+            mechanism=v.mechanism,
+            consistency=v.consistency,
+        )
+        logger.info(
+            "agent: actionable origin %s landed %.1fd AFTER this signature was first seen (%s) "
+            "-> abstain pre_existing for %s", cand.node, landed_after, first_seen,
+            (seed or {}).get("uuid"),
+        )
         return
     flags = {
         "stale_signature": True,
@@ -3736,6 +3775,11 @@ def _maybe_run_second_opinion(result, seed):
         return None, "skipped_no_verdict"
     if v.decision == Decision.abstain:
         return None, "skipped_abstain"
+    if v.decision == Decision.actionable:
+        # Its verify mode argues TIMING against a candidate ("this signature predates it"),
+        # which is exactly not the claim an `actionable` verdict makes; its mechanism mode
+        # would be a paid-for measurement nothing folds. Skipped until a fold exists for it.
+        return None, "skipped_actionable"
     cand = dossier.candidate
     if cand is not None and cand.backedout_by:
         # ``_apply_backout_gate`` will suppress this verdict outright, so an independent review

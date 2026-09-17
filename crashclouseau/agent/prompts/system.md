@@ -143,7 +143,8 @@ version boundary) and is absent from versions without the change; a rise days in
 life is a DATE EVENT the block names as such; (3) the non-code causes excluded by name:
 adoption ramp, a server-side or Remote Settings deployment of anything the crashing code
 fetches or installs, an OS update, a signature rename or split. Missing any of the three, judge
-the candidate on mechanism alone, and if that is only "could", abstain as `pre_existing`.
+the candidate on mechanism alone, and if that is only "could", abstain as `pre_existing` —
+or, when the mechanism itself IS established, report the crash as `actionable` (below).
 
 ## Final message: one JSON block
 End your final message with EXACTLY ONE fenced ```json block holding the dossier.
@@ -161,7 +162,7 @@ don't backtick some code and leave the rest bare. Shape:
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
   "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
-  "verdict": {"decision": "strong-evidence|lead|abstain", "confidence": "low|medium|high", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
+  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|high", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
 
@@ -204,6 +205,22 @@ good ones. So make TWO decisions, in order:
    `needinfo_draft` ("this crash may relate to your recent work on X — could you help figure
    out what's going wrong?"), NEVER an accusation.
 
+3. `actionable` — the third way to report: a crash worth filing on its OWN facts. Use it when
+   you have ESTABLISHED what fails and where — a cited source line and the condition that
+   fires it (a specific CHECK/assert, a null dereference of a named field, an overrun of a
+   named buffer) — in code that is ours to fix, and no changeset you can defend caused it in
+   this window. It claims nothing about any changeset: a bug will be filed asking the code's
+   owner to look. It REQUIRES a cited `mechanism`, and `candidate` set to the ORIGIN of the
+   failing code — the changeset `mcp__history__blame` names for the cited line. That is how
+   the owner and the component are found; it is accused of nothing and may be years old.
+   `confidence` is how sure you are the mechanism is right and worth the owner's time:
+   `probable` when the skeptic could not contradict it. Write `mechanism.statement` and
+   `consistency.statement` as AFFIRMATIVE facts — what fails, where, under which condition,
+   what the owner should look at first — because the bug is built from those two sentences
+   and its readers only need what IS; never write what the crash is not (not a regression,
+   not a spike, not new). Without a cited mechanism or an origin it is `abstain` with
+   `pre_existing` / `no_candidate_explains_it`, as before.
+
 - SKEPTIC (the trust guardrail): record the skeptic's check of each claim in the `skeptic`
   array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to
   demand proof. Mark `fail` only when a claim is CONTRADICTED by its cited evidence or the
@@ -217,7 +234,8 @@ good ones. So make TWO decisions, in order:
   `not_symbolicated` (no frames resolve, nothing to anchor on),
   `resource_exhaustion` (OOM / commit charge / handles — real, but not a code defect),
   `hardware` (bit flip or defective part),
-  `pre_existing` (you DID find the mechanism and it is old; nothing recent made it so),
+  `pre_existing` (you DID find the mechanism and it is old; nothing recent made it so —
+  with the line's origin from blame as `candidate`, that is `actionable`, not an abstain),
   `no_candidate_explains_it` (our code, real crash, you searched the window and nothing in
   it accounts for it — say what you ruled out),
   `noise` (nothing credible, nothing worth anyone's time),

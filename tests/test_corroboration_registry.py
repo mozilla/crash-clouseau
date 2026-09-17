@@ -306,7 +306,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
     # a flag to this set is a decision that has to be made here, in a diff, with a reason --
     # which is exactly what did not happen for `stale_signature_clamped`.
     EXPECTED = {
-        "absent_named_threads", "absent_thread_clamped", "call_path_verified",
+        "absent_named_threads", "absent_thread_clamped", "actionable_origin_postdates_signature",
+        "call_path_verified",
         "compiled_out_macro", "compiled_out_rev", "exposer_suspected",
         "fault_offset_unverified", "hardware_noise_signature_suppressed",
         "cpu_info", "machine_crash_count", "machine_distinct_cpus",

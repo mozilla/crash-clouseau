@@ -1104,7 +1104,11 @@ def get_agent_autofile(channel=None, product=None):
     a deterministic check corroborated — measured at ~3 crashes/day, versus ~7.6/day if it
     were lowered to the ``medium`` rung of 50. ``daily_cap`` bounds the damage a bad gate
     can do in one night; the pipeline itself has no such bound. ``null`` is no cap at all,
-    the shipped value on every channel since 2026-09-17 (the knob is kept)."""
+    the shipped value on every channel since 2026-09-17 (the knob is kept).
+
+    ``verdicts`` names the verdict strings the filer may act on: ``lead`` and ``culprit`` claim
+    a regressor; ``actionable`` (2026-09-17) files a crash on its own facts and claims none --
+    its two extra gates (a real population, no open bug) live in ``autofile_bug``."""
     a = get_agent().get("autofile", {})
     # THE PER-CHANNEL OVERLAY, merged BEFORE the per-key reads below so every one of the twelve
     # gates in ``autofile_bug`` is covered by one argument. ``channel=None`` returns today's dict
@@ -1133,7 +1137,7 @@ def get_agent_autofile(channel=None, product=None):
     return {
         "enabled": _env_bool("AUTOFILE_BUGS", a.get("enabled", False)) and not channel_veto,
         "min_confidence": a.get("min_confidence", 70),
-        "verdicts": a.get("verdicts", ["lead", "culprit"]),
+        "verdicts": a.get("verdicts", ["lead", "culprit", "actionable"]),
         "needinfo": _env_bool("AUTOFILE_NEEDINFO", a.get("needinfo", True)),
         "daily_cap": a.get("daily_cap", 10),
         # An open bug already referencing the signature: comment there instead of filing a

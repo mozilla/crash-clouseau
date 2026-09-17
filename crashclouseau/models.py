@@ -100,7 +100,7 @@ _UNUSABLE_VERDICT_PREFIXES = ("dossier validation failed", "no parseable ```json
 # two cannot drift apart.
 _OWN_JOB_RECLAIM_AFTER_S = 240
 VERDICT_TYPE = db.Enum(
-    "culprit", "lead", "unrelated", "abstain", "error", name="VERDICT_TYPE"
+    "culprit", "lead", "actionable", "unrelated", "abstain", "error", name="VERDICT_TYPE"
 )
 AGENT_STATUS_TYPE = db.Enum(
     "pending", "running", "done", "error", name="AGENT_STATUS_TYPE"
@@ -4194,7 +4194,8 @@ def commit():
 # _ensure_enum_values(). Fresh DBs and the full create.py recreate get them from the
 # db.Enum(...) definitions directly; only long-lived Postgres DBs need this.
 _ENUM_ADDITIONS = {
-    "VERDICT_TYPE": ("lead",),
+    # `actionable` (2026-09-17): a crash worth filing with no regressor claimed.
+    "VERDICT_TYPE": ("lead", "actionable"),
     # Every configured channel label. A long-lived DB built before a channel was declared has no
     # enum label for it, and the first tick on that channel would fail at `Build.put_data` /
     # `LastDate.update` with `invalid input value for enum` -- the ESR line (esr153, 2026-09-07)

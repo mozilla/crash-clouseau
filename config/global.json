@@ -308,7 +308,7 @@
         {
             "enabled": false,
             "min_confidence": 70,
-            "verdicts": ["lead", "culprit"],
+            "verdicts": ["lead", "culprit", "actionable"],
             "needinfo": true,
             "daily_cap": null,
             "comment_on_existing": "comment",

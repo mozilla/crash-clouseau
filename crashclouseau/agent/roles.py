@@ -217,6 +217,18 @@ _RELEVANCE = (
     "observed. "
 )
 
+# An `actionable` verdict (2026-09-17) claims no causation, so the two objections that rightly
+# fail a regressor claim -- "not in the window", "the signature predates it" -- are not
+# contradictions of anything it says. Without this the skeptic's only teeth on that verdict
+# would bite the one claim it does not make.
+_ACTIONABLE_SKEPTIC = (
+    "For an `actionable` verdict (a crash to be filed on its own facts, no regressor claimed) "
+    "the claim under test is the MECHANISM -- the cited line and the condition that fires it. "
+    "Its candidate is that code's ORIGIN by blame, so 'not in the window', 'landed long ago' or "
+    "'the signature predates it' is NOT a `fail` there; only a mechanism contradicted by its own "
+    "citations is. "
+)
+
 _ROLES: dict[str, dict] = {
     "crash-interpreter": {
         "description": "Normalize a raw processed crash into a grounded crash brief "
@@ -347,7 +359,7 @@ _ROLES: dict[str, dict] = {
         "mechanism you simply cannot verify end-to-end is `unverifiable` (it lowers confidence "
         "but KEEPS the lead) — NOT `fail`: a credible-but-unproven clue is exactly what we "
         "want to surface. Use `unverifiable` for searchfox holes such as virtual/IPC/FFI/"
-        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + _RELEVANCE + "A claim "
+        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + _RELEVANCE + _ACTIONABLE_SKEPTIC + "A claim "
         "without a fresh citation cannot pass. A fault-address↔field "
         "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (with namespaces, no template `<...>` args — "

@@ -1800,6 +1800,29 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
 
     signature = (uuid_info.get("signature") or "").strip()
 
+    # AN `actionable` VERDICT FILES ON THE CRASH'S OWN FACTS (Calixte, 2026-09-17), so two facts
+    # are checked here deterministically, before any venue work. First, a real POPULATION: the
+    # spike path's own bar for filing on volume alone (`spike.real_installs`). On nightly the
+    # median cited-mechanism `pre_existing` abstain is ONE installation -- the class developers
+    # dismiss as hardware ("very few reports in common code paths are often hardware related");
+    # on release the selector's 50-install floor already exceeds it. Read off the same Socorro
+    # aggregation the bug's volume sentence quotes, so the floor and the sentence cannot
+    # disagree. The second fact, no open bug on the signature, is checked once the venues are
+    # known below.
+    actionable = fileable and verdict == "actionable"
+    if actionable:
+        from crashclouseau import report_bug
+        floor = config.get_spike("real_installs", product, channel)
+        _first, stats = report_bug.fetch_signature_stats(uuid, uuid_info)
+        installs = (stats or {}).get("installs")
+        if installs is None:
+            return {"filed": False,
+                    "skipped": "population unknown; an actionable crash is filed on its volume"}
+        if installs < floor:
+            return {"filed": False,
+                    "skipped": "{} installation{} on this signature, below the actionable floor "
+                               "of {}".format(installs, "" if installs == 1 else "s", floor)}
+
     # THE SECOND REASON TO FILE. A verdict we cannot file on is the ordinary case (90% of runs
     # abstain), so this is the last gate rather than an early one: everything above it is local
     # and free, and this is one BMO request, cached per signature.
@@ -1843,7 +1866,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # CHANNEL-BLIND, and that is the entire point: the 22.2% above is nightly-filed bugs that a
     # beta run would file a second time; scoping the lookup to the crash's own channel would
     # make it blind to exactly that population and leave it asserting nothing.
-    if prior_sig and config.comment_mode(cfg["comment_on_existing"]) != "comment":
+    if prior_sig and (actionable or config.comment_mode(cfg["comment_on_existing"]) != "comment"):
         logger.info("autofile: already filed bug %s for %r on %s (from %s) — not filing "
                     "again for %s", prior_sig.get("bug") or "?", signature, channel or "?",
                     prior_sig.get("uuid") or "?", uuid)
@@ -1884,6 +1907,15 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     if meta_bugs:
         logger.info("autofile: open bug(s) %s reference this signature but are [meta] trackers "
                     "— not a venue for a crash report", [b["id"] for b in meta_bugs])
+    # NO OPEN BUG on the signature in this application, for an `actionable` filing: an open bug
+    # means someone can already act, and this filing exists only to put a crash in front of
+    # someone. Decided whatever the channel's `comment_on_existing` says, with metas and other
+    # applications excluded as everywhere else; `bug` names the venue, as on every decline that
+    # is about one.
+    if actionable and existing:
+        return {"filed": False, "bug": existing[0]["id"],
+                "skipped": "open bug {} exists; an actionable crash is filed only where no bug "
+                           "is".format(existing[0]["id"])}
     # (mode/comment_allowed/withheld are resolved above, right after `cfg`.)
     # THREE MODES, not a boolean (``config.COMMENT_ON_EXISTING``). ``skip`` is what ``False``
     # always DID -- no comment AND no new bug, decided before anything asks whether that bug

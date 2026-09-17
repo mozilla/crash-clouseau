@@ -530,6 +530,31 @@ def fetch_signature_stats(uuid, info):
 _HARDWARE_NOTE_LIFT = 2.0
 
 
+def build_signature_since_note(corroborations, buildid=None):
+    """The onset line of an ``actionable`` bug: the fact ``build_signature_age_note`` states,
+    said affirmatively. That note says "not new", a true sentence about what the crash is NOT;
+    this bug argues only from what the crash IS (Calixte, 2026-09-17: "no need to say what this
+    bug isn't"). Same unbounded clock, same rename caveat, ``""`` when nothing is known."""
+    from crashclouseau import sigage
+
+    c = corroborations or {}
+    ever = c.get("signature_first_seen_ever")
+    age_ever = c.get("signature_age_days_ever")
+    drift = c.get("signature_clock_drift_days")
+    if c.get("signature_rename_suspected") and ever and drift is not None:
+        return ("Socorro first recorded this signature in build {} ({}); crash-stats holds "
+                "reports of the same crash on builds up to {:.0f} days older than that, under an "
+                "earlier name.".format(ever, sigage.buildid_day(ever), abs(drift)))
+    if ever and age_ever is not None:
+        if str(ever) == str(buildid):
+            return "This signature's first report anywhere is in the build above."
+        when = ("less than a day" if age_ever < 1
+                else "{:.0f} days".format(age_ever))
+        return ("This signature has been reported since build {} ({}), {} before the build "
+                "above.".format(ever, sigage.buildid_day(ever), when))
+    return ""
+
+
 def build_signature_age_note(corroborations, buildid=None):
     """One sentence saying when this signature first appeared, or ``""``.
 
@@ -916,6 +941,58 @@ def build_exposer_note(corroborations):
         "it by changing timing, ordering or allocation? Both are useful answers, and an "
         "exposer is still recorded as `regressed_by`.".format(" " + addr if addr else "")
     )
+
+
+def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
+                             version=None, needinfo=None, author_display=None,
+                             max_frames=_MAX_PREVIEW_FRAMES):
+    """The SINGLE comment an ``actionable`` bug opens with -- a crash filed on its own facts,
+    with no regressor claimed (Calixte, 2026-09-17). Every line states what IS:
+
+    1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
+    2. how much this signature is crashing, and since which build;
+    3. **This bug looks actionable because:** the verdict's mechanism and consistency
+       statements, which the prompt asks for as affirmative facts (what fails, where, under
+       which condition, what to look at first), and where the failing code comes from -- the
+       origin changeset by blame, named for routing, accused of nothing;
+    4. the code references, the ask, the provenance footer.
+
+    Deliberately ABSENT, because each says what the crash is not or hedges a claim this bug
+    does not make: the skeptic block, the dissent note, the exposer / stale / trend / hardware
+    notes, the "Starting point -- NOT a suspected cause" paragraph and the "% worth
+    investigating" phrase (no calibration exists for this verdict)."""
+    uuid = (uuid_info or {}).get("uuid", "")
+    channel = (uuid_info or {}).get("channel")
+    info = dict(uuid_info or {})
+    if version:
+        info["version"] = version
+    verdict = (dossier or {}).get("verdict") or {}
+    candidate = (dossier or {}).get("candidate") or {}
+    facts = []
+    for claim in (verdict.get("mechanism"), verdict.get("consistency")):
+        statement = ((claim or {}).get("statement") or "").strip()
+        if statement:
+            facts.append("- " + statement)
+    if candidate.get("node"):
+        link = changeset_links(candidate["node"], channel, candidate.get("git_commit") or "")
+        if candidate.get("bug"):
+            link += " (bug {})".format(candidate["bug"])
+        who = author_display or candidate.get("author") or ""
+        facts.append("- The failing code comes from {}{}.".format(
+            link, " by {}".format(who) if who else ""))
+    because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
+    sections = [
+        "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
+        build_reason_block(details),
+        build_frames_block(stack, max_frames=max_frames, details=details),
+        build_stats_sentence(first, stats, info),
+        build_signature_since_note((dossier or {}).get("corroborations"), info.get("buildid")),
+        because,
+        build_code_references(verdict, channel),
+        needinfo,
+        _provenance(channel),
+    ]
+    return _unbacktick_bug_refs("\n\n".join(s for s in sections if s))
 
 
 def build_bug_comment(
@@ -2300,6 +2377,12 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # today, so `product=` changes nothing for Firefox).
     policy = config.get_agent_autofile(channel, product=uuid_info.get("product"))
     suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
+    # AN `actionable` VERDICT CLAIMS NO REGRESSION, whatever the window says about its ORIGIN
+    # changeset (2026-09-17): no `regression` keyword, no `regressed_by`, no release marks (the
+    # prefix and the tracking ask both say "new regression"), and its own affirmative opener.
+    actionable = ((dossier.get("verdict") or {}).get("decision")) == "actionable"
+    if actionable:
+        suspected_regression = False
     # May the bug make a STRUCTURED claim about the regressor at all: a candidate from outside
     # this build's pushlog window is named in the prose and nowhere else.
     link_regressor = bool(candidate and candidate.get("bug") and suspected_regression)
@@ -2316,8 +2399,13 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
         # these bugs searchable/dedupable alongside Socorro-filed ones. Capped at BMO's
         # 255-character limit, which 1.3% of signatures exceed — see ``bug_title``.
-        "title": bug_title(uuid_info.get("signature"), prefix=policy.get("summary_prefix") or ""),
-        "comment": build_bug_comment(
+        "title": bug_title(uuid_info.get("signature"),
+                           prefix="" if actionable else (policy.get("summary_prefix") or "")),
+        "comment": build_actionable_comment(
+            uuid_info, stack, dossier, details=fetch_crash_reason(uuid), stats=stats,
+            first=first, version=version, needinfo=_needinfo_line(person),
+            author_display=_person_display(person),
+        ) if actionable else build_bug_comment(
             uuid_info,
             stack,
             dossier,
@@ -2365,7 +2453,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # The tracking NOMINATION, release only: `cf_tracking_firefox<major>` = ? for the crash's
         # own version, set by the filer in its own PUT after the create. `None` everywhere else.
         "tracking_flag": (_tracking_flag(version, channel)
-                          if policy.get("nominate_tracking") else None),
+                          if policy.get("nominate_tracking") and not actionable else None),
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).

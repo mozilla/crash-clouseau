@@ -78,6 +78,14 @@ class FailureClass(str, Enum):
 class Decision(str, Enum):
     strong_evidence = "strong-evidence"
     lead = "lead"
+    # A crash worth filing on its own facts (Calixte, 2026-09-17): the mechanism is ESTABLISHED
+    # (a cited line and the condition that fires it), the failing code has an owner, and no
+    # changeset is claimed as the cause. ``candidate`` is that code's ORIGIN by blame -- how the
+    # owner and the product::component are found -- and is accused of nothing. Born from crash
+    # 0015b3bf (CheckLogMessage, release, 75-day-old signature): two runs on the same evidence
+    # said culprit 85 then abstain 25, because neither box fit. See ``Verdict._consistency_rule``
+    # and ``Dossier._actionable_needs_an_origin``.
+    actionable = "actionable"
     abstain = "abstain"
 
 
@@ -646,6 +654,17 @@ class Verdict(BaseModel):
             # people after noise.
             if self.confidence == Confidence.high:
                 self.confidence = Confidence.probable
+        elif self.decision == Decision.actionable:
+            # THE CLAIM IS THE MECHANISM, so it must be cited; nothing else is asserted (no
+            # causal link, no regression). ``high`` is clamped as a lead's is: no deterministic
+            # corroborator applies here, and ``probable`` -- the filing floor -- is "the skeptic
+            # could not contradict it". A stray ``abstain_reason`` is dropped rather than fatal:
+            # a descriptive field the model should not have filled must not destroy a verdict.
+            if self.mechanism is None or not self.mechanism.citations:
+                raise ValueError("actionable requires a cited mechanism claim")
+            if self.confidence == Confidence.high:
+                self.confidence = Confidence.probable
+            self.abstain_reason = None
         elif self.decision == Decision.abstain:
             if not self.abstain_reason:
                 raise ValueError("abstain requires an abstain_reason")
@@ -720,6 +739,29 @@ class Dossier(BaseModel):
                 c.node, bug
             )
         )
+
+    @model_validator(mode="after")
+    def _actionable_needs_an_origin(self):
+        """An ``actionable`` verdict routes its bug off ``candidate`` -- the ORIGIN of the failing
+        code by blame gives the owner to ask and the product::component. Without one there is a
+        mechanism and nobody to hand it to, which is exactly ``pre_existing``: "you DID find the
+        mechanism and it is old". A soft rewrite, never an error, so the cited evidence stays on
+        the page. Runs BEFORE ``_skeptic_veto`` (definition order), which then sees an abstain."""
+        v = self.verdict
+        if v is None or v.decision != Decision.actionable:
+            return self
+        if self.candidate is not None and self.candidate.node:
+            return self
+        self.verdict = Verdict(
+            decision=Decision.abstain,
+            confidence=Confidence.low,
+            abstain_reason="mechanism established, but no origin changeset was named for the "
+                           "failing code, so there is nobody to route it to",
+            abstain_kind=AbstainKind.pre_existing,
+            mechanism=v.mechanism,
+            consistency=v.consistency,
+        )
+        return self
 
     @model_validator(mode="after")
     def _skeptic_veto(self):
@@ -803,18 +845,21 @@ class Dossier(BaseModel):
                     abstain_kind=AbstainKind.noise,
                 )
         # (1b) A skeptic fail on a model-emitted lead = noise -> abstain (guardrail teeth).
-        elif v.decision == Decision.lead and binding:
+        # The same teeth on ``actionable``: there the claim under test is the mechanism, and
+        # a contradicted mechanism is nothing to file (the skeptic prompt says which claim
+        # that verdict puts under test, so a window or timing objection is not a ``fail``).
+        elif v.decision in (Decision.lead, Decision.actionable) and binding:
             self.verdict = Verdict(
                 decision=Decision.abstain,
                 confidence=Confidence.low,
-                abstain_reason="skeptic flagged this lead as noise / unrelated "
-                               "(failed: {})".format(", ".join(binding) or "?"),
+                abstain_reason="skeptic flagged this {} as noise / unrelated "
+                               "(failed: {})".format(v.decision.value, ", ".join(binding) or "?"),
                 abstain_kind=AbstainKind.noise,
             )
         # (1c) The only fails left rest on a configure-switch claim, which the deterministic
         # compiled-out gate decides. Keep the lead and RECORD it, so a rule whose whole
         # failure mode is a false abstain is countable instead of invisible.
-        elif v.decision == Decision.lead and (unbound or presence):
+        elif v.decision in (Decision.lead, Decision.actionable) and (unbound or presence):
             if unbound:
                 self.corroborations = {
                     **(self.corroborations or {}),

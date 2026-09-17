@@ -238,12 +238,15 @@ def abstain_calibration(cases, results):
 # Phase-2 calibration: per-case rows + precision-first threshold/reliability.
 # --------------------------------------------------------------------------- #
 def _reported(dossier):
-    """A non-abstain, non-errored verdict = a lead/strong the pipeline points a human at.
-    (A reported culprit-absent negative, or a reported case that missed the true regressor,
-    is a false-investigate — the precision-first metric that gates the report threshold.)"""
+    """A non-abstain, non-errored verdict = a lead/strong/actionable the pipeline points a
+    human at. (A reported culprit-absent negative, or a reported case that missed the true
+    regressor, is a false-investigate — the precision-first metric that gates the report
+    threshold. An ``actionable`` names no regressor, so on a regressor-labelled corpus it counts
+    as reported and never as a regressor hit.)"""
     if not (dossier and dossier.verdict):
         return False
-    return dossier.verdict.decision in (Decision.strong_evidence, Decision.lead)
+    return dossier.verdict.decision in (
+        Decision.strong_evidence, Decision.lead, Decision.actionable)
 
 
 def _confidence_value(dossier):

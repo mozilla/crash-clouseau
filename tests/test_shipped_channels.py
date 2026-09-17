@@ -265,7 +265,7 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
             self.assertEqual(overlay_diff(), {"comment_on_existing": "skip"})
         self.assertEqual((beta["min_confidence"], beta["verdicts"], beta["needinfo"]),
-                         (70, ["lead", "culprit"], True))
+                         (70, ["lead", "culprit", "actionable"], True))
         # No argument == nightly, byte for byte. This is what keeps the four existing
         # `return_value=` mocks of `get_agent_autofile` (test_autofile.py:86,125,1004,1457;
         # test_bit_flip_gate.py:235; test_bad_machine_gate.py:180,185) honest after the

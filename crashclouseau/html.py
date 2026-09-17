@@ -51,13 +51,13 @@ def crashstack():
         ui = (evidence or {}).get("ui") or {}
         has_experts = bool(((evidence or {}).get("dossier") or {}).get("area_experts"))
         show_evidence = bool(evidence and (
-            vt == "culprit" or (vt == "lead" and ui.get("show_lead", True)) or (has_experts and ui.get("show_experts", True)) or (vt == "abstain" and ui.get("show_abstain"))
+            vt in ("culprit", "actionable") or (vt == "lead" and ui.get("show_lead", True)) or (has_experts and ui.get("show_experts", True)) or (vt == "abstain" and ui.get("show_abstain"))
         ))
         # Informative "bug we'd file" preview (eval phase): only when the agent found a
         # regressor to file against (culprit/lead). Best-effort — a lookup failure must
         # never 500 the page.
         bug_preview = None
-        if show_evidence and vt in ("culprit", "lead"):
+        if show_evidence and vt in ("culprit", "lead", "actionable"):
             try:
                 bug_preview = report_bug.build_bug_preview(
                     uuid_info, stack, evidence.get("dossier") or {}
@@ -70,7 +70,7 @@ def crashstack():
         # preview, same best-effort rule: this asks BMO, and a lookup failure must not 500 the
         # page or hide the preview.
         filing = None
-        if show_evidence and vt in ("culprit", "lead"):
+        if show_evidence and vt in ("culprit", "lead", "actionable"):
             try:
                 filing = _filing_status(uuid, uuid_info, evidence)
             except Exception:

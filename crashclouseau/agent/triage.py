@@ -1051,7 +1051,9 @@ _OLD_SIGNATURE_GUIDANCE = (
     " exactly that (bug 2061960: the signature was 326 days old, and the developer we named pushed"
     " the fix). So the claim worth making here is what a change did to a crash that was ALREADY"
     " HAPPENING — a new caller, a newly reachable path, a higher rate — and not that it introduced"
-    " it. If you cannot say which, say so."
+    " it. If you cannot say which, say so. And if you cannot say which but you HAVE established"
+    " the mechanism — the cited line and the condition that fires it — report the crash as"
+    " `actionable`, with that line's origin from blame as the candidate, rather than abstaining."
 )
 
 _NEW_SIGNATURE_GUIDANCE = (
@@ -1876,7 +1878,10 @@ def _unexplained_rise_lines(crash: dict) -> list[str]:
         "a wrong one costs them the whole analysis.",
         "  WHAT IS WORTH WRITING when you have no changeset: what is failing and where "
         "(component, subsystem, the crashing call path), what the rate did, what you searched "
-        "and ruled out, and what a person who owns that code should look at first.",
+        "and ruled out, and what a person who owns that code should look at first. When what "
+        "is failing is ESTABLISHED (a cited line and the condition that fires it), that is an "
+        "`actionable` verdict with the line's origin from blame as the candidate, not an "
+        "abstain.",
         "  BUT AN EMPTY ANSWER IS STILL THE RIGHT ONE when the crash is not ours to fix. If "
         "the fault is inside a third-party or closed-source module (a graphics driver, a CDM, "
         "an OS library), or the stack is unsymbolicated vendor code, or this is memory "
