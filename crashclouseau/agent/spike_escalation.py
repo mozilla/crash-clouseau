@@ -1269,16 +1269,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                     "a memory-safety fault and that bug is public._".format(
                         preview["comment"], public_venue_declined))
             email = preview.get("needinfo_email") if config.get_agent_autofile(channel)["needinfo"] else ""
-            payload = {k: v for k, v in preview.items()
-                       if k in ("product", "component", "version", "type", "keywords",
-                                "cf_crash_signature", "groups", "cc")}
-            for k in ("groups", "cc"):
-                if not payload.get(k):
-                    payload.pop(k, None)
-            payload["summary"] = preview["title"]
-            payload["description"] = preview["comment"]
-            if email:
-                payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
+            payload = bugzilla_apply._create_payload(preview, email)
             bug_id, dropped = bugzilla_apply._create_bug_keeping_the_bug(payload, token)
             if dropped:
                 result["needinfo_dropped"] = email

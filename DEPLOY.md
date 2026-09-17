@@ -97,6 +97,10 @@ Several things are automated by the repo now; the rest are one-time app setup.
      unattended as the header describes. "Do NOT set a Bugzilla token (observe-only)" stood here
      until 2026-09-15 and had been false since the first filing; the product-level way to
      observe without writing is a per-product hold (Fenix, below), not a missing token.
+     The account is in `canconfirm` (granted 2026-09-17), so a bug it files is created `NEW`
+     / ever-confirmed instead of waiting on BugBot's crash-signature rule (5 h to 3 days).
+     Should the group ever be lost nothing fails: BMO silently files UNCONFIRMED and BugBot
+     confirms later, as before.
 3. **Scale every dyno** (only `web` auto-starts; the rest default to 0):
    ```
    heroku ps:scale web=1 worker=1 agentworker=1 clock=1

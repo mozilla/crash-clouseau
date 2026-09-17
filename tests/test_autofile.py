@@ -1492,6 +1492,13 @@ class TestSignatureMatching(_Base):
         for leaked in ("title", "comment", "needinfo", "needinfo_email"):
             self.assertNotIn(leaked, p)
 
+    def test_a_filed_bug_is_created_confirmed(self):
+        # `clouseau-bot` is in `canconfirm` (2026-09-17). Bugzilla derives "Ever confirmed"
+        # from the status, so `status: NEW` on the create is the whole change; bug 2071727
+        # comment 1 is the BugBot confirmation it replaces, 10 h after the filing.
+        self._file()
+        self.assertEqual(self.created[0]["status"], "NEW")
+
     def test_the_outcome_is_recorded_for_audit_and_idempotence(self):
         self._file()
         uuid, info = self.filed[0]

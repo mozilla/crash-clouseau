@@ -341,6 +341,38 @@ def _nominate_tracking(bug_id, flag, token):
     return None
 
 
+# The preview keys a create posts. `groups` and `cc` are in this tuple, and a test asserts they
+# reach the POSTED BODY rather than merely the preview. A key the preview sets and this filter
+# drops is a SILENT no-op -- that is how `blocks` and `regressed_by` were dead for weeks -- and
+# for `groups` the silent no-op publishes a use-after-free.
+_CREATE_KEYS = ("product", "component", "version", "type", "keywords",
+                "cf_crash_signature", "groups", "cc")
+
+
+def _create_payload(preview, email):
+    """The body ``POST /rest/bug`` gets for *preview*, for BOTH filers (``autofile_bug`` and
+    the spike escalation's). The two used to build it by hand, side by side, and a key added to
+    one whitelist and not the other is exactly the silent no-op ``_CREATE_KEYS`` warns about."""
+    payload = {k: v for k, v in preview.items() if k in _CREATE_KEYS}
+    # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
+    # byte-identical to what it was before this existed.
+    for k in ("groups", "cc"):
+        if not payload.get(k):
+            payload.pop(k, None)
+    payload["summary"] = preview["title"]
+    payload["description"] = preview["comment"]
+    # Created CONFIRMED. `clouseau-bot` has been in `canconfirm` since 2026-09-17; before that
+    # every filing sat UNCONFIRMED until BugBot's crash-signature rule confirmed it, 5 h to 3
+    # days later (2069800, 2067456 -- bug 2071727 comment 1 is what that looks like). Bugzilla
+    # derives `is_confirmed` ("Ever confirmed") from the status, so this one key sets both. It
+    # can never cost a bug: an account outside the group is not refused, it silently gets
+    # UNCONFIRMED (proved on allizom, 2026-09-07), and BugBot confirms it later as before.
+    payload["status"] = "NEW"
+    if email:
+        payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
+    return payload
+
+
 def _create_bug_keeping_the_bug(payload, token):
     """``(bug_id, needinfo_dropped)`` — create the bug, and never let the needinfo cost it.
 
@@ -2170,22 +2202,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 # this rule is next audited.
                 result["needinfo_already_set"] = email
         else:
-            # `groups` and `cc` are in this tuple, and a test asserts they reach the POSTED
-            # BODY rather than merely the preview. A key the preview sets and this filter drops
-            # is a SILENT no-op -- that is how `blocks` and `regressed_by` were dead for weeks --
-            # and for `groups` the silent no-op publishes a use-after-free.
-            payload = {k: v for k, v in preview.items()
-                       if k in ("product", "component", "version", "type", "keywords",
-                                "cf_crash_signature", "groups", "cc")}
-            # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
-            # byte-identical to what it was before this existed.
-            for k in ("groups", "cc"):
-                if not payload.get(k):
-                    payload.pop(k, None)
-            payload["summary"] = preview["title"]
-            payload["description"] = preview["comment"]
-            if email:
-                payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
+            payload = _create_payload(preview, email)
             bug_id, dropped = _create_bug_keeping_the_bug(payload, token)
             if dropped:
                 result["needinfo_dropped"] = email

@@ -189,6 +189,7 @@ class TestTheFilingDoor(unittest.TestCase):
              mock.patch.object(ba.models.Dossier, "filed_bugs_since", return_value=0), \
              mock.patch.object(ba, "_open_bugs_for_signature", return_value=[]), \
              mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \
+             mock.patch.object(ba, "_known_on_train_bug", return_value=None), \
              mock.patch.object(report_bug, "build_bug_preview", return_value=None), \
              mock.patch.object(ba.config, "get_bugzilla_token", return_value="tok"):
             res = ba.autofile_bug(
@@ -373,6 +374,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
              mock.patch.object(ba.models.Dossier, "record_filed_bug"), \
              mock.patch.object(ba, "_open_bugs_for_signature", return_value=[]), \
              mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \
+             mock.patch.object(ba, "_known_on_train_bug", return_value=None), \
              mock.patch.object(ba, "_create_bug_keeping_the_bug", side_effect=_create), \
              mock.patch.object(ba, "_link_blockers", return_value=[]), \
              mock.patch.object(ba, "_link_regressed_by", side_effect=_regress), \
@@ -434,6 +436,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
              mock.patch.object(ba.models.Dossier, "record_filed_bug"), \
              mock.patch.object(ba, "_open_bugs_for_signature", return_value=[]), \
              mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \
+             mock.patch.object(ba, "_known_on_train_bug", return_value=None), \
              mock.patch.object(ba, "_create_bug_keeping_the_bug",
                                return_value=(2099998, False)), \
              mock.patch.object(ba, "_link_blockers", return_value=[]), \

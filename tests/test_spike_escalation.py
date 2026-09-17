@@ -455,6 +455,9 @@ class TestFiling(_FilerBase):
         payload = self.created[0]
         self.assertEqual(payload["summary"], "Crash in [@ mozilla::Foo::Bar]")
         self.assertEqual(payload["product"], "Core")
+        # Same body builder as the ordinary filer (`bugzilla_apply._create_payload`), so a
+        # spike filing is created confirmed too.
+        self.assertEqual(payload["status"], "NEW")
         self.assertEqual(payload["cf_crash_signature"], "[@ mozilla::Foo::Bar]")
         self.assertEqual(payload["version"], "Trunk")
         self.assertIn("regression", payload["keywords"])
