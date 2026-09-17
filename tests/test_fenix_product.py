@@ -287,7 +287,7 @@ class TestFenixFilingPolicy(unittest.TestCase):
             self.assertTrue(nightly["enabled"])
             self.assertTrue(fenix["enabled"])
             self.assertEqual({k: v for k, v in fenix.items() if nightly[k] != v},
-                             {"comment_on_existing": "skip", "daily_cap": 2})
+                             {"comment_on_existing": "skip"})
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
             self.assertFalse(config.get_agent_autofile("nightly", "Fenix")["enabled"])
             self.assertFalse(config.get_agent_autofile("nightly", "Firefox")["enabled"])
@@ -343,7 +343,7 @@ class TestFenixFilingPolicy(unittest.TestCase):
                 pol = config.get_agent_autofile("beta", "Fenix")
                 self.assertEqual((pol["comment_on_existing"], pol["daily_cap"]), ("skip", 1))
                 # Firefox untouched by a Fenix entry.
-                self.assertEqual(config.get_agent_autofile("nightly", "Firefox")["daily_cap"], 10)
+                self.assertIsNone(config.get_agent_autofile("nightly", "Firefox")["daily_cap"])
             with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
                 self.assertFalse(config.get_agent_autofile("nightly", "Fenix")["enabled"])
 

@@ -1103,7 +1103,8 @@ def get_agent_autofile(channel=None, product=None):
     ``min_confidence`` 70 is the ``probable`` rung — a lead the model rated strongly or that
     a deterministic check corroborated — measured at ~3 crashes/day, versus ~7.6/day if it
     were lowered to the ``medium`` rung of 50. ``daily_cap`` bounds the damage a bad gate
-    can do in one night; the pipeline itself has no such bound."""
+    can do in one night; the pipeline itself has no such bound. ``null`` is no cap at all,
+    the shipped value on every channel since 2026-09-17 (the knob is kept)."""
     a = get_agent().get("autofile", {})
     # THE PER-CHANNEL OVERLAY, merged BEFORE the per-key reads below so every one of the twelve
     # gates in ``autofile_bug`` is covered by one argument. ``channel=None`` returns today's dict

@@ -156,6 +156,12 @@ class TestGates(_Base):
         self.assertEqual((res["bug"], res["mode"]), (999, "new_bug"))
         self.assertEqual(len(self.created), 1)
 
+    def test_a_null_cap_is_no_cap(self):
+        # `daily_cap: null` (2026-09-17): the bound is off, the knob stays -- a number re-arms it.
+        bugzilla_apply.models.Dossier.filed_bugs_since.return_value = 999
+        self.assertTrue(self._file(daily_cap=None)["filed"])
+        self.assertEqual(self._file(daily_cap=2)["skipped"], "daily cap 2 reached on nightly")
+
     def test_disabled_is_the_kill_switch(self):
         res = self._file(enabled=False)
         self.assertFalse(res["filed"])

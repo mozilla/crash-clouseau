@@ -4,7 +4,9 @@ Checklist for standing up a fresh Heroku app running the evidence agent.
 
 **"Nightly-only, observe-only" is out of date and has been for weeks.** The deployment this
 document describes runs **nightly, beta AND release** triage (`AGENT_CHANNELS="nightly beta
-release"`) and **files bugs unattended on all three** (`AUTOFILE_BUGS=1`): nightly at
+release"`) and **files bugs unattended on all three** (`AUTOFILE_BUGS=1`). **Every
+`daily_cap` is `null` = unbounded since 2026-09-17** (the knob is kept; a number re-arms it) --
+the caps below are what each channel shipped with: nightly at
 `daily_cap` 10 with `comment_on_existing: "comment"` (measured at 2.68 filings/day over 30
 days); beta at cap 3 with `skip`, held from 2026-08-26 and **armed 2026-09-07** after a
 fortnight of 40 held runs, 0 filed and 2 at the rung (both the QuotaManager spike a human had
@@ -45,7 +47,9 @@ Several things are automated by the repo now; the rest are one-time app setup.
   ~20-min triage runs never block the ingestion `worker` (queues `high default low`).
 - **Cost controls** — the analysed channels (`agent.channels`, overridable per deploy-free
   env var `AGENT_CHANNELS`), one run per proto-signature cluster **per channel** (dedup),
-  a per-channel `autofile.daily_cap`, and a **sonnet** principal tier are all in
+  a per-channel `autofile.daily_cap` (all `null` = no cap since 2026-09-17: at 2 on release it
+  dropped a culprit at 85 behind two lesser filings, and a capped finding is never retried; a
+  number re-arms it), and a **sonnet** principal tier are all in
   `config/global.json`.
 - **Ignored signatures** — `ignored_signatures` in `config/global.json`: deliberate test
   crashes (about:crashparent / about:crashcontent both sign as

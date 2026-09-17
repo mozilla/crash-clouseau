@@ -310,7 +310,7 @@
             "min_confidence": 70,
             "verdicts": ["lead", "culprit"],
             "needinfo": true,
-            "daily_cap": 10,
+            "daily_cap": null,
             "comment_on_existing": "comment",
             "default_channel": "nightly",
             "default_product": "Firefox",
@@ -320,7 +320,7 @@
                 {
                     "enabled": true,
                     "comment_on_existing": "skip",
-                    "daily_cap": 2
+                    "daily_cap": null
                 }
             },
             "channels":
@@ -329,13 +329,13 @@
                 {
                     "enabled": true,
                     "comment_on_existing": "skip",
-                    "daily_cap": 3
+                    "daily_cap": null
                 },
                 "release":
                 {
                     "enabled": true,
                     "comment_on_existing": "skip",
-                    "daily_cap": 2,
+                    "daily_cap": null,
                     "summary_prefix": "[new in release]",
                     "nominate_tracking": true
                 },
@@ -343,7 +343,7 @@
                 {
                     "enabled": true,
                     "comment_on_existing": "skip",
-                    "daily_cap": 2,
+                    "daily_cap": null,
                     "summary_prefix": "[new in esr]",
                     "nominate_tracking": true
                 }

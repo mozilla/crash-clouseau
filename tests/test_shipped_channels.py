@@ -173,7 +173,7 @@ class TestShippedAgentChannels(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
             self.assertTrue(config.get_agent_autofile("release")["enabled"])
             self.assertEqual(config.get_agent_autofile("release")["comment_on_existing"], "skip")
-            self.assertEqual(config.get_agent_autofile("release")["daily_cap"], 2)
+            self.assertIsNone(config.get_agent_autofile("release")["daily_cap"])
             self.assertTrue(config.get_agent_autofile("nightly")["enabled"])
         # ...and the global kill switch still beats the per-channel arm.
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
@@ -187,7 +187,7 @@ class TestShippedAgentChannels(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
             esr = config.get_agent_autofile("esr153")
             self.assertTrue(esr["enabled"])
-            self.assertEqual((esr["comment_on_existing"], esr["daily_cap"]), ("skip", 2))
+            self.assertEqual((esr["comment_on_existing"], esr["daily_cap"]), ("skip", None))
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
             self.assertFalse(config.get_agent_autofile("esr153")["enabled"])
 
@@ -197,7 +197,10 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
     `agent.autofile`."""
 
     def test_the_shipped_autofile_policy_per_channel(self):
-        """nightly = comment / 10 a day; beta = skip / 3 a day. Both numbers are decisions.
+        """nightly = comment; beta = skip. Since 2026-09-17 every `daily_cap` is `null`, i.e.
+        NO cap: the knob is kept, the bound is off (at 2 on release it dropped a culprit at 85
+        behind two lesser filings, and a capped finding is never revisited). The paragraph
+        below is why the numbers were 10 and 3 while they stood.
 
         `daily_cap` 3 IS NOT A THROUGHPUT CONSTRAINT. Beta's projected filing rate is
         0.008-0.048 filings/day — one bug every 21 to 125 days — so 3 can only ever bind on a
@@ -226,12 +229,12 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         nightly = config.get_agent_autofile("nightly")
         beta = config.get_agent_autofile("beta")
         self.assertEqual(nightly["comment_on_existing"], "comment")
-        self.assertEqual(nightly["daily_cap"], 10)
+        self.assertIsNone(nightly["daily_cap"])
         self.assertEqual(beta["comment_on_existing"], "skip")
-        self.assertEqual(beta["daily_cap"], 3)
+        self.assertIsNone(beta["daily_cap"])
         release = config.get_agent_autofile("release")
         self.assertEqual(release["comment_on_existing"], "skip")
-        self.assertEqual(release["daily_cap"], 2)
+        self.assertIsNone(release["daily_cap"])
         # Release's two marks (2026-09-07): the title prefix and the tracking nomination. A
         # release bug reads as one in any list, and release management meets it in the
         # tracking queue. Only release has either.
@@ -258,10 +261,9 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         with mock.patch.dict(os.environ):
             os.environ.pop("AUTOFILE_BUGS", None)
             self.assertEqual(overlay_diff(),
-                             {"enabled": True, "comment_on_existing": "skip", "daily_cap": 3})
+                             {"enabled": True, "comment_on_existing": "skip"})
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
-            self.assertEqual(overlay_diff(),
-                             {"comment_on_existing": "skip", "daily_cap": 3})
+            self.assertEqual(overlay_diff(), {"comment_on_existing": "skip"})
         self.assertEqual((beta["min_confidence"], beta["verdicts"], beta["needinfo"]),
                          (70, ["lead", "culprit"], True))
         # No argument == nightly, byte for byte. This is what keeps the four existing
@@ -341,8 +343,8 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
             self.assertTrue(firefox["enabled"])
             self.assertTrue(fenix["enabled"])
             self.assertEqual((firefox["comment_on_existing"], firefox["daily_cap"]),
-                             ("comment", 10))
-            self.assertEqual((fenix["comment_on_existing"], fenix["daily_cap"]), ("skip", 2))
+                             ("comment", None))
+            self.assertEqual((fenix["comment_on_existing"], fenix["daily_cap"]), ("skip", None))
 
     def test_every_channel_is_armed_and_a_per_channel_false_still_vetoes(self):
         """WHAT IS SHIPPED: with `AUTOFILE_BUGS=1` live in production, nightly, beta AND release

@@ -95,8 +95,9 @@ _BETA_INFO = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "beta",
 
 # What the shipped beta overlay says, as a dict, so a test can state the policy it exercises
 # without re-reading the file. `test_default_and_nightly_are_identical` checks it against
-# config/global.json.
-_BETA_POLICY = {"comment_on_existing": "skip", "daily_cap": 3}
+# config/global.json. `daily_cap` is `null` = no cap since 2026-09-17 (it was 3); the tests
+# about the cap MECHANISM pass a number explicitly.
+_BETA_POLICY = {"comment_on_existing": "skip", "daily_cap": None}
 
 
 def _unknown_overlay_keys():
@@ -620,7 +621,7 @@ class TestTheDailyCapIsPerChannel(_BetaBase):
         # The mirror: beta's own cap of 3 still binds, and it is beta's cap, not nightly's 10.
         self._reset()
         self._counter(beta=3, nightly=0)
-        res = self._file_beta(comment_on_existing="file_new")
+        res = self._file_beta(comment_on_existing="file_new", daily_cap=3)
         self.assertFalse(res["filed"])
         self.assertIn("daily cap 3", res["skipped"])
         self.assertIn("beta", res["skipped"])

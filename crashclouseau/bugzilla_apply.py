@@ -1783,11 +1783,16 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         recent = models.Dossier.filed_bugs_since(since, channel=channel, product=product)
     except Exception as exc:                                # pragma: no cover - defensive
         return {"filed": False, "skipped": "cap check failed: {}".format(exc)}
-    if recent >= cfg["daily_cap"]:
+    cap = cfg["daily_cap"]
+    # `null` in config is NO cap (Calixte, 2026-09-17). At 2 on release the bound dropped a
+    # culprit at 85 (0015b3bf, CheckLogMessage, no bug anywhere) behind two lesser filings, and
+    # a capped finding is never revisited: this gate runs before the venue search and nothing
+    # retries it. The knob stays -- a number here re-arms it without a code change.
+    if cap is not None and recent >= cap:
         logger.warning("autofile: daily cap %s reached for %s/%s (%s in 24h) — not filing for %s",
-                       cfg["daily_cap"], product or "?", channel or "?", recent, uuid)
+                       cap, product or "?", channel or "?", recent, uuid)
         return {"filed": False, "skipped": "daily cap {} reached on {}".format(
-            cfg["daily_cap"], channel or "?")}
+            cap, channel or "?")}
 
     token = config.get_bugzilla_token()
     if not token:

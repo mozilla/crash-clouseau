@@ -112,7 +112,7 @@ class TestTheShippedConfig(unittest.TestCase):
             self.assertTrue(config.get_agent_autofile("nightly", product="Firefox")["enabled"])
             fenix = config.get_agent_autofile("nightly", product="Fenix")
             self.assertTrue(fenix["enabled"])
-            self.assertEqual((fenix["comment_on_existing"], fenix["daily_cap"]), ("skip", 2))
+            self.assertEqual((fenix["comment_on_existing"], fenix["daily_cap"]), ("skip", None))
             with _held_fenix():
                 self.assertFalse(config.get_agent_autofile("nightly", product="Fenix")["enabled"])
 

@@ -155,7 +155,7 @@ class TestTheShippedChannels(unittest.TestCase):
                     pol = config.get_agent_autofile(line)
                     self.assertTrue(pol["enabled"])
                     self.assertEqual(pol["comment_on_existing"], "skip")
-                    self.assertEqual(pol["daily_cap"], 2)
+                    self.assertIsNone(pol["daily_cap"])
                     self.assertEqual(pol["summary_prefix"], "[new in esr]")
                     self.assertTrue(pol["nominate_tracking"])
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
