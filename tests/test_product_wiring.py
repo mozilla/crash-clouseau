@@ -229,16 +229,29 @@ class TestCrashstackPanel(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
 
-    def _get(self, evidence, pc=("Core", "DOM: Core & HTML"), nick="stransky", pop=None):
+    def _get(self, evidence, pc=("Core", "DOM: Core & HTML"), nick="stransky", pop=None,
+             open_bugs=(), bmo_down=False, prior=None, policy=None):
         # The bug-preview product::component + Bugzilla-nick lookups are networked; mock
         # Everything networked in the bug preview is mocked so the panel renders offline and
         # deterministically: product::component, the Bugzilla nick, Socorro's crash
         # reason/volume and the version lookup. The git sha comes from the candidate. The comment ITSELF is
         # composed for real from _stack() + the evidence.
         # authors_for -> {} makes the needinfo email come from the candidate author display.
+        # `open_bugs` / `bmo_down` / `prior` are the filing-status block's two lookups
+        # (`bugzilla_apply.open_venues`, one or two BMO searches, and
+        # `Dossier.already_filed_for_signature`, a DB read); `policy` overrides the channel's
+        # autofile config, which otherwise comes from config/global.json (nightly: comment).
+        venues = None if bmo_down else {"venues": list(open_bugs), "other_app": [], "metas": []}
+        autofile = mock.patch.object(config, "get_agent_autofile", return_value=policy) \
+            if policy is not None else mock.patch.object(config, "get_agent_autofile",
+                                                         wraps=config.get_agent_autofile)
         with mock.patch("crashclouseau.models.CrashStack.get_by_uuid",
                         return_value=(_stack(), _uuid_info())), \
                 mock.patch.object(bugzilla_apply, "build_evidence", return_value=evidence), \
+                mock.patch.object(bugzilla_apply, "open_venues", return_value=venues), \
+                mock.patch("crashclouseau.models.Dossier.already_filed_for_signature",
+                           return_value=prior), \
+                autofile, \
                 mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
                 mock.patch("crashclouseau.models.UUID.get_info",
                            return_value={"version": "155.0a1"}), \
@@ -265,6 +278,137 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertEqual(rv.status_code, 200)
         html = rv.get_data(as_text=True)
         self.assertNotIn("evidence-panel", html)
+
+    # ---- the filing-status block at the top of "Bug we ..." (html._filing_status) ----------
+
+    _HUMAN_BUG = {"id": 2072627, "product": "Core", "creation_time": "2026-09-16T13:29:25Z",
+                  "keywords": [], "regressed_by": []}
+
+    def test_a_declined_run_shows_the_existing_bug_not_a_promise(self):
+        """8ab28d1a, 2026-09-17: a culprit at 85 on release, declined by the daily cap, headed
+        "Bug we'll file (preview -- filed automatically when enabled)" while dmeehan's bug
+        2072627 had been open on the signature since the day before. The decline record cannot
+        name that bug -- the cap gate runs before the venue search -- so the page asks BMO and
+        says what it finds, beside what the filer actually did."""
+        ev = _evidence(verdict="culprit", confidence=85)
+        ev["filing_declined"] = {"skipped": "daily cap 2 reached on release",
+                                 "at": "2026-09-17T03:44:44+00:00", "channel": "release"}
+        skip = dict(config.get_agent_autofile("release"), enabled=True,
+                    comment_on_existing="skip", daily_cap=2)
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG], policy=skip).get_data(as_text=True)
+        self.assertIn("Bug we would have filed", html)
+        self.assertNotIn("filed automatically when enabled", html)
+        self.assertIn("<strong>Not filed:</strong> daily cap 2 reached on release", html)
+        self.assertIn("A bug already exists for this signature", html)
+        self.assertIn('show_bug.cgi?id=2072627" target="_blank" rel="noopener">bug 2072627</a>'
+                      " (Core, filed 2026-09-16)", html)
+        # ...and what the channel's policy would have done with it had the cap not fired
+        self.assertIn("never writes on an existing bug", html)
+        # the preview body is still there: the bug we WOULD have filed is what a triager
+        # compares against the one that exists
+        self.assertIn("Crash in [@ Foo::bar]", html)
+        self.assertNotIn("No open public bug", html)
+
+    def test_a_decline_that_names_its_bug_links_it(self):
+        ev = _evidence(verdict="lead", confidence=70)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["filing_declined"] = {"skipped": "open bug 2072627 exists", "bug": 2072627}
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG]).get_data(as_text=True)
+        self.assertIn("<strong>Not filed:</strong> open bug 2072627 exists &mdash; "
+                      '<a href="https://bugzilla.mozilla.org/show_bug.cgi?id=2072627"', html)
+
+    def test_a_filed_bug_is_shown_as_filed_and_not_listed_twice(self):
+        ev = _evidence()
+        ev["filed_bug"] = {"filed": True, "bug": 2072700, "mode": "new_bug",
+                           "needinfo": "jamie", "at": "2026-09-17T04:00:00+00:00"}
+        ours = dict(self._HUMAN_BUG, id=2072700, creation_time="2026-09-17T04:00:00Z")
+        html = self._get(ev, open_bugs=[ours]).get_data(as_text=True)
+        self.assertIn("<h3>Bug we filed</h3>", html)
+        self.assertIn('Filed as <a href="https://bugzilla.mozilla.org/show_bug.cgi?id=2072700"',
+                      html)
+        self.assertIn("on 2026-09-17. Needinfo: jamie.", html)
+        self.assertNotIn("Not filed", html)
+        # the bug we filed is the only open one: it is not ALSO "a bug that already exists"
+        self.assertNotIn("A bug already exists", html)
+        self.assertNotIn("No open public bug", html)
+
+    def test_a_comment_on_an_existing_bug_says_so(self):
+        ev = _evidence()
+        ev["filed_bug"] = {"filed": True, "bug": 2072627, "mode": "comment_on_existing"}
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG]).get_data(as_text=True)
+        self.assertIn("<h3>Bug we commented on</h3>", html)
+        self.assertIn("posted as a comment on <a href=\"https://bugzilla.mozilla.org/"
+                      'show_bug.cgi?id=2072627"', html)
+        self.assertNotIn("A bug already exists", html)
+
+    def test_a_rejected_write_is_a_rejection_not_a_promise(self):
+        ev = _evidence()
+        ev["filing_error"] = {"error": "400 Client Error: summary too long", "at": "x"}
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("Bug we tried to file", html)
+        self.assertIn("Bugzilla rejected it &mdash; <code>400 Client Error: summary too long"
+                      "</code>", html)
+
+    def test_a_run_with_no_record_says_so_and_no_open_bug_is_stated(self):
+        # Runs before 2026-09-07 recorded declines nowhere; a finished run with no record of
+        # any kind must not read as "filed" OR as "declined". (`AUTOFILE_BUGS` is unset in the
+        # test environment, so the armed channel is spelled out.)
+        armed = dict(config.get_agent_autofile("nightly"), enabled=True)
+        html = self._get(_evidence(), policy=armed).get_data(as_text=True)
+        self.assertIn("Bug we&rsquo;ll file <span class=\"muted\">(preview)</span>", html)
+        self.assertIn("No filing decision is recorded for this run.", html)
+        self.assertIn("No open public bug references this signature.", html)
+        self.assertNotIn("Not filed", html)
+
+    def test_a_disabled_channel_says_filing_is_off(self):
+        off = dict(config.get_agent_autofile("nightly"), enabled=False)
+        html = self._get(_evidence(), policy=off).get_data(as_text=True)
+        self.assertIn("Filing is off for nightly; nothing was filed.", html)
+
+    def test_bmo_unreachable_is_said_not_rendered_as_no_bug(self):
+        html = self._get(_evidence(), bmo_down=True).get_data(as_text=True)
+        self.assertIn("Bugzilla could not be asked whether a bug already exists", html)
+        self.assertNotIn("No open public bug", html)
+        self.assertNotIn("A bug already exists", html)
+
+    def test_our_own_earlier_filing_on_the_signature_is_named(self):
+        # Closed or restricted, the public search cannot see it; the DB can.
+        html = self._get(_evidence(), prior={"uuid": "0ther-uuid-1234", "bug": "2071111"}) \
+            .get_data(as_text=True)
+        self.assertIn("Clouseau already filed <a href=\"https://bugzilla.mozilla.org/"
+                      'show_bug.cgi?id=2071111"', html)
+        self.assertIn('from crash <a href="crashstack.html?uuid=0ther-uuid-1234">0ther-uu</a>',
+                      html)
+        self.assertNotIn("No open public bug", html)
+
+    def test_a_failed_prior_lookup_is_not_a_prior_filing(self):
+        # `already_filed_for_signature` fails CLOSED with a `{"skipped": ...}` sentinel.
+        html = self._get(_evidence(), prior={"skipped": "prior-filing lookup failed"}) \
+            .get_data(as_text=True)
+        self.assertNotIn("Clouseau already filed", html)
+
+    def test_a_declined_lead_with_no_candidate_still_shows_its_status(self):
+        # A mechanism lead has no preview (`build_bug_preview` is None without a candidate),
+        # and the filer declines it with "no candidate regressor to file against". The status
+        # block still renders -- there is a decision to show -- with no preview body under it.
+        ev = _evidence(verdict="lead", confidence=70)
+        ev["ui"]["lead_label"] = "LEAD"
+        ev["dossier"]["candidate"] = None
+        ev["filing_declined"] = {"skipped": "no candidate regressor to file against"}
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG]).get_data(as_text=True)
+        self.assertIn("Bug we would have filed", html)
+        self.assertIn("<strong>Not filed:</strong> no candidate regressor to file against", html)
+        self.assertIn("A bug already exists for this signature", html)
+        self.assertNotIn("Product :: Component", html)
+
+    def test_filing_status_failure_keeps_the_preview(self):
+        with mock.patch.object(html, "_filing_status", side_effect=RuntimeError("db gone")):
+            rv = self._get(_evidence())
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_data(as_text=True)
+        self.assertIn("Bug we&rsquo;ll file", body)
+        self.assertIn("Crash in [@ Foo::bar]", body)
+        self.assertNotIn("filed automatically when enabled", body)
 
     def test_culprit_panel_full(self):
         rv = self._get(_evidence())

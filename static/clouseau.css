@@ -635,3 +635,18 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
     margin: 1em 0;
 }
 .evidence.withheld h3 { margin-top: 0; color: #c0392b; }
+
+/* What the filer DID for this crash, at the top of crashstack.html's "Bug we ..." block:
+   green = filed or commented, amber = declined or rejected, blue = a bug already exists on the
+   signature -- which answers "did you file a bug?" more often than the run's own record does
+   (the daily-cap gate runs before the venue search, so a capped run never learned of it). */
+.filing-status {
+    margin: 0.3em 0 0.8em;
+    padding: 0.4em 0.8em;
+    border-left: 3px solid #999;
+    background-color: #f4f4f4;
+    font-size: 0.95em;
+}
+.filing-status.filed { border-left-color: #4c8c4a; background-color: #e8f2e8; }
+.filing-status.declined { border-left-color: #c05621; background-color: #fff8f2; }
+.filing-status.exists { border-left-color: #2b6cb0; background-color: #ecf3fb; }

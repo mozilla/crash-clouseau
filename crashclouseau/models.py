@@ -3570,6 +3570,15 @@ class Verdict(db.Model):
             "dossier": payload.get("dossier") or {},
             "actions": payload.get("actions") or [],
             "over_budget": bool(payload.get("over_budget")),
+            # What the autofiler DID, DECLINED and had REJECTED for this crash, verbatim
+            # (``record_filed_bug`` / ``record_filing_decline`` / ``record_filing_error``).
+            # crashstack.html read none of these until 2026-09-17 and headed every lead's
+            # preview "filed automatically when enabled": 8ab28d1a, a culprit at 85 on release
+            # that the daily cap had declined, sat under that line while a human's bug 2072627
+            # was open on its signature, and the page could say neither (``html._filing_status``).
+            "filed_bug": payload.get("filed_bug"),
+            "filing_declined": payload.get("filing_declined"),
+            "filing_error": payload.get("filing_error"),
             "status": d.status if d is not None else None,
             "cost_usd": (
                 float(d.cost_usd)

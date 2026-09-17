@@ -336,13 +336,70 @@
       </div>
       {% endif -%}
 
-      {# Informative preview of what Clouseau would do for this regressor, in order: file a
-         bug (title + recreated crash comment + resolved product::component), post the
-         analysis comment, then needinfo the regressor's author. The eventual flow does all
-         this automatically. #}
-      {% if bug_preview -%}
+      {# The bug for this regressor -- what the filer DID about it first, then the preview of
+         the bug itself (title + recreated crash comment + resolved product::component +
+         needinfo). `filing` (html._filing_status) says whether it was filed, commented,
+         declined or rejected, and lists the open bugs already on the signature, which the
+         run's record often cannot name: the cap gate runs before the venue search, so
+         8ab28d1a said "daily cap 2 reached on release" while a human's bug 2072627 was open.
+         Until 2026-09-17 this block was headed "filed automatically when enabled" for every
+         lead, filed or not. #}
+      {% if bug_preview or filing -%}
       <div class="evidence-section bug-preview">
-        <h3>Bug we&rsquo;ll file <span class="muted">(preview &mdash; filed automatically when enabled)</span></h3>
+        {%- set fl = filing or {} -%}
+        {%- set pol = fl.get('policy') or {} -%}
+        {%- set filed = fl.get('filed') -%}
+        {%- if filed -%}
+          {%- if filed.get('mode') == 'comment_on_existing' -%}
+        <h3>Bug we commented on</h3>
+        <p class="filing-status filed">The analysis was posted as a comment on <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>, which already tracked this signature.{% if filed.get('needinfo') %} Needinfo: {{ filed['needinfo']|e }}.{% endif %}</p>
+          {%- else -%}
+        <h3>Bug we filed</h3>
+        <p class="filing-status filed">Filed as <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>{% if filed.get('security_groups') %} (restricted){% endif %}{% if filed.get('at') %} on {{ filed['at'][:10]|e }}{% endif %}.{% if filed.get('needinfo') %} Needinfo: {{ filed['needinfo']|e }}.{% endif %}</p>
+          {%- endif -%}
+        {%- elif fl.get('error') -%}
+        <h3>Bug we tried to file <span class="muted">(preview &mdash; Bugzilla rejected the write)</span></h3>
+        <p class="filing-status declined"><strong>Not filed:</strong> Bugzilla rejected it &mdash; <code>{{ fl['error']['error']|e }}</code></p>
+        {%- elif fl.get('declined') -%}
+        <h3>Bug we would have filed <span class="muted">(preview &mdash; not filed)</span></h3>
+        <p class="filing-status declined"><strong>Not filed:</strong> {{ fl['declined']['reason']|e }}{% if fl['declined'].get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ fl['declined']['bug']|e }}" target="_blank" rel="noopener">bug {{ fl['declined']['bug']|e }}</a>{% endif %}</p>
+        {%- elif fl.get('undecided') -%}
+        <h3>Bug we&rsquo;ll file <span class="muted">(preview)</span></h3>
+        <p class="filing-status">{% if pol.get('enabled') %}No filing decision is recorded for this run.{% else %}Filing is off for {{ channel|e }}; nothing was filed.{% endif %}</p>
+        {%- else -%}
+        <h3>Bug we&rsquo;ll file <span class="muted">(preview)</span></h3>
+        {%- endif -%}
+        {#- THE BUGS ALREADY THERE, whatever this run did. `open_bugs` is None when BMO could
+            not be asked -- said out loud, because a silent "no bug" is the misreading this
+            block exists to prevent. `own_prior` is Clouseau's own filing from another crash,
+            which the public search cannot see once that bug is closed or restricted. -#}
+        {%- if filing -%}
+          {%- if fl.get('open_bugs') -%}
+        <p class="filing-status exists"><strong>A bug already exists for this signature:</strong>
+          {% for b in fl['open_bugs'] -%}
+          <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b['id']|e }}" target="_blank" rel="noopener">bug {{ b['id']|e }}</a>
+          {%- if b.get('product') or b.get('creation_time') %} ({% if b.get('product') %}{{ b['product']|e }}{% endif %}{% if b.get('product') and b.get('creation_time') %}, {% endif %}{% if b.get('creation_time') %}filed {{ b['creation_time'][:10]|e }}{% endif %}){% endif %}
+          {%- if b.get('via_duplicates') %} <span class="muted">via duplicate{% if b['via_duplicates']|length > 1 %}s{% endif %} {{ b['via_duplicates']|join(', ')|e }}</span>{% endif %}
+          {%- if not loop.last %}, {% endif %}
+          {%- endfor %}.
+          {% if not filed %}<span class="muted">{% if pol.get('mode') == 'skip' %}On {{ channel|e }} Clouseau never writes on an existing bug, so nothing was posted there.{% elif pol.get('mode') == 'comment' %}On {{ channel|e }} Clouseau posts its analysis on an existing bug rather than filing a new one.{% else %}On {{ channel|e }} Clouseau files only crashes with no bug and never writes on an existing one.{% endif %}</span>{% endif %}
+        </p>
+          {%- elif fl.get('open_bugs') is none -%}
+        <p class="filing-status">Bugzilla could not be asked whether a bug already exists for this signature.</p>
+          {%- elif not filed and not fl.get('own_prior') -%}
+        <p class="filing-status">No open public bug references this signature.</p>
+          {%- endif -%}
+          {%- if fl.get('own_prior') -%}
+        <p class="filing-status exists">Clouseau already filed <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ fl['own_prior']['bug']|e }}" target="_blank" rel="noopener">bug {{ fl['own_prior']['bug']|e }}</a> for this signature{% if fl['own_prior'].get('uuid') %}, from crash <a href="crashstack.html?uuid={{ fl['own_prior']['uuid']|e }}">{{ fl['own_prior']['uuid'][:8]|e }}</a>{% endif %}.</p>
+          {%- endif -%}
+          {%- if fl.get('other_app_bugs') -%}
+        <p class="muted">Open on this signature but for another application, so not a venue: {% for b in fl['other_app_bugs'] %}<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b['id']|e }}" target="_blank" rel="noopener">bug {{ b['id']|e }}</a>{% if b.get('product') %} ({{ b['product']|e }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+          {%- endif -%}
+          {%- if fl.get('meta_bugs') -%}
+        <p class="muted">[meta] tracker{% if fl['meta_bugs']|length > 1 %}s{% endif %} on this signature, not a venue for a crash report: {% for b in fl['meta_bugs'] %}<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b['id']|e }}" target="_blank" rel="noopener">bug {{ b['id']|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+          {%- endif -%}
+        {%- endif -%}
+        {% if bug_preview -%}
         <p><strong>Product :: Component:</strong>
         {% if bug_preview.get('product') and bug_preview.get('component') -%}
         {{ bug_preview['product']|e }} :: {{ bug_preview['component']|e }}
@@ -379,6 +436,7 @@
         <p><strong>Needinfo flag:</strong> <span class="needinfo-draft">{{ bug_preview['needinfo_email']|e }}</span></p>
         {% elif bug_preview.get('needinfo') -%}
         <p><strong>Needinfo flag:</strong> <span class="needinfo-draft">none &mdash; no Bugzilla account resolved for the regressor's author, so the bug files without one.</span></p>
+        {% endif -%}
         {% endif -%}
       </div>
       {% endif -%}

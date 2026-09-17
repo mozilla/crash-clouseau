@@ -64,6 +64,17 @@ def crashstack():
                 )
             except Exception:
                 logger.error("crashstack bug preview failed for %s", uuid, exc_info=True)
+        # ...and what actually happened to it: filed, declined (and for which bug), rejected --
+        # plus the open bugs already on the signature, which is the answer to "did you file
+        # a bug?" more often than the record is (``_filing_status``). Same verdicts as the
+        # preview, same best-effort rule: this asks BMO, and a lookup failure must not 500 the
+        # page or hide the preview.
+        filing = None
+        if show_evidence and vt in ("culprit", "lead"):
+            try:
+                filing = _filing_status(uuid, uuid_info, evidence)
+            except Exception:
+                logger.error("crashstack filing status failed for %s", uuid, exc_info=True)
         # How many machines this signature is really coming from. Shown for every crash,
         # verdict or not — the report count is on the page whether or not the agent ran, and
         # it is the number most likely to be misread. Best-effort, same as the preview.
@@ -84,6 +95,7 @@ def crashstack():
             evidence=evidence,
             show_evidence=show_evidence,
             bug_preview=bug_preview,
+            filing=filing,
             population=pop,
         )
     abort(404)
@@ -179,6 +191,72 @@ def _declined_bug(bug, reason):
         return str(bug)
     m = _BUG_IN_REASON.search(reason or "")
     return m.group(1) if m else None
+
+
+def _filing_status(uuid, uuid_info, evidence):
+    """What the filer did about THIS run and what Bugzilla holds for the signature, as one
+    dict for the crashstack preview block.
+
+    "Did you file a bug for this?" has no single source. 8ab28d1a (2026-09-17): a culprit at
+    85 on release, the page headed "Bug we'll file (preview -- filed automatically when
+    enabled)", the run's record saying only ``daily cap 2 reached on release`` because the cap
+    gate runs before the venue search -- and dmeehan's bug 2072627 open on the signature since
+    the day before, which nothing on the page could say. Hence five facts, each from its own
+    source:
+
+    * ``filed`` -- ``filed_bug`` when it says ``filed: true``: our bug, or the bug we commented
+      on (``mode``).
+    * ``declined`` -- ``filing_declined``: the gate that said no, with the bug it was about when
+      it named one (``_declined_bug``, the tasks page's reading).
+    * ``error`` -- ``filing_error``: a write BMO rejected.
+    * ``own_prior`` -- ``Dossier.already_filed_for_signature``: a bug Clouseau filed for this
+      signature from ANOTHER crash. Survives that bug being closed or restricted, which the BMO
+      search below does not; dropped when it is this crash's own filing.
+    * ``open_bugs`` -- ``bugzilla_apply.open_venues``: the open public bugs on the signature
+      as the filer sees them, asked NOW (see its docstring for why not the record). ``None``
+      when BMO could not be asked, and the template says so rather than rendering "no bug". A
+      bug we filed or commented on from this crash is left out; ``filed`` already shows it.
+
+    ``policy`` is the channel's filing configuration, so the page can say what the filer does
+    with an existing bug on this channel (``skip`` never writes on one; ``comment`` posts the
+    analysis there). ``undecided`` marks a finished run with no record of any kind -- runs
+    before 2026-09-07 recorded declines nowhere, and a globally disabled filer still does not.
+    Best-effort throughout: the caller wraps it, and the BMO half already fails to ``None``."""
+    channel = uuid_info.get("channel")
+    product = uuid_info.get("product")
+    signature = (uuid_info.get("signature") or "").strip()
+    cfg = config.get_agent_autofile(channel, product)
+    fb = evidence.get("filed_bug") or {}
+    filed = fb if fb.get("filed") and fb.get("bug") else None
+    filed_id = str(filed["bug"]) if filed else None
+    declined = None
+    fd = evidence.get("filing_declined") or {}
+    if fd.get("skipped"):
+        declined = {"reason": fd["skipped"], "at": fd.get("at"),
+                    "bug": _declined_bug(fd.get("bug"), fd["skipped"])}
+    fe = evidence.get("filing_error") or {}
+    error = {"error": fe["error"], "at": fe.get("at")} if fe.get("error") else None
+    own_prior = None
+    prior = models.Dossier.already_filed_for_signature(signature) if signature else None
+    # The fail-closed sentinel (`{"skipped": ...}`) has no bug and is not a prior filing.
+    if isinstance(prior, dict) and prior.get("bug") and prior.get("uuid") != uuid \
+            and str(prior["bug"]) != filed_id:
+        own_prior = {"uuid": prior.get("uuid"), "bug": str(prior["bug"])}
+    venues = bugzilla_apply.open_venues(signature, product) if signature else \
+        {"venues": [], "other_app": [], "metas": []}
+    return {
+        "policy": {"enabled": cfg["enabled"], "mode": cfg["comment_on_existing"],
+                   "daily_cap": cfg["daily_cap"]},
+        "filed": filed,
+        "declined": declined,
+        "error": error,
+        "own_prior": own_prior,
+        "open_bugs": None if venues is None else [
+            b for b in venues["venues"] if str(b.get("id")) != filed_id],
+        "other_app_bugs": [] if venues is None else venues["other_app"],
+        "meta_bugs": [] if venues is None else venues["metas"],
+        "undecided": not (filed or declined or error) and evidence.get("status") == "done",
+    }
 
 
 def _task_view(rows, stale_after_s, now, spike_filings=None):

@@ -137,6 +137,41 @@ def build_evidence(uuid, public=True):
     return ev
 
 
+# The web page's budget for one BMO request about a signature. The filer's ``_HTTP_TIMEOUT`` is
+# 60 s, which a worker can afford and a page view cannot: the web dyno runs ONE gunicorn worker
+# and Heroku's router gives up at 30 s, so a single slow BMO answer would take the whole site
+# down with it. The venue search is at most two requests (the open bugs, then the open targets
+# of the signature's duplicates), and at 8 s each both fit under the router's clock beside the
+# preview's own lookups.
+_PAGE_HTTP_TIMEOUT = 8
+
+
+def open_venues(signature, product, timeout=_PAGE_HTTP_TIMEOUT):
+    """The open Bugzilla bugs on *signature* EXACTLY AS THE FILER SEES THEM, for display:
+    ``{"venues", "other_app", "metas"}`` (each a list of ``_venue_row`` dicts, oldest id
+    first), or ``None`` when BMO could not be asked.
+
+    The same search, the same exact-entry test, the same duplicate-target follow-up and the
+    same two splits as ``autofile_bug``, so that what crashstack.html calls "a bug already
+    exists for this signature" is the bug the filer would have declined for or commented on --
+    not a looser lookup naming bugs the filer ignores, nor a tighter one missing the venue it
+    chose. Read-only, unauthenticated, public bugs only, like every venue lookup here.
+
+    ASKED AT PAGE-VIEW TIME rather than read from the run's record, because the record is only
+    as informative as the gate that wrote it. The filer's gates run cheapest first and the venue
+    search is one of the last, so a run the daily cap declined never asked BMO at all: 8ab28d1a
+    (2026-09-17, a culprit at 85 on release) carries ``daily cap 2 reached on release`` and
+    nothing else, while dmeehan's bug 2072627 had been open on the signature since the day
+    before -- "did you file a bug for this?" had to be answered by hand. And a bug a human files
+    AFTER our run is invisible to any record, however complete. ``timeout`` is per request."""
+    existing = _open_bugs_for_signature(signature, timeout=timeout)
+    if existing is None:
+        return None
+    venues, other_app = _split_by_application(existing, product)
+    venues, metas = _split_out_metas(venues)
+    return {"venues": venues, "other_app": other_app, "metas": metas}
+
+
 # --------------------------------------------------------------------------- #
 # Bugzilla REST writes (every write in the product, the spike filer's included, is one of
 # these)
@@ -518,7 +553,7 @@ def _row_is_about(bug, signature):
     return _summary_is_about(bug.get("summary"), sig)
 
 
-def _open_bugs_for_signature(signature):
+def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT):
     """OPEN bugs referencing *signature* as
     ``[{"id", "creation_time", "product", "keywords"}, ...]``, oldest first.
 
@@ -579,7 +614,7 @@ def _open_bugs_for_signature(signature):
         params["o{}".format(2 * i + 2)] = "substring"
         params["v{}".format(2 * i + 2)] = "[@ " + spelling
     try:
-        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r = net.get(_bz_rest(), params=params, timeout=timeout)
         r.raise_for_status()
         bugs = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
@@ -594,7 +629,7 @@ def _open_bugs_for_signature(signature):
         for b in sorted(bugs, key=lambda b: b.get("id", 0))
         if b.get("id") and any(_row_is_about(b, s) for s in spellings)
     ]
-    return _merge_duplicate_targets(rows, _duplicate_targets_for_signature(sig))
+    return _merge_duplicate_targets(rows, _duplicate_targets_for_signature(sig, timeout=timeout))
 
 
 def _venue_row(bug):
@@ -637,7 +672,7 @@ def _merge_duplicate_targets(rows, targets):
 _DUP_CHAIN_MAX_HOPS = 5
 
 
-def _duplicate_targets_for_signature(signature):
+def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT):
     """The OPEN bugs that the RESOLVED DUPLICATE bugs on *signature* resolve into, as venue rows
     (``_venue_row`` plus ``venue_since`` and ``via_duplicates``), oldest id first; ``[]`` when
     there are none or BMO could not be asked.
@@ -697,7 +732,7 @@ def _duplicate_targets_for_signature(signature):
         params["o{}".format(2 * i + 2)] = "substring"
         params["v{}".format(2 * i + 2)] = "[@ " + spelling
     try:
-        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r = net.get(_bz_rest(), params=params, timeout=timeout)
         r.raise_for_status()
         dups = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
@@ -734,7 +769,7 @@ def _duplicate_targets_for_signature(signature):
         if not pending:
             break
         seen.update(pending)
-        fetched = _bugs_by_id(sorted(pending))
+        fetched = _bugs_by_id(sorted(pending), timeout=timeout)
         if fetched is None:
             return []
         following = {}
@@ -758,7 +793,7 @@ def _duplicate_targets_for_signature(signature):
     return [out[k] for k in sorted(out)]
 
 
-def _bugs_by_id(ids):
+def _bugs_by_id(ids, timeout=_HTTP_TIMEOUT):
     """The public BMO rows for *ids*, with what a venue row and a dup hop need; ``None`` when
     BMO could not be asked. A restricted id comes back in ``faults`` rather than failing the
     request, so it is simply absent from the result."""
@@ -770,7 +805,7 @@ def _bugs_by_id(ids):
                           "product,keywords,regressed_by",
     }
     try:
-        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r = net.get(_bz_rest(), params=params, timeout=timeout)
         r.raise_for_status()
         return (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
