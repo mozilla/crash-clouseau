@@ -1073,8 +1073,20 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         if candidate.get("bug"):
             link += " (bug {})".format(candidate["bug"])
         who = author_display or candidate.get("author") or ""
-        facts.append("- The failing code comes from {}{}.".format(
-            link, " by {}".format(who) if who else ""))
+        origin = ((dossier or {}).get("corroborations") or {}).get("hang_awaited_origin") or {}
+        if origin.get("node") and str(origin["node"])[:12].lower() == str(
+                candidate["node"])[:12].lower():
+            # A hang bucket is routed by the blame of the awaited work's frame, and blame is
+            # "last changed by", not "comes from": on vendored code it is the vendor bump.
+            where = "`{}`".format(origin["function"]) if origin.get("function") else "its frame"
+            if origin.get("path"):
+                at = ":{}".format(origin["line"]) if origin.get("line") else ""
+                where += " ({}{})".format(origin["path"], at)
+            facts.append("- The work the main thread waits for -- {} -- was last changed by {}{}."
+                         .format(where, link, " by {}".format(who) if who else ""))
+        else:
+            facts.append("- The failing code comes from {}{}.".format(
+                link, " by {}".format(who) if who else ""))
     because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
     sections = [
         bucket_opener,

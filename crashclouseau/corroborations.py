@@ -363,6 +363,19 @@ REGISTRY = {
         "`hang.awaited_summary` at gate time: the thread the main thread waits for, its top "
         "frames, its bucket key and a deterministic bucket title. The bug prints the frames, the "
         "filer keys a bucket-holder signature's dedup and fallback title on it."),
+    "hang_awaited_origin": (
+        "evidence", ("report_bug.py", "agent/orchestrator.py", "templates/crashstack.html"),
+        "The blame of the awaited work's frame (`hang.awaited_origin`), which "
+        "`_apply_hang_origin_gate` made the actionable verdict's `candidate`: node, bug, author, "
+        "frame. The bug says 'last changed by', the age gate waives itself on it."),
+    "hang_model_origin": (
+        "diagnostic", (),
+        "The candidate the model had picked before the awaited work's blame replaced it -- on "
+        "37d5021a the wait code's own changeset. How often the model routes by the wait."),
+    "hang_bucket_age_waived": (
+        "diagnostic", (),
+        "The age gate's actionable flip was skipped because the candidate is the awaited work's "
+        "blame: the signature's first-seen is the catch-all's clock, not this bucket's."),
     "hang_wait_not_actionable": (
         "suppression", ("templates/crashstack.html",),
         "An `actionable` verdict whose cited mechanism files are all the WAITING thread's -- it "

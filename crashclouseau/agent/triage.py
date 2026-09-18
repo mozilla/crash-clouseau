@@ -760,9 +760,11 @@ def _watchdog_lines(crash: dict) -> list[str]:
 _AWAITED_FRAMES = 14
 
 
-def _awaited_work_lines(raw: dict) -> list[str]:
+def _awaited_work_lines(raw: dict, origin: dict | None = None) -> list[str]:
     """The AWAITED WORK of a shutdown hang, as prompt lines, or ``[]`` when the spin-loop stack
-    names nothing the thread list can resolve (see ``hang.spin_target``).
+    names nothing the thread list can resolve (see ``hang.spin_target``). ``origin`` is the
+    seed's ``hang_awaited_origin`` -- who last changed that work -- rendered as the `candidate`
+    an actionable verdict must carry, so the routing is not the model's to find.
 
     BUG 2073349, and the same lesson as bug 2064436 one step further along. That fix put the
     thread LIST and the blocked spin-loop stack in front of the model; this puts the awaited
@@ -811,9 +813,11 @@ def _awaited_work_lines(raw: dict) -> list[str]:
         "AWAITED WORK -- the thread the hung main thread is waiting for. On a shutdown hang THIS "
         "is the subject: the wait in the analysed stack is the symptom every report under the "
         "signature shares (and what its [meta] tracker is about), what this thread is doing and "
-        "why it does not finish is the finding. Cite ITS code, take the origin (blame) and the "
-        "owner from ITS frames, and write `verdict.title` as `<work> blocks {} shutdown inside "
-        "<call>`. Thread {} `{}`{}{}:".format(
+        "why it does not finish is the finding. START `mechanism.statement` with what this thread "
+        "does and why it cannot finish; do NOT restate how the wait works (`ShutdownWithTimeout(-1)` "
+        "arms no timer, `SpinEventLoopUntil` is unbounded) -- the reader owns that code and has read "
+        "it many times. Cite ITS code, and write `verdict.title` as `<work> blocks {} shutdown "
+        "inside <call>`. Thread {} `{}`{}{}:".format(
             what, t["index"], t["name"] or "unnamed",
             ", {} other busy {} thread{} (buckets: {})".format(
                 others, what, "" if others == 1 else "s",
@@ -825,6 +829,15 @@ def _awaited_work_lines(raw: dict) -> list[str]:
     lines += ["  " + ln for ln in hang.frames_text(t["frames"], _AWAITED_FRAMES).split("\n")]
     if summary.get("bucket"):
         lines.append("  Bucket (the work | the blocking call): {}".format(summary["bucket"]))
+    if (origin or {}).get("node"):
+        lines.append(
+            "  Last changed by (blame of frame {} `{}`, {}:{}): changeset {}{} by {}. THIS is the "
+            "`candidate` of an actionable verdict -- its bug's component and its author are where "
+            "the bucket bug goes; the wait's own changesets are not.".format(
+                origin.get("stackpos"), origin.get("function") or "?", origin.get("path") or "?",
+                origin.get("line") or "?", origin["node"],
+                " (bug {})".format(origin["bug"]) if origin.get("bug") else "",
+                origin.get("author") or "?"))
     return lines
 
 
@@ -1603,7 +1616,7 @@ def _crash_facts(crash: dict) -> list[str]:
     # while a nested event loop was active. Only a watchdog crash may reinterpret that stack as
     # a shutdown hang and tell the model to investigate the awaited thread instead of the fault.
     if watchdog:
-        lines += _awaited_work_lines(raw)
+        lines += _awaited_work_lines(raw, crash.get("hang_awaited_origin"))
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)

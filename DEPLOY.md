@@ -393,6 +393,14 @@ signature-titled bug beside it. Now, on such a signature:
   (`hang.awaited_summary`, prompt fact `AWAITED WORK`, dossier key `hang_awaited_work`), and an
   `actionable` verdict whose cited mechanism is only the wait code becomes a `pre_existing`
   abstain (`hang_wait_not_actionable`);
+- an `actionable` verdict on such a hang is ROUTED BY THE AWAITED WORK: its `candidate` is the
+  blame of the awaited thread's work frame (`hang.awaited_origin`, seed key `hang_awaited_origin`,
+  one to three hg annotates), whatever changeset the model named (kept as `hang_model_origin`);
+  the bug's component and the needinfo follow from it -- Suggest lands in Application Services ::
+  General on adw, CUPS in Toolkit :: Printing on emcdonough, as :jstutte routed by hand. The age
+  gate's actionable flip is waived for it (`hang_bucket_age_waived`): the signature's first-seen
+  is the catch-all's clock, not the bucket's. The bug says "was last changed by", because blame on
+  vendored code is the vendor bump;
 - a NEW bug is a BUCKET bug or nothing: titled for its cause (`verdict.title`, else `<work> blocks
   <pool> shutdown inside <call>` from the awaited thread, else the mechanism's first sentence),
   no `cf_crash_signature`, `blocks` the tracker(s) and `clouseau`, opening with "Bucket of bug N,

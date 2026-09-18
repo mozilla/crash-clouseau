@@ -929,6 +929,12 @@ def build_seed(uuid):
         # What else the machine that produced this crash has been crashing on — the bad-machine
         # gate's input (`machine.install_history`). Every value None when unknown.
         "install_history": _install_history(raw_crash, channel),
+        # On a shutdown hang whose awaited thread is in the dump: who last changed the work it
+        # is doing (`hang.awaited_origin`, one to three hg annotates). The `candidate` an
+        # `actionable` verdict routes by (`_apply_hang_origin_gate`), and a prompt fact. None
+        # everywhere else.
+        "hang_awaited_origin": _hang_awaited_origin(
+            raw_crash, channel, info.get("signature") or uuid_info.get("signature")),
         # What share of this SIGNATURE is hardware error rather than a software defect — the
         # signature-level half of the bit-flip gate (`sigage.hardware_noise`). All None when
         # unknown.
@@ -2282,6 +2288,16 @@ def _apply_signature_age_gate(dossier, seed):
     cand = dossier.candidate
     if not first_seen or cand is None or not cand.node:
         return
+    if v.decision == Decision.actionable and (dossier.corroborations or {}).get(
+            "hang_awaited_origin"):
+        # A BUCKET of a catch-all signature has its own onset, and the signature's first-seen is
+        # not it: `shutdownhang | ... nsThreadPool::ShutdownWithTimeout` is four years old while
+        # the Suggest ingest that hangs it shipped in 2025. The candidate here is the blame of
+        # the awaited work's own line (`_apply_hang_origin_gate`), so "landed after the
+        # signature" says nothing about whether it is where that code comes from. Waived and
+        # recorded; the wait gate still owns the mechanism.
+        dossier.corroborations = {**dossier.corroborations, "hang_bucket_age_waived": first_seen}
+        return
     from crashclouseau import sigage
 
     channel = (seed or {}).get("channel")
@@ -2707,6 +2723,115 @@ def _record_hang_awaited_work(dossier, seed):
     if not summary:
         return
     dossier.corroborations = {**(dossier.corroborations or {}), "hang_awaited_work": summary}
+
+
+def _hang_awaited_origin(raw_crash, channel, signature=None):
+    """Seed-time: the blame of the awaited work's frame on a watchdog crash (see
+    ``hang.awaited_origin``), or ``None``. Never raises; costs nothing on a fault."""
+    raw = raw_crash or {}
+    if not raw:
+        return None
+    from crashclouseau import hang, utils
+
+    dump = raw.get("json_dump") or {}
+    if not utils.is_watchdog_crash(signature or raw.get("signature"), raw.get("report_type"),
+                                   raw.get("moz_crash_reason") or dump.get("moz_crash_reason")):
+        return None
+    try:
+        return hang.awaited_origin(raw, channel)
+    except Exception:                                   # pragma: no cover - defensive
+        logger.warning("agent: awaited-work blame failed for %s", raw.get("uuid"), exc_info=True)
+        return None
+
+
+_ORIGIN_KEYS = ("node", "bug", "author", "author_email", "desc", "path", "line", "function",
+                "stackpos")
+
+
+def _apply_hang_origin_gate(dossier, seed):
+    """An ``actionable`` verdict on a shutdown hang is ROUTED BY THE AWAITED WORK: its
+    ``candidate`` becomes the blame of the awaited thread's work frame (the seed's
+    ``hang_awaited_origin``), whatever the model picked, and an empty ``title`` is filled from
+    the awaited work.
+
+    The verification run of 2026-09-18 (37d5021a, after the AWAITED WORK fact shipped): the
+    mechanism named Suggest -> Remote Settings -> viaduct correctly, and the candidate was still
+    `94ccd3fa3a5f`, a Jens changeset in `xpcom/threads` -- the blame of the wait's own line, which
+    is what rule 3 ("the changeset blame names for the cited line") literally asks for when the
+    first cited line is the wait. The age gate then killed it (612 days after the signature).
+    Routing is not the model's to get right: the frame that names the work is known, its blame is
+    one request, and on the three legacy buckets it lands where :jstutte routed by hand
+    (Application Services :: General / adw, Toolkit :: Printing / emcdonough, alwu). The model's
+    pick is kept as `hang_model_origin` so the disagreement stays measurable. Mutates in place;
+    never raises."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None or v.decision != Decision.actionable:
+        return
+    origin = (seed or {}).get("hang_awaited_origin") or {}
+    work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
+    if not origin.get("node") or not work.get("thread"):
+        return
+    from crashclouseau.agent.schema import Candidate
+
+    candidate = dossier.candidate
+    model_node = (candidate.node if candidate else "") or ""
+    origin_node = str(origin["node"])
+    same_candidate = model_node[:12].lower() == origin_node[:12].lower()
+    already_routed = bool(
+        ((dossier.corroborations or {}).get("hang_awaited_origin") or {}).get("node")
+    )
+    dossier.corroborations = {
+        **(dossier.corroborations or {}),
+        "hang_awaited_origin": {k: origin.get(k) for k in _ORIGIN_KEYS}}
+    if model_node and not same_candidate:
+        dossier.corroborations = {**dossier.corroborations, "hang_model_origin": model_node}
+    identity = {
+        "node": origin_node,
+        "bug": origin.get("bug"),
+        "author": origin.get("author") or "",
+        "channel": (seed or {}).get("channel") or "",
+        "author_email": origin.get("author_email") or "",
+    }
+    if candidate is not None and same_candidate:
+        # The online worker routes BEFORE its candidate-specific lookups, then the shared gate
+        # ladder routes again. Preserve what those lookups learned (`backedout_by`, `is_backout`,
+        # `backout_of_same_push`) on the second pass. Rebuilding Candidate here used to erase
+        # exactly the safety facts the early routing exists to obtain.
+        dossier.candidate = candidate.model_copy(update=identity)
+    else:
+        dossier.candidate = Candidate(**identity)
+    if not (v.title or "").strip() and work.get("title"):
+        dossier.verdict = v.model_copy(update={"title": str(work["title"])[:200]})
+    if not already_routed:
+        logger.info("agent: actionable hang routed by the awaited work: candidate %s (bug %s, "
+                    "%s) from frame %s %s%s for %s", origin["node"], origin.get("bug"),
+                    origin.get("author"), origin.get("stackpos"), origin.get("function"),
+                    " (model had picked {})".format(model_node[:12]) if model_node else "",
+                    (seed or {}).get("uuid"))
+
+
+def _ensure_actionable_title(dossier):
+    """An ``actionable`` verdict leaves without an empty ``title``: the model's, else the awaited
+    work's (`<work> blocks <pool> shutdown inside <call>`), else the mechanism's first sentence.
+    The 2026-09-18 verification run left the field empty -- an optional descriptive field the
+    prompt asks for is filled rarely (`crash.moz_crash_reason`: 0 of 189) -- and the filer's
+    fallback did the same derivation at filing time; doing it here puts the title on the page and
+    in the record too. Never on an abstain."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None or v.decision != Decision.actionable or (v.title or "").strip():
+        return
+    work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
+    title = str(work.get("title") or "")
+    if not title:
+        from crashclouseau import report_bug
+
+        for claim in (v.mechanism, v.consistency):
+            sentence = report_bug._first_sentence((claim.statement if claim else "") or "")
+            if len(sentence) >= 20:
+                title = sentence
+                break
+    if title:
+        dossier.verdict = v.model_copy(update={"title": title[:200]})
 
 
 # A searchfox permalink's path: `.../source/<path>#L1` or `.../rev/<rev>/<path>#1-2`.
@@ -4011,6 +4136,10 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # The awaited work of a shutdown hang (bug 2073349): recorded before the gates, because
         # `_apply_hang_wait_gate` reads it and the bug prints it. See `_record_hang_awaited_work`.
         _record_hang_awaited_work(result.dossier, seed)
+        # ...and an `actionable` verdict on such a hang is routed by that work's blame, not by
+        # the changeset the model named (`_apply_hang_origin_gate`). Before the age gate, which
+        # reads the candidate and waives itself for this one.
+        _apply_hang_origin_gate(result.dossier, seed)
         # Per-version rate step (beta/release): recorded, not acted on. See `_record_version_step`.
         _record_version_step(result.dossier, seed)
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
@@ -4068,6 +4197,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # at once on an abstain, so everything above it has already had its chance to abstain
         # for free.
         _apply_compiled_out_gate(result.dossier, seed)
+        # An `actionable` verdict that survived the gates carries a title (bug 2073349's
+        # verification run left the field empty; the bug it would file is named by it).
+        _ensure_actionable_title(result.dossier)
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.
         _record_window_membership(result.dossier, seed)
@@ -4404,6 +4536,15 @@ def run_evidence_agent(uuid, force=False):
                     "agent: %s over budget: $%.4f > $%s",
                     uuid, result.total_cost_usd, cap,
                 )
+
+            # An actionable shutdown hang is routed by the awaited work's blame, not by the
+            # model's candidate. Do that BEFORE every online candidate-specific lookup below:
+            # otherwise backout state is resolved for the discarded model candidate and a
+            # diff-derived compiled-out answer describes the wrong patch. The shared gate ladder
+            # repeats these two idempotent calls for offline/eval runs; `_apply_hang_origin_gate`
+            # preserves the online metadata when it sees the routed candidate again.
+            _record_hang_awaited_work(result.dossier, seed)
+            _apply_hang_origin_gate(result.dossier, seed)
 
             # Was the chosen candidate backed out — or is it ITSELF a backout? Resolved HERE,
             # before the second opinion, so a candidate we are about to suppress never buys a

@@ -36,7 +36,7 @@ import unittest
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from crashclouseau.agent import triage                                   # noqa: E402
-from tests.test_hang_bucket import _IDLE_POOL, _SUGGEST, _hang           # noqa: E402
+from tests.test_hang_bucket import _IDLE_POOL, _ORIGIN, _SUGGEST, _hang  # noqa: E402
 
 # A plain single-thread deref: the floor of what any run pays.
 _PLAIN = {
@@ -145,6 +145,9 @@ _AWAITED = {
     "version": "155.0.1",
     "signature": "shutdownhang | mozilla::SpinEventLoopUntil<T> | nsThreadPool::ShutdownWithTimeout",
     "raw_crash": _hang([_IDLE_POOL, _SUGGEST]),
+    # The blame of the awaited work (`hang_awaited_origin`): one more line, the candidate an
+    # actionable verdict is routed by.
+    "hang_awaited_origin": _ORIGIN,
 }
 
 
@@ -186,8 +189,11 @@ _MEASURED = {
     # 2026-09-18, the AWAITED WORK block (bug 2073349): ~2,550 bytes over the same hang without
     # it -- the awaited thread's 14 frames (long Rust symbols and source paths) and the rule
     # sentence. Paid only on a hang whose spin-loop stack names a thread the dump has.
-    "crash facts, hang with awaited work": (4873, 300),
-    "user prompt, hang with awaited work": (5701, 400),
+    # +576 on 2026-09-18 (second pass): the origin line -- who last changed the awaited work,
+    # the `candidate` an actionable verdict is routed by -- and the rule that the mechanism
+    # starts with the work and does not restate how the wait works (Jens, 2073349 c1).
+    "crash facts, hang with awaited work": (5449, 300),
+    "user prompt, hang with awaited work": (6277, 400),
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.

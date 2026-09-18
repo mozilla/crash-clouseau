@@ -406,6 +406,107 @@ def awaited_summary(raw):
     return out
 
 
+# Vendored crates from crates.io: their blame is a vendor bump and their owner is nobody here.
+# `third_party/application-services/` is Mozilla's own code and is kept (its bump's bug names
+# the team: bug 1952588 "Vendor application-services to 138 for Suggest geo expansion", adw).
+_NOT_OURS = ("third_party/rust/", "third_party/libwebrtc/", "gfx/wr/", "gfx/skia/")
+_ORIGIN_ATTEMPTS = 3
+_BUG_RE = re.compile(r"\bbug[ \t]*([0-9]+)", re.I)
+_EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>\s]+)>")
+
+
+def work_frame_candidates(frames):
+    """The frames whose blame names the owner of a busy thread's work, best first: the outermost
+    non-glue work frame (the runnable's entry, e.g. ``SuggestStore::ingest``), then inward, at
+    most ``_ORIGIN_ATTEMPTS``. Frames with no source file, or in a vendored crate, are skipped:
+    nobody here owns ``pollster`` or a Windows DLL."""
+    work = work_frames(frames)
+    outer = [f for f in work if not _GLUE_RE.search(_label(f))] or work
+    out = []
+    for f in reversed(outer):
+        path = _frame_path(f.get("file"))
+        if not path or not f.get("line") or path.startswith(_NOT_OURS):
+            continue
+        out.append(f)
+        if len(out) >= _ORIGIN_ATTEMPTS:
+            break
+    return out
+
+
+def _annotate_line(path, channel, node, line):
+    """The hg annotate row for ``path:line`` at *node* on *channel*'s repo, or ``None``. One
+    ``json-annotate`` request through libmozdata (our User-Agent, its retry); never raises."""
+    try:
+        from libmozdata.hgmozilla import Annotate
+
+        data = Annotate.get(path, channel, node)
+    except Exception:  # noqa: BLE001 - a lookup that fails is an origin we do not have
+        return None
+    rows = ((data or {}).get(path) or {}).get("annotate") or []
+    for row in rows:
+        try:
+            if int(row.get("lineno", -1)) == int(line):
+                return row
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def origin_from_row(row, frame, stackpos=None):
+    """A blame row as the ORIGIN record the seed carries: the changeset that last touched the
+    awaited work's line, its bug, its author (hg's ``Name <email>``) and the frame it came from."""
+    author = str((row or {}).get("author") or "").strip()
+    m = _EMAIL_RE.search(author)
+    desc = str((row or {}).get("desc") or "")
+    bug = _BUG_RE.search(desc)
+    return {
+        "node": str((row or {}).get("node") or "")[:12],
+        "bug": int(bug.group(1)) if bug else None,
+        "author": author,
+        "author_email": m.group(1) if m else "",
+        "desc": desc.strip().splitlines()[0][:160] if desc.strip() else "",
+        "path": _frame_path((frame or {}).get("file")),
+        "line": (frame or {}).get("line"),
+        "function": clean_symbol(_function(frame)),
+        "stackpos": stackpos,
+    }
+
+
+def awaited_origin(raw, channel):
+    """Who last changed the AWAITED WORK: the blame of the awaited thread's work frame, as
+    ``origin_from_row`` shapes it, or ``None``.
+
+    Bug 2073349's verification run (2026-09-18): handed the awaited thread, the model still took
+    its ``candidate`` -- the origin an ``actionable`` verdict routes by -- from the WAIT code's
+    blame (a Jens changeset in ``xpcom/threads``), and the age gate rightly refused it. The
+    routing has to be deterministic: blame the frame that names the work. Measured on the three
+    legacy buckets it lands where :jstutte routed by hand -- Suggest: bug 1952588, Application
+    Services :: General, adw; CUPS: bug 1826872, Toolkit :: Printing, emcdonough; the audio
+    session: bug 2055710, alwu. One to three hg requests, only on a hang with a busy awaited
+    thread; the frame's revision comes from its own URI (git, converted through lando the way
+    the history tool does). Never raises."""
+    from crashclouseau import inspector
+
+    threads = awaited_threads(raw)
+    busy = [t for t in threads if not t["idle"]]
+    if not busy:
+        return None
+    index = busy[0]["index"]
+    all_frames = (((raw or {}).get("json_dump") or {}).get("threads") or [])[index].get(
+        "frames") or []
+    for frame in work_frame_candidates(all_frames):
+        try:
+            path, node = inspector.get_path_node(frame.get("file"))
+        except Exception:  # noqa: BLE001 - lando may be down; the next frame may not need it
+            continue
+        if not path or not node:
+            continue
+        row = _annotate_line(path, channel or "nightly", node, frame.get("line"))
+        if row and row.get("node"):
+            return origin_from_row(row, frame, stackpos=all_frames.index(frame))
+    return None
+
+
 def thread_files(raw, index):
     """The source paths on thread *index*'s stack, for the gate that asks whether a mechanism
     cites the WAITING thread's code or the awaited thread's."""

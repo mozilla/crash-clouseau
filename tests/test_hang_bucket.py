@@ -378,6 +378,68 @@ class TestAwaitedWork(unittest.TestCase):
         self.assertLess(len(long), 260)
 
 
+_ROW = {"node": "9583cc38e7cb2a4b1c0d", "author": "Drew Willcoxon <adw@mozilla.com>",
+        "desc": "Bug 1952588 - Vendor application-services to 138 for Suggest geo expansion. "
+                "r=bdk,daisuke\n\nThis vendors the desktop-138 branch", "lineno": 636}
+_ORIGIN = {"node": "9583cc38e7cb", "bug": 1952588, "author": "Drew Willcoxon <adw@mozilla.com>",
+           "author_email": "adw@mozilla.com", "path": _AS + "suggest/src/store.rs", "line": 636,
+           "function": "suggest::store::SuggestStoreInner<T>::ingest", "stackpos": 9,
+           "desc": "Bug 1952588 - Vendor application-services to 138 for Suggest geo expansion. "
+                   "r=bdk,daisuke"}
+
+
+class TestTheAwaitedOrigin(unittest.TestCase):
+    """Who last changed the awaited work: the blame of its frame, which is what an actionable
+    verdict on a hang is routed by (bug 2073349's verification run took the WAIT code's blame)."""
+
+    def test_the_frames_to_blame_are_the_work_outermost_first_and_ours(self):
+        cands = hang.work_frame_candidates(_SUGGEST["frames"])
+        self.assertEqual([hang.clean_symbol(f["function"]) for f in cands],
+                         ["suggest::store::SuggestStoreInner<T>::ingest",
+                          "remote_settings::RemoteSettingsClient::sync",
+                          "remote_settings::client::RemoteSettingsClient<T>::sync"])
+        # A frame with no source file (a system library) or in a vendored crate is nobody's.
+        frames = [_f("pollster::Signal::wait", "XUL", "third_party/rust/pollster/src/lib.rs", 69),
+                  _f("CoCreateInstance", "combase.dll"),
+                  _f("mozilla::widget::WinAudioSession::Start()", "xul.dll",
+                     "widget/windows/WinAudioSession.cpp", 288)]
+        self.assertEqual([f["function"] for f in hang.work_frame_candidates(frames)],
+                         ["mozilla::widget::WinAudioSession::Start()"])
+        self.assertEqual(hang.work_frame_candidates(_IDLE_POOL["frames"]), [])
+
+    def test_a_blame_row_becomes_the_origin_record(self):
+        frame = _SUGGEST["frames"][9]
+        self.assertEqual(hang.origin_from_row(_ROW, frame, stackpos=9), _ORIGIN)
+        bare = hang.origin_from_row({"node": "abc", "author": "someone", "desc": ""}, frame)
+        self.assertEqual((bare["bug"], bare["author_email"], bare["desc"]), (None, "", ""))
+
+    def test_the_origin_is_the_work_frames_blame_with_the_next_frame_as_fallback(self):
+        calls = []
+
+        def fake_annotate(path, channel, node, line):
+            calls.append((path, channel, node, line))
+            if path.endswith("store.rs"):
+                return None            # hg had no row for the first frame
+            return dict(_ROW, node="deadbeef0000cafe", lineno=line)
+
+        with mock.patch.object(hang, "_annotate_line", side_effect=fake_annotate):
+            origin = hang.awaited_origin(_hang([_IDLE_POOL, _SUGGEST]), "release")
+        self.assertEqual(calls[0][:3], (_AS + "suggest/src/store.rs", "release", "36f485dbc605"))
+        self.assertEqual(calls[1][0], _AS + "remote_settings/src/lib.rs")
+        self.assertEqual((origin["node"], origin["path"], origin["stackpos"]),
+                         ("deadbeef0000", _AS + "remote_settings/src/lib.rs", 8))
+        # The revision comes from the frame's own URI, never from tip.
+        self.assertTrue(all(c[2] == "36f485dbc605" for c in calls))
+
+    def test_no_busy_thread_or_no_blame_is_no_origin(self):
+        with mock.patch.object(hang, "_annotate_line", return_value=None) as ann:
+            self.assertIsNone(hang.awaited_origin(_hang([_IDLE_POOL]), "release"))
+            ann.assert_not_called()
+            self.assertIsNone(hang.awaited_origin(_hang([_SUGGEST]), "release"))
+            self.assertEqual(ann.call_count, 3, "three frames tried, then give up")
+        self.assertIsNone(hang.awaited_origin(_hang([_SUGGEST], spin=""), "release"))
+
+
 class TestThePromptFact(unittest.TestCase):
     def test_the_awaited_thread_reaches_the_crash_facts(self):
         facts = "\n".join(triage._crash_facts({"raw_crash": _hang([_IDLE_POOL, _SUGGEST])}))
@@ -389,6 +451,20 @@ class TestThePromptFact(unittest.TestCase):
         # The direction, stated once: the wait is the symptom, the awaited work the finding.
         self.assertIn("the wait in the analysed stack is the symptom", facts)
         self.assertIn("`<work> blocks BgIOThreadPool shutdown inside <call>`", facts)
+
+    def test_the_origin_reaches_the_prompt_as_the_candidate(self):
+        crash = {"raw_crash": _hang([_IDLE_POOL, _SUGGEST]), "hang_awaited_origin": _ORIGIN}
+        facts = "\n".join(triage._crash_facts(crash))
+        self.assertIn("Last changed by (blame of frame 9 `suggest::store::SuggestStoreInner<T>::"
+                      "ingest`, " + _AS + "suggest/src/store.rs:636): changeset 9583cc38e7cb "
+                      "(bug 1952588) by Drew Willcoxon <adw@mozilla.com>. THIS is the `candidate`",
+                      facts)
+        self.assertIn("START `mechanism.statement` with what this thread does", facts)
+        self.assertIn("do NOT restate how the wait works", facts)
+        # No origin, no line -- and the fact still stands.
+        facts = "\n".join(triage._crash_facts({"raw_crash": _hang([_IDLE_POOL, _SUGGEST])}))
+        self.assertIn("AWAITED WORK", facts)
+        self.assertNotIn("Last changed by", facts)
 
     def test_all_idle_is_said_in_the_kinds_own_words(self):
         lines = "\n".join(triage._awaited_work_lines(_hang([_IDLE_POOL])))
@@ -527,10 +603,126 @@ class TestTheOrchestrator(unittest.TestCase):
 
         src = inspect.getsource(orch.apply_deterministic_gates)
         record = "_record_hang_awaited_work(result.dossier, seed)"
+        origin = "_apply_hang_origin_gate(result.dossier, seed)"
+        age = "_apply_signature_age_gate(result.dossier, seed)"
         gate = "_apply_hang_wait_gate(result.dossier, seed)"
-        self.assertIn(record, src)
-        self.assertIn(gate, src)
-        self.assertLess(src.index(record), src.index(gate))
+        title = "_ensure_actionable_title(result.dossier)"
+        for call in (record, origin, age, gate, title):
+            self.assertIn(call, src)
+        self.assertLess(src.index(record), src.index(origin))
+        self.assertLess(src.index(origin), src.index(age))
+        self.assertLess(src.index(age), src.index(gate))
+        self.assertLess(src.index(gate), src.index(title))
+
+        # Production has online candidate-specific resolvers before the shared gate ladder.
+        # Route first so they inspect the awaited-work candidate, not the discarded model pick.
+        worker = inspect.getsource(orch.run_evidence_agent)
+        worker_origin = "_apply_hang_origin_gate(result.dossier, seed)"
+        backout = "_resolve_candidate_backout(result.dossier, seed)"
+        compiled = "_resolve_compiled_out(result.dossier, seed)"
+        shared = "apply_deterministic_gates("
+        self.assertLess(worker.index(worker_origin), worker.index(backout))
+        self.assertLess(worker.index(worker_origin), worker.index(compiled))
+        self.assertLess(worker.index(compiled), worker.index(shared))
+
+    def _routed(self, decision=Decision.actionable, origin=_ORIGIN, threads=(_IDLE_POOL, _SUGGEST),
+                title=""):
+        d = _actionable([_AS + "viaduct/src/client.rs"], title=title, decision=decision)
+        seed = dict(_seed(_hang(list(threads))), hang_awaited_origin=origin)
+        orch._record_hang_awaited_work(d, seed)
+        orch._apply_hang_origin_gate(d, seed)
+        return d, seed
+
+    def test_an_actionable_hang_is_routed_by_the_awaited_works_blame(self):
+        d, _ = self._routed()
+        c = d.candidate
+        self.assertEqual((c.node, c.bug, c.author, c.author_email, c.channel),
+                         ("9583cc38e7cb", 1952588, "Drew Willcoxon <adw@mozilla.com>",
+                          "adw@mozilla.com", "release"))
+        self.assertEqual(d.corroborations["hang_awaited_origin"]["function"],
+                         "suggest::store::SuggestStoreInner<T>::ingest")
+        # The model's pick is kept, so the disagreement is measurable.
+        self.assertEqual(d.corroborations["hang_model_origin"], "5017c221a10c")
+        # ...and the empty title is the awaited work's.
+        self.assertEqual(d.verdict.title, _SUGGEST_TITLE)
+
+    def test_the_models_own_title_and_a_matching_pick_are_kept(self):
+        d, _ = self._routed(title="Suggest ingest blocks the pool",
+                            origin=dict(_ORIGIN, node="5017c221a10c"))
+        self.assertEqual(d.verdict.title, "Suggest ingest blocks the pool")
+        self.assertNotIn("hang_model_origin", d.corroborations)
+
+    def test_routing_twice_preserves_online_candidate_safety_facts(self):
+        d, seed = self._routed()
+        d.candidate = d.candidate.model_copy(update={
+            "backedout_by": "backedout0001", "is_backout": True,
+            "backout_of_same_push": "reverted00001", "git_commit": "git000000001",
+        })
+
+        # `run_evidence_agent` routes, enriches online, then the shared ladder routes again.
+        orch._apply_hang_origin_gate(d, seed)
+
+        self.assertEqual(d.candidate.node, _ORIGIN["node"])
+        self.assertEqual(d.candidate.backedout_by, "backedout0001")
+        self.assertTrue(d.candidate.is_backout)
+        self.assertEqual(d.candidate.backout_of_same_push, "reverted00001")
+        self.assertEqual(d.candidate.git_commit, "git000000001")
+        self.assertEqual(d.corroborations["hang_model_origin"], "5017c221a10c")
+        orch._apply_backout_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def test_only_actionable_and_only_with_an_origin_and_a_busy_thread(self):
+        d, _ = self._routed(decision=Decision.lead)
+        self.assertEqual(d.candidate.node, "5017c221a10c")
+        self.assertNotIn("hang_awaited_origin", d.corroborations)
+        d, _ = self._routed(origin=None)
+        self.assertEqual(d.candidate.node, "5017c221a10c")
+        d, _ = self._routed(threads=(_IDLE_POOL,))
+        self.assertEqual(d.candidate.node, "5017c221a10c")
+
+    def test_the_age_gate_waives_itself_for_the_awaited_works_origin(self):
+        # The signature is four years old and the routed origin is from 2025: the flip that
+        # killed the verification run ("landed 612 days after the signature") does not apply to
+        # a bucket, whose onset is not the catch-all's.
+        d, seed = self._routed()
+        seed = dict(seed, signature_first_seen_buildid="20220906224751",
+                    candidate_pushdates={"9583cc38e7cb": "2025-03-20T10:00:00+00:00"})
+        with mock.patch("crashclouseau.sigage.pushdate_for_node") as pd:
+            orch._apply_signature_age_gate(d, seed)
+            pd.assert_not_called()
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        self.assertEqual(d.corroborations["hang_bucket_age_waived"], "20220906224751")
+        self.assertNotIn("actionable_origin_postdates_signature", d.corroborations)
+
+    def test_a_title_is_ensured_on_an_actionable_verdict(self):
+        d = _actionable(["x/y.cpp"])
+        orch._record_hang_awaited_work(d, _seed(_hang([_IDLE_POOL, _SUGGEST])))
+        orch._ensure_actionable_title(d)
+        self.assertEqual(d.verdict.title, _SUGGEST_TITLE)
+        d = _actionable(["x/y.cpp"])
+        d.verdict = d.verdict.model_copy(update={"mechanism": Claim(
+            statement="`nsFoo::Bar` dereferences a null `mDoc` after the window unloads. "
+                      "More text.", citations=[RefCitation(filename="x/y.cpp", line=1)])})
+        orch._ensure_actionable_title(d)
+        self.assertEqual(d.verdict.title,
+                         "nsFoo::Bar dereferences a null mDoc after the window unloads")
+        d = _actionable(["x/y.cpp"], title="mine")
+        orch._ensure_actionable_title(d)
+        self.assertEqual(d.verdict.title, "mine")
+        d = _actionable(["x/y.cpp"], decision=Decision.lead)
+        orch._ensure_actionable_title(d)
+        self.assertEqual(d.verdict.title, "")
+
+    def test_the_seed_asks_for_the_origin_only_on_a_watchdog_crash(self):
+        with mock.patch.object(orch, "_hang_awaited_origin", wraps=orch._hang_awaited_origin), \
+                mock.patch("crashclouseau.hang.awaited_origin", return_value=_ORIGIN) as blame:
+            self.assertEqual(orch._hang_awaited_origin(_hang([_SUGGEST]), "release", _SIG),
+                             _ORIGIN)
+            blame.assert_called_once()
+            fault = dict(_hang([_SUGGEST]), report_type="crash", moz_crash_reason=None)
+            self.assertIsNone(orch._hang_awaited_origin(fault, "release", "mozilla::Foo::Bar"))
+            self.assertEqual(blame.call_count, 1)
+            self.assertIsNone(orch._hang_awaited_origin({}, "release", _SIG))
 
 
 _META = {"id": 1866944, "keywords": ["meta", "crash"], "product": "Core",
@@ -622,6 +814,20 @@ class TestTheBucketBug(unittest.TestCase):
                       "#510`", p["comment"])
         self.assertNotIn("please add it to the tracker", p["comment"])
         self.assertNotIn("Crash in [@", p["title"])
+
+    def test_the_bug_says_who_last_changed_the_awaited_work(self):
+        d = _dossier(candidate={"node": "9583cc38e7cb", "bug": 1952588,
+                                "author": "Drew Willcoxon <adw@mozilla.com>"})
+        d["corroborations"]["hang_awaited_origin"] = _ORIGIN
+        p = _preview(d, meta_bugs=[_META])
+        self.assertIn("The work the main thread waits for -- `suggest::store::SuggestStoreInner<T>"
+                      "::ingest` (" + _AS + "suggest/src/store.rs:636) -- was last changed by",
+                      p["comment"])
+        self.assertIn("(bug 1952588)", p["comment"])
+        self.assertNotIn("The failing code comes from", p["comment"])
+        # Without the routing record the regressor-era sentence stands.
+        p = _preview(_dossier(), meta_bugs=[_META])
+        self.assertIn("The failing code comes from", p["comment"])
 
     def test_the_regressor_filing_shape_takes_the_same_bucket_form(self):
         d = _dossier(verdict={"decision": "lead", "confidence": "probable",

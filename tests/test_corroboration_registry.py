@@ -306,6 +306,10 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
     # a flag to this set is a decision that has to be made here, in a diff, with a reason --
     # which is exactly what did not happen for `stale_signature_clamped`.
     EXPECTED = {
+        # 2026-09-18, the hang bucket routing: the model's own origin pick (measures how often
+        # it routes by the wait code) and the age gate's waiver for the awaited work's blame.
+        "hang_model_origin",
+        "hang_bucket_age_waived",
         "absent_named_threads", "absent_thread_clamped", "actionable_origin_postdates_signature",
         "call_path_verified",
         "compiled_out_macro", "compiled_out_rev", "exposer_suspected",
