@@ -1055,36 +1055,58 @@ def _bug_state(bug_id, token):
             "assigned_to": b.get("assigned_to") or ""}
 
 
-def _own_prior_bugs(signatures):
-    """The bugs WE filed on these signatures, from the database -- the ordinary filer's
-    ``filed_bug`` records and the spike table -- newest spike filing first. Neither lookup may
-    raise into the filer; the ordinary one hands back a fail-closed sentinel with no ``bug``."""
+def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
+    """The bugs WE filed on these signatures, from the database, as ``{"bug",
+    "bucket_match"}`` records -- the ordinary filer's ``filed_bug`` records and the spike table,
+    newest spike filing first. ``bucket_match`` distinguishes an exact identity match from a
+    legacy filing with no recorded bucket, which still fails closed but is not a safe comment
+    venue. Neither lookup may raise into the filer."""
     out = []
+    matching_bucket = bool(bucket or bucket_title)
     try:
-        prior = models.SpikeEscalation.prior_bug_for(signatures)
+        prior = (models.SpikeEscalation.prior_bug_for(
+            signatures, bucket=bucket, bucket_title=bucket_title)
+            if bucket or bucket_title
+            else models.SpikeEscalation.prior_bug_for(signatures))
         if prior:
-            out.append(prior)
+            # The spike-table query applies the identity predicate itself.
+            out.append({"bug": prior, "bucket_match": matching_bucket})
     except Exception:  # pragma: no cover - defensive
         pass
     for sig in signatures:
         try:
-            filed = models.Dossier.already_filed_for_signature(sig) or {}
+            filed = (models.Dossier.already_filed_for_signature(
+                sig, bucket=bucket, bucket_title=bucket_title)
+                if bucket or bucket_title
+                else models.Dossier.already_filed_for_signature(sig)) or {}
         except Exception:  # pragma: no cover - defensive
             filed = {}
         bug = filed.get("bug") if isinstance(filed, dict) else None
         if bug:
             try:
-                out.append(int(bug))
+                same_title = all((
+                    not bucket,
+                    bool(bucket_title),
+                    str(filed.get("bucket_title") or "") == str(bucket_title),
+                ))
+                exact = any((
+                    bool(bucket and str(filed.get("bucket") or "") == str(bucket)),
+                    same_title,
+                ))
+                out.append({"bug": int(bug), "bucket_match": exact})
             except (TypeError, ValueError):
                 continue
     seen = []
-    for b in out:
-        if b not in seen:
-            seen.append(b)
-    return seen
+    unique = []
+    for record in out:
+        if record["bug"] not in seen:
+            seen.append(record["bug"])
+            unique.append(record)
+    return unique
 
 
-def resolve_venue_below_public(signatures, product, buildid, token):
+def resolve_venue_below_public(signatures, product, buildid, token, *, bucket=None,
+                               bucket_title=None):
     """What decides a spike's fate when no OPEN public bug on the signature exists, in order:
 
     1. a bug WE filed on the signature (any channel) that is still open but invisible to the
@@ -1101,7 +1123,9 @@ def resolve_venue_below_public(signatures, product, buildid, token):
     so this is a new defect or a fix that did not hold) or one closed INVALID / WORKSFORME /
     DUPLICATE, which say nothing about whether the crash is still happening."""
     build_dt = sigage.to_datetime(str(buildid)) if buildid else None
-    for bug in _own_prior_bugs(signatures):
+    matching_bucket = bool(bucket or bucket_title)
+    for prior in _own_prior_bugs(signatures, bucket=bucket, bucket_title=bucket_title):
+        bug = prior["bug"]
         state = _bug_state(bug, token)
         if not state:
             continue
@@ -1117,6 +1141,17 @@ def resolve_venue_below_public(signatures, product, buildid, token):
             # opened by a flaky read.
             visible = bugzilla_apply._bugs_by_id([bug])
             if visible is not None and any(r.get("id") == bug for r in visible):
+                if prior["bucket_match"]:
+                    # Bucket bugs intentionally carry no crash signature. The database lookup
+                    # above selected this exact bucket, so this public bug is its venue; without
+                    # the identity check a later episode would file the same bucket again.
+                    return {"id": bug, "kind": "own_bucket",
+                            "assigned_to": state["assigned_to"]}
+                if matching_bucket:
+                    # A legacy filing with no recorded bucket cannot safely receive this
+                    # bucket's comment, but allowing a new bug would defeat fail-closed dedup.
+                    return {"id": bug, "kind": "own_unknown_bucket",
+                            "assigned_to": state["assigned_to"]}
                 logger.info("spike: our open bug %s is public but no longer carries the "
                             "signature (a bucket bug, or edited off) -- not a venue", bug)
                 continue
@@ -1201,6 +1236,14 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         return dict(result, retry=True, skipped="signature lookup failed; not risking a duplicate")
     existing, other_app = bugzilla_apply._split_by_application(existing, product)
     existing, meta_bugs = bugzilla_apply._split_out_metas(existing)
+    # Resolve the bucket before looking below public signature venues. Bucket bugs carry no
+    # signature, so only the stored key/title can find a prior filing of the same bucket.
+    bucket_title = None
+    bucket_key = ""
+    if meta_bugs and grounded and findings is not None:
+        bucket_title = spike_report.spike_bucket_title(brief, findings)
+        if bucket_title:
+            bucket_key = spike_report.spike_bucket_key(brief)
     mode = cfg["comment_on_existing"]
     venue = for_spike = None
     related = []
@@ -1226,10 +1269,17 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     venue_kind = "open" if venue is not None else None
     if venue is None:
         siblings = brief.get("siblings") or [signature]
-        below = resolve_venue_below_public(siblings, product, esc.buildid, token)
+        below = resolve_venue_below_public(
+            siblings, product, esc.buildid, token,
+            bucket=bucket_key or None, bucket_title=bucket_title or None)
         if below is not None and below["kind"] == "fixed":
             return dict(result, bug=below["id"], venue_kind="fixed",
                         skipped=_fixed_decline(below, esc.buildid))
+        if below is not None and below["kind"] == "own_unknown_bucket":
+            return dict(result, bug=below["id"], venue_kind="own_unknown_bucket",
+                        skipped=("our earlier bug {} has no recorded bucket; not risking a "
+                                 "duplicate or posting this bucket to the wrong bug".format(
+                                     below["id"])))
         if below is not None and mode == "skip":
             return dict(result, bug=below["id"],
                         skipped="open bug {} exists".format(below["id"]))
@@ -1244,11 +1294,21 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     # to name is SIGNATURE-LEVEL information, and the signature lives on the tracker: the volume
     # goes there as a comment, with no needinfo -- the tracker's people are its audience, the way
     # a human's volume note is (bug 1866944 comment 28).
-    bucket_title = None
     if venue is None and meta_bugs:
-        if grounded and findings is not None:
-            bucket_title = spike_report.spike_bucket_title(brief, findings)
         if not bucket_title:
+            if withheld:
+                # The tracker is public (it came from the anonymous signature lookup). Never
+                # route a memory-safety crash there merely because the analysis could not name a
+                # bucket: that bypasses the restricted-filing carve-out and discloses the crash
+                # link and analysis. With no cause title we cannot safely create either the
+                # required bucket bug or a public comment, so fail closed.
+                return dict(
+                    result,
+                    memory_unsafe_signals=signals,
+                    skipped=("memory-safety spike is held by [meta] bug {}; the analysis names "
+                             "no bucket, so it was not posted publicly".format(
+                                 meta_bugs[0]["id"])),
+                )
             venue = {"id": meta_bugs[0]["id"], "assigned_to": ""}
             venue_kind = "meta"
             for_spike = False

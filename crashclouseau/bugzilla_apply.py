@@ -930,12 +930,21 @@ def _bucket_of(dossier):
     return str(work.get("bucket") or "")
 
 
-def _different_bucket(prior, bucket):
+def _different_bucket(prior, bucket, bucket_title=""):
     """Was our earlier filing on this signature about a DIFFERENT bucket than *bucket*? Only
     when both are known: an unknown on either side reads as the same bucket, so the one-bug-
     per-signature stop keeps applying wherever the cohort cannot be told apart."""
     previous = str((prior or {}).get("bucket") or "")
-    return bool(previous and bucket and previous != bucket)
+    bucket = str(bucket or "")
+    if previous and bucket:
+        return previous != bucket
+    # Non-hang bucket bugs have no deterministic stack key. Their cause title is the fallback
+    # identity; as with keys, an unknown value on either side fails toward deduplication.
+    previous_title = str((prior or {}).get("bucket_title") or "")
+    bucket_title = str(bucket_title or "")
+    titles_known = bool(previous_title and bucket_title)
+    titles_differ = titles_known and previous_title != bucket_title
+    return bool(not (previous or bucket) and titles_differ)
 
 
 def _split_by_application(bugs, product):
@@ -1875,7 +1884,6 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # developer, because this query was then asked only on a `skip` channel.
     #
     # The one DB query is made on every channel; what differs is what a hit means.
-    prior_sig = models.Dossier.already_filed_for_signature(signature)
     # On a channel that never writes on existing bugs a prior filing is a FULL STOP, before the
     # venue search is even made. A derivation and not a new knob: a policy of "never touch an
     # existing bug" cannot also want a SECOND bug for a signature it has already filed one for
@@ -1899,7 +1907,18 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     held_by_meta = bool(_split_out_metas(
         _split_by_application(existing, uuid_info.get("product"))[0])[1])
     this_bucket = _bucket_of(dossier)
-    if prior_sig and held_by_meta and _different_bucket(prior_sig, this_bucket):
+    from crashclouseau import report_bug
+
+    this_bucket_title = report_bug.bucket_title(dossier) if held_by_meta else ""
+    # On a bucket-holder signature, ask the database for THIS bucket. The old signature-only
+    # query always returned the oldest filing, so after A and B had both been filed a second B
+    # compared itself with A and was filed again. Unknown historical identities still fail
+    # closed inside the query.
+    prior_sig = models.Dossier.already_filed_for_signature(
+        signature, bucket=this_bucket or None, bucket_title=this_bucket_title or None
+    ) if held_by_meta else models.Dossier.already_filed_for_signature(signature)
+    if prior_sig and held_by_meta and _different_bucket(
+            prior_sig, this_bucket, this_bucket_title):
         logger.info("autofile: our bug %s on %r is bucket %r; this crash is bucket %r of a "
                     "signature held by a [meta] tracker -- a bucket bug may be filed for %s",
                     prior_sig.get("bug"), signature, prior_sig.get("bucket"), this_bucket, uuid)
@@ -2126,7 +2145,6 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             out["via_duplicate"] = via_duplicate
         return out
 
-    from crashclouseau import report_bug
     # A NEW bug on a bucket-holder signature is a BUCKET BUG or nothing (`report_bug.
     # build_bug_preview`'s bucket mode: named for its cause, no `cf_crash_signature`, blocks the
     # tracker). Nothing in the verdict to name the bucket -- no `title`, no awaited work, no

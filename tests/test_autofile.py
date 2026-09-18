@@ -546,6 +546,11 @@ class TestMetaBugsMakeBucketBugs(_Base):
             "bucket": "viaduct::client::Client::send_sync | viaduct::Request::send"}}}
         res = self._file(dossier=other, comment_on_existing=False)
         self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"), res)
+        bugzilla_apply.models.Dossier.already_filed_for_signature.assert_any_call(
+            _INFO["signature"],
+            bucket="viaduct::client::Client::send_sync | viaduct::Request::send",
+            bucket_title=_TITLED["verdict"]["title"],
+        )
         same = {**_TITLED, "corroborations": {"hang_awaited_work": {
             "bucket": "CoCreateInstance | mozilla::widget::WinAudioSession::Start"}}}
         res = self._file(dossier=same, comment_on_existing=False)

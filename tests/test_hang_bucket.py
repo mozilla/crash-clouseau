@@ -339,6 +339,16 @@ class TestThePromptFact(unittest.TestCase):
         facts = "\n".join(triage._crash_facts({"raw_crash": {"reason": "SIGSEGV"}}))
         self.assertNotIn("AWAITED WORK", facts)
 
+    def test_an_ordinary_fault_inside_a_spin_loop_is_not_called_a_shutdown_hang(self):
+        # The annotation describes nested event loops on ordinary crashes too. A recognised
+        # shutdown-shaped entry is not enough to redirect analysis away from the faulting stack.
+        raw = _hang([_SUGGEST], report_type="crash", signature="mozilla::Foo::Bar",
+                    moz_crash_reason="MOZ_CRASH(oops)")
+        facts = "\n".join(triage._crash_facts(
+            {"signature": "mozilla::Foo::Bar", "raw_crash": raw}))
+        self.assertNotIn("WATCHDOG / TIMEOUT CRASH", facts)
+        self.assertNotIn("AWAITED WORK", facts)
+
 
 def _actionable(paths, title="", decision=Decision.actionable):
     cits = [RefCitation(filename=p, line=1) for p in paths]
@@ -645,6 +655,29 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
         self.assertIn("The thread the main thread is waiting for -- thread 2 `BgIOThreadPool "
                       "#510`", self.created[0]["description"])
 
+    def test_a_later_spike_in_the_same_bucket_uses_the_bucket_bug(self):
+        self.brief["raw_crash"] = _hang([_IDLE_POOL, _SUGGEST])
+        self.brief["is_hang"] = True
+        se.models.SpikeEscalation.prior_bug_for.return_value = 2073426
+        se._bug_state.return_value = {
+            "id": 2073426, "status": "NEW", "resolution": "", "resolved": None,
+            "assigned_to": ""}
+        bugzilla_apply._bugs_by_id.return_value = [{"id": 2073426, "resolution": ""}]
+
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+
+        self.assertEqual((res["bug"], res["mode"], res["venue_kind"]),
+                         (2073426, "spike_comment", "own_bucket"))
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.comments[0][0], 2073426)
+        se.models.SpikeEscalation.prior_bug_for.assert_called_with(
+            ["mozilla::Foo::Bar"],
+            bucket="viaduct::client::Client::send_sync | viaduct::Request::send | "
+                   "remote_settings::client::ViaductApiClient::make_request",
+            bucket_title=_SUGGEST_TITLE,
+        )
+
     def test_a_spike_with_nothing_to_name_goes_to_the_tracker_as_a_comment(self):
         for findings, grounded in ((None, False), (self.findings, False),
                                    (SpikeFindings(summary="short"), True)):
@@ -657,6 +690,17 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
                 self.assertIsNone(res["needinfo"], "the tracker's people are not needinfo'd")
                 self.assertEqual(self.created, [])
                 self.assertIn("crash volume spiked", self.comments[0][1])
+
+    def test_an_unnamed_memory_safety_spike_is_not_posted_to_the_public_tracker(self):
+        self.brief["raw_crash"] = {
+            "json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, None, grounded=False)
+        self.assertFalse(res["filed"])
+        self.assertIn("not posted publicly", res["skipped"])
+        self.assertTrue(res["memory_unsafe_signals"])
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.created, [])
 
     def test_our_public_bug_that_dropped_the_signature_is_not_a_venue(self):
         # 2071528 after Jens made it the audio-session bucket: open, public, no signature. Our
@@ -680,6 +724,13 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
         self.assertEqual(spike_report.spike_bucket_title(
             {"raw_crash": _hang([_SUGGEST])}, None), _SUGGEST_TITLE)
         self.assertEqual(spike_report.spike_bucket_title({"raw_crash": {}}, None), "")
+
+    def test_an_ordinary_spike_inside_a_spin_loop_has_no_awaited_work_bucket(self):
+        raw = _hang([_SUGGEST], report_type="crash", signature="mozilla::Foo::Bar",
+                    moz_crash_reason="MOZ_CRASH(oops)")
+        brief = {"signature": "mozilla::Foo::Bar", "raw_crash": raw}
+        self.assertEqual(spike_report.spike_bucket_title(brief, None), "")
+        self.assertEqual(spike_report.spike_bucket_key(brief), "")
 
 
 if __name__ == "__main__":

@@ -202,17 +202,30 @@ def spike_bucket_title(brief, findings):
     else the investigator's summary cut to a sentence. Nothing usable means the spike is
     signature-level information and goes to the tracker as a comment instead (see
     ``spike_escalation.file_spike_bug``)."""
-    from crashclouseau import hang
-
-    try:
-        work = hang.awaited_summary((brief or {}).get("raw_crash") or {}) or {}
-    except Exception:  # pragma: no cover - defensive
-        work = {}
+    work = _spike_awaited_work(brief)
     if work.get("title"):
         return str(work["title"])[:report_bug._MAX_BUCKET_TITLE]
     summary = getattr(findings, "summary", "") if findings is not None else ""
     sentence = report_bug._first_sentence(summary)
     return sentence[:report_bug._MAX_BUCKET_TITLE] if len(sentence) >= 20 else ""
+
+
+def _spike_awaited_work(brief):
+    """The awaited-work summary only when *brief* is actually a watchdog crash."""
+    raw = (brief or {}).get("raw_crash") or {}
+    if not is_hang((brief or {}).get("signature"), raw):
+        return {}
+    from crashclouseau import hang
+
+    try:
+        return hang.awaited_summary(raw) or {}
+    except Exception:  # pragma: no cover - defensive
+        return {}
+
+
+def spike_bucket_key(brief):
+    """The deterministic awaited-stack key used to deduplicate a hang bucket."""
+    return str(_spike_awaited_work(brief).get("bucket") or "")
 
 
 def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None):
@@ -292,15 +305,7 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
     meta_ids = [int(b["id"]) for b in (meta_bugs or []) if (b or {}).get("id")]
     bucket = bool(meta_ids and bucket_title)
     opener = report_bug.build_bucket_opener(meta_bugs, signature) if bucket else None
-    bucket_key = ""
-    if bucket:
-        from crashclouseau import hang
-
-        try:
-            bucket_key = (hang.awaited_summary(brief.get("raw_crash") or {}) or {}).get(
-                "bucket") or ""
-        except Exception:  # pragma: no cover - defensive
-            bucket_key = ""
+    bucket_key = spike_bucket_key(brief) if bucket else ""
     author_display = report_bug._person_display(person) if person else None
     culprit = findings.culprit if findings is not None else None
     regression = bool(culprit and culprit.node and grounded and culprit.confidence != "low")

@@ -3296,8 +3296,10 @@ class Dossier(db.Model):
         return {"uuid": row.uuid} if row else None
 
     @staticmethod
-    def already_filed_for_signature(signature, channel=None):
-        """``{"uuid", "bug"}`` when we have ALREADY FILED A BUG for *signature*, else ``None``.
+    def already_filed_for_signature(signature, channel=None, bucket=None, bucket_title=None):
+        """Our first matching filing for *signature*, as ``{"uuid", "bug", ...}``, else
+        ``None``. When a bucket identity is supplied, match that bucket or a legacy filing whose
+        identity is unknown; returned bucket fields let the caller distinguish those cases.
 
         THE GUARD THAT SURVIVES THE TARGET BUG BEING CLOSED, which none of the others do --
         except, since bug 2070711, for the one closure that names a successor: a bug of ours
@@ -3347,7 +3349,8 @@ class Dossier(db.Model):
                                  # (`bugzilla_apply.autofile_bug` on a signature an open
                                  # [meta] holds): a later run on the same signature files a
                                  # DIFFERENT bucket rather than stopping at "already filed".
-                                 fb["bucket"].astext.label("bucket"))
+                                 fb["bucket"].astext.label("bucket"),
+                                 fb["bucket_title"].astext.label("bucket_title"))
                 .select_from(Dossier)
                 .join(UUID, Dossier.uuidid == UUID.id)
                 .filter(
@@ -3370,6 +3373,23 @@ class Dossier(db.Model):
                 q = q.outerjoin(Build, Build.id == UUID.buildid).filter(
                     or_(Build.channel == channel, Build.id.is_(None))
                 )
+            # A signature held by a [meta] tracker deliberately has MORE THAN ONE filing: one
+            # per bucket. Select a filing for THIS bucket, rather than selecting the signature's
+            # oldest filing and comparing its bucket in Python. Otherwise A, B, B returns A on
+            # the third run and files a duplicate B. A historical filing with no bucket identity
+            # still fails closed and matches every bucket, preserving the pre-bucket dedup rule.
+            bucket = str(bucket or "")
+            bucket_title = str(bucket_title or "")
+            bucket_path = fb["bucket"].astext
+            title_path = fb["bucket_title"].astext
+            unknown = and_(
+                or_(bucket_path.is_(None), bucket_path == ""),
+                or_(title_path.is_(None), title_path == ""),
+            )
+            if bucket:
+                q = q.filter(or_(bucket_path == bucket, unknown))
+            elif bucket_title:
+                q = q.filter(or_(title_path == bucket_title, unknown))
             row = q.order_by(Dossier.id).first()
         except Exception:                                  # pragma: no cover - defensive
             return {"skipped": "prior-filing lookup failed"}
@@ -3378,6 +3398,8 @@ class Dossier(db.Model):
         out = {"uuid": row.uuid, "bug": row.bug}
         if row.bucket:
             out["bucket"] = row.bucket
+        if row.bucket_title:
+            out["bucket_title"] = row.bucket_title
         return out
 
     @staticmethod
@@ -4697,23 +4719,33 @@ class SpikeEscalation(db.Model):
         )
 
     @staticmethod
-    def prior_bug_for(signatures):
+    def prior_bug_for(signatures, bucket=None, bucket_title=None):
         """The bug our most recent spike filing on any of ``signatures`` went to, on any channel,
         or ``None``. The spike filer asks it after the PUBLIC venue lookup found nothing: a bug we
         filed and a human restricted, or resolved, is invisible there, and only the database
-        knows we filed it. Never raises; a backend without JSONB paths answers ``None``."""
+        knows we filed it. A supplied bucket key (or fallback title) restricts the lookup to that
+        bucket. Never raises; a backend without JSONB paths answers ``None``."""
         if not signatures:
             return None
         try:
-            row = (
-                db.session.query(SpikeEscalation.payload["filing"]["bug"].astext)
+            filing = SpikeEscalation.payload["filing"]
+            q = (
+                db.session.query(filing["bug"].astext)
                 .filter(
                     SpikeEscalation.signature.in_(sorted({s[:512] for s in signatures})),
-                    SpikeEscalation.payload["filing"]["filed"].astext == "true",
+                    filing["filed"].astext == "true",
                 )
-                .order_by(SpikeEscalation.created.desc())
-                .first()
             )
+            # Bucket bugs carry no crash signature, so BMO cannot deduplicate them. When the
+            # caller knows the current bucket, find a prior filing of that bucket specifically;
+            # the most recent filing of some other bucket is not a venue for this one.
+            bucket = str(bucket or "")
+            bucket_title = str(bucket_title or "")
+            if bucket:
+                q = q.filter(filing["bucket"].astext == bucket)
+            elif bucket_title:
+                q = q.filter(filing["bucket_title"].astext == bucket_title)
+            row = q.order_by(SpikeEscalation.created.desc()).first()
         except Exception:
             logger.error("Cannot read the prior spike filings", exc_info=True)
             db.session.rollback()

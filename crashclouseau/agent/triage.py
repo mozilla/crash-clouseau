@@ -1597,8 +1597,13 @@ def _crash_facts(crash: dict) -> list[str]:
             lines.append(f"{label}: {value}")
     # Before the signature-level block below, because it is still a fact about THIS report.
     lines += _thread_inventory(raw)
-    lines += _watchdog_lines(crash)
-    lines += _awaited_work_lines(raw)
+    watchdog = _watchdog_lines(crash)
+    lines += watchdog
+    # `xpcom_spin_event_loop_stack` is also present on ordinary fault crashes that happened
+    # while a nested event loop was active. Only a watchdog crash may reinterpret that stack as
+    # a shutdown hang and tell the model to investigate the awaited thread instead of the fault.
+    if watchdog:
+        lines += _awaited_work_lines(raw)
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)

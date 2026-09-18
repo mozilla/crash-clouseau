@@ -747,6 +747,26 @@ class TestTheFiledBugJsonbHalf(_Base):
         self.assertEqual(models.Dossier.already_filed_for_signature(plain),
                          {"uuid": "bta-0121-aaaa-bbbb-ccccddddeeee", "bug": "2071529"})
 
+    def test_bucket_lookup_finds_a_later_matching_filing_not_only_the_oldest(self):
+        """After A and B have both been filed, another B must find B. The old query returned
+        the signature's oldest row (A), so the caller considered B different and filed it again."""
+        sig = "{}::several-buckets".format(self.SIG)
+        sigid = models.Signature.get_id(sig)
+        self._filed(
+            "bta-0122-aaaa-bbbb-ccccddddeeee", self.nightly,
+            dict(self._info(2071530, sig), bucket="bucket A", bucket_title="Bucket A title"),
+            sigid=sigid)
+        self._filed(
+            "bta-0123-aaaa-bbbb-ccccddddeeee", self.nightly,
+            dict(self._info(2071531, sig), bucket="bucket B", bucket_title="Bucket B title"),
+            sigid=sigid)
+
+        found = models.Dossier.already_filed_for_signature(
+            sig, bucket="bucket B", bucket_title="Bucket B title")
+        self.assertEqual((found["bug"], found["bucket"]), ("2071531", "bucket B"))
+        self.assertIsNone(models.Dossier.already_filed_for_signature(
+            sig, bucket="bucket C", bucket_title="Bucket C title"))
+
     def test_already_filed_for_signature_blocks_the_second_bug(self):
         """FIXED. The guard used to be called `channel=channel`, so it could only ever see
         filings from the SAME channel — and the population it was measured on is entirely
