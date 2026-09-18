@@ -422,6 +422,10 @@ class _FilerBase(unittest.TestCase):
             mock.patch.object(bugzilla_apply, "_link_regressed_by",
                               side_effect=lambda b, r, t: list(r)),
             mock.patch.object(bugzilla_apply, "_nominate_tracking", return_value=True),
+            # Its sibling: a SuperSearch and PUTs. The crash's own train, as the preview states
+            # it, and nothing refused, unless a test says so.
+            mock.patch.object(bugzilla_apply, "_set_status_flags",
+                              side_effect=lambda b, p, s, pr, t: (dict(p.get("status_flags") or {}), [])),
             mock.patch.object(bugzilla_apply, "_set_needinfo", return_value=None),
             mock.patch.object(report_bug, "fetch_crash_reason",
                               return_value={"moz_crash_reason": "MOZ_CRASH(oops)"}),

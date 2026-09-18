@@ -437,6 +437,31 @@ heroku run -a crash-clouseau-augmented -- python bin/backfill_bucket.py --bug 20
 Cleanup owed on BMO from before: 2069191 still carries the signature and the `topcrash` keyword
 BugBot added for it (Jens moves both to the tracker, as on 2071528).
 
+## Affected versions on a bug we file (2026-09-18)
+
+Relman feedback, relayed by Calixte: "Could clouseau set the affected versions automatically?
+That would help relman a lot to surface these bugs." Release management finds bugs through the
+per-train status flags, and ours carried none until somebody set them by hand. Now every NEW bug
+either filer creates -- culprit, lead, actionable, bucket, spike; every channel and product --
+gets `cf_status_firefox<major> = affected` for:
+
+- the crash's own version (the preview states it, `status_flags`; `cf_status_firefox_esr<major>`
+  on an ESR line), and
+- every other LIVE train Socorro shows the signature on (`sigage.affected_trains`: one version
+  facet over 60 days, kept to the majors product-details says are on nightly/beta/release and the
+  two ESR lines -- a stale 150.0 install reporting once is not a train). A bucket bug states its
+  own train only: the catch-all signature says nothing about which trains have THAT cause.
+
+`affected` only, one PUT per flag after the create (a retired flag would reject a create whole,
+and a PUT is atomic across fields), best-effort like the tracking nomination. `unaffected` is
+left to BugBot's `regression_set_status_flags`, which derives it from `regressed_by` one flag at
+a time and only where the flag is still `---`, so the two never fight. A COMMENT on somebody
+else's bug touches no flag (Calixte: new bugs only). Not a knob.
+
+Check after a deploy: the first new filing's `filed_bug` carries `status_flags` (what landed) and,
+if BMO refused one, `status_flags_failed`; the bug's own version reads `affected` on BMO, plus
+the other trains its signature is on. Nothing else in the filing changed.
+
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct

@@ -344,6 +344,11 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
         # what release management tracks.
         "tracking_flag": (report_bug._tracking_flag(brief.get("version"), channel)
                           if policy.get("nominate_tracking") else None),
+        # The crash's own train has the bug (`report_bug.build_bug_preview`'s key of the same
+        # name): set by the filer after the create, with the other live trains Socorro shows the
+        # signature on (`bugzilla_apply._set_status_flags`).
+        "status_flags": ({own: "affected"} if (own := report_bug._status_flag(
+            brief.get("version"), channel)) else {}),
         "groups": [group] if (withhold and group) else [],
         "cc": [account] if (withhold and account) else [],
     }

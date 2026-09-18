@@ -128,6 +128,10 @@ class _Base(unittest.TestCase):
             # Read before the needinfo PUT on the comment-on-existing branch, and it is a
             # Bugzilla request: nobody is needinfo'd on the venue unless a test says so.
             mock.patch.object(bugzilla_apply, "_existing_needinfos", return_value=set()),
+            # Asked only on the file-a-new-bug branch, and it is a SuperSearch plus a
+            # product-details read: the signature is on no other live train unless a test says
+            # so (`None` = could not ask, which states the crash's own train alone).
+            mock.patch("crashclouseau.sigage.affected_trains", return_value=None),
             mock.patch.object(bugzilla_apply, "_create_bug",
                               side_effect=lambda p, t: self.created.append(p) or 999),
             mock.patch.object(bugzilla_apply, "_post_comment",

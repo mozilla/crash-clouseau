@@ -36,6 +36,7 @@ is a LOWER bound and the resulting downweight is conservative.
 """
 import re
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from urllib.parse import urlencode
 
 from libmozdata import socorro
@@ -48,6 +49,12 @@ from crashclouseau.logger import logger
 # 365 over the line. Public because the second-opinion agent's crash-stats tool states the
 # window in its agent-facing text, and the figure must not drift between the two files.
 MAX_WINDOW_DAYS = 364
+
+# Product Details is not wrapped by libmozdata's bounded Connection client: versions.get()
+# uses requests.get() directly, with no timeout. Read the same document through our bounded
+# HTTP wrapper instead. A successful answer is stable for this worker's short lifetime and is
+# cached; failures are deliberately not cached, so the next filing can try again.
+_FIREFOX_VERSIONS_URL = "https://product-details.mozilla.org/1.0/firefox_versions.json"
 
 
 def _buildid_to_dt(buildid):
@@ -769,6 +776,134 @@ def summarize_version_rates(result, days=VERSION_RATES_DAYS, step_ratio=VERSION_
         "from_share": previous["share"],
     }
     return out
+
+
+# --- which trains a signature is on ---------------------------------------------------------
+# What the filer turns into `cf_status_firefox<N> = affected` on a bug it files (relman feedback
+# relayed by Calixte, 2026-09-18: "Could clouseau set the affected versions automatically? That
+# would help relman a lot to surface these bugs"). The window is `VERSION_RATES_DAYS` and not a
+# number of its own: a version lives about four weeks on its train, so any window covering the
+# current version's whole life answers the same, and it is the LIVE-TRAIN filter below, not the
+# window, that keeps a stale install's old version out.
+
+
+@lru_cache(maxsize=1)
+def _read_live_trains():
+    response = net.get(_FIREFOX_VERSIONS_URL, timeout=net.SERVICE_TIMEOUT)
+    response.raise_for_status()
+    data = response.json() or {}
+
+    def major(key):
+        m = re.match(r"(\d+)", str(data.get(key) or ""))
+        return int(m.group(1)) if m else None
+
+    current_esr = major("FIREFOX_ESR")
+    next_esr = major("FIREFOX_ESR_NEXT")
+    trains = {
+        "nightly": major("FIREFOX_NIGHTLY"),
+        "beta": major("LATEST_FIREFOX_RELEASED_DEVEL_VERSION"),
+        "release": major("LATEST_FIREFOX_VERSION"),
+        "esr": next_esr or current_esr,
+        "esr_previous": current_esr if next_esr and current_esr != next_esr else None,
+    }
+    if not all(trains.get(k) for k in ("nightly", "beta", "release", "esr")):
+        raise ValueError("product-details response is missing a live Firefox train")
+    return trains
+
+
+def live_trains():
+    """``{"nightly": 158, "beta": 157, "release": 156, "esr": 153, "esr_previous": 140}`` -- the
+    major on each train today, read off product-details once per process through the bounded
+    HTTP wrapper; ``{}`` when it could not be read. Never raises.
+
+    This is the set release management tracks and the set BugBot's own status-flag rule
+    (``regression_set_status_flags``) writes to. A flag for any other version is either retired
+    on BMO or a version nobody ships a fix to."""
+    try:
+        return {k: v for k, v in _read_live_trains().items() if v}
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("sigage: current versions unavailable: %s", exc)
+        return {}
+
+
+def observed_versions(signature, product="Firefox", days=VERSION_RATES_DAYS):
+    """``{version: reports}`` for this signature on EVERY channel within ``days`` (``"158.0a1"``,
+    ``"157.0b4"``, ``"156.0.1"``, ``"140.3.0esr"``), or ``None`` when Socorro could not be
+    asked. One SuperSearch: a version facet and no rows. Never raises."""
+    if not signature:
+        return None
+    days = max(1, min(int(days or VERSION_RATES_DAYS), MAX_WINDOW_DAYS))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    params = {
+        "signature": "=" + signature,
+        "product": product or "Firefox",
+        "date": ">=" + since,
+        "_results_number": 0,
+        "_facets": "version",
+        "_facets_size": 200,
+    }
+    got = {}
+
+    def handler(json_, data):
+        data["r"] = json_
+
+    try:
+        socorro.SuperSearch(params=params, handler=handler, handlerdata=got).wait()
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("sigage: version facet failed for %r: %s", signature, exc)
+        return None
+    result = got.get("r")
+    if not isinstance(result, dict):
+        return None
+    out = {}
+    for t in (result.get("facets") or {}).get("version") or []:
+        term = str(t.get("term") or "").strip()
+        if term:
+            out[term] = out.get(term, 0) + int(t.get("count") or 0)
+    return out
+
+
+def trains_from_versions(observed, live):
+    """The pure half of ``affected_trains``: ``{("firefox", 158), ("esr", 140)}`` -- every live
+    train whose CURRENT major has a report among ``observed``.
+
+    The version string carries the flag family: an ``esr`` suffix is the ESR family (its own
+    family on BMO, ``cf_status_firefox_esr<N>``), everything else the release line, matched by
+    MAJOR against nightly, beta and release. By major and not by channel on purpose: a 157.0a1
+    report from before the merge is a report against the 157 codebase, which is beta now. A
+    version whose major is on no live train -- a stale 150.0 install reporting once -- is
+    dropped: its flag is retired on BMO, and nobody ships a fix to it."""
+    live = live or {}
+    desktop = {live.get(k) for k in ("nightly", "beta", "release")} - {None}
+    esr = {live.get(k) for k in ("esr", "esr_previous")} - {None}
+    out = set()
+    for version, count in (observed or {}).items():
+        if not count:
+            continue
+        v = str(version).strip().lower()
+        m = re.match(r"(\d+)", v)
+        if not m:
+            continue
+        major = int(m.group(1))
+        if v.endswith("esr"):
+            if major in esr:
+                out.add(("esr", major))
+        elif major in desktop:
+            out.add(("firefox", major))
+    return out
+
+
+def affected_trains(signature, product="Firefox", days=VERSION_RATES_DAYS):
+    """The live trains this signature is on today, ``{("firefox", 158), ...}``, or ``None`` when
+    Socorro or product-details could not be asked -- an unknown is not "on no train". Never
+    raises."""
+    live = live_trains()
+    if not live:
+        return None
+    observed = observed_versions(signature, product, days)
+    if observed is None:
+        return None
+    return trains_from_versions(observed, live)
 
 
 def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):

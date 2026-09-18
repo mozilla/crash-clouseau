@@ -440,6 +440,13 @@
         {% if bug_preview.get('tracking_flag') -%}
         <p><strong>Tracking flag:</strong> <code>{{ bug_preview['tracking_flag']|e }}</code> = ?</p>
         {% endif -%}
+        {# Every channel: the crash's own train has the bug, `cf_status_firefox<major>` =
+           affected, set by the filer in a PUT of its own after the create. The other live trains
+           Socorro shows the signature on are added when the bug is filed (a SuperSearch the page
+           does not run). New bugs only: a comment on an existing bug touches no flag. #}
+        {% if bug_preview.get('status_flags') -%}
+        <p><strong>Status flags:</strong> {% for f, v in bug_preview['status_flags'].items() %}<code>{{ f|e }}</code> = {{ v|e }}{% if not loop.last %}, {% endif %}{% endfor %} &mdash; plus every other live train Socorro shows the signature on, checked when the bug is filed.</p>
+        {% endif -%}
         {# ONE comment, verbatim: stack + crash reason + volume + analysis + needinfo ask.
            Shown unrendered (escaped, not linkified) because it IS the markdown we post --
            what you read here is byte-for-byte what lands in the bug. #}

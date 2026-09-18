@@ -1168,6 +1168,12 @@ def get_agent_autofile(channel=None, product=None):
         # (`report_bug.bug_title`); the nomination is its own best-effort PUT after the create
         # (`bugzilla_apply._nominate_tracking`), because the flag for an old version may not
         # exist any more and a create carrying an unknown field is rejected whole.
+        #
+        # NOT A KNOB, and on every channel: a bug we file also says which trains HAVE the crash,
+        # `cf_status_firefox<major>` = affected for the crash's own version and for every live
+        # train Socorro shows the signature on, each its own PUT after the create
+        # (`bugzilla_apply._set_status_flags`; relman feedback relayed by Calixte, 2026-09-18).
+        # New bugs only -- a comment on somebody else's bug touches no flag.
         "summary_prefix": (a.get("summary_prefix") or "").strip(),
         "nominate_tracking": bool(a.get("nominate_tracking", False)),
     }

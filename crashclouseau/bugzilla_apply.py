@@ -341,10 +341,66 @@ def _nominate_tracking(bug_id, flag, token):
     return None
 
 
+def _set_status_flags(bug_id, preview, signature, product, token):
+    """``cf_status_firefox<N> = affected`` on a bug we FILED, for every train that has the crash:
+    its own (``preview["status_flags"]``, which the preview states from the version alone) and
+    every other live train Socorro shows the signature on today (``sigage.affected_trains``,
+    asked here and not in the preview because it is a SuperSearch and the page renders the
+    preview). Returns ``(set, refused)``: what landed, as ``{flag: value}``, and the flag names
+    BMO refused.
+
+    WHY. Relman feedback relayed by Calixte, 2026-09-18: "Could clouseau set the affected
+    versions automatically? That would help relman a lot to surface these bugs." Release
+    management finds bugs through these flags; a crash bug carrying none sits in a component's
+    backlog until somebody sets them by hand (sledru did, on ours). NEW BUGS ONLY, Calixte's
+    call: on somebody else's open bug the flags are curated by hand, and a venue comment is not
+    the place to override them -- the comment branch of ``autofile_bug`` never reaches this.
+
+    ``affected`` ONLY, and only where a report exists. ``unaffected`` would be an inference from
+    the regressor's landing version, and BugBot's ``regression_set_status_flags`` rule already
+    draws exactly that from ``regressed_by`` -- one flag at a time, and only where the flag is
+    still ``---`` (read 2026-09-18), so what is set here is never overwritten and never blocks
+    the rest of its work. Where the two would disagree (a report on a train the regressor never
+    reached), the report is the fact, and the flag is what puts a human on the contradiction.
+
+    ONE PUT PER FLAG, after the create, for the reason ``_nominate_tracking`` has: BMO retires a
+    version's flags a few cycles after it ships, a PUT is atomic across fields, and a refused
+    flag must cost that flag alone. Best-effort like its siblings: the bug is filed and the
+    comment names the version. A BUCKET bug's signature is the [meta] tracker's catch-all and
+    says nothing about which trains have THIS cause, so a bucket bug states its own train only
+    and Socorro is not asked."""
+    preview = preview or {}
+    flags = dict(preview.get("status_flags") or {})
+    if signature and not preview.get("bucket"):
+        try:
+            from crashclouseau import report_bug, sigage
+            trains = sigage.affected_trains(signature, product)
+            for flag, value in report_bug.status_flags_for_trains(trains or ()).items():
+                flags.setdefault(flag, value)
+        except Exception as exc:
+            # This enrichment runs after the bug exists. No upstream response or parser bug may
+            # turn that successful create into an unrecorded "filing failed" result; the own
+            # train from the preview remains independently useful and is still written below.
+            logger.warning("autofile: discovering affected trains for %r failed: %s",
+                           signature, exc)
+    done, refused = {}, []
+    for flag in sorted(flags):
+        try:
+            _put_bug(bug_id, {flag: flags[flag]}, token)
+            done[flag] = flags[flag]
+        except Exception as exc:
+            logger.warning("autofile: setting %s = %s on bug %s failed: %s",
+                           flag, flags[flag], bug_id, exc)
+            refused.append(flag)
+    return done, refused
+
+
 # The preview keys a create posts. `groups` and `cc` are in this tuple, and a test asserts they
 # reach the POSTED BODY rather than merely the preview. A key the preview sets and this filter
 # drops is a SILENT no-op -- that is how `blocks` and `regressed_by` were dead for weeks -- and
-# for `groups` the silent no-op publishes a use-after-free.
+# for `groups` the silent no-op publishes a use-after-free. `tracking_flag` and `status_flags`
+# are NOT here on purpose: each is a PUT of its own after the create (`_nominate_tracking`,
+# `_set_status_flags`), because a create carrying a retired flag is rejected whole.
 _CREATE_KEYS = ("product", "component", "version", "type", "keywords",
                 "cf_crash_signature", "groups", "cc")
 
@@ -2367,6 +2423,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                     result["tracking_nominated"] = flag
                 else:
                     result["tracking_failed"] = flag
+            # WHICH TRAINS HAVE THE BUG (`_set_status_flags`): the crash's own, and every live
+            # train Socorro shows the signature on, `affected` each in its own PUT. Recorded
+            # either way, like the nomination: a refused flag is one a human has to add.
+            flags, refused = _set_status_flags(bug_id, preview, signature, product, token)
+            if flags:
+                result["status_flags"] = flags
+            if refused:
+                result["status_flags_failed"] = refused
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
         # PERSIST THE REJECTION. A failed write used to return here having written nothing, so

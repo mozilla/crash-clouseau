@@ -1827,6 +1827,25 @@ def bug_title(signature, prefix=""):
     return "{}{}]".format(lead, sig)
 
 
+def _flag_field(kind, major, esr=False):
+    """BMO's per-train flag name: ``cf_<kind>_firefox<major>``, or ``cf_<kind>_firefox_esr<major>``
+    for the ESR flag family. ``kind`` is ``tracking`` (an ask) or ``status`` (a statement)."""
+    return "cf_{}_firefox{}{}".format(kind, "_esr" if esr else "", major)
+
+
+def _train_flag(kind, version, channel=None):
+    """``_flag_field`` for a Firefox version string on ``channel``, or ``None`` when the version
+    is unknown or unparseable. The family comes from the CHANNEL, not the version string: an ESR
+    line label (``esr140``) is the ESR family, everything else the release flags."""
+    try:
+        major = utils.get_major(str(version or "").strip())
+    except (ValueError, IndexError):
+        return None
+    if major <= 0:
+        return None
+    return _flag_field(kind, major, esr=config.channel_family(channel) == "esr")
+
+
 def _tracking_flag(version, channel=None):
     """``cf_tracking_firefox<major>`` for a Firefox version string (``"155.0.1"`` -> firefox155),
     or ``cf_tracking_firefox_esr<major>`` when the crash is on an ESR channel
@@ -1840,15 +1859,22 @@ def _tracking_flag(version, channel=None):
     ESR is a different flag FAMILY on BMO, not a different number: ``cf_tracking_firefox140``
     is Firefox 140's release flag, long retired, and nominating it for an ESR crash would put
     the bug in nobody's queue."""
-    try:
-        major = utils.get_major(str(version or "").strip())
-    except (ValueError, IndexError):
-        return None
-    if major <= 0:
-        return None
-    if config.channel_family(channel) == "esr":
-        return "cf_tracking_firefox_esr{}".format(major)
-    return "cf_tracking_firefox{}".format(major)
+    return _train_flag("tracking", version, channel)
+
+
+def _status_flag(version, channel=None):
+    """``cf_status_firefox<major>`` for the crash's own version (``cf_status_firefox_esr<major>``
+    on an ESR line), or ``None``: the flag whose ``affected`` says this train HAS the bug. Named
+    like ``_tracking_flag`` and unlike it in kind -- a status flag is a statement of fact about a
+    version, which release management reads to find the bug; the tracking flag is an ask."""
+    return _train_flag("status", version, channel)
+
+
+def status_flags_for_trains(trains):
+    """``{"cf_status_firefox158": "affected", "cf_status_firefox_esr140": "affected"}`` for the
+    ``{("firefox", 158), ("esr", 140)}`` that ``sigage.affected_trains`` answers."""
+    return {_flag_field("status", major, esr=(family == "esr")): "affected"
+            for family, major in (trains or ())}
 
 
 def build_incomplete_fix_note(fix, channel=None):
@@ -2497,6 +2523,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     bucket_name = bucket_title(dossier) if meta_ids else ""
     bucket = bool(meta_ids and bucket_name)
     opener = build_bucket_opener(meta_bugs, uuid_info.get("signature")) if bucket else None
+    own_train = _status_flag(version, channel)
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -2570,6 +2597,16 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # own version, set by the filer in its own PUT after the create. `None` everywhere else.
         "tracking_flag": (_tracking_flag(version, channel)
                           if policy.get("nominate_tracking") and not actionable else None),
+        # THE CRASH'S OWN TRAIN HAS THE BUG: `cf_status_firefox<major>` = affected, on every
+        # channel and under every verdict, because it is the one thing this bug can state without
+        # asking anyone -- the report exists. A fact about a version, not a regression claim, so
+        # `actionable` keeps it. The filer sets it in a PUT of its own after the create
+        # (`bugzilla_apply._set_status_flags`) and adds the other live trains Socorro shows the
+        # signature on -- asked there and not here, because that is a SuperSearch and the page
+        # renders this preview. New bugs we file only, never a venue bug, whose flags a human
+        # curates. Relman feedback relayed by Calixte, 2026-09-18: "Could clouseau set the
+        # affected versions automatically? That would help relman a lot to surface these bugs".
+        "status_flags": {own_train: "affected"} if own_train else {},
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).

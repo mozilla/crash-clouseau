@@ -1384,6 +1384,13 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             if flag:
                 result["tracking_nominated" if bugzilla_apply._nominate_tracking(bug_id, flag, token)
                        else "tracking_failed"] = flag
+            # Which trains have the bug, `affected` each in its own PUT (`_set_status_flags`).
+            flags, refused = bugzilla_apply._set_status_flags(
+                bug_id, preview, signature, product, token)
+            if flags:
+                result["status_flags"] = flags
+            if refused:
+                result["status_flags_failed"] = refused
             if public_venue_declined is not None:
                 result["public_venue_declined"] = public_venue_declined
             if related:
