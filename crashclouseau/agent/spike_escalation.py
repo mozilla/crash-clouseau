@@ -1056,44 +1056,44 @@ def _bug_state(bug_id, token):
 
 
 def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
-    """The bugs WE filed on these signatures, from the database, as ``{"bug",
-    "bucket_match"}`` records -- the ordinary filer's ``filed_bug`` records and the spike table,
-    newest spike filing first. ``bucket_match`` distinguishes an exact identity match from a
-    legacy filing with no recorded bucket, which still fails closed but is not a safe comment
-    venue. Neither lookup may raise into the filer."""
+    """The bugs WE filed on these signatures, from the database, as ``{"bug", "bucket_match"}``
+    records -- the ordinary filer's ``filed_bug`` records and the spike table, newest spike
+    filing first. ``bucket_match`` is an exact identity match: the same stack KEY, or -- for a
+    bucket with no key -- the same recorded title, which is enough to comment on our own bug
+    but never enough to call a filing a different bucket (a title is not an identity). A legacy
+    filing with no recorded bucket, or one whose bucket differs, is ``False``. Neither lookup
+    may raise into the filer."""
+    bucket = str(bucket or "")
+    bucket_title = str(bucket_title or "")
+    scoped = bool(bucket or bucket_title)
+
+    def exact(record):
+        if bucket:
+            return str(record.get("bucket") or "") == bucket
+        return bool(bucket_title) and str(record.get("bucket_title") or "") == bucket_title
+
     out = []
-    matching_bucket = bool(bucket or bucket_title)
     try:
         prior = (models.SpikeEscalation.prior_bug_for(
-            signatures, bucket=bucket, bucket_title=bucket_title)
-            if bucket or bucket_title
-            else models.SpikeEscalation.prior_bug_for(signatures))
-        if prior:
-            # The spike-table query applies the identity predicate itself.
-            out.append({"bug": prior, "bucket_match": matching_bucket})
+            signatures, bucket=bucket or None, bucket_title=bucket_title or None)
+            if scoped else models.SpikeEscalation.prior_bug_for(signatures))
+        if isinstance(prior, int):
+            prior = {"bug": prior}
+        if prior and prior.get("bug"):
+            out.append({"bug": int(prior["bug"]), "bucket_match": scoped and exact(prior)})
     except Exception:  # pragma: no cover - defensive
         pass
     for sig in signatures:
         try:
             filed = (models.Dossier.already_filed_for_signature(
-                sig, bucket=bucket, bucket_title=bucket_title)
-                if bucket or bucket_title
-                else models.Dossier.already_filed_for_signature(sig)) or {}
+                sig, bucket=bucket or None, bucket_title=bucket_title or None)
+                if scoped else models.Dossier.already_filed_for_signature(sig)) or {}
         except Exception:  # pragma: no cover - defensive
             filed = {}
         bug = filed.get("bug") if isinstance(filed, dict) else None
         if bug:
             try:
-                same_title = all((
-                    not bucket,
-                    bool(bucket_title),
-                    str(filed.get("bucket_title") or "") == str(bucket_title),
-                ))
-                exact = any((
-                    bool(bucket and str(filed.get("bucket") or "") == str(bucket)),
-                    same_title,
-                ))
-                out.append({"bug": int(bug), "bucket_match": exact})
+                out.append({"bug": int(bug), "bucket_match": scoped and exact(filed)})
             except (TypeError, ValueError):
                 continue
     seen = []
@@ -1148,8 +1148,10 @@ def resolve_venue_below_public(signatures, product, buildid, token, *, bucket=No
                     return {"id": bug, "kind": "own_bucket",
                             "assigned_to": state["assigned_to"]}
                 if matching_bucket:
-                    # A legacy filing with no recorded bucket cannot safely receive this
-                    # bucket's comment, but allowing a new bug would defeat fail-closed dedup.
+                    # Ours, but not recorded as THIS bucket: a legacy filing with no identity,
+                    # or a bucket with no key (a non-hang) under another title. It cannot
+                    # safely receive this bucket's comment, and a new bug would defeat the
+                    # fail-closed dedup -- one bug per signature where the cause cannot be told.
                     return {"id": bug, "kind": "own_unknown_bucket",
                             "assigned_to": state["assigned_to"]}
                 logger.info("spike: our open bug %s is public but no longer carries the "
@@ -1277,9 +1279,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                         skipped=_fixed_decline(below, esc.buildid))
         if below is not None and below["kind"] == "own_unknown_bucket":
             return dict(result, bug=below["id"], venue_kind="own_unknown_bucket",
-                        skipped=("our earlier bug {} has no recorded bucket; not risking a "
-                                 "duplicate or posting this bucket to the wrong bug".format(
-                                     below["id"])))
+                        skipped=("our earlier bug {} on this signature is not recorded as this "
+                                 "bucket; not risking a duplicate or posting this bucket to the "
+                                 "wrong bug".format(below["id"])))
         if below is not None and mode == "skip":
             return dict(result, bug=below["id"],
                         skipped="open bug {} exists".format(below["id"]))

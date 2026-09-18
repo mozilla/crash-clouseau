@@ -35,6 +35,14 @@ from crashclouseau.agent.spike_agent import SpikeFindings  # noqa: E402
 from tests.test_autofile import _PREVIEW, _Base, _bug  # noqa: E402
 from tests.test_spike_escalation import _FilerBase, _esc  # noqa: E402
 
+import importlib.util  # noqa: E402
+
+_BB_SPEC = importlib.util.spec_from_file_location(
+    "backfill_bucket", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                    "bin", "backfill_bucket.py"))
+backfill = importlib.util.module_from_spec(_BB_SPEC)
+_BB_SPEC.loader.exec_module(backfill)
+
 _REV = "hg:hg.mozilla.org/releases/mozilla-release:{}:36f485dbc605"
 
 
@@ -141,6 +149,30 @@ _SOCKET_IDLE = {"thread_name": "Socket Thread", "frames": [
     _f("nsThread::ThreadFunc(void*)", "xul.dll", "xpcom/threads/nsThread.cpp", 375),
     _f("thread_start<unsigned int (__cdecl*)(void *),1>", "ucrtbase.dll"),
     _f("BaseThreadInitThunk", "kernel32.dll"), _f("RtlUserThreadStart", "ntdll.dll"),
+]}
+_AUDIO = {"thread_name": "BackgroundThreadPool #2", "frames": [
+    _f("NtAlpcConnectPortEx", "ntdll.dll"),
+    _f("LRPC_CASSOCIATION::AlpcConnect(int, unsigned long, int, void*, int*)", "rpcrt4.dll"),
+    _f("NdrClientCall4", "rpcrt4.dll"),
+    _f("CDeviceEnumerator::FinalConstruct(void)", "MMDevAPI.dll"),
+    _f("CoCreateInstance(_GUID const&, IUnknown*, unsigned long, _GUID const&, void**)",
+       "combase.dll"),
+    {"module": "aswhook.dll"},
+    _f("mozilla::widget::WinAudioSession::Start()", "xul.dll", "widget/windows/WinAudioSession.cpp",
+       288),
+    _f("mozilla::widget::WinAudioSession::Create(nsTString<char16_t>&&, nsTString<char16_t>&&, "
+       "nsID&&)", "xul.dll", "widget/windows/WinAudioSession.cpp", 226),
+    _f("NS_NewCancelableRunnableFunction<`lambda at .\\widget\\windows\\WinAudioSession.cpp:226:7'>"
+       "(char const*, `lambda at .\\widget\\windows\\WinAudioSession.cpp:226:7'&&)::$_0::operator()",
+       "xul.dll", "xpcom/threads/nsThreadUtils.h", 700),
+    _f("nsThreadPool::Run()", "xul.dll", "xpcom/threads/nsThreadPool.cpp", 442),
+    _f("NS_ProcessNextEvent(nsIThread*, bool)", "xul.dll", "xpcom/threads/nsThreadUtils.cpp", 471),
+    _f("nsThread::ThreadFunc(void*)", "xul.dll", "xpcom/threads/nsThread.cpp", 375),
+    _f("_PR_NativeRunThread(void*)", "nss3.dll"), _f("pr_root(void*)", "nss3.dll"),
+    _f("thread_start<unsigned int (__stdcall*)(void *),1>", "ucrtbase.dll"),
+    _f("BaseThreadInitThunk", "kernel32.dll"),
+    _f("patched_BaseThreadInitThunk(int, void*, void*)", "mozglue.dll"),
+    _f("__RtlUserThreadStart", "ntdll.dll"), _f("_RtlUserThreadStart", "ntdll.dll"),
 ]}
 _WATCHDOG = {"thread_name": "Shutdown Hang Terminator", "frames": [
     _f("mozilla::(anonymous namespace)::RunWatchdog(void*)", "XUL",
@@ -299,6 +331,21 @@ class TestAwaitedWork(unittest.TestCase):
         self.assertEqual(hang.clean_symbol("thread_start<unsigned int (__cdecl*)(void *),1>"),
                          "thread_start<T>")
         self.assertEqual(hang.clean_symbol(""), "")
+
+    def test_windows_thread_start_and_runnable_frames_are_plumbing(self):
+        # 7d923464 (bug 2071528's report): `_RtlUserThreadStart` / `__RtlUserThreadStart` under
+        # the thread start and the `NS_NewCancelableRunnableFunction` wrapper above the work
+        # read as work frames, so the bucket keyed on `_RtlUserThreadStart`.
+        s = hang.awaited_summary(_hang(
+            [_AUDIO], spin="default: nsThreadPool::ShutdownWithTimeout BackgroundThreadPool"))
+        self.assertEqual(s["bucket"], "mozilla::widget::WinAudioSession::Create | "
+                                      "LRPC_CASSOCIATION::AlpcConnect")
+        self.assertEqual(s["title"], "mozilla::widget::WinAudioSession::Create blocks "
+                                     "BackgroundThreadPool shutdown inside "
+                                     "LRPC_CASSOCIATION::AlpcConnect")
+        # The AV hook between CoCreateInstance and Start is kept as work (it is informative)
+        # but sits in the middle, where a key must not look.
+        self.assertIn("aswhook.dll", [f["module"] for f in hang.work_frames(_AUDIO["frames"])])
 
     def test_a_rust_impl_block_is_the_types_path(self):
         # Linux symbolises a Rust method through its impl block; macOS and Windows do not. The
@@ -641,6 +688,24 @@ class TestTheFilerRecordsTheBucket(_Base):
         self.assertFalse(bugzilla_apply._different_bucket({"bucket": "a"}, "a"))
         self.assertFalse(bugzilla_apply._different_bucket({"bucket": ""}, "b"))
         self.assertFalse(bugzilla_apply._different_bucket({}, ""))
+        # A title is not an identity: two titles never make two buckets.
+        self.assertFalse(bugzilla_apply._different_bucket(
+            {"bucket": "", "bucket_title": "one cause, said one way"}, ""))
+
+    def test_a_bucket_with_no_key_is_one_bug_per_signature(self):
+        # A non-hang bucket-holder signature: our earlier bucket bug carries a title and no
+        # key. A later run titles the same cause differently; that is not a second bucket.
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1472062, keywords=["meta"])]
+        bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = {
+            "bug": 2070317, "uuid": "u-0", "bucket_title": "Nursery eviction fails under X"}
+        res = self._file(dossier={"candidate": {"node": "n"},
+                                  "verdict": {"title": "Nursery chunk allocation fails under X"}},
+                         comment_on_existing=False)
+        self.assertFalse(res["filed"])
+        self.assertIn("already filed bug 2070317", res["skipped"])
+        # The lookup was asked for THIS title, so a same-title filing is preferred if one exists.
+        bugzilla_apply.models.Dossier.already_filed_for_signature.assert_any_call(
+            "Foo::Bar", bucket=None, bucket_title="Nursery chunk allocation fails under X")
 
 
 class TestTheSpikeFilerBucketMode(_FilerBase):
@@ -676,7 +741,8 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
     def test_a_later_spike_in_the_same_bucket_uses_the_bucket_bug(self):
         self.brief["raw_crash"] = _hang([_IDLE_POOL, _SUGGEST])
         self.brief["is_hang"] = True
-        se.models.SpikeEscalation.prior_bug_for.return_value = 2073426
+        se.models.SpikeEscalation.prior_bug_for.return_value = {
+            "bug": 2073426, "bucket": _KEY, "bucket_title": _SUGGEST_TITLE}
         se._bug_state.return_value = {
             "id": 2073426, "status": "NEW", "resolution": "", "resolved": None,
             "assigned_to": ""}
@@ -691,6 +757,35 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
         self.assertEqual(self.comments[0][0], 2073426)
         se.models.SpikeEscalation.prior_bug_for.assert_called_with(
             ["mozilla::Foo::Bar"], bucket=_KEY, bucket_title=_SUGGEST_TITLE)
+
+    def test_a_spike_bucket_with_no_key_matches_ours_by_title_or_declines(self):
+        # `mozilla::Foo::Bar` is not a hang, so the bucket has no stack key and its title is the
+        # investigator's sentence. Our earlier spike bug under the SAME title is the venue; under
+        # ANOTHER title it is not a second bucket but an unknown one, and nothing is written.
+        title = "The buffer allocator rewrite made a fresh content process OOM"
+        se._bug_state.return_value = {"id": 88, "status": "NEW", "resolution": "",
+                                      "resolved": None, "assigned_to": ""}
+        bugzilla_apply._bugs_by_id.return_value = [{"id": 88, "resolution": ""}]
+        se.models.SpikeEscalation.prior_bug_for.return_value = {
+            "bug": 88, "bucket": "", "bucket_title": title}
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["bug"], res["mode"], res["venue_kind"]), (88, "spike_comment",
+                                                                        "own_bucket"))
+        self.comments.clear()
+        se.models.SpikeEscalation.prior_bug_for.return_value = {
+            "bug": 88, "bucket": "", "bucket_title": "A fresh content process OOMs on start"}
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["filed"], res["bug"], res["venue_kind"]),
+                         (False, 88, "own_unknown_bucket"))
+        self.assertIn("not recorded as this bucket", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+        # An older caller shape -- a bare bug id -- is an unknown bucket too.
+        se.models.SpikeEscalation.prior_bug_for.return_value = 88
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual(res["venue_kind"], "own_unknown_bucket")
 
     def test_a_spike_with_nothing_to_name_goes_to_the_tracker_as_a_comment(self):
         for findings, grounded in ((None, False), (self.findings, False),
@@ -745,6 +840,40 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
         brief = {"signature": "mozilla::Foo::Bar", "raw_crash": raw}
         self.assertEqual(spike_report.spike_bucket_title(brief, None), "")
         self.assertEqual(spike_report.spike_bucket_key(brief), "")
+
+
+class TestTheBackfill(unittest.TestCase):
+    """`bin/backfill_bucket.py`: the identity a pre-bucket filing gets, from its own report."""
+
+    def test_the_fields_come_from_the_awaited_work_or_the_overrides(self):
+        raw = _hang([_IDLE_POOL, _SUGGEST])
+        self.assertEqual(backfill.fields_for(raw), {"bucket": _KEY, "bucket_title": _SUGGEST_TITLE})
+        # 2069191's report: the socket thread was idle, so there is no key; the bug's own summary
+        # (as its owner retitled it) is the title, and nothing else is invented.
+        idle = _hang([_SOCKET_IDLE], spin="default: nsHttpConnectionMgr::Shutdown")
+        self.assertEqual(backfill.fields_for(idle, title="Socket thread priority event queue "
+                                                         "could starve shutdown"),
+                         {"bucket": "", "bucket_title": "Socket thread priority event queue "
+                                                        "could starve shutdown"})
+        self.assertEqual(backfill.fields_for({}), {"bucket": "", "bucket_title": ""})
+        self.assertEqual(backfill.fields_for(raw, bucket="k")["bucket"], "k")
+
+    def test_it_fills_only_what_is_missing_unless_forced(self):
+        filing = {"filed": True, "bug": 2073349, "signature": _SIG}
+        out, changed = backfill.apply_fields(filing, {"bucket": "k", "bucket_title": "t"})
+        self.assertTrue(changed)
+        self.assertEqual((out["bucket"], out["bucket_title"], out["bug"]), ("k", "t", 2073349))
+        self.assertNotIn("bucket", filing, "the record passed in is not mutated")
+        out2, changed = backfill.apply_fields(out, {"bucket": "other", "bucket_title": "t"})
+        self.assertFalse(changed)
+        self.assertEqual(out2["bucket"], "k")
+        out3, changed = backfill.apply_fields(out, {"bucket": "other", "bucket_title": ""},
+                                              force=True)
+        self.assertTrue(changed)
+        self.assertEqual((out3["bucket"], out3["bucket_title"]), ("other", "t"),
+                         "an empty value never overwrites a recorded one, even forced")
+        self.assertEqual(backfill._pairs(["2069191=Some title=with equals"]),
+                         {2069191: "Some title=with equals"})
 
 
 if __name__ == "__main__":

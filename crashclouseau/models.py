@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 from libmozdata.hgmozilla import Mercurial
 import sqlalchemy.dialects.postgresql as pg
-from sqlalchemy import and_, inspect, func, not_, or_, text
+from sqlalchemy import and_, case, inspect, func, not_, or_, text
 from sqlalchemy.orm import aliased
 from sqlalchemy.types import TypeDecorator
 import pytz
@@ -3298,8 +3298,10 @@ class Dossier(db.Model):
     @staticmethod
     def already_filed_for_signature(signature, channel=None, bucket=None, bucket_title=None):
         """Our first matching filing for *signature*, as ``{"uuid", "bug", ...}``, else
-        ``None``. When a bucket identity is supplied, match that bucket or a legacy filing whose
-        identity is unknown; returned bucket fields let the caller distinguish those cases.
+        ``None``. With a bucket KEY, match that bucket or a legacy filing whose identity is
+        unknown; with only a TITLE, match ANY prior filing (a title is not an identity, see
+        below) and prefer a same-title one; the returned bucket fields let the caller tell an
+        exact match from an unknown one.
 
         THE GUARD THAT SURVIVES THE TARGET BUG BEING CLOSED, which none of the others do --
         except, since bug 2070711, for the one closure that names a successor: a bug of ours
@@ -3378,19 +3380,29 @@ class Dossier(db.Model):
             # oldest filing and comparing its bucket in Python. Otherwise A, B, B returns A on
             # the third run and files a duplicate B. A historical filing with no bucket identity
             # still fails closed and matches every bucket, preserving the pre-bucket dedup rule.
+            #
+            # ONLY THE STACK KEY IS AN IDENTITY. A bucket TITLE is written by the model (or cut
+            # from its mechanism sentence) and differs from run to run on one cause, so
+            # filtering on it would let a second, differently-titled bug through for the same
+            # cause. A bucket with no key -- a non-hang -- is therefore one bug per signature:
+            # any prior filing matches. The title still ORDERS the result, so a caller that
+            # finds our bug can tell "ours, same cause" from "ours, cause unknown".
             bucket = str(bucket or "")
             bucket_title = str(bucket_title or "")
             bucket_path = fb["bucket"].astext
             title_path = fb["bucket_title"].astext
-            unknown = and_(
-                or_(bucket_path.is_(None), bucket_path == ""),
-                or_(title_path.is_(None), title_path == ""),
-            )
             if bucket:
+                unknown = and_(
+                    or_(bucket_path.is_(None), bucket_path == ""),
+                    or_(title_path.is_(None), title_path == ""),
+                )
                 q = q.filter(or_(bucket_path == bucket, unknown))
+                q = q.order_by(case((bucket_path == bucket, 0), else_=1), Dossier.id)
             elif bucket_title:
-                q = q.filter(or_(title_path == bucket_title, unknown))
-            row = q.order_by(Dossier.id).first()
+                q = q.order_by(case((title_path == bucket_title, 0), else_=1), Dossier.id)
+            else:
+                q = q.order_by(Dossier.id)
+            row = q.first()
         except Exception:                                  # pragma: no cover - defensive
             return {"skipped": "prior-filing lookup failed"}
         if not row:
@@ -4720,17 +4732,22 @@ class SpikeEscalation(db.Model):
 
     @staticmethod
     def prior_bug_for(signatures, bucket=None, bucket_title=None):
-        """The bug our most recent spike filing on any of ``signatures`` went to, on any channel,
-        or ``None``. The spike filer asks it after the PUBLIC venue lookup found nothing: a bug we
-        filed and a human restricted, or resolved, is invisible there, and only the database
-        knows we filed it. A supplied bucket key (or fallback title) restricts the lookup to that
-        bucket. Never raises; a backend without JSONB paths answers ``None``."""
+        """Our most recent spike filing on any of ``signatures``, on any channel, as ``{"bug",
+        "bucket", "bucket_title"}``, or ``None``. The spike filer asks it after the PUBLIC venue
+        lookup found nothing: a bug we filed and a human restricted, or resolved, is invisible
+        there, and only the database knows we filed it. A bucket KEY restricts the lookup to
+        that bucket; a TITLE only orders it (a title is not an identity, see
+        ``Dossier.already_filed_for_signature``), so with no key any prior spike filing on the
+        signature comes back and the caller compares titles itself. Never raises; a backend
+        without JSONB paths answers ``None``."""
         if not signatures:
             return None
         try:
             filing = SpikeEscalation.payload["filing"]
+            bucket_path = filing["bucket"].astext
+            title_path = filing["bucket_title"].astext
             q = (
-                db.session.query(filing["bug"].astext)
+                db.session.query(filing["bug"].astext, bucket_path, title_path)
                 .filter(
                     SpikeEscalation.signature.in_(sorted({s[:512] for s in signatures})),
                     filing["filed"].astext == "true",
@@ -4742,9 +4759,9 @@ class SpikeEscalation(db.Model):
             bucket = str(bucket or "")
             bucket_title = str(bucket_title or "")
             if bucket:
-                q = q.filter(filing["bucket"].astext == bucket)
+                q = q.filter(bucket_path == bucket)
             elif bucket_title:
-                q = q.filter(filing["bucket_title"].astext == bucket_title)
+                q = q.order_by(case((title_path == bucket_title, 0), else_=1))
             row = q.order_by(SpikeEscalation.created.desc()).first()
         except Exception:
             logger.error("Cannot read the prior spike filings", exc_info=True)
@@ -4753,7 +4770,7 @@ class SpikeEscalation(db.Model):
         if not row or not row[0]:
             return None
         try:
-            return int(row[0])
+            return {"bug": int(row[0]), "bucket": row[1] or "", "bucket_title": row[2] or ""}
         except (TypeError, ValueError):
             return None
 

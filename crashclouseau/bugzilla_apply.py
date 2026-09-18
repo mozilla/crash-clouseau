@@ -930,21 +930,19 @@ def _bucket_of(dossier):
     return str(work.get("bucket") or "")
 
 
-def _different_bucket(prior, bucket, bucket_title=""):
+def _different_bucket(prior, bucket):
     """Was our earlier filing on this signature about a DIFFERENT bucket than *bucket*? Only
-    when both are known: an unknown on either side reads as the same bucket, so the one-bug-
-    per-signature stop keeps applying wherever the cohort cannot be told apart."""
+    when both KEYS are known: an unknown on either side reads as the same bucket, so the one-
+    bug-per-signature stop keeps applying wherever the cohort cannot be told apart.
+
+    THE KEY ALONE, NEVER THE TITLE. A bucket title is the model's sentence (or the mechanism's
+    first sentence) and two runs on one cause write two of them, so "the titles differ" is not
+    "the causes differ"; read as a difference it would file the same cause twice. A non-hang
+    bucket bug has no key and is therefore one bug per signature (the lookup in
+    ``models.Dossier.already_filed_for_signature`` matches any prior filing for it)."""
     previous = str((prior or {}).get("bucket") or "")
     bucket = str(bucket or "")
-    if previous and bucket:
-        return previous != bucket
-    # Non-hang bucket bugs have no deterministic stack key. Their cause title is the fallback
-    # identity; as with keys, an unknown value on either side fails toward deduplication.
-    previous_title = str((prior or {}).get("bucket_title") or "")
-    bucket_title = str(bucket_title or "")
-    titles_known = bool(previous_title and bucket_title)
-    titles_differ = titles_known and previous_title != bucket_title
-    return bool(not (previous or bucket) and titles_differ)
+    return bool(previous and bucket and previous != bucket)
 
 
 def _split_by_application(bugs, product):
@@ -1917,8 +1915,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     prior_sig = models.Dossier.already_filed_for_signature(
         signature, bucket=this_bucket or None, bucket_title=this_bucket_title or None
     ) if held_by_meta else models.Dossier.already_filed_for_signature(signature)
-    if prior_sig and held_by_meta and _different_bucket(
-            prior_sig, this_bucket, this_bucket_title):
+    if prior_sig and held_by_meta and _different_bucket(prior_sig, this_bucket):
         logger.info("autofile: our bug %s on %r is bucket %r; this crash is bucket %r of a "
                     "signature held by a [meta] tracker -- a bucket bug may be filed for %s",
                     prior_sig.get("bug"), signature, prior_sig.get("bucket"), this_bucket, uuid)

@@ -399,15 +399,33 @@ signature-titled bug beside it. Now, on such a signature:
   filed without the signature"; with nothing to name the bucket the filer declines
   (`skipped: signature is held by [meta] bug N; the verdict names no bucket`);
 - one bug per BUCKET, not per signature: a prior filing of ours stops a new one only when its
-  recorded `bucket` (the awaited thread's key) is the same or unknown;
+  recorded `bucket` (the awaited thread's key: `<work> | <call>`, the same on every platform) is
+  the same or unknown. ONLY THE KEY IS AN IDENTITY: a bucket with no key (a non-hang) is one bug
+  per signature, because its title is the model's sentence and two runs write two of them; the
+  title only decides whether our own bucket bug is the venue for a same-titled spike;
 - the spike filer does the same with a grounded analysis, and posts a spike it cannot name as a
   comment on the tracker (mode `spike_comment`, `venue_kind: meta`, no needinfo): the volume is
   signature-level information and the signature lives there.
 
 Check after a deploy: the first bucket filing's `filed_bug` carries `bucket_title`, `meta_bugs`
 and (on a hang) `bucket`; the created bug has an empty crash-signature field and the tracker in
-its blocks list. Cleanup owed on BMO from before: 2069191 still carries the signature and the
-`topcrash` keyword BugBot added for it (Jens moves both to the tracker, as on 2071528).
+its blocks list.
+
+BEFORE THAT, THE BACKFILL. The three filings made before bucket bugs existed have no identity,
+and an unknown identity matches every bucket -- so 2073349 (pool-shutdown family), the spike
+filing behind 2071528 and 2069191 (necko's family) stop every new bucket on the two families
+that matter most, the unfiled Linux CUPS bucket included. `bin/backfill_bucket.py` re-reads each
+record's report and writes the key and title; 2069191's socket thread was idle, so it gets the
+bug's own summary as title and no key:
+
+```
+heroku run -a crash-clouseau-augmented -- python bin/backfill_bucket.py --bug 2073349 --bug 2071528 \
+  --bug 2069191 --title "2069191=Socket thread priority event queue (TRR events) could starve regular even processing during shutdown"
+# read the report, then the same line with --apply
+```
+
+Cleanup owed on BMO from before: 2069191 still carries the signature and the `topcrash` keyword
+BugBot added for it (Jens moves both to the tracker, as on 2071528).
 
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 

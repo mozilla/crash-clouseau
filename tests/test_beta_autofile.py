@@ -766,6 +766,19 @@ class TestTheFiledBugJsonbHalf(_Base):
         self.assertEqual((found["bug"], found["bucket"]), ("2071531", "bucket B"))
         self.assertIsNone(models.Dossier.already_filed_for_signature(
             sig, bucket="bucket C", bucket_title="Bucket C title"))
+        # A TITLE is not an identity: with no key, ANY prior filing on the signature matches
+        # (one bug per signature for a non-hang bucket), the same-title one first.
+        found = models.Dossier.already_filed_for_signature(sig, bucket_title="Bucket B title")
+        self.assertEqual((found["bug"], found["bucket_title"]), ("2071531", "Bucket B title"))
+        found = models.Dossier.already_filed_for_signature(sig, bucket_title="Bucket C title")
+        self.assertEqual(found["bug"], "2071530", "no same-title filing: the oldest, still a stop")
+        # A legacy filing with no identity matches every keyed bucket, after an exact match.
+        legacy = "{}::legacy".format(self.SIG)
+        legacy_id = models.Signature.get_id(legacy)
+        self._filed("bta-0124-aaaa-bbbb-ccccddddeeee", self.nightly,
+                    self._info(2073349, legacy), sigid=legacy_id)
+        found = models.Dossier.already_filed_for_signature(legacy, bucket="bucket D")
+        self.assertEqual((found["bug"], found.get("bucket")), ("2073349", None))
 
     def test_already_filed_for_signature_blocks_the_second_bug(self):
         """FIXED. The guard used to be called `channel=channel`, so it could only ever see
