@@ -754,6 +754,80 @@ def _watchdog_lines(crash: dict) -> list[str]:
     ]
 
 
+# Budget for the awaited thread's frames in the prompt: the whole block reaches the blind second
+# opinion too (`_crash_facts`), and 14 frames is where every bucket seen in the 2026-09-18 census
+# had already named its work and its blocking call.
+_AWAITED_FRAMES = 14
+
+
+def _awaited_work_lines(raw: dict) -> list[str]:
+    """The AWAITED WORK of a shutdown hang, as prompt lines, or ``[]`` when the spin-loop stack
+    names nothing the thread list can resolve (see ``hang.spin_target``).
+
+    BUG 2073349, and the same lesson as bug 2064436 one step further along. That fix put the
+    thread LIST and the blocked spin-loop stack in front of the model; this puts the awaited
+    thread's STACK there. Without it the model explained the wait -- `ShutdownWithTimeout(-1)`
+    arms no timer, so `SpinEventLoopUntil` is unbounded -- which is true of every report under the
+    signature and is what its `[meta]` tracker is about, took the owner from that code's blame
+    (nika, Core::XPCOM) and never read thread 25, `BgIOThreadPool #510`, parked in
+    `SuggestStore::ingest -> RemoteSettingsClient::sync -> viaduct::Client::send_sync`. :jstutte
+    filed that bucket himself (bug 2073426) and asked us to stop filing the catch-all.
+
+    A FACT block, not archetype guidance, because both models must see it: the blind second
+    opinion is the instrument that refutes a lead, and a refuter blind to the awaited thread
+    corroborates the wait story as readily as the principal writes it. The rule sentence is the
+    minimum that turns the stack into a direction: the wait is the symptom, the awaited work is
+    the finding, and the owner is the awaited code's. A dump whose pool threads are ALL idle is
+    said outright -- the honest reading is that the work finished after the watchdog fired, and a
+    model told nothing would invent the subsystem."""
+    from crashclouseau import hang
+
+    summary = hang.awaited_summary(raw)
+    if not summary:
+        return []
+    what = summary["name"] or ("the thread pool" if summary["kind"] == "pool" else "a thread")
+    if not summary.get("thread"):
+        if summary["threads"]:
+            n = summary["threads"]
+            idle = ("all idle in the pool's own wait" if summary["kind"] == "pool"
+                    else "idle in its own event loop, running nothing")
+            return [
+                "",
+                "AWAITED WORK: the main thread is waiting for {} ({} thread{} in this dump, {}). "
+                "The work it waited for is not visible here -- it finished after the watchdog "
+                "fired, or ran on a thread that had already exited -- so do NOT name a subsystem "
+                "for it; the wait itself is the signature's known, tracked shape and is not a "
+                "finding.".format(what, n, "" if n == 1 else "s", idle),
+            ]
+        return [
+            "",
+            "AWAITED WORK: the main thread is waiting for {}, and no thread of that name is in "
+            "this dump.".format(what),
+        ]
+    t = summary["thread"]
+    others = summary["busy"] - 1
+    idle = summary["idle"]
+    head = (
+        "AWAITED WORK -- the thread the hung main thread is waiting for. On a shutdown hang THIS "
+        "is the subject: the wait in the analysed stack is the symptom every report under the "
+        "signature shares (and what its [meta] tracker is about), what this thread is doing and "
+        "why it does not finish is the finding. Cite ITS code, take the origin (blame) and the "
+        "owner from ITS frames, and write `verdict.title` as `<work> blocks {} shutdown inside "
+        "<call>`. Thread {} `{}`{}{}:".format(
+            what, t["index"], t["name"] or "unnamed",
+            ", {} other busy {} thread{} (buckets: {})".format(
+                others, what, "" if others == 1 else "s",
+                "; ".join(o["bucket"] or "?" for o in summary.get("other_busy") or []))
+            if others else "",
+            ", {} idle".format(idle) if idle else "")
+    )
+    lines = ["", head]
+    lines += ["  " + ln for ln in hang.frames_text(t["frames"], _AWAITED_FRAMES).split("\n")]
+    if summary.get("bucket"):
+        lines.append("  Bucket (its first non-wait frames): {}".format(summary["bucket"]))
+    return lines
+
+
 def _java_exception_chain(raw: dict) -> str:
     """The Java exception chain, OUTERMOST FIRST, as ``module.Type caused by module.Type``, or
     ``""`` when the report carries no ``java_exception``.
@@ -1524,6 +1598,7 @@ def _crash_facts(crash: dict) -> list[str]:
     # Before the signature-level block below, because it is still a fact about THIS report.
     lines += _thread_inventory(raw)
     lines += _watchdog_lines(crash)
+    lines += _awaited_work_lines(raw)
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)

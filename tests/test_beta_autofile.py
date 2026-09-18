@@ -729,6 +729,24 @@ class TestTheFiledBugJsonbHalf(_Base):
         self.assertIsNone(models.Dossier.already_filed_for_signature(self.OTHER))
         self.assertIsNone(models.Dossier.already_filed_for_signature(""))
 
+    def test_the_bucket_of_a_filing_comes_back_with_it(self):
+        """A BUCKET bug's record carries the awaited thread's key (bug 2073349): the next run on
+        the same signature files a different bucket rather than stopping at "already filed".
+        A filing that recorded no bucket comes back without the key, as before."""
+        sig = "{}::bucket".format(self.SIG)
+        sigid = models.Signature.get_id(sig)
+        self._filed("bta-0120-aaaa-bbbb-ccccddddeeee", self.nightly,
+                    dict(self._info(2071528, sig), bucket="CoCreateInstance | WinAudioSession"),
+                    sigid=sigid)
+        found = models.Dossier.already_filed_for_signature(sig)
+        self.assertEqual((found["bug"], found["bucket"]),
+                         ("2071528", "CoCreateInstance | WinAudioSession"))
+        plain = "{}::plain".format(self.SIG)
+        self._filed("bta-0121-aaaa-bbbb-ccccddddeeee", self.nightly,
+                    self._info(2071529, plain), sigid=models.Signature.get_id(plain))
+        self.assertEqual(models.Dossier.already_filed_for_signature(plain),
+                         {"uuid": "bta-0121-aaaa-bbbb-ccccddddeeee", "bug": "2071529"})
+
     def test_already_filed_for_signature_blocks_the_second_bug(self):
         """FIXED. The guard used to be called `channel=channel`, so it could only ever see
         filings from the SAME channel — and the population it was measured on is entirely

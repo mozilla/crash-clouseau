@@ -434,6 +434,10 @@ class _FilerBase(unittest.TestCase):
             mock.patch.object(models.SpikeEscalation, "prior_bug_for", return_value=None),
             mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[]),
             mock.patch.object(se, "_bug_state", return_value=None),
+            # Anonymous BMO sees none of our prior bugs unless a test says so: an open bug of
+            # ours the public lookup did not return is then RESTRICTED (a venue), not a public
+            # bucket bug that no longer carries the signature (not one).
+            mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=[]),
             mock.patch.object(se, "_needinfo_person_for",
                               return_value={"nick": "dev", "account": "dev@moz.example",
                                             "name": "Dev", "email": "dev@moz.example"}),

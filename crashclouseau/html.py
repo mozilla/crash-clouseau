@@ -56,25 +56,28 @@ def crashstack():
         # Informative "bug we'd file" preview (eval phase): only when the agent found a
         # regressor to file against (culprit/lead). Best-effort — a lookup failure must
         # never 500 the page.
-        bug_preview = None
-        if show_evidence and vt in ("culprit", "lead", "actionable"):
-            try:
-                bug_preview = report_bug.build_bug_preview(
-                    uuid_info, stack, evidence.get("dossier") or {}
-                )
-            except Exception:
-                logger.error("crashstack bug preview failed for %s", uuid, exc_info=True)
-        # ...and what actually happened to it: filed, declined (and for which bug), rejected --
+        # What actually happened to the bug: filed, declined (and for which bug), rejected --
         # plus the open bugs already on the signature, which is the answer to "did you file
-        # a bug?" more often than the record is (``_filing_status``). Same verdicts as the
-        # preview, same best-effort rule: this asks BMO, and a lookup failure must not 500 the
-        # page or hide the preview.
+        # a bug?" more often than the record is (``_filing_status``). Best-effort: this asks
+        # BMO, and a lookup failure must not 500 the page or hide the preview. Computed BEFORE
+        # the preview because the preview's shape depends on one of its answers: a signature an
+        # open [meta] tracker holds gets a BUCKET bug (no signature, blocks the tracker, titled
+        # for its cause), and the page must show the bug the filer would post.
         filing = None
         if show_evidence and vt in ("culprit", "lead", "actionable"):
             try:
                 filing = _filing_status(uuid, uuid_info, evidence)
             except Exception:
                 logger.error("crashstack filing status failed for %s", uuid, exc_info=True)
+        bug_preview = None
+        if show_evidence and vt in ("culprit", "lead", "actionable"):
+            try:
+                bug_preview = report_bug.build_bug_preview(
+                    uuid_info, stack, evidence.get("dossier") or {},
+                    meta_bugs=(filing or {}).get("meta_bugs") or None,
+                )
+            except Exception:
+                logger.error("crashstack bug preview failed for %s", uuid, exc_info=True)
         # How many machines this signature is really coming from. Shown for every crash,
         # verdict or not — the report count is on the page whether or not the agent ran, and
         # it is the number most likely to be misread. Best-effort, same as the preview.

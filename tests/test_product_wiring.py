@@ -1851,21 +1851,28 @@ class TestBugPreview(unittest.TestCase):
         self.assertEqual(
             report_bug.build_related_bugs_note([], landing_unresolved=True, node="n"), "")
 
-    def test_the_meta_note_cross_references_the_tracker(self):
-        note = report_bug.build_meta_bugs_note([{"id": 1279293, "keywords": ["meta"]}])
-        self.assertIn("bug 1279293 references this signature too", note)
-        self.assertIn("it is a [meta] tracking bug", note)
-        self.assertIn("please add it to the tracker if it belongs", note)
+    def test_the_bucket_opener_names_the_tracker_and_keeps_the_signature_off_the_bug(self):
+        # What replaced the "[meta] tracking bug ... please add it to the tracker" note: a bug
+        # beside a tracker is a BUCKET of it (bug 2073349 c1), so the opener says which tracker
+        # holds the signature and that this bug blocks it -- and the signature is quoted in the
+        # text, because the bug no longer carries it in the field.
+        note = report_bug.build_bucket_opener([{"id": 1279293, "keywords": ["meta"]}],
+                                              "IPCError-browser | ShutDownKill")
+        self.assertTrue(note.startswith("Bucket of bug 1279293, filed without the signature"))
+        self.assertIn("`[@ IPCError-browser | ShutDownKill]`", note)
+        self.assertIn("This bug blocks the tracker", note)
+        self.assertNotIn("please add it to the tracker", note)
+        self.assertFalse(hasattr(report_bug, "build_meta_bugs_note"))
 
-    def test_the_meta_note_is_absent_by_default(self):
+    def test_the_bucket_opener_is_absent_by_default(self):
         for metas in (None, [], [None], [{}]):
             with self.subTest(metas=metas):
-                self.assertEqual(report_bug.build_meta_bugs_note(metas), "")
+                self.assertEqual(report_bug.build_bucket_opener(metas, "Foo::Bar"), "")
 
-    def test_the_meta_note_agrees_with_itself_in_the_plural(self):
-        two = report_bug.build_meta_bugs_note([{"id": 858032}, {"id": 1279293}])
-        self.assertIn("bug 858032, bug 1279293 reference this signature too", two)
-        self.assertIn("they are [meta] tracking bugs", two)
+    def test_the_bucket_opener_agrees_with_itself_in_the_plural(self):
+        two = report_bug.build_bucket_opener([{"id": 858032}, {"id": 1279293}], "Foo::Bar")
+        self.assertIn("Bucket of bug 858032, bug 1279293, filed without the signature", two)
+        self.assertIn("those are the [meta] tracker", two)
 
     def test_build_bug_comment_drops_empty_sections(self):
         # No reason, no stats, no citations, no needinfo -> no empty headings, no blank runs.

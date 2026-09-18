@@ -2673,6 +2673,129 @@ def _apply_absent_thread_gate(dossier, seed):
                     v.confidence.value, (seed or {}).get("uuid"))
 
 
+def _record_hang_awaited_work(dossier, seed):
+    """Record the AWAITED WORK of a shutdown hang: the thread the main thread is waiting for,
+    its top frames, its bucket key and a deterministic bucket title (``hang.awaited_summary``).
+    Moves no rung.
+
+    Bug 2073349. The report's ``xpcom_spin_event_loop_stack`` named ``BgIOThreadPool`` and the
+    pool's one busy thread sat at index 25 in ``SuggestStore::ingest -> RemoteSettingsClient::
+    sync -> viaduct::Client::send_sync``; the verdict explained the wait instead, and the bug
+    named the wait code's author. The same extraction feeds the prompt (``triage.
+    _awaited_work_lines``), so this is the persisted copy: what the bug prints
+    (``report_bug.build_awaited_work_block``), what the filer keys a bucket-holder signature's
+    dedup and fallback title on, and what ``_apply_hang_wait_gate`` compares the mechanism to.
+    Only on a watchdog crash (``utils.is_watchdog_crash``), and unrecorded rather than empty
+    when the spin stack names nothing the thread list resolves."""
+    if dossier is None or not seed:
+        return
+    raw = seed.get("raw_crash") or {}
+    if not raw:
+        return
+    from crashclouseau import hang, utils
+
+    dump = raw.get("json_dump") or {}
+    if not utils.is_watchdog_crash(seed.get("signature"), raw.get("report_type"),
+                                   raw.get("moz_crash_reason") or dump.get("moz_crash_reason")):
+        return
+    try:
+        summary = hang.awaited_summary(raw)
+    except Exception:                                   # pragma: no cover - defensive
+        logger.warning("agent: awaited-work extraction failed for %s", seed.get("uuid"),
+                       exc_info=True)
+        return
+    if not summary:
+        return
+    dossier.corroborations = {**(dossier.corroborations or {}), "hang_awaited_work": summary}
+
+
+# A searchfox permalink's path: `.../source/<path>#L1` or `.../rev/<rev>/<path>#1-2`.
+_SEARCHFOX_PATH_RE = re.compile(r"searchfox\.org/[^/\s]+/(?:source|rev/[^/\s]+)/([^#?\s]+)")
+# The code every shutdown hang's MAIN thread waits in, whatever the awaited thread does: the
+# spin loops, the pool and thread shutdown paths, XPCOM shutdown itself.
+_WAIT_CODE_PREFIXES = ("xpcom/threads/", "xpcom/build/")
+
+
+def _citation_paths(claim):
+    """The source paths a claim's citations name -- ``filename`` on a diff-line / stack-frame /
+    ref citation, the path inside a searchfox permalink -- as a set of repo-relative paths."""
+    paths = set()
+    for c in getattr(claim, "citations", None) or []:
+        filename = str(getattr(c, "filename", "") or "").strip().strip("/")
+        if filename:
+            paths.add(filename)
+            continue
+        m = _SEARCHFOX_PATH_RE.search(str(getattr(c, "permalink", "") or ""))
+        if m:
+            paths.add(m.group(1).strip("/"))
+    return paths
+
+
+def _apply_hang_wait_gate(dossier, seed):
+    """An ``actionable`` verdict on a shutdown hang whose cited mechanism is THE WAIT is not
+    actionable: it becomes a ``pre_existing`` abstain that keeps its mechanism.
+
+    Bug 2073349 (2026-09-18). The mechanism cited ``xpcom/threads/nsThreadManager.cpp:214`` and
+    ``nsThreadPool.cpp:533/588/615`` -- ``Shutdown()`` is ``ShutdownWithTimeout(-1)``, no timer,
+    unbounded ``SpinEventLoopUntil`` -- and the bug asked the author of those lines to look.
+    That is true of every report under ``shutdownhang | ... | nsThreadPool::ShutdownWithTimeout``
+    and is what its [meta] tracker (bug 1866944) is about; :jstutte: "I'd want to get that
+    isolated without explaining me each time how shutdown hangs work." The finding, when there
+    is one, is on the awaited thread (thread 25 here), and a mechanism that cites none of its
+    code and only the waiting thread's has not looked there.
+
+    THRESHOLD-FREE AND STRUCTURAL: the cited paths are all files of the analysed (waiting)
+    thread's frames or under the XPCOM threading/shutdown directories, and none is a file of
+    the awaited thread's work frames. A mechanism that reaches the awaited work through code
+    NOT on its stack -- Jens's own 2073426 cites the viaduct necko backend's timer and the
+    Suggest blocker, neither on thread 25 -- cites no wait-code-only set and is untouched. Fires
+    equally when the awaited threads are all idle (the catch-all with nothing behind it) and
+    only on ``actionable``: a ``lead`` about the wait code names a changeset that touched it,
+    which is a different claim with its own gates. Mutates in place; never raises."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None or v.decision != Decision.actionable:
+        return
+    work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
+    if not work:
+        return
+    cited = _citation_paths(v.mechanism)
+    if not cited:
+        return
+    if cited & set(work.get("files") or []):
+        return
+    raw = (seed or {}).get("raw_crash") or {}
+    from crashclouseau import hang, inspector
+
+    idx = inspector.thread_for_analysis(raw)
+    waiting = hang.thread_files(raw, idx) if isinstance(idx, int) else set()
+    if not all(p in waiting or p.startswith(_WAIT_CODE_PREFIXES) for p in cited):
+        return
+    thread = work.get("thread") or {}
+    if thread:
+        where = "thread {} `{}` ({})".format(
+            thread.get("index"), thread.get("name") or "unnamed", work.get("bucket") or "?")
+    else:
+        where = "not visible in this dump (the {} thread{} idle)".format(
+            work.get("name") or "awaited", " is" if work.get("threads") == 1 else "s are all")
+    dossier.corroborations = {
+        **dossier.corroborations, "hang_wait_not_actionable": sorted(cited)}
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=("the cited mechanism explains the main thread's wait ({}), which every "
+                        "report under this signature shares and its tracker already describes; "
+                        "the awaited work, which is what a bug would be about, is {}"
+                        .format(", ".join(sorted(cited)), where)),
+        abstain_kind=AbstainKind.pre_existing,
+        mechanism=v.mechanism,
+        consistency=v.consistency,
+        title=v.title,
+    )
+    logger.info("agent: actionable mechanism on a hang cites only the wait code %s -> abstain "
+                "pre_existing for %s (awaited work: %s)", sorted(cited),
+                (seed or {}).get("uuid"), where)
+
+
 def _apply_bad_machine_gate(dossier, seed):
     """SUPPRESS a verdict whose crash came from a machine that is scattering unrelated
     signatures: the machine is broken, not the code.
@@ -3885,6 +4008,9 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # verdict, no rung and no filing -- see `crashclouseau/sensitive.py` for why its address
         # read and byte rule are its own rather than `_looks_poison`'s.
         _record_sensitivity(result.dossier, seed)
+        # The awaited work of a shutdown hang (bug 2073349): recorded before the gates, because
+        # `_apply_hang_wait_gate` reads it and the bug prints it. See `_record_hang_awaited_work`.
+        _record_hang_awaited_work(result.dossier, seed)
         # Per-version rate step (beta/release): recorded, not acted on. See `_record_version_step`.
         _record_version_step(result.dossier, seed)
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
@@ -3897,6 +4023,11 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # clamp should get the last word on the rung. Running it first would just hand a
         # downweighted lead back to the bump.
         _apply_signature_age_gate(result.dossier, seed)
+        # An `actionable` mechanism on a shutdown hang that explains the WAIT and not the awaited
+        # work is the [meta] tracker's subject, not a bug (bug 2073349). After the age gate,
+        # which owns the other actionable->abstain flip, and before the fold, which skips
+        # `actionable` anyway.
+        _apply_hang_wait_gate(result.dossier, seed)
         # Second-opinion fold: an independent blind re-analysis corroborates (boost) or
         # confidently refutes (downgrade) the reported lead. Runs AFTER the corroboration
         # gate (so a corroboration-bumped lead is what's boosted/refuted) and BEFORE the

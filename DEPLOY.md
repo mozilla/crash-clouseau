@@ -379,6 +379,36 @@ rule (83 runs / 48 signatures in 21 days). Read the first week with `verdicts.ve
 `'%filed only where no bug is%'`. `Feedback.classify` scores these `unknown` / `crash_invalid`
 only (no regressor claim to confirm); a resolution-based "useful" bucket is a follow-up.
 
+## Bucket filings on a signature a [meta] tracker holds (2026-09-18)
+
+A signature an open `[meta]` bug carries in `cf_crash_signature` is a CATCH-ALL: for a shutdown
+hang it is the main thread's wait, and every cause under it -- a different pool thread's work in
+each report -- shares it. The people who own those (bug 1866944 for `nsThreadPool::
+ShutdownWithTimeout`, 1633342 for necko) bucket the reports by the awaited thread's stack and file
+one bug per bucket that BLOCKS the tracker, WITHOUT the signature (:jstutte, bugs 2073349 c1 and
+2069191 c5). The filer used to see the tracker, call it "not a venue", and file a new
+signature-titled bug beside it. Now, on such a signature:
+
+- the analysis is handed the AWAITED WORK: the thread the spin-loop stack names, with its frames
+  (`hang.awaited_summary`, prompt fact `AWAITED WORK`, dossier key `hang_awaited_work`), and an
+  `actionable` verdict whose cited mechanism is only the wait code becomes a `pre_existing`
+  abstain (`hang_wait_not_actionable`);
+- a NEW bug is a BUCKET bug or nothing: titled for its cause (`verdict.title`, else `<work> blocks
+  <pool> shutdown inside <call>` from the awaited thread, else the mechanism's first sentence),
+  no `cf_crash_signature`, `blocks` the tracker(s) and `clouseau`, opening with "Bucket of bug N,
+  filed without the signature"; with nothing to name the bucket the filer declines
+  (`skipped: signature is held by [meta] bug N; the verdict names no bucket`);
+- one bug per BUCKET, not per signature: a prior filing of ours stops a new one only when its
+  recorded `bucket` (the awaited thread's key) is the same or unknown;
+- the spike filer does the same with a grounded analysis, and posts a spike it cannot name as a
+  comment on the tracker (mode `spike_comment`, `venue_kind: meta`, no needinfo): the volume is
+  signature-level information and the signature lives there.
+
+Check after a deploy: the first bucket filing's `filed_bug` carries `bucket_title`, `meta_bugs`
+and (on a hang) `bucket`; the created bug has an empty crash-signature field and the tracker in
+its blocks list. Cleanup owed on BMO from before: 2069191 still carries the signature and the
+`topcrash` keyword BugBot added for it (Jens moves both to the tracker, as on 2071528).
+
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct

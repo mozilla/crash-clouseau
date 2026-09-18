@@ -142,10 +142,11 @@ class _Base(unittest.TestCase):
         pv.start()
         self.addCleanup(pv.stop)
 
-    def _file(self, verdict="lead", confidence=70, **cfg_over):
+    def _file(self, verdict="lead", confidence=70, dossier=None, **cfg_over):
         if cfg_over:
             bugzilla_apply.config.get_agent_autofile.return_value = _cfg(**cfg_over)
-        return bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},
+        return bugzilla_apply.autofile_bug("u-1", _INFO, {},
+                                           dossier or {"candidate": {"node": "n"}},
                                            verdict, confidence)
 
 
@@ -461,28 +462,52 @@ class TestOtherApplications(_Base):
         self.assertEqual(bugzilla_apply._split_by_application([tb], None), ([], [tb]))
 
 
-class TestMetaBugsAreNotVenues(_Base):
-    """A `[meta]` bug is a list of other bugs: an analysis posted into one sits among its
-    dependencies rather than in front of anyone, and the needinfo goes to whoever owns the
-    tracker. On the top 200 nightly signatures the oldest open same-application bug is a meta
-    for 9/200 (four trackers: 1279293, 1472062, 858032, 1588498), all nine arriving through
-    `cf_crash_signature` — the count is the same with the summary clause removed, though
-    1279293 is reachable both ways — and all four carrying the `meta` KEYWORD."""
+# A dossier that can NAME its bucket: the model's own `verdict.title`. On a signature an open
+# `[meta]` holds this is what turns "a second catch-all" into a bucket bug.
+_TITLED = {"candidate": {"node": "n"},
+           "verdict": {"title": "SuggestStore::ingest blocks BgIOThreadPool shutdown inside "
+                                "viaduct::Client::send_sync"}}
 
-    def test_a_meta_tracker_is_not_a_venue(self):
+
+class TestMetaBugsMakeBucketBugs(_Base):
+    """A `[meta]` bug on the signature means the signature is a CATCH-ALL: every cause under one
+    main-thread wait shares it, and the tracker exists so each cause gets its own bug, without
+    the signature, blocking it (:jstutte, bugs 2073349 c1 and 2069191 c5, 2026-09-18). The filer
+    used to call the tracker "not a venue" and file a signature-titled bug beside it -- 2073349
+    and 2069191 are what that looks like. Now the tracker is not a venue AND the new bug is a
+    BUCKET bug, or nothing. On the top 200 nightly signatures the oldest open same-application bug
+    is a meta for 9/200 (four trackers: 1279293, 1472062, 858032, 1588498), all carrying the
+    `meta` KEYWORD."""
+
+    def test_a_meta_tracker_is_not_a_venue_and_the_new_bug_is_a_bucket(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [
             _bug(1279293, "2016-06-09T00:00:00Z", keywords=["crash", "meta", "topcrash"])]
-        res = self._file()
+        res = self._file(dossier=_TITLED)
         self.assertEqual((res["bug"], res["mode"]), (999, "new_bug"))
         self.assertEqual(self.comments, [])
         self.assertEqual(res["meta_bugs"], [1279293])
+        # The preview mock stands in for the bucket shape; the filer records the title it posts.
+        self.assertEqual(res.get("bucket_title"), None)
 
-    def test_the_new_bug_cross_references_the_tracker(self):
+    def test_without_a_bucket_to_name_nothing_is_filed(self):
+        # THE 2073349 / 2069191 CASE. A verdict with no `title`, no awaited work and no mechanism
+        # sentence can only be filed as `Crash in [@ sig]` beside the tracker -- so it is not.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1279293, keywords=["meta"])]
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["bug"], 1279293)
+        self.assertEqual(res["meta_bugs"], [1279293])
+        self.assertIn("held by [meta] bug 1279293", res["skipped"])
+        self.assertIn("second catch-all", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_the_new_bug_is_built_with_the_tracker(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [
             _bug(1279293, keywords=["meta"])]
         with mock.patch("crashclouseau.report_bug.build_bug_preview",
                         return_value=_PREVIEW) as preview:
-            self._file()
+            self._file(dossier=_TITLED)
         self.assertEqual([b["id"] for b in preview.call_args.kwargs["meta_bugs"]], [1279293])
 
     def test_a_normal_crash_bug_is_untouched(self):
@@ -502,11 +527,36 @@ class TestMetaBugsAreNotVenues(_Base):
 
     def test_the_kill_switch_is_not_tripped_by_a_tracker(self):
         # Same reading as another application's bug: "an open bug exists, do not write" means
-        # an open bug we could have written IN.
+        # an open bug we could have written IN. A bucket bug is still filed under `skip`.
         bugzilla_apply._open_bugs_for_signature.return_value = [
             _bug(1279293, keywords=["meta"])]
-        res = self._file(comment_on_existing=False)
+        res = self._file(dossier=_TITLED, comment_on_existing=False)
         self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+
+    def test_one_bug_per_bucket_not_per_signature(self):
+        # Our earlier filing on this signature was bucket A (the awaited thread's key, recorded
+        # on the filing). A crash in bucket B files; a crash in bucket A, or one whose bucket is
+        # unknown, stops at "already filed" exactly as before.
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1866944, keywords=["meta"])]
+        bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = {
+            "bug": 2071528, "uuid": "u-0",
+            "bucket": "CoCreateInstance | mozilla::widget::WinAudioSession::Start"}
+        other = {**_TITLED, "corroborations": {"hang_awaited_work": {
+            "bucket": "viaduct::client::Client::send_sync | viaduct::Request::send"}}}
+        res = self._file(dossier=other, comment_on_existing=False)
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"), res)
+        same = {**_TITLED, "corroborations": {"hang_awaited_work": {
+            "bucket": "CoCreateInstance | mozilla::widget::WinAudioSession::Start"}}}
+        res = self._file(dossier=same, comment_on_existing=False)
+        self.assertFalse(res["filed"])
+        self.assertIn("already filed bug 2071528", res["skipped"])
+        res = self._file(dossier=_TITLED, comment_on_existing=False)
+        self.assertFalse(res["filed"], "an unknown bucket reads as the same bucket")
+        # And with no tracker on the signature the bucket changes nothing: one bug per signature.
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        res = self._file(dossier=other, comment_on_existing=False)
+        self.assertFalse(res["filed"])
 
     def test_the_split_reads_the_keyword_not_the_summary(self):
         # All four measured trackers carry the keyword; the "[meta]" prefix is a convention.

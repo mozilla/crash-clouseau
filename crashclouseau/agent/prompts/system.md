@@ -162,7 +162,7 @@ don't backtick some code and leave the rest bare. Shape:
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
   "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
-  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|high", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
+  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
 

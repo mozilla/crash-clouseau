@@ -943,9 +943,104 @@ def build_exposer_note(corroborations):
     )
 
 
+_MAX_AWAITED_FRAMES = 12
+_MAX_BUCKET_TITLE = 200
+
+
+def build_awaited_work_block(corroborations, max_frames=_MAX_AWAITED_FRAMES):
+    """The stack of the thread the hung main thread is WAITING FOR, fenced, or ``None``.
+
+    The half of a shutdown-hang bug its reader actually wants. The main thread's frames above
+    it are the signature -- the same wait in every report under it -- and what :jstutte buckets
+    by hand is what the awaited pool thread is doing (bug 1866944 comment 30, and the two bucket
+    bugs he wrote from our reports, 2071528 and 2073426). Bug 2073349 printed ten frames of the
+    wait and not one of thread 25's; this prints the awaited thread from the deterministic
+    ``hang_awaited_work`` record the orchestrator stamped from the same minidump."""
+    work = (corroborations or {}).get("hang_awaited_work") or {}
+    thread = work.get("thread") or {}
+    if not thread.get("frames"):
+        return None
+    from crashclouseau import hang
+
+    what = work.get("name") or ("the thread pool" if work.get("kind") == "pool" else "it")
+    notes = []
+    others = (work.get("busy") or 1) - 1
+    if others > 0:
+        notes.append("{} other busy {} thread{}".format(others, what, "" if others == 1 else "s"))
+    if work.get("idle"):
+        notes.append("{} idle".format(work["idle"]))
+    head = "The thread the main thread is waiting for -- thread {} `{}`{}:".format(
+        thread.get("index"), thread.get("name") or "unnamed",
+        " ({})".format(", ".join(notes)) if notes else "")
+    return head + "\n" + _fenced(hang.frames_text(thread["frames"], max_frames))
+
+
+def _first_sentence(text, limit=150):
+    """The first sentence of a mechanism statement, as a title: code spans un-backticked,
+    markdown links reduced to their text, cut at a word boundary under *limit*."""
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(text or ""))
+    text = " ".join(text.replace("`", "").split())
+    if not text:
+        return ""
+    m = re.search(r"[.;:]\s+(?=[A-Z`(])|\.$", text)
+    if m and m.start() >= 20:
+        text = text[:m.start()]
+    text = text.rstrip(".")
+    if len(text) > limit:
+        cut = text[:limit].rsplit(" ", 1)[0]
+        text = (cut if len(cut) >= 20 else text[:limit]).rstrip(",;:.- ") + "..."
+    return text
+
+
+def bucket_title(dossier):
+    """The title of a bug filed on a BUCKET-HOLDER signature -- one an open ``[meta]`` tracker
+    already carries -- or ``""`` when nothing in the dossier can name the bucket.
+
+    A signature the meta holds bundles every cause under one main-thread wait, so a bug named
+    ``Crash in [@ sig]`` there is a second catch-all beside the tracker (:jstutte, bugs 2073349
+    c1 and 2069191 c5: "not create parallel catch-all bugs with the same signature as the meta
+    bug"). Named for its CAUSE instead, in this order: the model's own ``verdict.title`` (asked
+    for in the prompt's shape), the deterministic hang title built from the awaited thread
+    (``hang.bucket_title``: ``<work> blocks <pool> shutdown inside <call>``, the shape Jens gave
+    2071528 and 2073426), else the first sentence of the mechanism. Nothing usable means NO
+    bucket bug -- ``bugzilla_apply.autofile_bug`` declines rather than filing the catch-all."""
+    d = dossier or {}
+    v = d.get("verdict") or {}
+    title = " ".join(str(v.get("title") or "").split())
+    if title:
+        return title[:_MAX_BUCKET_TITLE]
+    work = (d.get("corroborations") or {}).get("hang_awaited_work") or {}
+    if work.get("title"):
+        return str(work["title"])[:_MAX_BUCKET_TITLE]
+    for claim in (v.get("mechanism"), v.get("consistency")):
+        sentence = _first_sentence(((claim or {}).get("statement") or ""))
+        if len(sentence) >= 20:
+            return sentence[:_MAX_BUCKET_TITLE]
+    return ""
+
+
+def build_bucket_opener(meta_bugs, signature):
+    """The first line of a bucket bug: which tracker holds the signature and why this bug does
+    not carry it. Jens's own opener on 2073426 reads "Bucket of bug 1866944, filed without
+    signatures."; ours says the same and names the signature so the bug is still findable by
+    text. Replaces the note that used to say "Filed here instead; please add it to the
+    tracker if it belongs" -- the filer now blocks the tracker itself."""
+    ids = [int(b["id"]) for b in (meta_bugs or []) if (b or {}).get("id")]
+    if not ids:
+        return ""
+    sig = (signature or "").strip()
+    return (
+        "Bucket of {}, filed without the signature: {} the [meta] tracker holding "
+        "`[@ {}]`, and every cause of that main-thread wait shares the signature, so a bug "
+        "carrying it would claim them all. This bug blocks the tracker and is about the one "
+        "cause below."
+    ).format(", ".join("bug {}".format(i) for i in ids),
+             "that is" if len(ids) == 1 else "those are", sig)
+
+
 def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
                              version=None, needinfo=None, author_display=None,
-                             max_frames=_MAX_PREVIEW_FRAMES):
+                             max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None):
     """The SINGLE comment an ``actionable`` bug opens with -- a crash filed on its own facts,
     with no regressor claimed (Calixte, 2026-09-17). Every line states what IS:
 
@@ -982,9 +1077,11 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
             link, " by {}".format(who) if who else ""))
     because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
     sections = [
+        bucket_opener,
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         build_reason_block(details),
         build_frames_block(stack, max_frames=max_frames, details=details),
+        build_awaited_work_block((dossier or {}).get("corroborations")),
         build_stats_sentence(first, stats, info),
         build_signature_since_note((dossier or {}).get("corroborations"), info.get("buildid")),
         because,
@@ -1012,6 +1109,7 @@ def build_bug_comment(
     meta_bugs=None,
     never_comment=False,
     max_frames=_MAX_PREVIEW_FRAMES,
+    bucket_opener=None,
 ):
     """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
     hand-filed crash bug (cf. bug 2057432 comment 0):
@@ -1029,9 +1127,14 @@ def build_bug_comment(
         changeset in 5 may only have EXPOSED a lifetime bug that is older than it;
     5. the Clouseau analysis + suspected regressor;
     6. searchfox/hg links for the code the analysis cites;
-    7. why this is a new bug rather than a comment on ``related_bugs`` / ``other_app_bugs`` /
-       ``meta_bugs``, when there are any — three different reasons, never merged;
+    7. why this is a new bug rather than a comment on ``related_bugs`` / ``other_app_bugs``,
+       when there are any — two different reasons, never merged;
     8. the needinfo ask.
+
+    A bug on a signature an open ``[meta]`` holds (``meta_bugs``) is a BUCKET bug and opens with
+    ``bucket_opener`` instead (``build_bucket_opener``): it carries no signature and blocks the
+    tracker, so there is no "why not the tracker" to explain. ``meta_bugs`` is kept as a
+    parameter for the callers that still pass it; the opener is what renders.
 
     Sections with no data are dropped, never emitted empty."""
     uuid = (uuid_info or {}).get("uuid", "")
@@ -1040,9 +1143,12 @@ def build_bug_comment(
     if version:
         info["version"] = version
     sections = [
+        bucket_opener,
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         build_reason_block(details),
         build_frames_block(stack, max_frames=max_frames, details=details),
+        # On a hang: the thread the main thread waits for, which is what the bug is about.
+        build_awaited_work_block((dossier or {}).get("corroborations")),
         build_stats_sentence(first, stats, info),
         build_signature_age_note((dossier or {}).get("corroborations"), info.get("buildid")),
         # Immediately after the age line, because the two answer opposite halves of the same
@@ -1068,7 +1174,6 @@ def build_bug_comment(
             node=((dossier or {}).get("candidate") or {}).get("node"),
             never_comment=never_comment),
         build_other_app_bugs_note(other_app_bugs),
-        build_meta_bugs_note(meta_bugs),
         needinfo,
         _provenance(channel),
     ]
@@ -1274,32 +1379,6 @@ def build_other_app_bugs_note(other_app_bugs):
             "it is" if len(bugs) == 1 else "they are",
             ", ".join(products) or "another product",
             "another application" if len(products) < 2 else "other applications",
-        )
-    )
-
-
-def build_meta_bugs_note(meta_bugs):
-    """Cross-reference the open ``[meta]`` trackers on this signature, or ``""``.
-
-    The third reason the filer files past an open bug (``bugzilla_apply._split_out_metas``),
-    after "it predates the cause" and "it is another application's". A meta bug is a list of
-    other bugs: an analysis posted into one sits among its dependencies instead of in front of
-    anyone, and the needinfo goes to whoever owns the tracker. Named rather than dropped
-    because the tracker IS the right place for the link — bug 1279293 tracks every
-    ``IPCError-browser | ShutDownKill`` there is — just not the right place for the analysis.
-
-    Rows are ``{"id", "keywords", ...}`` as ``_open_bugs_for_signature`` returns them."""
-    bugs = [b for b in (meta_bugs or []) if (b or {}).get("id")]
-    if not bugs:
-        return ""
-    return (
-        "{} {} this signature too, but {} [meta] tracking {}, so an analysis posted there "
-        "would sit among the dependencies rather than in front of anyone. Filed here instead; "
-        "please add it to the tracker if it belongs.".format(
-            ", ".join("bug {}".format(b["id"]) for b in bugs),
-            "references" if len(bugs) == 1 else "reference",
-            "it is a" if len(bugs) == 1 else "they are",
-            "bug" if len(bugs) == 1 else "bugs",
         )
     )
 
@@ -2394,17 +2473,32 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # filings, which is exactly the one a human restricted.
     withhold = sensitive.is_withheld(dossier.get("corroborations"))
     g = security_group(product) if withhold else None
+    # A BUCKET BUG (2026-09-18). The signature is held by an open `[meta]` tracker, so it is a
+    # catch-all for every cause under one main-thread wait, and the bug filed for THIS cause is
+    # named for the cause, carries no `cf_crash_signature` (the signature stays with the meta,
+    # where BugBot's topcrash keyword and the volume belong) and `blocks` the tracker as its
+    # dependencies do (:jstutte, bugs 2073349 c1 and 2069191 c5; the shape of his 2071528 retitle
+    # and his 2073426). With no title material there is no bucket bug: the filer declines, and
+    # the page preview shows the plain form.
+    meta_ids = [int(b["id"]) for b in (meta_bugs or []) if (b or {}).get("id")]
+    awaited = (dossier.get("corroborations") or {}).get("hang_awaited_work") or {}
+    bucket_name = bucket_title(dossier) if meta_ids else ""
+    bucket = bool(meta_ids and bucket_name)
+    opener = build_bucket_opener(meta_bugs, uuid_info.get("signature")) if bucket else None
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
         # these bugs searchable/dedupable alongside Socorro-filed ones. Capped at BMO's
-        # 255-character limit, which 1.3% of signatures exceed — see ``bug_title``.
-        "title": bug_title(uuid_info.get("signature"),
-                           prefix="" if actionable else (policy.get("summary_prefix") or "")),
+        # 255-character limit, which 1.3% of signatures exceed — see ``bug_title``. A bucket
+        # bug is the exception: its title is its cause, and the channel's `[new in release]`
+        # mark -- a statement about the signature -- stays off it.
+        "title": bucket_name if bucket else bug_title(
+            uuid_info.get("signature"),
+            prefix="" if actionable else (policy.get("summary_prefix") or "")),
         "comment": build_actionable_comment(
             uuid_info, stack, dossier, details=fetch_crash_reason(uuid), stats=stats,
             first=first, version=version, needinfo=_needinfo_line(person),
-            author_display=_person_display(person),
+            author_display=_person_display(person), bucket_opener=opener,
         ) if actionable else build_bug_comment(
             uuid_info,
             stack,
@@ -2423,6 +2517,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             other_app_bugs=other_app_bugs,
             meta_bugs=meta_bugs,
             never_comment=never_comment,
+            bucket_opener=opener,
         ),
         "product": product,
         "component": component,
@@ -2438,13 +2533,22 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         "keywords": (["crash", "regression"] if suspected_regression else ["crash"]),
         # Bugzilla's crash-signature field, same `[@ ...]` syntax as the title. This is what
         # makes the bug show up against the signature in Socorro and in BMO's crash queries.
-        "cf_crash_signature": "[@ {}]".format((uuid_info.get("signature") or "").strip()),
+        # ...except on a bucket bug, where the signature belongs to the tracker (Jens moved the
+        # signature and the topcrash keyword off 2071528 onto 1866944 by hand, 2026-09-14).
+        "cf_crash_signature": "" if bucket else "[@ {}]".format(
+            (uuid_info.get("signature") or "").strip()),
         # The `clouseau` tracking bug, and ONLY that. The regressor's own bug used to be added
         # here too, which said something we never meant: that the regressor bug cannot be closed
         # until this crash is fixed. It also put a crash bug in a stranger's blocks list — on bug
         # 2062119, a 2022 bug of Jens Stutte's that the run's own skeptic had ruled out.
-        # `regressed_by` below is the relation that actually describes a regression.
-        "blocked": ["clouseau"],
+        # `regressed_by` below is the relation that actually describes a regression. A bucket
+        # bug ALSO blocks the [meta] tracker(s) holding its signature: that is what "bucket of
+        # bug N" means on BMO, and what the tracker's dependency list is for.
+        "blocked": ["clouseau"] + (meta_ids if bucket else []),
+        # What made this a bucket bug, for the filer's record and the page: the tracker(s) and
+        # the bucket key of the awaited work (`hang.bucket_key`), when the crash is a hang.
+        "bucket": ({"meta_bugs": meta_ids, "key": awaited.get("bucket") or ""}
+                   if bucket else None),
         # The regression relation BMO's own tooling reads, and the one a triager expects to find
         # on a regression bug. Gated on `link_regressor`, and a list because the field is one --
         # the pipeline only ever names a single changeset.

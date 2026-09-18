@@ -351,10 +351,19 @@ class TestWhatTheFilerChecks(_Base):
         self.assertEqual((self.created, self.comments), ([], []))
 
     def test_a_meta_tracker_or_another_application_is_not_an_open_bug(self):
+        # ...and a tracker on the signature makes the filing a BUCKET bug, which needs a name
+        # (`verdict.title`); without one the filer declines rather than file the catch-all --
+        # bug 2073349, the actionable filing that taught the filer this, had none.
         bugzilla_apply._open_bugs_for_signature.return_value = [
             _bug(6, keywords=("meta",)), _bug(7, product="MailNews Core")]
-        res = self._actionable()
+        res = self._file(verdict="actionable", confidence=70, dossier={
+            "candidate": {"node": "n"},
+            "verdict": {"title": "SuggestStore::ingest blocks BgIOThreadPool shutdown"}})
         self.assertTrue(res["filed"], res)
+        self.assertEqual((res["meta_bugs"], res["other_app_bugs"]), ([6], [7]))
+        res = self._actionable()
+        self.assertFalse(res["filed"])
+        self.assertIn("held by [meta] bug 6", res["skipped"])
 
     def test_a_prior_filing_on_the_signature_stops_it_even_where_comments_are_allowed(self):
         bugzilla_apply.models.Dossier.already_filed_for_signature.return_value = {

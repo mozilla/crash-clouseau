@@ -3342,7 +3342,12 @@ class Dossier(db.Model):
         fb = Dossier.payload["filed_bug"]
         try:
             q = (
-                db.session.query(UUID.uuid, fb["bug"].astext.label("bug"))
+                db.session.query(UUID.uuid, fb["bug"].astext.label("bug"),
+                                 # The BUCKET the filing was about, when it was one
+                                 # (`bugzilla_apply.autofile_bug` on a signature an open
+                                 # [meta] holds): a later run on the same signature files a
+                                 # DIFFERENT bucket rather than stopping at "already filed".
+                                 fb["bucket"].astext.label("bucket"))
                 .select_from(Dossier)
                 .join(UUID, Dossier.uuidid == UUID.id)
                 .filter(
@@ -3368,7 +3373,12 @@ class Dossier(db.Model):
             row = q.order_by(Dossier.id).first()
         except Exception:                                  # pragma: no cover - defensive
             return {"skipped": "prior-filing lookup failed"}
-        return {"uuid": row.uuid, "bug": row.bug} if row else None
+        if not row:
+            return None
+        out = {"uuid": row.uuid, "bug": row.bug}
+        if row.bucket:
+            out["bucket"] = row.bucket
+        return out
 
     @staticmethod
     def filed_bugs_since(when, channel=None, product=None):

@@ -625,6 +625,21 @@ class Verdict(BaseModel):
     abstain_kind: AbstainKind | None = None
     mechanism: Claim | None = None
     consistency: Claim | None = None
+    # WHAT FAILS AND WHERE, AS A BUG SUMMARY. The title a bug filed on a BUCKET-HOLDER signature
+    # gets: a signature an open ``[meta]`` tracker already carries bundles every cause under
+    # one main-thread wait, so the bug we file there must be named for its cause, not for the
+    # signature (:jstutte, bugs 2073349 c1 and 2069191 c5, 2026-09-18). For a shutdown hang the
+    # asked-for shape is ``<work> blocks <pool> shutdown inside <call>``. Optional and
+    # descriptive: an ordinary crash bug is still titled ``Crash in [@ sig]``, and when the model
+    # leaves it empty the filer derives one (``report_bug.bucket_title``). Normalised, never
+    # validated -- a field the model may omit must not be able to destroy a verdict.
+    title: str = ""
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _one_line_title(cls, v):
+        text = " ".join(str(v or "").split())
+        return text[:200]
 
     @model_validator(mode="after")
     def _consistency_rule(self):

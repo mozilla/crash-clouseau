@@ -195,8 +195,31 @@ def other_reports_line(brief):
         "https://crash-stats.mozilla.org/report/index/{}".format(u) for u in others)
 
 
+def spike_bucket_title(brief, findings):
+    """The title of a spike bug on a BUCKET-HOLDER signature (one an open ``[meta]`` holds), or
+    ``""``: the deterministic hang title from the awaited thread (``hang.bucket_title``, the
+    ``<work> blocks <pool> shutdown inside <call>`` shape :jstutte gave 2071528 and 2073426),
+    else the investigator's summary cut to a sentence. Nothing usable means the spike is
+    signature-level information and goes to the tracker as a comment instead (see
+    ``spike_escalation.file_spike_bug``)."""
+    from crashclouseau import hang
+
+    try:
+        work = hang.awaited_summary((brief or {}).get("raw_crash") or {}) or {}
+    except Exception:  # pragma: no cover - defensive
+        work = {}
+    if work.get("title"):
+        return str(work["title"])[:report_bug._MAX_BUCKET_TITLE]
+    summary = getattr(findings, "summary", "") if findings is not None else ""
+    sentence = report_bug._first_sentence(summary)
+    return sentence[:report_bug._MAX_BUCKET_TITLE] if len(sentence) >= 20 else ""
+
+
 def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None):
-    """Why this is a new bug and not a comment, when open bugs exist on the signature."""
+    """Why this is a new bug and not a comment, when open bugs exist on the signature. A
+    ``[meta]`` on the signature is not a reason any more: a bug filed beside one is a BUCKET bug
+    that opens with ``report_bug.build_bucket_opener`` (``meta_bugs`` is accepted and ignored
+    so the callers need not change shape)."""
     notes = []
     if related_bugs:
         notes.append(
@@ -209,24 +232,26 @@ def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None):
     other = report_bug.build_other_app_bugs_note(other_app_bugs)
     if other:
         notes.append(other)
-    meta = report_bug.build_meta_bugs_note(meta_bugs)
-    if meta:
-        notes.append(meta)
     return "\n\n".join(notes) if notes else None
 
 
 def build_spike_comment(brief, findings, *, details=None, stack=None, person=None,
                         author_display=None, link_regressor=False, grounded=True,
                         related_bugs=None, other_app_bugs=None, meta_bugs=None,
-                        as_comment=False):
-    """The whole opener (or the comment on an existing bug) as one markdown text."""
+                        as_comment=False, bucket_opener=None):
+    """The whole opener (or the comment on an existing bug) as one markdown text. On a hang the
+    awaited thread's stack follows the main thread's (``report_bug.build_awaited_work_block``,
+    from the same minidump): the main thread's frames are the signature, the awaited thread is
+    what the bug is about."""
     uuid = brief.get("uuid", "")
     channel = brief.get("channel")
     sections = [
+        bucket_opener,
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         other_reports_line(brief),
         report_bug.build_reason_block(details),
         report_bug.build_frames_block(stack, details=details) if stack else None,
+        _awaited_block(brief),
         spike_paragraph(brief),
         analysis_section(findings, brief, author_display=author_display,
                          link_regressor=link_regressor, grounded=grounded),
@@ -237,14 +262,45 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
     return report_bug._unbacktick_bug_refs("\n\n".join(s for s in sections if s))
 
 
+def _awaited_block(brief):
+    """The awaited thread of a hang, rendered from the brief's own processed crash."""
+    raw = (brief or {}).get("raw_crash") or {}
+    if not raw or not (brief or {}).get("is_hang"):
+        return None
+    from crashclouseau import hang
+
+    try:
+        work = hang.awaited_summary(raw)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    return report_bug.build_awaited_work_block({"hang_awaited_work": work}) if work else None
+
+
 def build_spike_preview(brief, findings, *, product, component, person=None,
                         details=None, stack=None, link_regressor=False, grounded=True,
                         related_bugs=None, other_app_bugs=None, meta_bugs=None,
-                        withhold=False):
-    """The bug the spike filer posts: ``build_bug_preview``'s shape, for the spike."""
+                        withhold=False, bucket_title=None):
+    """The bug the spike filer posts: ``build_bug_preview``'s shape, for the spike.
+
+    ``bucket_title`` makes it a BUCKET BUG on a signature an open ``[meta]`` holds
+    (``spike_bucket_title``): titled for its cause, no ``cf_crash_signature``, blocking the
+    tracker, opening with why (the same shape as the ordinary filer's, see
+    ``report_bug.build_bug_preview``)."""
     channel = brief.get("channel")
     policy = config.get_agent_autofile(channel)
     signature = (brief.get("signature") or "").strip()
+    meta_ids = [int(b["id"]) for b in (meta_bugs or []) if (b or {}).get("id")]
+    bucket = bool(meta_ids and bucket_title)
+    opener = report_bug.build_bucket_opener(meta_bugs, signature) if bucket else None
+    bucket_key = ""
+    if bucket:
+        from crashclouseau import hang
+
+        try:
+            bucket_key = (hang.awaited_summary(brief.get("raw_crash") or {}) or {}).get(
+                "bucket") or ""
+        except Exception:  # pragma: no cover - defensive
+            bucket_key = ""
     author_display = report_bug._person_display(person) if person else None
     culprit = findings.culprit if findings is not None else None
     regression = bool(culprit and culprit.node and grounded and culprit.confidence != "low")
@@ -260,11 +316,12 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
     # signature got loud, where the mark would be false. See `is_new_signature`.
     prefix = policy.get("summary_prefix") or "" if is_new_signature(brief) else ""
     return {
-        "title": report_bug.bug_title(signature, prefix=prefix),
+        "title": bucket_title if bucket else report_bug.bug_title(signature, prefix=prefix),
         "comment": build_spike_comment(
             brief, findings, details=details, stack=stack, person=person,
             author_display=author_display, link_regressor=link_regressor, grounded=grounded,
-            related_bugs=related_bugs, other_app_bugs=other_app_bugs, meta_bugs=meta_bugs),
+            related_bugs=related_bugs, other_app_bugs=other_app_bugs, meta_bugs=meta_bugs,
+            bucket_opener=opener),
         "product": product,
         "component": component,
         "version": report_bug._bug_version(channel),
@@ -272,8 +329,9 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
         # `regression` when the investigator grounded a candidate at medium or better; the bare
         # volume step is not asserted as one -- an OS update spikes a signature too.
         "keywords": ["crash", "regression"] if regression else ["crash"],
-        "cf_crash_signature": "[@ {}]".format(signature),
-        "blocked": ["clouseau"],
+        "cf_crash_signature": "" if bucket else "[@ {}]".format(signature),
+        "blocked": ["clouseau"] + (meta_ids if bucket else []),
+        "bucket": {"meta_bugs": meta_ids, "key": bucket_key} if bucket else None,
         "regressed_by": regressed_by,
         "needinfo": report_bug._needinfo_line(person) if person else None,
         "needinfo_email": account,

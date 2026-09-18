@@ -355,8 +355,9 @@ def _create_payload(preview, email):
     one whitelist and not the other is exactly the silent no-op ``_CREATE_KEYS`` warns about."""
     payload = {k: v for k, v in preview.items() if k in _CREATE_KEYS}
     # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
-    # byte-identical to what it was before this existed.
-    for k in ("groups", "cc"):
+    # byte-identical to what it was before this existed. `cf_crash_signature` is empty on a
+    # BUCKET bug (the signature stays on the [meta] tracker) and is dropped for the same reason.
+    for k in ("groups", "cc", "cf_crash_signature"):
         if not payload.get(k):
             payload.pop(k, None)
     payload["summary"] = preview["title"]
@@ -919,6 +920,22 @@ def _own_bug_out_of_sight(prior, existing):
             "skipped": "already filed bug {} for this signature; it {} — not filing "
                        "again".format(bug, why),
             "prior_signature_filing": prior, "own_bug_state": state}
+
+
+def _bucket_of(dossier):
+    """The awaited-work bucket key of this crash (``hang.bucket_key`` via the orchestrator's
+    ``hang_awaited_work`` record), or ``""`` when the crash is not a hang whose awaited thread
+    was found."""
+    work = ((dossier or {}).get("corroborations") or {}).get("hang_awaited_work") or {}
+    return str(work.get("bucket") or "")
+
+
+def _different_bucket(prior, bucket):
+    """Was our earlier filing on this signature about a DIFFERENT bucket than *bucket*? Only
+    when both are known: an unknown on either side reads as the same bucket, so the one-bug-
+    per-signature stop keeps applying wherever the cohort cannot be told apart."""
+    previous = str((prior or {}).get("bucket") or "")
+    return bool(previous and bucket and previous != bucket)
 
 
 def _split_by_application(bugs, product):
@@ -1866,6 +1883,27 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # CHANNEL-BLIND, and that is the entire point: the 22.2% above is nightly-filed bugs that a
     # beta run would file a second time; scoping the lookup to the crash's own channel would
     # make it blind to exactly that population and leave it asserting nothing.
+    existing = _open_bugs_for_signature(signature)
+    if existing is None:
+        return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
+    # A BUCKET-HOLDER SIGNATURE -- one an open ``[meta]`` tracker carries -- takes one bug PER
+    # BUCKET, not one per signature (:jstutte, bugs 2073349 c1 and 2069191 c5, 2026-09-18): the
+    # main-thread wait it names is shared by every cause under it, and the tracker exists so
+    # that each cause gets its own bug, without the signature, blocking it. So a prior filing of
+    # ours on the signature is a stop only when it was about THIS bucket -- or when neither
+    # bucket is known, which fails toward the stop as every dedup here does. The bucket is the
+    # awaited thread's key (``hang.bucket_key``, stamped by the orchestrator as
+    # ``hang_awaited_work``) and was recorded on the earlier filing (``bucket`` below); on
+    # 2071528 the second analysis was a different cohort (`nsSegmentedBuffer::Clear`) and went
+    # onto the audio-session bucket bug as a comment, which is the mix-up this avoids.
+    held_by_meta = bool(_split_out_metas(
+        _split_by_application(existing, uuid_info.get("product"))[0])[1])
+    this_bucket = _bucket_of(dossier)
+    if prior_sig and held_by_meta and _different_bucket(prior_sig, this_bucket):
+        logger.info("autofile: our bug %s on %r is bucket %r; this crash is bucket %r of a "
+                    "signature held by a [meta] tracker -- a bucket bug may be filed for %s",
+                    prior_sig.get("bug"), signature, prior_sig.get("bucket"), this_bucket, uuid)
+        prior_sig = None
     if prior_sig and (actionable or config.comment_mode(cfg["comment_on_existing"]) != "comment"):
         logger.info("autofile: already filed bug %s for %r on %s (from %s) — not filing "
                     "again for %s", prior_sig.get("bug") or "?", signature, channel or "?",
@@ -1874,10 +1912,6 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "already filed bug {} for this signature on {}".format(
                     prior_sig.get("bug") or "?", channel or "?"),
                 "prior_signature_filing": prior_sig}
-
-    existing = _open_bugs_for_signature(signature)
-    if existing is None:
-        return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
     # On a `comment` channel our own OPEN bug is the ordinary venue -- the search returns it and
     # `already_commented` declines the second analysis -- so the guard acts only when the search
     # CANNOT see our bug, and the reason decides (`_own_bug_out_of_sight`): restricted, resolved
@@ -2093,6 +2127,19 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         return out
 
     from crashclouseau import report_bug
+    # A NEW bug on a bucket-holder signature is a BUCKET BUG or nothing (`report_bug.
+    # build_bug_preview`'s bucket mode: named for its cause, no `cf_crash_signature`, blocks the
+    # tracker). Nothing in the verdict to name the bucket -- no `title`, no awaited work, no
+    # mechanism sentence -- means the only bug we could file is the catch-all Jens asked us to
+    # stop filing, so none is.
+    if bug_id is None and meta_bugs and not report_bug.bucket_title(dossier):
+        tracker = meta_bugs[0]["id"]
+        logger.info("autofile: %r is held by [meta] bug %s and the verdict names no bucket to "
+                    "file -- not filing a signature-titled bug for %s", signature, tracker, uuid)
+        return {"filed": False, "bug": tracker, "meta_bugs": [b["id"] for b in meta_bugs],
+                "skipped": "signature is held by [meta] bug {}; the verdict names no bucket to "
+                           "file, and a bug titled by the signature would be a second "
+                           "catch-all".format(tracker)}
     try:
         preview = report_bug.build_bug_preview(
             uuid_info, stack, dossier,
@@ -2263,6 +2310,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             # And the third bucket, for the same audit reason (``_split_out_metas``).
             if meta_bugs:
                 result["meta_bugs"] = [b["id"] for b in meta_bugs]
+            # A BUCKET BUG: which bucket (the awaited work's key, the dedup grain above) and
+            # under which title. `bucket` is what `Dossier.already_filed_for_signature` hands
+            # the next run on this signature.
+            if preview.get("bucket"):
+                result["bucket_title"] = preview.get("title")
+                if preview["bucket"].get("key"):
+                    result["bucket"] = preview["bucket"]["key"]
             # Blockers need a second call — create discards them silently (see
             # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
             wanted = preview.get("blocked") or []

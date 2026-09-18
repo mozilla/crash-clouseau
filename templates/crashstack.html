@@ -206,7 +206,7 @@
       {% if evidence['verdict'] == 'abstain' -%}
       {#- A suppressed verdict is not the same as an empty one: we DID find a changeset, it is
           just dead. Saying "insufficient evidence" there reads as a failure to look. -#}
-      <p class="muted">{% if corrob.get('candidate_backedout_suppressed') %}Nothing to report &mdash; the suspected changeset was backed out, so there is nothing left to act on.{% elif corrob.get('candidate_backout_suppressed') %}Nothing to report &mdash; the suspected changeset is a backout of a patch from its own push, so the tree never differed and it cannot have changed crash behaviour.{% elif corrob.get('compiled_out_suppressed') %}{% if corrob.get('compiled_out_provenance') == 'mechanism' %}Nothing to report &mdash; the mechanism found rests on <code>{{ corrob.get('compiled_out_symbol','')|e }}</code>, whose body is compiled out of this build, so it cannot be what crashed.{% else %}Nothing to report &mdash; the suspected changeset is mostly about <code>{{ corrob.get('compiled_out_symbol','')|e }}</code>, which is compiled out of this build. That is a reason to doubt the changeset, not a refutation of the mechanism.{% endif %}{% else %}Insufficient evidence &mdash; no culprit identified.{% endif %}{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
+      <p class="muted">{% if corrob.get('candidate_backedout_suppressed') %}Nothing to report &mdash; the suspected changeset was backed out, so there is nothing left to act on.{% elif corrob.get('candidate_backout_suppressed') %}Nothing to report &mdash; the suspected changeset is a backout of a patch from its own push, so the tree never differed and it cannot have changed crash behaviour.{% elif corrob.get('hang_wait_not_actionable') %}Nothing to file &mdash; the mechanism found explains the main thread's <em>wait</em> (<code>{{ corrob.get('hang_wait_not_actionable')|join(', ')|e }}</code>), which every report under this signature shares and its [meta] tracker already describes; the work the main thread was waiting for is what a bug would be about.{% elif corrob.get('compiled_out_suppressed') %}{% if corrob.get('compiled_out_provenance') == 'mechanism' %}Nothing to report &mdash; the mechanism found rests on <code>{{ corrob.get('compiled_out_symbol','')|e }}</code>, whose body is compiled out of this build, so it cannot be what crashed.{% else %}Nothing to report &mdash; the suspected changeset is mostly about <code>{{ corrob.get('compiled_out_symbol','')|e }}</code>, which is compiled out of this build. That is a reason to doubt the changeset, not a refutation of the mechanism.{% endif %}{% else %}Insufficient evidence &mdash; no culprit identified.{% endif %}{% if evidence['rationale'] %} {{ evidence['rationale']|linkify(repo_url) }}{% endif %}</p>
       {% endif -%}
 
       {% if corrob.get('fault_address_offset_match') -%}
@@ -320,6 +320,14 @@
       {% if d.get('crash') and d['crash'].get('failure_class') -%}
       <p><strong>Failure class:</strong> {{ d['crash']['failure_class']|e }}{% if d['crash'].get('moz_crash_reason') %} &mdash; <code>{{ d['crash']['moz_crash_reason']|e }}</code>{% endif %}</p>
       {% endif -%}
+      {% set awaited = corrob.get('hang_awaited_work') or {} -%}
+      {% if awaited.get('thread') -%}
+      <p><strong>Awaited work</strong> &mdash; the thread the hung main thread was waiting for: thread {{ awaited['thread']['index']|e }} <code>{{ awaited['thread']['name']|e }}</code>{% if awaited.get('bucket') %}, bucket <code>{{ awaited['bucket']|e }}</code>{% endif %}{% if awaited.get('idle') %} ({{ awaited['idle'] }} idle {{ awaited.get('name','')|e }} thread{% if awaited['idle'] != 1 %}s{% endif %} beside it){% endif %}.</p>
+      <pre class="action-body">{% for f in awaited['thread']['frames'][:12] %}{{ f.get('stackpos') }}  {{ f.get('module','')|e }}  {{ (f.get('function','') or '')[:120]|e }}{% if f.get('filename') %}  {{ f['filename']|e }}{% if f.get('line') %}:{{ f['line'] }}{% endif %}{% endif %}
+{% endfor %}</pre>
+      {% elif awaited -%}
+      <p class="muted"><strong>Awaited work:</strong> the main thread was waiting for <code>{{ awaited.get('name') or awaited.get('target','')|e }}</code>; {% if awaited.get('threads') %}its {{ awaited['threads'] }} thread{% if awaited['threads'] != 1 %}s are{% else %} is{% endif %} idle in this dump{% else %}no thread of that name is in this dump{% endif %} &mdash; the work it waited for is not visible.</p>
+      {% endif -%}
 
       {% if has_cand -%}
       <div class="evidence-section">
@@ -402,7 +410,7 @@
         <p class="muted">Open on this signature but for another application, so not a venue: {% for b in fl['other_app_bugs'] %}<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b['id']|e }}" target="_blank" rel="noopener">bug {{ b['id']|e }}</a>{% if b.get('product') %} ({{ b['product']|e }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}.</p>
           {%- endif -%}
           {%- if fl.get('meta_bugs') -%}
-        <p class="muted">[meta] tracker{% if fl['meta_bugs']|length > 1 %}s{% endif %} on this signature, not a venue for a crash report: {% for b in fl['meta_bugs'] %}<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b['id']|e }}" target="_blank" rel="noopener">bug {{ b['id']|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+        <p class="muted">[meta] tracker{% if fl['meta_bugs']|length > 1 %}s{% endif %} holding this signature: {% for b in fl['meta_bugs'] %}<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b['id']|e }}" target="_blank" rel="noopener">bug {{ b['id']|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %} &mdash; a bug filed here is a <em>bucket</em> of it: named for its cause, without the signature, blocking the tracker.</p>
           {%- endif -%}
         {%- endif -%}
         {% if bug_preview -%}
@@ -414,6 +422,9 @@
         {% endif -%}
         </p>
         <p><strong>Summary:</strong> {{ bug_preview['title']|e }}</p>
+        {% if bug_preview.get('bucket') -%}
+        <p><strong>Bucket of:</strong> {% for b in bug_preview['bucket']['meta_bugs'] %}<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b|e }}" target="_blank" rel="noopener">bug {{ b|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %} &mdash; no crash signature on this bug (it stays on the tracker), which this bug blocks.</p>
+        {% endif -%}
         {# The one field on the filed bug that other tooling ACTS on, so it is worth reading
            before it is asserted. Absent exactly when the bug will not make the claim: a
            candidate that did not land in this build's pushlog window is named in the comment

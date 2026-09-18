@@ -36,6 +36,7 @@ import unittest
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 from crashclouseau.agent import triage                                   # noqa: E402
+from tests.test_hang_bucket import _IDLE_POOL, _SUGGEST, _hang           # noqa: E402
 
 # A plain single-thread deref: the floor of what any run pays.
 _PLAIN = {
@@ -135,6 +136,18 @@ _JAVA = {
 }
 
 
+# A shutdown hang whose awaited thread is IN the dump: crash 37d5021a (bug 2073349) in shape, an
+# idle `BgIOThreadPool` worker and the busy one in Suggest/viaduct. The `AWAITED WORK` block is
+# the whole difference from the 40-thread hang row above: the thread's 14 frames and the rule
+# sentence, shared with the blind second opinion.
+_AWAITED = {
+    "uuid": "u-hang2", "channel": "release", "product": "Firefox", "buildid": "20260903215306",
+    "version": "155.0.1",
+    "signature": "shutdownhang | mozilla::SpinEventLoopUntil<T> | nsThreadPool::ShutdownWithTimeout",
+    "raw_crash": _hang([_IDLE_POOL, _SUGGEST]),
+}
+
+
 # name -> (measured bytes, tolerance). Nightly rows measured 2026-08-24 at HEAD; the beta rows
 # and the two age rows 2026-08-25. The tolerance is deliberately tight: v109's whole system.md
 # change was +638 bytes and it has to be impossible to make that quietly.
@@ -163,15 +176,22 @@ _MEASURED = {
     # the shape line, the `pre_existing` pointer and the rate-claim sentence.
     # +156 the same day: "do not argue that nothing in the window explains it" -- the first two
     # live runs each closed their second statement with exactly that.
-    "system.md": (20740, 400),
+    # +130 on 2026-09-18: `title` in the verdict shape -- a bug on a signature a [meta] holds is
+    # named for its cause, not the signature (bug 2073349 c1).
+    "system.md": (20870, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     "crash facts, 40-thread parent hang": (2508, 200),
     "user prompt, 40-thread parent hang": (3285, 300),
+    # 2026-09-18, the AWAITED WORK block (bug 2073349): ~2,550 bytes over the same hang without
+    # it -- the awaited thread's 14 frames (long Rust symbols and source paths) and the rule
+    # sentence. Paid only on a hang whose spin-loop stack names a thread the dump has.
+    "crash facts, hang with awaited work": (4909, 300),
+    "user prompt, hang with awaited work": (5737, 400),
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (21280, 400),
+    "system.md, beta": (21410, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
@@ -190,7 +210,7 @@ _MEASURED = {
     # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
     # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
     # long Java signature / paths; it carries no line numbers on its frames.
-    "system.md, java": (21903, 400),
+    "system.md, java": (22033, 400),
     "crash facts, fenix java": (325, 60),
     "user prompt, fenix java": (3240, 300),
 }
@@ -210,6 +230,15 @@ class TestPromptBudget(unittest.TestCase):
             actual, want, delta=tol,
             msg="{} is {} bytes, last measured at {} (+/-{}).{}".format(
                 name, actual, want, tol, _HOWTO))
+
+    def test_the_awaited_work_block_is_pinned(self):
+        """The one per-crash block added since the ledger was written; a hang without an
+        awaited thread in its dump must not pay for it."""
+        self._check("crash facts, hang with awaited work",
+                    len("\n".join(triage._crash_facts(_AWAITED))))
+        self._check("user prompt, hang with awaited work", len(triage._user_prompt(_AWAITED)))
+        self.assertIn("AWAITED WORK", triage._user_prompt(_AWAITED))
+        self.assertNotIn("AWAITED WORK", triage._user_prompt(_parent_hang()))
 
     def test_the_standing_system_prompt_is_pinned(self):
         """Read whole on every run, `lru_cache`d, identical for every crash ON ONE CHANNEL -- so

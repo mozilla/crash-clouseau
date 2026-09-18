@@ -1106,6 +1106,20 @@ def resolve_venue_below_public(signatures, product, buildid, token):
         if not state:
             continue
         if not state["resolution"]:
+            # OPEN, and the public lookup did not return it. RESTRICTED is the case this branch
+            # was written for. But a PUBLIC bug of ours that the lookup did not return simply
+            # does not carry the signature any more: a BUCKET bug (filed without it, on a
+            # signature a [meta] holds) or one a human edited the signature off -- 2071528, made
+            # the audio-session bucket by :jstutte on 2026-09-14, collected our `nsSegmentedBuffer`
+            # spike comment the next day through exactly this branch. Anonymous BMO returns a
+            # public bug and omits a restricted one (`bugzilla_apply._bugs_by_id`), which tells
+            # the two apart; unreadable keeps today's answer, so a disclosure case cannot be
+            # opened by a flaky read.
+            visible = bugzilla_apply._bugs_by_id([bug])
+            if visible is not None and any(r.get("id") == bug for r in visible):
+                logger.info("spike: our open bug %s is public but no longer carries the "
+                            "signature (a bucket bug, or edited off) -- not a venue", bug)
+                continue
             return {"id": bug, "kind": "own_restricted", "assigned_to": state["assigned_to"]}
         if state["resolution"] == "FIXED" and build_dt is not None and state["resolved"] is not None \
                 and _aware(state["resolved"]) > _aware(build_dt):
@@ -1223,7 +1237,24 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             venue = {"id": below["id"], "assigned_to": below.get("assigned_to") or ""}
             venue_kind = below["kind"]
             for_spike = False
-    person = _needinfo_person_for(findings, brief) if grounded else {}
+    # A BUCKET-HOLDER SIGNATURE (an open [meta] tracker carries it): no bug titled by the
+    # signature may be filed beside the tracker (:jstutte, bugs 2073349 c1 and 2069191 c5). A
+    # grounded analysis that names its cause files a BUCKET bug -- titled for the cause, no
+    # signature, blocking the tracker (`spike_report.build_spike_preview`). A spike with nothing
+    # to name is SIGNATURE-LEVEL information, and the signature lives on the tracker: the volume
+    # goes there as a comment, with no needinfo -- the tracker's people are its audience, the way
+    # a human's volume note is (bug 1866944 comment 28).
+    bucket_title = None
+    if venue is None and meta_bugs:
+        if grounded and findings is not None:
+            bucket_title = spike_report.spike_bucket_title(brief, findings)
+        if not bucket_title:
+            venue = {"id": meta_bugs[0]["id"], "assigned_to": ""}
+            venue_kind = "meta"
+            for_spike = False
+            logger.info("spike: %r is held by [meta] bug %s and the analysis names no bucket "
+                        "-- the spike goes to the tracker as a comment", signature, venue["id"])
+    person = _needinfo_person_for(findings, brief) if grounded and venue_kind != "meta" else {}
     if not person and venue is not None and venue.get("assigned_to"):
         # Nobody to ask about a culprit: the bug's own assignee is the human who knows the fix.
         try:
@@ -1258,7 +1289,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 brief, findings, product=bz_product, component=component, person=person,
                 details=details, stack=stack, link_regressor=link_regressor, grounded=grounded,
                 related_bugs=related or None, other_app_bugs=other_app or None,
-                meta_bugs=meta_bugs or None, withhold=withheld)
+                meta_bugs=meta_bugs or None, withhold=withheld, bucket_title=bucket_title)
             if withheld and not preview.get("groups"):
                 return dict(result, skipped=(
                     "memory-safety crash and no security group for product {!r}".format(bz_product)))
@@ -1279,6 +1310,11 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                            "product": bz_product, "component": component, "component_from": how,
                            "needinfo": email or None, "blocks": linked,
                            "keywords": preview.get("keywords")})
+            if preview.get("bucket"):
+                result["meta_bugs"] = preview["bucket"]["meta_bugs"]
+                result["bucket_title"] = preview.get("title")
+                if preview["bucket"].get("key"):
+                    result["bucket"] = preview["bucket"]["key"]
             regressors = preview.get("regressed_by") or []
             if regressors:
                 result["regressed_by"] = bugzilla_apply._link_regressed_by(bug_id, regressors, token)

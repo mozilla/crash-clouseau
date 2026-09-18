@@ -356,6 +356,19 @@ REGISTRY = {
         "diagnostic", (),
         "The quoted thread names a verdict asserted that this process does not have."),
     "absent_thread_clamped": ("diagnostic", (), ""),
+
+    # -- the awaited work of a shutdown hang (bug 2073349) -----------------------------------
+    "hang_awaited_work": (
+        "evidence", ("report_bug.py", "bugzilla_apply.py", "templates/crashstack.html"),
+        "`hang.awaited_summary` at gate time: the thread the main thread waits for, its top "
+        "frames, its bucket key and a deterministic bucket title. The bug prints the frames, the "
+        "filer keys a bucket-holder signature's dedup and fallback title on it."),
+    "hang_wait_not_actionable": (
+        "suppression", ("templates/crashstack.html",),
+        "An `actionable` verdict whose cited mechanism files are all the WAITING thread's -- it "
+        "explains the wait every report under the signature shares, which is the [meta] "
+        "tracker's subject -- became a `pre_existing` abstain. Instance-level on purpose: the "
+        "next run on the cluster may read the awaited thread."),
     "archetypes": (
         "evidence", ("feedback.py",),
         "The slugs that fired, copied onto `Feedback` so `scoreboard()[\"by_archetype\"]` can "

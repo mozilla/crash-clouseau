@@ -294,6 +294,15 @@ _SHUTDOWN_HANG = {
         "(2) `Shutdown phase reached`, which bounds what can still be running; (3) the stack "
         "itself, which is the HUNG MAIN THREAD (not the watchdog) and reads outside-in — the "
         "innermost Gecko frame is who is waiting, not who is stuck. "
+        "(1b) the `AWAITED WORK` fact, when present: that is the thread the main thread is "
+        "waiting FOR, with its stack. What it is doing and why it does not finish is the "
+        "finding; the wait itself (`ShutdownWithTimeout(-1)` arms no timer, `SpinEventLoopUntil` "
+        "is unbounded) is true of every report under the signature and is what the signature's "
+        "[meta] tracker is about -- it is never the mechanism to file, and its code's blame is "
+        "not the owner. Cite the awaited thread's code, take `candidate` (blame) and the owner "
+        "from there, and fill `verdict.title` as `<work> blocks <pool> shutdown inside <call>`; "
+        "when the fact says the awaited threads are all idle, the work is not visible and no "
+        "subsystem may be named for it. "
         "BEFORE YOU NAME A SUBSYSTEM, find its thread in the `THREADS IN THIS PROCESS` fact. If "
         "it is not there it was not running here and the mechanism is refuted. Two traps that "
         "cost bug 2064436: a subsystem present in a CONTENT process says nothing about a hang in "
@@ -366,6 +375,9 @@ _SUPERSEDED = {
     }),
     "shutdown-hang": frozenset({
         "2bb22027da52995373d98fe920881b32be5ab2dd3182fd59e56b38f41124d184",
+        # f030d587 = 8190e68, the row with the population-prior closer rewritten; superseded
+        # 2026-09-18 by the AWAITED WORK step (bug 2073349).
+        "f030d587bed0c9357fdf22b6391c09947bd10aede38b6f5cab7e2470eea6590b",
     }),
 }
 
