@@ -152,6 +152,7 @@ _WATCHDOG = {"thread_name": "Shutdown Hang Terminator", "frames": [
 _SIG = "shutdownhang | mozilla::SpinEventLoopUntil<T> | nsThreadPool::ShutdownWithTimeout"
 _SUGGEST_TITLE = ("suggest::store::SuggestStoreInner<T>::ingest blocks BgIOThreadPool shutdown "
                   "inside viaduct::client::Client::send_sync")
+_KEY = "suggest::store::SuggestStoreInner::ingest | viaduct::client::Client::send_sync"
 
 
 def _hang(threads, spin="default: nsThreadPool::ShutdownWithTimeout BgIOThreadPool", **over):
@@ -241,8 +242,11 @@ class TestAwaitedWork(unittest.TestCase):
         self.assertEqual((s["kind"], s["name"], s["threads"], s["busy"], s["idle"]),
                          ("pool", "BgIOThreadPool", 2, 1, 1))
         self.assertEqual((s["thread"]["index"], s["thread"]["name"]), (2, "BgIOThreadPool #510"))
-        self.assertEqual(s["bucket"], "viaduct::client::Client::send_sync | viaduct::Request::send"
-                                      " | remote_settings::client::ViaductApiClient::make_request")
+        # The KEY is the two ends of the work, with generics dropped: the same on macOS
+        # (37d5021a), Linux (e794dacd, 6b31256d) and Windows (ca4f5fe5), where a first-three-
+        # frames key read three cohorts (inlining moves the middle; Linux spells Rust methods
+        # `<Type>::method`; Windows adds the method's generics).
+        self.assertEqual(s["bucket"], _KEY)
         # The shape Jens gave 2071528 and 2073426: the work, the pool, the blocking call. The
         # uniffi scaffolding under `ingest` is glue and does not name the work.
         self.assertEqual(s["title"], _SUGGEST_TITLE)
@@ -260,7 +264,7 @@ class TestAwaitedWork(unittest.TestCase):
         self.assertFalse(hang.is_idle(_SUGGEST["frames"]))
         self.assertFalse(hang.is_idle(_CUPS_MUTEX["frames"]))
         self.assertEqual(hang.bucket_key(_CUPS_MUTEX["frames"]),
-                         "nsPrinterCUPS::IsCUPSVersionAtLeast | nsPrinterCUPS::SupportsColor")
+                         "nsPrinterCUPS::SupportsColor | nsPrinterCUPS::IsCUPSVersionAtLeast")
 
     def test_busy_before_idle_and_the_other_busy_threads_are_listed(self):
         s = hang.awaited_summary(_hang([_IDLE_POOL, _CUPS_MUTEX, _SUGGEST]))
@@ -296,6 +300,26 @@ class TestAwaitedWork(unittest.TestCase):
                          "thread_start<T>")
         self.assertEqual(hang.clean_symbol(""), "")
 
+    def test_a_rust_impl_block_is_the_types_path(self):
+        # Linux symbolises a Rust method through its impl block; macOS and Windows do not. The
+        # same cohort must clean, key and wait-match the same way on all three (6b31256d).
+        self.assertEqual(hang.clean_symbol("<viaduct::client::Client>::send_sync"),
+                         "viaduct::client::Client::send_sync")
+        self.assertEqual(hang.clean_symbol("<remote_settings::client::ViaductApiClient as "
+                                           "remote_settings::client::ApiClient>::fetch_changeset"),
+                         "remote_settings::client::ViaductApiClient::fetch_changeset")
+        self.assertEqual(hang.clean_symbol("<suggest::store::SuggestStoreInner<suggest::rs::"
+                                           "SuggestRemoteSettingsClient>>::ingest"),
+                         "suggest::store::SuggestStoreInner<T>::ingest")
+        self.assertTrue(hang.is_wait({"function": "<std::sys::sync::condvar::futex::Condvar>"
+                                                  "::wait"}))
+        self.assertTrue(hang.is_wait({"function": "<pollster::Signal>::wait"}))
+        # The key drops generics altogether: Windows' `ingest<T>` and macOS' `ingest` are one.
+        self.assertEqual(hang.identity("suggest::store::SuggestStoreInner<S>::ingest<S>(x)"),
+                         "suggest::store::SuggestStoreInner::ingest")
+        # An impl block with no path inside is still read as one; nothing real spells this.
+        self.assertEqual(hang.clean_symbol("<T>::x"), "T::x")
+
     def test_frames_text_is_socorros_layout_with_long_functions_cut(self):
         text = hang.frames_text(hang.normalize_frames(_SUGGEST["frames"]), 3)
         lines = text.split("\n")
@@ -314,8 +338,7 @@ class TestThePromptFact(unittest.TestCase):
         self.assertIn("Thread 2 `BgIOThreadPool #510`, 1 idle:", facts)
         self.assertIn("viaduct::client::Client::send_sync", facts)
         self.assertIn("suggest::store::SuggestStoreInner<S>::ingest", facts)
-        self.assertIn("Bucket (its first non-wait frames): viaduct::client::Client::send_sync",
-                      facts)
+        self.assertIn("Bucket (the work | the blocking call): " + _KEY, facts)
         # The direction, stated once: the wait is the symptom, the awaited work the finding.
         self.assertIn("the wait in the analysed stack is the symptom", facts)
         self.assertIn("`<work> blocks BgIOThreadPool shutdown inside <call>`", facts)
@@ -545,10 +568,7 @@ class TestTheBucketBug(unittest.TestCase):
         self.assertEqual(p["title"], _SUGGEST_TITLE)
         self.assertEqual(p["cf_crash_signature"], "")
         self.assertEqual(p["blocked"], ["clouseau", 1866944])
-        self.assertEqual(p["bucket"], {"meta_bugs": [1866944],
-                                       "key": "viaduct::client::Client::send_sync | viaduct::"
-                                              "Request::send | remote_settings::client::"
-                                              "ViaductApiClient::make_request"})
+        self.assertEqual(p["bucket"], {"meta_bugs": [1866944], "key": _KEY})
         self.assertTrue(p["comment"].startswith("Bucket of bug 1866944, filed without the "
                                                 "signature"))
         self.assertIn("The thread the main thread is waiting for -- thread 2 `BgIOThreadPool "
@@ -649,9 +669,7 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual(res["mode"], "spike_new_bug")
         self.assertEqual(self.created[0]["summary"], _SUGGEST_TITLE)
-        self.assertEqual(res["bucket"], "viaduct::client::Client::send_sync | viaduct::Request::"
-                                        "send | remote_settings::client::ViaductApiClient::"
-                                        "make_request")
+        self.assertEqual(res["bucket"], _KEY)
         self.assertIn("The thread the main thread is waiting for -- thread 2 `BgIOThreadPool "
                       "#510`", self.created[0]["description"])
 
@@ -672,11 +690,7 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
         self.assertEqual(self.created, [])
         self.assertEqual(self.comments[0][0], 2073426)
         se.models.SpikeEscalation.prior_bug_for.assert_called_with(
-            ["mozilla::Foo::Bar"],
-            bucket="viaduct::client::Client::send_sync | viaduct::Request::send | "
-                   "remote_settings::client::ViaductApiClient::make_request",
-            bucket_title=_SUGGEST_TITLE,
-        )
+            ["mozilla::Foo::Bar"], bucket=_KEY, bucket_title=_SUGGEST_TITLE)
 
     def test_a_spike_with_nothing_to_name_goes_to_the_tracker_as_a_comment(self):
         for findings, grounded in ((None, False), (self.findings, False),

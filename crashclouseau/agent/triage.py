@@ -824,7 +824,7 @@ def _awaited_work_lines(raw: dict) -> list[str]:
     lines = ["", head]
     lines += ["  " + ln for ln in hang.frames_text(t["frames"], _AWAITED_FRAMES).split("\n")]
     if summary.get("bucket"):
-        lines.append("  Bucket (its first non-wait frames): {}".format(summary["bucket"]))
+        lines.append("  Bucket (the work | the blocking call): {}".format(summary["bucket"]))
     return lines
 
 

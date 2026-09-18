@@ -38,7 +38,6 @@ leaves of them: 15 bytes, middle elided (``BgIOThr~ool #15`` for ``BgIOThreadPoo
 import re
 
 MAX_FRAMES = 16
-_MAX_BUCKET_FRAMES = 3
 _MAX_TITLE = 200
 
 # The innermost entry of `xpcom_spin_event_loop_stack` names what the main thread waits for.
@@ -183,12 +182,19 @@ def _label(frame):
     return _function(frame) or str((frame or {}).get("module") or "").strip()
 
 
+def _matches(regex, frame):
+    """The frame's function matches *regex* as symbolised OR as cleaned: ``<std::sys::sync::
+    condvar::futex::Condvar>::wait`` is a wait under both spellings."""
+    fn = _function(frame)
+    return bool(fn) and (bool(regex.match(fn)) or bool(regex.match(clean_symbol(fn))))
+
+
 def is_wait(frame):
-    return bool(_WAIT_RE.match(clean_symbol(_function(frame))))
+    return _matches(_WAIT_RE, frame)
 
 
 def is_plumbing(frame):
-    return bool(_PLUMBING_RE.match(clean_symbol(_function(frame))))
+    return _matches(_PLUMBING_RE, frame)
 
 
 def is_idle(frames):
@@ -257,10 +263,49 @@ def awaited_threads(raw):
     return out
 
 
+def _rust_impl_path(text):
+    """``<a::B<x>>::m`` / ``<a::B as t::T>::m`` -> ``a::B<x>::m``: a Rust method symbolised
+    through its impl block, as Linux builds spell it, rewritten to the path macOS and Windows
+    spell. Depth-aware, because the type's own generics nest inside the block. Anything else
+    comes back unchanged."""
+    if not text.startswith("<"):
+        return text
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+            if depth == 0:
+                head, rest = text[1:i], text[i + 1:]
+                if not rest.startswith("::"):
+                    return text
+                # `<Type as Trait>`: the type is what names the code; split at depth 0 only.
+                d, cut = 0, None
+                for j in range(len(head) - 3):
+                    c = head[j]
+                    if c == "<":
+                        d += 1
+                    elif c == ">":
+                        d -= 1
+                    elif d == 0 and head[j:j + 4] == " as ":
+                        cut = j
+                        break
+                type_path = head[:cut] if cut is not None else head
+                return type_path.strip() + rest
+    return text
+
+
 def clean_symbol(function):
-    """A function as a bug title or a bucket key wants it: template arguments collapsed to
-    ``<T>`` and the argument list dropped, the way Socorro's signature generator normalises."""
-    text = str(function or "").strip()
+    """A function as a bug title wants it: template arguments collapsed to ``<T>`` and the
+    argument list dropped, the way Socorro's signature generator normalises.
+
+    A Rust method on Linux arrives as ``<viaduct::client::Client>::send_sync`` or ``<A as
+    Trait>::method`` where macOS and Windows symbolise ``viaduct::client::Client::send_sync``;
+    the leading impl block is the type's path, so it is kept as one (``_rust_impl_path``) --
+    otherwise the same cohort reads ``<T>::send_sync`` on one platform and
+    ``viaduct::client::Client::send_sync`` on the others (6b31256d vs 37d5021a, 2026-09-18)."""
+    text = _rust_impl_path(str(function or "").strip())
     out, depth = [], 0
     for ch in text:
         if ch == "<":
@@ -282,29 +327,47 @@ def work_frames(frames):
     return [f for f in frames or [] if _label(f) and not is_wait(f) and not is_plumbing(f)]
 
 
+def work_and_call(frames):
+    """``(work, call)``: the two ends of what the thread is doing, cleaned. The WORK is the
+    outermost work frame that is not language glue (the runnable's entry, e.g.
+    ``SuggestStore::ingest`` rather than the uniffi scaffolding under it); the CALL is the
+    innermost work frame (``viaduct::Client::send_sync``, ``_cupsCreateDest``). ``("", "")``
+    when the thread has no work frame."""
+    work = work_frames(frames)
+    if not work:
+        return "", ""
+    outer = [f for f in work if not _GLUE_RE.search(_label(f))] or work
+    return clean_symbol(_label(outer[-1])), clean_symbol(_label(work[0]))
+
+
+def identity(symbol):
+    """A symbol as a bucket KEY wants it: cleaned, then with every generic marker dropped.
+    Windows symbolises a generic method's instantiation (``ingest<T>``) where macOS shows
+    ``ingest`` (ca4f5fe5 vs 37d5021a), and an identity must not depend on which."""
+    return clean_symbol(symbol).replace("<T>", "").strip()
+
+
 def bucket_key(frames):
-    """The first ``_MAX_BUCKET_FRAMES`` work frames, cleaned and ``|``-joined: the cohort a report
-    belongs to, the way Socorro's proto-signature buckets a crashing thread."""
-    labels = [clean_symbol(_label(f)) for f in work_frames(frames)[:_MAX_BUCKET_FRAMES]]
-    return " | ".join(x for x in labels if x)[:400] if labels else ""
+    """``<work> | <call>``: the cohort a report belongs to, as the dedup identity of a bucket.
+
+    THE TWO ENDS AND NOT THE TOP THREE FRAMES, because the key has to agree across platforms
+    and builds of ONE cohort, and the middle of a stack does not: on the Suggest/viaduct cohort
+    macOS 155.0.1 (37d5021a) has ``viaduct::Request::send`` where Linux 154.0 (e794dacd) has it
+    inlined away and shows ``fetch_changeset`` instead, so a first-three-frames key read three
+    different cohorts. The runnable's entry and the blocking call are what survive inlining,
+    and they are what the title says too."""
+    what, call = (identity(x) for x in work_and_call(frames))
+    if not what:
+        return ""
+    return (what if call == what else "{} | {}".format(what, call))[:400]
 
 
 def bucket_title(frames, target):
     """``<work> blocks <pool> shutdown inside <call>`` -- the shape :jstutte gave the two bucket
     bugs he wrote from our reports (2071528 retitled 2026-09-14, 2073426 filed 2026-09-18) -- or
-    ``""`` when the awaited thread has no work frame to name.
-
-    The WORK is the outermost work frame that is not language glue (the runnable's entry, e.g.
-    ``SuggestStore::ingest`` rather than the uniffi scaffolding under it); the CALL is the
-    innermost work frame (``viaduct::Client::send_sync``, ``_cupsCreateDest``). One frame gives
-    only the first half."""
-    work = work_frames(frames)
-    if not work or not target:
-        return ""
-    outer = [f for f in work if not _GLUE_RE.search(_label(f))] or work
-    what = clean_symbol(_label(outer[-1]))
-    call = clean_symbol(_label(work[0]))
-    if not what:
+    ``""`` when the awaited thread has no work frame to name (see ``work_and_call``)."""
+    what, call = work_and_call(frames)
+    if not what or not target:
         return ""
     name = target.get("name") or ("thread pool" if target.get("kind") == "pool" else "thread")
     title = "{} blocks {} shutdown".format(what, name)

@@ -186,8 +186,8 @@ _MEASURED = {
     # 2026-09-18, the AWAITED WORK block (bug 2073349): ~2,550 bytes over the same hang without
     # it -- the awaited thread's 14 frames (long Rust symbols and source paths) and the rule
     # sentence. Paid only on a hang whose spin-loop stack names a thread the dump has.
-    "crash facts, hang with awaited work": (4909, 300),
-    "user prompt, hang with awaited work": (5737, 400),
+    "crash facts, hang with awaited work": (4873, 300),
+    "user prompt, hang with awaited work": (5701, 400),
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
