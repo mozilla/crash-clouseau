@@ -414,9 +414,11 @@ its blocks list.
 BEFORE THAT, THE BACKFILL. The three filings made before bucket bugs existed have no identity,
 and an unknown identity matches every bucket -- so 2073349 (pool-shutdown family), the spike
 filing behind 2071528 and 2069191 (necko's family) stop every new bucket on the two families
-that matter most, the unfiled Linux CUPS bucket included. `bin/backfill_bucket.py` re-reads each
-record's report and writes the key and title; 2069191's socket thread was idle, so it gets the
-bug's own summary as title and no key:
+that matter most, the unfiled Linux CUPS bucket included. `bin/backfill_bucket.py` re-reads the
+one report that CREATED each bug and writes its key and title to every ledger row for that bug;
+comments never define another identity (2071528 later received an incorrectly routed
+`nsSegmentedBuffer` spike comment). 2069191's socket thread was idle, so it gets the bug's own
+summary as title and no key:
 
 ```
 heroku run -a crash-clouseau-augmented -- python bin/backfill_bucket.py --bug 2073349 --bug 2071528 \

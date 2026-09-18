@@ -875,6 +875,39 @@ class TestTheBackfill(unittest.TestCase):
         self.assertEqual(backfill._pairs(["2069191=Some title=with equals"]),
                          {2069191: "Some title=with equals"})
 
+    def test_a_later_comment_cannot_give_the_bug_a_second_bucket_identity(self):
+        # 2071528 was created from the audio-session report, then received an incorrectly routed
+        # nsSegmentedBuffer spike comment. The creator alone defines the bug; both ledger rows
+        # receive that canonical identity and the comment's crash is never read.
+        creator = {"table": "dossier", "uuid": "audio", "row": object(),
+                   "filing": {"filed": True, "bug": 2071528, "mode": "new_bug"}}
+        comment = {"table": "spike", "uuid": "segmented", "row": object(),
+                   "filing": {"filed": True, "bug": 2071528, "mode": "spike_comment"}}
+        audio = _hang(
+            [_AUDIO], spin="default: nsThreadPool::ShutdownWithTimeout BackgroundThreadPool")
+        reads = []
+
+        def read(uuid):
+            reads.append(uuid)
+            if uuid == "audio":
+                return audio
+            return _hang([_CUPS_MUTEX])
+
+        source, fields = backfill.canonical_fields([comment, creator], read)
+        self.assertIs(source, creator)
+        self.assertEqual(reads, ["audio"])
+        self.assertEqual(fields["bucket"], "mozilla::widget::WinAudioSession::Create | "
+                                           "LRPC_CASSOCIATION::AlpcConnect")
+        filled = [backfill.apply_fields(r["filing"], fields)[0]
+                  for r in (creator, comment)]
+        self.assertEqual({r["bucket"] for r in filled}, {fields["bucket"]})
+
+    def test_an_ambiguous_creation_ledger_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "exactly one new-bug record"):
+            backfill.canonical_fields([
+                {"uuid": "u", "filing": {"mode": "spike_comment"}},
+            ], lambda uuid: {})
+
 
 if __name__ == "__main__":
     unittest.main()
