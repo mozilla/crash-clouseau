@@ -367,6 +367,12 @@
             "daily_cap": 3,
             "comment_on_existing": "comment"
         },
+        "signature_family":
+        {
+            "enabled": true,
+            "days": 182,
+            "max_candidates": 8
+        },
         "filters":
         {
             "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr", "security/ct/CTKnownLogs.h", "security/manager/ssl/StaticHPKPins.h"],

@@ -1376,6 +1376,23 @@ def get_agent_signature_age():
     }
 
 
+def get_agent_signature_family():
+    """The signature-family lookup (``sigfamily.lookup``): what else this crash has been called,
+    and whether the old name stopped when the new one started. A kill switch and two bounds.
+
+    ``enabled`` is a genuine switch, not a rollout flag: the lookup is two to four SuperSearches
+    against crash-stats per seed, an external dependency the pipeline can lose for a day, and
+    the one case a switch is for. ``days`` is how far back the discovery and the build timelines
+    read -- Socorro's Elasticsearch keeps roughly 178 days, so more buys nothing;
+    ``max_candidates`` bounds the per-candidate build queries."""
+    a = get_agent().get("signature_family", {})
+    return {
+        "enabled": _env_bool("SIGNATURE_FAMILY_ENABLED", a.get("enabled", True)),
+        "days": int(a.get("days", 182)),
+        "max_candidates": int(a.get("max_candidates", 8)),
+    }
+
+
 def get_agent_version_rates():
     """Per-version crash-rate facts (``sigage.version_rates``) for the prompt and the
     ``version_step`` corroboration. ``step_ratio`` is what counts as a step between two
