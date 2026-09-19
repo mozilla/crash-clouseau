@@ -127,6 +127,16 @@ function does not settle it — a changeset can touch frame 0 and still only be 
 made an older lifetime bug reachable. Naming an exposer is still useful: Mozilla records
 exposers as `regressed_by` too, so do not abstain over it.
 
+A DIAGNOSTIC IS AN EXPOSER, NOT A CAUSE. A change that ADDS an assert, a `CHECK`, a
+`MOZ_DIAGNOSTIC_ASSERT`, a crash annotation or a new `OOM` size class, or that MOVES where an
+abort fires, mints a NEW SIGNATURE for a condition that already existed. When the SIGNATURE
+RENAME block, the family clock or the version history says the condition predates that change,
+name it as the exposer and write "exposed by", never "regressed by": bug 2071287 named the fix
+that added the assert as the regressor, and the module owner corrected it to the change that
+made the condition true, three releases earlier. The regressor is whoever made the condition
+true; look for it by blame on the checked value, and if it is outside the window say so and
+report the crash as pre-existing and exposed, with the exposer named as such.
+
 A MECHANISM IS NOT EVIDENCE UNTIL ONE LINK IS OBSERVED. A chain whose every link reads "can",
 "could" or "may" is a hypothesis about the code, and it is equally true if the candidate is
 innocent. Before naming a candidate, ask what you would expect to SEE in this report if it were

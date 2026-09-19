@@ -312,6 +312,25 @@ def _sweep_channel(product, channel, cfg, room):
             logger.warning("spike: %s on %s is a real spike but no report with a stack was "
                            "ingested for build %s", signature, day, picked)
             continue
+        # A RE-BUCKETING IS NOT A SPIKE. An appearance from zero whose gain is exactly what an
+        # older name of the same crash LOST on the same build (`sigfamily.handoff_for_spike`)
+        # is the crash changing its name, and the pre-LLM decline that would have stopped
+        # 2071620 and 2071606 for $0: the model's own summary called that one "a renamed form
+        # of a longstanding SpiderMonkey OOM abort" and the filer read neither it nor the
+        # status. Recorded `done` with the predecessor and its numbers, so the operator's
+        # table says why nothing was spent.
+        handoff = _handoff_for_spike(signature, uuid, product, channel, picked) \
+            if spike.get("kind") == "build_day" else None
+        if handoff is not None:
+            reason = _handoff_decline(handoff, picked)
+            row = models.SpikeEscalation.create(
+                signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
+                payload=dict(payload, skipped=reason, predecessor=handoff["signature"],
+                             predecessor_before=handoff.get("before"),
+                             predecessor_after=handoff.get("after")))
+            row.set_status("done")
+            logger.info("spike: %s on %s is a %s; not investigated", signature, day, reason)
+            continue
         payload["classic_runs"] = len(runs)
         row = models.SpikeEscalation.create(
             signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
@@ -334,6 +353,38 @@ def _enqueue(escalation_id, cfg):
         # ordinary run's 1800s, and RQ's default would kill it at 180s.
         timeout=cfg["job_timeout"],
     )
+
+
+def _handoff_for_spike(signature, uuid, product, channel, buildid):
+    """The older name this spike is the re-bucketing of (``sigfamily.handoff_for_spike``), read
+    with the representative report's proto, or ``None`` -- on no handoff, a switched-off lookup,
+    or any failure. The processed crash is one Socorro fetch; the family lookup is cached per
+    (signature, channel, day), so the brief's seed reuses it."""
+    if not config.get_agent_signature_family()["enabled"]:
+        return None
+    from crashclouseau import inspector, sigfamily
+
+    proto = None
+    try:
+        proto = (inspector.get_crash_data(uuid) or {}).get("proto_signature")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("spike: could not fetch the processed crash %s for the family lookup: %s",
+                       uuid, exc)
+    try:
+        return sigfamily.handoff_for_spike(signature, proto, product, channel, buildid)
+    except Exception as exc:  # pragma: no cover - the lookup never raises; belt and braces
+        logger.warning("spike: family lookup failed for %r: %s", signature, exc)
+        return None
+
+
+def _handoff_decline(handoff, buildid):
+    """Why nothing is spent on a spike that is an older name's volume under a new name."""
+    change = handoff.get("change")
+    return ("re-bucketing from `{}`: that signature had {} reports on the builds of the 28 days "
+            "before build {} and {} on builds from it on{} -- the spike is an old crash under a "
+            "new name, not a new crash".format(
+                handoff.get("signature"), handoff.get("before"), buildid, handoff.get("after"),
+                " ({})".format(change) if change else ""))
 
 
 def _fixed_before_spending(signature, siblings, product, buildid):
@@ -626,6 +677,15 @@ def _minimal_seed(uuid, uuid_info, esc):
             [esc.signature]).get(esc.signature)
     except Exception as exc:
         logger.warning("spike: signature history lookup failed for %s: %s", esc.signature, exc)
+    if config.get_agent_signature_family()["enabled"]:
+        try:
+            from crashclouseau import sigfamily
+
+            seed.update(sigfamily.seed_facts(sigfamily.lookup(
+                esc.signature, (raw or {}).get("proto_signature"), esc.product, esc.channel,
+                esc.buildid)))
+        except Exception as exc:  # pragma: no cover - the lookup never raises
+            logger.warning("spike: signature family lookup failed for %s: %s", esc.signature, exc)
     return seed
 
 
@@ -668,6 +728,8 @@ def build_spike_brief(esc, light=False):
     for a filing retry."""
     from crashclouseau.agent import orchestrator, triage
 
+    from crashclouseau import sigfamily
+
     uuid = esc.uuid
     payload = esc.payload or {}
     spike = payload.get("spike") or {}
@@ -680,12 +742,21 @@ def build_spike_brief(esc, light=False):
         logger.warning("spike: build_seed failed for %s: %s", uuid, exc)
     if seed is None:
         seed = _minimal_seed(uuid, uuid_info, esc)
+    # THE CRASH'S OTHER NAMES (`sigfamily`, on the seed): the older name it was called before
+    # this one and the spellings still live beside it join `siblings`, so the runs, the stacks,
+    # our prior bugs and the venue are all looked up under every name of the crash.
+    family = sigfamily.family_from_seed(seed)
+    siblings = sorted(set(siblings) | set(sigfamily.spellings(family)))
     build_day = esc.build_day.isoformat() if esc.build_day else None
     brief = {
         "escalation_id": esc.id,
         "uuid": uuid,
         "signature": esc.signature,
         "siblings": siblings,
+        "signature_family": family,
+        "signature_predecessors": seed.get("signature_predecessors") or [],
+        "signature_siblings": seed.get("signature_siblings") or [],
+        "signature_family_first_seen_ever": seed.get("signature_family_first_seen_ever"),
         "product": esc.product,
         "channel": esc.channel,
         "version": seed.get("version"),
@@ -839,6 +910,10 @@ def _public_brief(brief):
         "first_seen_ever": brief.get("first_seen_ever"),
         "first_seen_channel": brief.get("first_seen_channel"),
         "new_signature": spike_report.is_new_signature(brief),
+        "signature_predecessors": [p.get("signature") for p in
+                                   brief.get("signature_predecessors") or [] if p.get("signature")],
+        "signature_siblings": [s.get("signature") for s in
+                               brief.get("signature_siblings") or [] if s.get("signature")],
     }
 
 
@@ -1233,7 +1308,12 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     except Exception:
         signals = []
     withheld = bool(signals)
-    existing = bugzilla_apply._open_bugs_for_signature(signature)
+    # The crash's other names ride along (`sigfamily`, on the brief): a bug open on the name
+    # this crash had before the rename is its venue, and gets this name attached.
+    family = brief.get("signature_family") or {}
+    existing = (bugzilla_apply._open_bugs_for_signature(signature, family=family)
+                if bugzilla_apply._family_spelling_map(signature, family)
+                else bugzilla_apply._open_bugs_for_signature(signature))
     if existing is None:
         return dict(result, retry=True, skipped="signature lookup failed; not risking a duplicate")
     existing, other_app = bugzilla_apply._split_by_application(existing, product)
@@ -1252,7 +1332,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     if existing:
         venue, for_spike = _pick_venue(existing, esc.build_day)
     if venue is not None and mode == "skip" and not withheld:
-        return dict(result, skipped="open bug {} exists".format(venue["id"]))
+        return dict(result, skipped="open bug {}{} exists".format(
+            venue["id"], bugzilla_apply._via_clause(venue)), **bugzilla_apply._via_fields(venue))
     if venue is not None and mode == "file_new":
         related = sorted(b["id"] for b in existing)
         venue = None
@@ -1340,7 +1421,17 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 brief, findings, details=details, stack=stack, person=person,
                 author_display=report_bug._person_display(person) if person else None,
                 link_regressor=link_regressor, grounded=grounded, as_comment=True)
+            # A venue reached through the crash's OTHER name says so, and gets this name
+            # attached in its own PUT after the comment (`bugzilla_apply._attach_signature`).
+            via_note = bugzilla_apply._venue_via_signature_note(signature, venue, family)
+            if via_note:
+                text += "\n\n" + via_note
             bugzilla_apply._post_comment(venue["id"], text, False, token)
+            if via_note:
+                result["venue_via_signature"] = venue.get("via_signature")
+                result["venue_via_relation"] = venue.get("via_relation")
+                result["signature_attached"] = bugzilla_apply._attach_signature(
+                    venue["id"], signature, token)
             email = (person or {}).get("account") or ""
             outcome = bugzilla_apply._set_needinfo(venue["id"], email, token) if email else None
             result.update({"filed": True, "bug": venue["id"], "mode": "spike_comment",

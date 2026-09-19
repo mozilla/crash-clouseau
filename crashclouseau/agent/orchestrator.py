@@ -848,6 +848,25 @@ def build_seed(uuid):
             sig_first_report_date = ever_facts.get("first_date")
         except Exception as exc:  # pragma: no cover - defensive; never break a seed
             logger.warning("agent: signature history lookup failed for %s: %s", uuid, exc)
+    # WHAT ELSE THIS CRASH HAS BEEN CALLED, and whether the old name stopped when this one
+    # started (`sigfamily.lookup`): the predecessor a rename handed off from, the spellings still
+    # live beside this one, and the FAMILY's first-seen -- the crash's age as opposed to the
+    # name's. One filing in eight was named for a crash that already had another name, with an
+    # open bug on the old name 17 times out of 18 (plans/24). Two to four SuperSearches in two
+    # round-trips, cached per (signature, channel, day) so the spike sweep and the filer share
+    # the answer. A failed lookup is recorded as `failed`, never read as "no predecessor".
+    family_facts = {}
+    if config.get_agent_signature_family()["enabled"]:
+        try:
+            from crashclouseau import sigfamily
+
+            family_facts = sigfamily.seed_facts(sigfamily.lookup(
+                info.get("signature", ""), (raw_crash or {}).get("proto_signature"),
+                info.get("product") or uuid_info.get("product", "") or "Firefox", channel,
+                info.get("buildid")))
+        except Exception as exc:  # pragma: no cover - defensive; never break a seed
+            logger.warning("agent: signature family lookup failed for %s: %s", uuid, exc)
+            family_facts = {"signature_family_lookup": "failed"}
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
     # runs — so hand it the map for every seeded candidate. Both candidate builders already
     # carry `pushdate` (DB datetime on-stack, hg [epoch, tz] off-stack), so this costs nothing.
@@ -921,6 +940,13 @@ def build_seed(uuid):
         # `report_bug.fetch_signature_stats` computes that other quantity for the bug comment).
         # ``None`` means the lookup failed and must never read as "a singleton".
         "signature_report_count": sig_report_count,
+        # The signature FAMILY (`sigfamily.seed_facts`): `signature_predecessors` (the names this
+        # crash was called before this one and that STOPPED when it started), `signature_siblings`
+        # (spellings still live beside it), `signature_family_first_seen_ever` (the crash's age,
+        # as opposed to the name's), `signature_handoff_build`, `signature_handoff_alignment`,
+        # `signature_fan_in`, `signature_family_lookup`. Read by the crash brief
+        # (`triage._signature_age_lines`), the age gate's clock, the recorder and the filer.
+        **family_facts,
         "candidate_pushdates": candidate_pushdates,
         # Learned crash archetypes that match this crash (`models.Archetype`): a recurring
         # shape plus what a reviewer told us to check when we see it. Handed to the agent as a
@@ -2285,6 +2311,25 @@ def _apply_signature_age_gate(dossier, seed):
     if not cfg["enabled"]:
         return
     first_seen = (seed or {}).get("signature_first_seen_buildid")
+    # THE FAMILY'S CLOCK, when this name is a RENAME. A handoff predecessor (`sigfamily`: an
+    # older name that STOPPED on the build this one started) dates the crash, not the name, so
+    # the comparison below runs from the older of the two first-seens -- a renamer landing two
+    # years after the crash was first reported gets the same downweight a candidate landing two
+    # years after the signature does. ONLY a handoff moves the clock: a coexisting or older
+    # spelling still live beside this one is not proof of this crash's age, and a FIXED filing
+    # on an old reused name (2061960's `nsFind`, 326 days) must keep filing exactly as before
+    # (tests.test_signature_first_date.TestGateClockIsUnchanged). Same windowed instrument as
+    # `first_seen` (the predecessor's oldest build on the channel, ~178 days), never the
+    # unbounded table -- see `sigage.first_seen_ever` for why that would be a regression.
+    family_clock = None
+    for p in (seed or {}).get("signature_predecessors") or []:
+        fb = str((p or {}).get("first_build") or "")
+        if fb and (family_clock is None or fb < family_clock[0]):
+            family_clock = (fb, p.get("signature"))
+    if family_clock and (not first_seen or family_clock[0] < str(first_seen)):
+        first_seen = family_clock[0]
+    else:
+        family_clock = None
     cand = dossier.candidate
     if not first_seen or cand is None or not cand.node:
         return
@@ -2362,6 +2407,11 @@ def _apply_signature_age_gate(dossier, seed):
         "candidate_landed_after_first_seen_days": landed_after,
         "signature_first_seen_buildid": first_seen,
     }
+    if family_clock:
+        # The gap was measured from the PREDECESSOR's first build: the filed bug has to name it
+        # (`report_bug.build_stale_signature_note`), or the reader sees a first-seen that
+        # crash-stats does not show for this signature.
+        flags["stale_signature_family_clock"] = family_clock[1]
     waived = _frequency_regression_reasons(seed)
     if waived:
         # THE GATE'S PREMISE DOES NOT HOLD, so record the timing and move nothing. "Landing late
@@ -3146,9 +3196,58 @@ def _record_signature_age_facts(dossier, seed):
     # brief (`triage._signature_age_lines`) and the filed bug (`report_bug`), by construction.
     novelty = sigage.novelty_facts(
         seed.get("signature"), seed.get("signature_first_report_date"), seed.get("version"),
-        seed.get("version_rates"), seed.get("channel"))
-    if facts or novelty:
-        dossier.corroborations = {**(dossier.corroborations or {}), **facts, **novelty}
+        seed.get("version_rates"), seed.get("channel"),
+        predecessors=seed.get("signature_predecessors"))
+    family = _signature_family_facts(seed)
+    if facts or novelty or family:
+        dossier.corroborations = {**(dossier.corroborations or {}), **facts, **novelty, **family}
+
+
+# The sibling statuses that make a spelling LIVE beside this one -- a venue and a volume to count
+# (`bugzilla_apply`, `report_bug.fetch_signature_stats`). `undecided` (a quiet old name too soon
+# after the build to call) and `other_channel` are carried too: a bug on either is still a bug on
+# this crash. `unclassified` (S itself had no history on the channel) is not.
+_LIVE_SIBLING_STATUSES = frozenset({"coexisting", "older", "younger", "undecided", "other_channel"})
+
+
+def _signature_family_facts(seed):
+    """The signature-family facts of a seed as corroborations, LITERAL keys (the registry scanner
+    reads literal subscripts only). ``{}`` when the seed carries no lookup at all.
+
+    What is recorded and why: `signature_family_lookup` so a failed or disabled lookup is
+    distinguishable from "no predecessor" in the persisted data; the loudest predecessor and its
+    numbers so the filed bug can say what this name used to be called
+    (`report_bug.build_signature_age_note`); every predecessor and every live sibling so the
+    filer can search Bugzilla for the crash under all its names (`sigfamily.
+    family_from_corroborations`); the family's first-seen so the crash's age is on the record
+    beside the name's."""
+    s = seed or {}
+    status = s.get("signature_family_lookup")
+    if not status:
+        return {}
+    facts = {"signature_family_lookup": status}
+    predecessors = [p for p in (s.get("signature_predecessors") or []) if p.get("signature")]
+    siblings = [x for x in (s.get("signature_siblings") or [])
+                if x.get("signature") and x.get("status") in _LIVE_SIBLING_STATUSES]
+    if predecessors:
+        top = predecessors[0]
+        facts["signature_predecessor"] = top["signature"]
+        facts["signature_predecessors"] = [p["signature"] for p in predecessors]
+        facts["signature_predecessor_before"] = top.get("before")
+        facts["signature_predecessor_after"] = top.get("after")
+        facts["signature_predecessor_change"] = top.get("change") or ""
+        if top.get("first_seen_ever"):
+            facts["signature_predecessor_first_seen_ever"] = top["first_seen_ever"]
+        if s.get("signature_handoff_build"):
+            facts["signature_handoff_build"] = s["signature_handoff_build"]
+        if s.get("signature_handoff_alignment"):
+            facts["signature_handoff_alignment"] = s["signature_handoff_alignment"]
+        facts["signature_fan_in"] = int(s.get("signature_fan_in") or len(predecessors))
+    if siblings:
+        facts["signature_siblings_live"] = [x["signature"] for x in siblings]
+    if s.get("signature_family_first_seen_ever"):
+        facts["signature_family_first_seen_ever"] = s["signature_family_first_seen_ever"]
+    return facts
 
 
 def _record_offstack_seed_facts(dossier, seed):

@@ -449,6 +449,63 @@ REGISTRY = {
         "The share (0..1) of the crash version's crash reports that had already arrived when the "
         "signature was first reported. A crash the build introduced is in the first few percent; "
         "bug 2070554 sat at 0.53."),
+    # -- the signature FAMILY (`sigfamily`, `orchestrator._signature_family_facts`) -------------
+    # What else this crash has been called. One filing in eight was named for a crash that
+    # already had another name, with an open bug on the old name 17 times out of 18 (plans/24);
+    # these are how the filed bug, the filer's venue search and the volume sentence learn it.
+    "signature_family_lookup": (
+        "evidence", ("sigfamily.py",),
+        "`ok` / `no_candidates` / `no_history` / `ineligible` / `disabled` / `failed`. Recorded "
+        "on every run so a failed or disabled lookup is distinguishable from 'no predecessor' in "
+        "the persisted data; `sigfamily.family_from_corroborations` refuses to rebuild a family "
+        "for a run that recorded none."),
+    "signature_predecessor": (
+        "evidence", ("report_bug.py",),
+        "The loudest older name of this crash that STOPPED on the build this one started (a "
+        "handoff). The filed bug's age note leads with it instead of 'this signature is new'."),
+    "signature_predecessors": (
+        "evidence", ("sigfamily.py",),
+        "Every handoff predecessor, loudest first: the filer searches Bugzilla under all of them "
+        "(`bugzilla_apply._family_spellings` via `sigfamily.family_from_corroborations`)."),
+    "signature_predecessor_before": (
+        "evidence", ("report_bug.py",),
+        "The predecessor's reports on the builds of the 28 days before the handoff build."),
+    "signature_predecessor_after": (
+        "evidence", ("report_bug.py",),
+        "...and on builds from the handoff build on. The pair is the handoff, quoted in the bug."),
+    "signature_predecessor_change": (
+        "evidence", ("report_bug.py",),
+        "`sigfamily.describe_change`: which frame became which, in one clause."),
+    "signature_predecessor_first_seen_ever": (
+        "evidence", ("report_bug.py",),
+        "The predecessor's `SignatureFirstDate` build -- the crash's age, as opposed to the "
+        "name's."),
+    "signature_handoff_build": (
+        "evidence", ("report_bug.py", "sigfamily.py"),
+        "This signature's first build on the channel: the moment the crash took the new name, and "
+        "the `venue_since` clock of a bug reached through the old one."),
+    "signature_handoff_alignment": (
+        "evidence", ("report_bug.py", "sigfamily.py"),
+        "`build` (the old name kept reporting on old builds: a code change renamed it), `date` "
+        "(it stopped on every build at once: a skip-list change or a symbol gap, no changeset can "
+        "be the cause) or `unknown` (nightly, whose old builds die too fast to tell)."),
+    "signature_fan_in": (
+        "evidence", ("report_bug.py", "sigfamily.py"),
+        "Distinct predecessors that handed off to this name; two or more is a catch-all minted by "
+        "a generic frame (CheckLogMessage took every sandbox CHECK), and the bug says so."),
+    "signature_siblings_live": (
+        "evidence", ("report_bug.py", "sigfamily.py"),
+        "The other spellings of this crash still live beside it (coexisting, older, younger, on "
+        "another channel, or too quiet to call): venues for the filer and the second sentence of "
+        "the volume count (`fetch_signature_stats(..., siblings=)`)."),
+    "signature_family_first_seen_ever": (
+        "evidence", ("report_bug.py", "sigfamily.py"),
+        "The oldest `SignatureFirstDate` over this name and its handoff predecessors."),
+    "stale_signature_family_clock": (
+        "evidence", ("report_bug.py",),
+        "The age gate measured the candidate's lateness from the PREDECESSOR's first build, not "
+        "this signature's -- only a handoff moves that clock. The timing note names the old name "
+        "so the reader can find the build on crash-stats."),
     "crash_in_step_version": (
         "evidence", ("agent/orchestrator.py",),
         "Is the triaged report ON the step version? When it is, the crash's own pushlog window "

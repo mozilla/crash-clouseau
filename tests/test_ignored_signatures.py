@@ -301,6 +301,9 @@ class TestTheSpikeSweep(unittest.TestCase):
             mock.patch.object(se, "classic_runs", return_value=[
                 {"uuid": "u-1", "status": "done", "verdict": "abstain", "filed_bug": None}]),
             mock.patch.object(se, "representative_uuid", return_value="u-1"),
+            # The family lookup (Socorro + a processed-crash fetch): no other name unless a
+            # test says so.
+            mock.patch.object(se, "_handoff_for_spike", return_value=None),
             mock.patch.object(se, "_trend", return_value={}),
             mock.patch.object(spikes, "build_history", return_value=[]),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),

@@ -642,7 +642,40 @@ def _row_is_about(bug, signature):
     return _summary_is_about(bug.get("summary"), sig)
 
 
-def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT):
+# How many other names of the crash the venue search may add to its OR. Each costs two clauses
+# on the BMO query; the family of one signature is rarely more than four names (2070554's four
+# `WaitOnAddress` spellings are the widest case measured).
+_MAX_FAMILY_SPELLINGS = 8
+
+
+def _family_spelling_map(signature, family):
+    """``{spelling: {"via", "relation", "since"}}`` -- every OTHER name of this crash the venue
+    search should ask for (``sigfamily``: handoff predecessors first, then the live siblings,
+    each in every lambda demangling), minus the signature's own spellings. ``since`` is the
+    ISO instant the crash took the new name (S's first build on the channel), set on handoff
+    predecessors only: it is the ``venue_since`` clock a bug on the OLD name is dated by."""
+    from crashclouseau import sigage, sigfamily
+
+    own = {s.lower() for s in utils.lambda_siblings(signature)}
+    fam = family or {}
+    since = None
+    build = fam.get("s_first_build")
+    if build and fam.get("predecessors"):
+        dt_ = sigage._buildid_to_dt(build)
+        since = dt_.isoformat() if dt_ else None
+    out = {}
+    names = [(p, "handoff") for p in sigfamily.spellings({"predecessors": fam.get("predecessors")})]
+    names += [(s, "sibling") for s in sigfamily.spellings({"siblings": fam.get("siblings")})]
+    for name, relation in names[:_MAX_FAMILY_SPELLINGS]:
+        for spelling in utils.lambda_siblings(name):
+            if spelling.lower() in own or spelling in out:
+                continue
+            out[spelling] = {"via": name, "relation": relation,
+                             "since": since if relation == "handoff" else None}
+    return out
+
+
+def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None):
     """OPEN bugs referencing *signature* as
     ``[{"id", "creation_time", "product", "keywords"}, ...]``, oldest first.
 
@@ -680,7 +713,19 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT):
     without it: our own 2069647 on ``wgpu_server_buffer_get_mapped_range`` had been duped into
     1976766 two days earlier, the DUPLICATE was invisible to ``resolution="---"``, and 1976766
     was rejected as predating the regressor by fourteen months — so we filed the same analysis
-    a second time, past both, and :teoxoy's comment 3 asked why we track neither."""
+    a second time, past both, and :teoxoy's comment 3 asked why we track neither.
+
+    PLUS THE CRASH'S OTHER NAMES (*family*, a ``sigfamily.lookup`` answer or the facts the run
+    recorded): the older name a rename handed off from and the spellings still live beside this
+    one. One filing in eight was named for a crash that already had another name, and 17 of the
+    18 clearest had an open bug on the OLD name at filing time (plans/24): 1737467 on
+    ``PatchNtdll`` for our 2073210, 1976766 on ``WebGPUParent::MapCallback`` for our 2069647. A
+    row reached only through another name carries ``via_signature`` (that name) and
+    ``via_relation`` (``handoff`` / ``sibling``); a handoff row also carries ``venue_since`` --
+    the instant the crash took this name -- because that is when the crash under THIS signature
+    became that bug's, whatever year the bug was filed in (the same clock as a dup or an
+    attached signature, see ``_bug_for_this_regression``). A sibling row keeps its creation
+    clock: another spelling of the same crash is exactly as old as the crash."""
     if not signature:
         return []
     sig = signature.strip()
@@ -688,7 +733,9 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT):
     # demanglings of one lambda are one defect (`utils.lambda_siblings`), and a bug filed on the
     # Windows spelling is the venue for the Linux crash too. Two clauses per spelling, same
     # `j_top: OR`.
-    spellings = sorted(utils.lambda_siblings(sig))
+    own = sorted(utils.lambda_siblings(sig))
+    others = _family_spelling_map(sig, family)
+    spellings = own + sorted(others)
     params = {
         "include_fields": "id,summary,status,resolution,creation_time,product,keywords,"
                           "cf_crash_signature,regressed_by",
@@ -713,12 +760,24 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT):
         return None
     # ``regressed_by`` rides along because it decides whether a venue wants our comment at
     # all — see the gate in ``autofile_bug``. Free: same request, one more field.
-    rows = [
-        _venue_row(b)
-        for b in sorted(bugs, key=lambda b: b.get("id", 0))
-        if b.get("id") and any(_row_is_about(b, s) for s in spellings)
-    ]
-    return _merge_duplicate_targets(rows, _duplicate_targets_for_signature(sig, timeout=timeout))
+    rows = []
+    for b in sorted(bugs, key=lambda b: b.get("id", 0)):
+        if not b.get("id"):
+            continue
+        if any(_row_is_about(b, s) for s in own):
+            rows.append(_venue_row(b))
+            continue
+        via = next((s for s in sorted(others) if _row_is_about(b, s)), None)
+        if via is None:
+            continue
+        row = _venue_row(b)
+        row["via_signature"] = others[via]["via"]
+        row["via_relation"] = others[via]["relation"]
+        if others[via]["since"]:
+            row["venue_since"] = others[via]["since"]
+        rows.append(row)
+    return _merge_duplicate_targets(
+        rows, _duplicate_targets_for_signature(sig, timeout=timeout, spellings=spellings))
 
 
 def _venue_row(bug):
@@ -761,7 +820,7 @@ def _merge_duplicate_targets(rows, targets):
 _DUP_CHAIN_MAX_HOPS = 5
 
 
-def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT):
+def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings=None):
     """The OPEN bugs that the RESOLVED DUPLICATE bugs on *signature* resolve into, as venue rows
     (``_venue_row`` plus ``venue_since`` and ``via_duplicates``), oldest id first; ``[]`` when
     there are none or BMO could not be asked.
@@ -807,7 +866,9 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT):
         return []
     from crashclouseau import sigage
 
-    spellings = sorted(utils.lambda_siblings(sig))
+    # The caller's spellings when it widened them over the crash's other names (a dup on the
+    # OLD name into an open bug is that human saying "this crash is bug N" too).
+    spellings = sorted(set(spellings or ()) | utils.lambda_siblings(sig))
     params = {
         "include_fields": "id,summary,cf_crash_signature,dupe_of,cf_last_resolved",
         "j_top": "OR",
@@ -976,6 +1037,24 @@ def _own_bug_out_of_sight(prior, existing):
             "skipped": "already filed bug {} for this signature; it {} — not filing "
                        "again".format(bug, why),
             "prior_signature_filing": prior, "own_bug_state": state}
+
+
+def _via_clause(venue):
+    """`` (on this crash's earlier name `P`)`` / `` (on its sibling spelling `P`)``, for a venue
+    row reached through another name of the crash; ``""`` otherwise."""
+    via = (venue or {}).get("via_signature")
+    if not via:
+        return ""
+    kind = "earlier name" if venue.get("via_relation") == "handoff" else "sibling spelling"
+    return " (on this crash's {} `{}`)".format(kind, via)
+
+
+def _via_fields(venue):
+    """The audit keys of a decline about a venue reached through another name."""
+    via = (venue or {}).get("via_signature")
+    if not via:
+        return {}
+    return {"venue_via_signature": via, "venue_via_relation": venue.get("via_relation")}
 
 
 def _bucket_of(dossier):
@@ -1305,7 +1384,7 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None, sig
     return None, predating
 
 
-def _fixed_after_build_bug(signature, buildid, product):
+def _fixed_after_build_bug(signature, buildid, product, spellings=None):
     """The id of a bug on *signature* that was RESOLVED FIXED **after** *buildid* was produced,
     or ``None``. In one line: is this crash a pre-fix report of a defect somebody has already
     fixed?
@@ -1423,7 +1502,7 @@ def _fixed_after_build_bug(signature, buildid, product):
     # (It used to run its own `_is_specific_signature` gate on the summary clause; that length
     # test was retired for `_summary_is_about`, which decides the same 200-signature panel on
     # FORM instead of on a 16-character threshold read off two points.)
-    for bug, resolved in _fixed_bugs_about(sig, product):
+    for bug, resolved in _fixed_bugs_about(sig, product, spellings=spellings):
         if resolved is not None and resolved > build_dt:
             return bug["id"]
     return None
@@ -1433,7 +1512,7 @@ _FIXED_BUGS_CACHE: dict = {}
 
 
 def _fixed_bugs_about(signature, product, use_cache=False, major=None,
-                      resolutions=("FIXED",)):
+                      resolutions=("FIXED",), spellings=None):
     """``[(bug_row, resolved_datetime), ...]`` for the bugs on *signature* that are RESOLVED
     FIXED and belong to this crash's own application, lowest id first.
 
@@ -1449,11 +1528,16 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
     tests mock it by name. Keep the two param dicts in step by hand.
 
     Public, unauthenticated, read-only. ``[]`` on any failure, which both callers read as "no
-    information" — see each one for which way that makes it fail."""
+    information" — see each one for which way that makes it fail.
+
+    ``spellings`` widens the question over the crash's other names (``sigfamily``): a bug FIXED
+    on the old name after this build is this crash's fix as much as one on the new name."""
     sig = (signature or "").strip()
     if not sig:
         return []
     from crashclouseau import sigage
+
+    names = [sig] + sorted(s for s in set(spellings or ()) if s and s != sig)
 
     # OPT-IN caching, per (signature, product), for the worker's lifetime. `_incomplete_fix_bug`
     # asks this on every run that would otherwise file nothing -- ~90% of them -- and the same
@@ -1463,7 +1547,7 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
     # OFF for `_fixed_after_build_bug`, deliberately: that one SUPPRESSES a filing, it runs at
     # most once per filing attempt so it costs nothing to keep live, and a stale "no FIXED bug
     # yet" would let through exactly the duplicate it exists to stop.
-    key = (sig, product or "", major, tuple(resolutions))
+    key = (sig, product or "", major, tuple(resolutions), tuple(names[1:]))
     if use_cache and key in _FIXED_BUGS_CACHE:
         return _FIXED_BUGS_CACHE[key]
 
@@ -1480,9 +1564,14 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
         # "unassigned" here rather than as an error.
         "include_fields": fields,
         "j_top": "OR",
-        "f1": "cf_crash_signature", "o1": "substring", "v1": sig,
-        "f2": "short_desc", "o2": "substring", "v2": "[@ " + sig,
     }
+    for i, name in enumerate(names):
+        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
+        params["o{}".format(2 * i + 1)] = "substring"
+        params["v{}".format(2 * i + 1)] = name
+        params["f{}".format(2 * i + 2)] = "short_desc"
+        params["o{}".format(2 * i + 2)] = "substring"
+        params["v{}".format(2 * i + 2)] = "[@ " + name
     try:
         r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
@@ -1494,7 +1583,9 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
     out = []
     wanted = {r.upper() for r in resolutions}
     for bug in sorted((b for b in ours if b.get("id")), key=lambda b: b["id"]):
-        if (bug.get("resolution") or "").upper() not in wanted or not _row_is_about(bug, sig):
+        if (bug.get("resolution") or "").upper() not in wanted:
+            continue
+        if not any(_row_is_about(bug, name) for name in names):
             continue
         out.append((bug, sigage.to_datetime(bug.get("cf_last_resolved"))))
     if use_cache:
@@ -1517,7 +1608,7 @@ def _major_version(version):
     return int(m.group(1)) if m else None
 
 
-def _known_on_train_bug(signature, product, major):
+def _known_on_train_bug(signature, product, major, spellings=None):
     """The RESOLVED bug that already tracks this signature ON THIS TRAIN, or ``None``:
     ``{"id", "field", "flag", "resolution"}``.
 
@@ -1552,7 +1643,8 @@ def _known_on_train_bug(signature, product, major):
         return None
     field = _train_flag_field(major)
     for bug, _resolved in _fixed_bugs_about(sig, product, major=major,
-                                            resolutions=("FIXED", "WONTFIX")):
+                                            resolutions=("FIXED", "WONTFIX"),
+                                            spellings=spellings):
         flag = str(bug.get(field) or "").strip().lower()
         if flag in _TRAIN_HAS_THE_BUG:
             return {"id": bug["id"], "field": field, "flag": flag,
@@ -1679,13 +1771,124 @@ _BARE_ADDR = re.compile(r"^@?0x[0-9a-fA-F]+$")
 
 
 def _is_unsymbolicated(signature):
-    """True when NO component of the signature resolved to a symbol.
+    """True when NO component of the signature names code: every part is a bare address, a
+    module name, a generic crash word or an OS lock/heap primitive (``sigfamily.
+    is_unsymbolicated``).
 
-    Requires every ``|``-separated part to be a bare address, so a partly-symbolicated
-    signature still files: ``OOM | unknown | memcpy_repmovs_Intel | …`` is perfectly
-    actionable and must not be caught here."""
+    Bare addresses alone were the rule until 2026-09-19, and it let three module-only names
+    file: ``libxul.so (deleted) | ... | libnspr4.so (deleted)`` (2069648, a DUP of our own
+    2065373 -- :jld, "Duplicate of 2065373, but with missing symbols"), ``xul.dll |
+    _PR_MD_UNLOCK | PR_Unlock | xul.dll`` (2061962, a DUP of our own 2061960) and
+    ``libvulkan_radeon.so``. Such a name cannot be searched, blamed or deduplicated; the
+    symbolicated sibling files. A partly-symbolicated signature still files: ``OOM | unknown |
+    memcpy_repmovs_Intel | mozilla::dom::RTCEncodedFrameBase::...`` is perfectly actionable,
+    and a prefix-listed frame standing alone (``mozilla::detail::MutexImpl::mutexLock``) is
+    still a symbol."""
+    from crashclouseau import sigfamily
+
     parts = [p.strip() for p in (signature or "").split("|") if p.strip()]
-    return bool(parts) and all(_BARE_ADDR.match(p) for p in parts)
+    if parts and all(_BARE_ADDR.match(p) for p in parts):
+        return True
+    return sigfamily.is_unsymbolicated(signature)
+
+
+def _signature_family(dossier):
+    """The crash's other names, as the run RECORDED them: the persisted corroborations first
+    (`sigfamily.family_from_corroborations`), else the seed the dossier carries. Never a fresh
+    lookup from the filer: a run that recorded no lookup is a run made before the instrument
+    existed or with it switched off, and the filer must not spend Socorro requests -- or reach
+    the network from a test -- to second-guess it. ``{}`` when there is nothing."""
+    from crashclouseau import sigfamily
+
+    d = dossier or {}
+    fam = sigfamily.family_from_corroborations(d.get("corroborations"))
+    if fam is None and (d.get("crash") or {}).get("signature_family_lookup"):
+        fam = sigfamily.family_from_seed(d.get("crash"))
+    return fam or {}
+
+
+def _family_spellings(signature, family):
+    """Every name the crash goes by, this signature's own spellings first -- what the FIXED and
+    known-on-train lookups are asked with."""
+    from crashclouseau import sigfamily
+
+    out = sorted(utils.lambda_siblings((signature or "").strip()))
+    for name in sigfamily.spellings(family):
+        for spelling in sorted(utils.lambda_siblings(name)):
+            if spelling not in out:
+                out.append(spelling)
+    return out
+
+
+def _signature_field(bug_id, timeout=_HTTP_TIMEOUT):
+    """A bug's current ``cf_crash_signature``, or ``None`` when it could not be read."""
+    try:
+        r = net.get(_bz_rest(), params={"id": str(bug_id),
+                                        "include_fields": "id,cf_crash_signature"},
+                    timeout=timeout)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: cf_crash_signature read failed for bug %s: %s", bug_id, exc)
+        return None
+    row = next((b for b in bugs if b.get("id") == bug_id), None)
+    return None if row is None else (row.get("cf_crash_signature") or "")
+
+
+def _attach_signature(bug_id, signature, token):
+    """APPEND ``[@ signature]`` to *bug_id*'s ``cf_crash_signature`` in its own PUT, and say what
+    happened: ``"attached"``, ``"already"`` (an entry for it, in any lambda spelling, is there),
+    or ``"failed"``. Never raises.
+
+    Calixte's rule from bug 2063003: a crash filed under a bug that carries another name MUST add
+    its own name to that bug, or the next Socorro click and the next triager start from zero.
+    Append, never rewrite -- the field is read back and the old entries are kept verbatim -- and
+    a PUT of its own, because BMO's PUT is atomic across fields and a refused flag elsewhere
+    must not cost the signature (`_link_regressed_by`, `_nominate_tracking`)."""
+    sig = (signature or "").strip()
+    if not sig or not bug_id:
+        return "failed"
+    current = _signature_field(bug_id)
+    if current is None:
+        return "failed"
+    present = {e.lower() for e in _signature_field_entries(current)}
+    if present & {s.lower() for s in utils.lambda_siblings(sig)}:
+        return "already"
+    entry = "[@ {}]".format(sig)
+    new = (current.rstrip() + "\n" + entry) if current.strip() else entry
+    try:
+        _put_bug(bug_id, {"cf_crash_signature": new}, token)
+    except Exception as exc:
+        logger.warning("autofile: could not attach %r to bug %s: %s", sig, bug_id, exc)
+        return "failed"
+    return "attached"
+
+
+def _venue_via_signature_note(signature, venue, family):
+    """The one paragraph a comment posted through the crash's OTHER name carries: which name
+    this crash reports under now, since when, what changed, and that the name has been added
+    to the bug. ``""`` for a venue reached through the signature itself."""
+    from crashclouseau import sigage, sigfamily
+
+    via = (venue or {}).get("via_signature")
+    if not via:
+        return ""
+    fam = family or {}
+    change = ""
+    for p in fam.get("predecessors") or []:
+        if p.get("signature") == via and p.get("change"):
+            change = p["change"]
+    if not change:
+        change = sigfamily.describe_change(signature, via)
+    build = fam.get("s_first_build")
+    if (venue or {}).get("via_relation") == "handoff":
+        since = (" since build {} ({})".format(build, sigage.buildid_day(build)) if build else "")
+        return ("_Posted here because this crash reports under the signature `{}`{}: {}. This "
+                "bug carried the earlier name `{}`; `[@ {}]` has been added to its crash "
+                "signatures._".format(signature, since, change, via, signature))
+    return ("_Posted here because `{}` is another spelling of this bug's signature `{}` ({}); "
+            "`[@ {}]` has been added to its crash signatures._".format(
+                signature, via, change, signature))
 
 
 def _needinfo_changes(email):
@@ -1945,7 +2148,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # CHANNEL-BLIND, and that is the entire point: the 22.2% above is nightly-filed bugs that a
     # beta run would file a second time; scoping the lookup to the crash's own channel would
     # make it blind to exactly that population and leave it asserting nothing.
-    existing = _open_bugs_for_signature(signature)
+    # THE CRASH'S OTHER NAMES (`sigfamily`, recorded by the run): the venue search asks for the
+    # bug under every one of them, the FIXED/known-on-train lookups too, and a venue reached
+    # through the old name gets the new one attached (`_attach_signature`).
+    family = _signature_family(dossier)
+    spellings = _family_spellings(signature, family)
+    own_count = len(utils.lambda_siblings(signature))
+    # Byte-identical calls when the crash has no other name, so the lookups' contracts (and
+    # the thirty-odd tests that pin them by name) do not move for the ordinary crash.
+    widened = {"spellings": spellings} if len(spellings) > own_count else {}
+    existing = (_open_bugs_for_signature(signature, family=family) if widened
+                else _open_bugs_for_signature(signature))
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
     # A BUCKET-HOLDER SIGNATURE -- one an open ``[meta]`` tracker carries -- takes one bug PER
@@ -1971,6 +2184,15 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     prior_sig = models.Dossier.already_filed_for_signature(
         signature, bucket=this_bucket or None, bucket_title=this_bucket_title or None
     ) if held_by_meta else models.Dossier.already_filed_for_signature(signature)
+    if not prior_sig and not held_by_meta:
+        # ...OR UNDER ONE OF ITS OTHER NAMES. 2072875 and 2073159 were DUPs of our own 2072488,
+        # the Linux and Fenix spellings of the Windows name we had filed restricted two days
+        # earlier -- invisible to the anonymous venue search AND to this exact-signature query.
+        for other in spellings[own_count:]:
+            hit = models.Dossier.already_filed_for_signature(other)
+            if hit:
+                prior_sig = dict(hit, via_signature=other) if isinstance(hit, dict) else hit
+                break
     if prior_sig and held_by_meta and _different_bucket(prior_sig, this_bucket):
         logger.info("autofile: our bug %s on %r is bucket %r; this crash is bucket %r of a "
                     "signature held by a [meta] tracker -- a bucket bug may be filed for %s",
@@ -1980,9 +2202,12 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         logger.info("autofile: already filed bug %s for %r on %s (from %s) — not filing "
                     "again for %s", prior_sig.get("bug") or "?", signature, channel or "?",
                     prior_sig.get("uuid") or "?", uuid)
+        under = ("this crash under its other name `{}`".format(prior_sig["via_signature"])
+                 if isinstance(prior_sig, dict) and prior_sig.get("via_signature")
+                 else "this signature")
         return {"filed": False, "bug": prior_sig.get("bug"),
-                "skipped": "already filed bug {} for this signature on {}".format(
-                    prior_sig.get("bug") or "?", channel or "?"),
+                "skipped": "already filed bug {} for {} on {}".format(
+                    prior_sig.get("bug") or "?", under, channel or "?"),
                 "prior_signature_filing": prior_sig}
     # On a `comment` channel our own OPEN bug is the ordinary venue -- the search returns it and
     # `already_commented` declines the second analysis -- so the guard acts only when the search
@@ -2020,8 +2245,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # is about one.
     if actionable and existing:
         return {"filed": False, "bug": existing[0]["id"],
-                "skipped": "open bug {} exists; an actionable crash is filed only where no bug "
-                           "is".format(existing[0]["id"])}
+                "skipped": "open bug {}{} exists; an actionable crash is filed only where no bug "
+                           "is".format(existing[0]["id"], _via_clause(existing[0])),
+                **_via_fields(existing[0])}
     # (mode/comment_allowed/withheld are resolved above, right after `cfg`.)
     # THREE MODES, not a boolean (``config.COMMENT_ON_EXISTING``). ``skip`` is what ``False``
     # always DID -- no comment AND no new bug, decided before anything asks whether that bug
@@ -2046,8 +2272,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # `bug` on a `filed: False` result is the bug the decision was ABOUT -- the open venue
         # this crash was not written into -- as on every other decline shape below that names
         # one; the tasks view renders it as "not filed (bug N)".
+        # A venue reached through the crash's other name says so: on a `skip` channel nothing
+        # is written, not even the new name onto the old bug, so the decline is the only trace
+        # (2073210 -> 1737467 on release).
         return {"filed": False, "bug": existing[0]["id"],
-                "skipped": "open bug {} exists".format(existing[0]["id"])}
+                "skipped": "open bug {}{} exists".format(
+                    existing[0]["id"], _via_clause(existing[0])),
+                **_via_fields(existing[0])}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
     # cannot, and with no landing date NONE of them can be shown to
     # (``_bug_for_this_regression``). Resolved before the preview is built so a new bug filed
@@ -2108,7 +2339,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # duplicate on 2026-08-18. Invisible for exactly one reason: ``resolution="---"``.
     if bug_id is None:
         fixed_by = _fixed_after_build_bug(
-            signature, uuid_info.get("buildid"), uuid_info.get("product"))
+            signature, uuid_info.get("buildid"), uuid_info.get("product"), **widened)
         if fixed_by:
             bid = utils.get_buildid(uuid_info.get("buildid"))
             logger.info("autofile: bug %s was FIXED after build %s, so %s is a pre-fix report "
@@ -2122,7 +2353,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # filed as a new bug anyway). Skipped rather than commented: the venue lookup's `skip`
         # policy on this channel applies to a closed venue as much as to an open one.
         known = _known_on_train_bug(
-            signature, uuid_info.get("product"), _major_version(uuid_info.get("version")))
+            signature, uuid_info.get("product"), _major_version(uuid_info.get("version")),
+            **widened)
         if known:
             logger.info("autofile: bug %s already tracks %r on this train (%s = %s), so %s is "
                         "that bug and not a new one — not filing", known["id"], signature,
@@ -2335,7 +2567,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         }
     try:
         if bug_id is not None:
-            _post_comment(bug_id, preview["comment"], False, token)
+            # A VENUE REACHED THROUGH THE CRASH'S OTHER NAME says so in the comment and gets
+            # this name attached (Calixte, bug 2063003: a dup must add its signature to the
+            # target). The attach is its own PUT after the comment, and a failure there is
+            # recorded, never raised: the comment is posted.
+            via_note = _venue_via_signature_note(signature, venue, family)
+            text = preview["comment"] + ("\n\n" + via_note if via_note else "")
+            _post_comment(bug_id, text, False, token)
+            if via_note:
+                result["venue_via_signature"] = venue.get("via_signature")
+                result["venue_via_relation"] = venue.get("via_relation")
+                result["signature_attached"] = _attach_signature(bug_id, signature, token)
             # The comment is already posted, so a failing needinfo must not escape: it would
             # skip ``record_filed_bug`` below and the next run would comment a second time on
             # the same bug. Lose the flag, keep the filing.

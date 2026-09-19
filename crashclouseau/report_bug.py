@@ -314,12 +314,25 @@ def build_stats_sentence(first, stats, uuid_info):
     else:
         where = version or channel
     buildid = utils.get_buildid((uuid_info or {}).get("buildid"))
-    return "{}{} {}with buildid {}.".format(
+    sentence = "{}{} {}with buildid {}.".format(
         what,
         " in {}".format(where) if where else "",
         "" if first else "starting ",
         buildid,
     )
+    # THE FAMILY'S SHARE, as a second sentence: the same crash under its other spellings over
+    # the same builds (`fetch_signature_stats(..., siblings=)`). The first sentence is left
+    # exactly as it was, so the number a reader checks against crash-stats for THIS signature
+    # still matches.
+    per = stats.get("siblings") or {}
+    if per:
+        more = sum(per.values())
+        names = ", ".join("`{}` ({})".format(s, n) for s, n in
+                          sorted(per.items(), key=lambda kv: (-kv[1], kv[0])))
+        sentence += (" {} more report{} in the same period sit under sibling spelling{} of this "
+                     "signature: {}.".format(more, "" if more == 1 else "s",
+                                             "" if len(per) == 1 else "s", names))
+    return sentence
 
 
 _GITHUB_COMMIT_URL = "https://github.com/mozilla-firefox/firefox/commit/{}"
@@ -467,12 +480,21 @@ def fetch_crash_reason(uuid):
     return got
 
 
-def fetch_signature_stats(uuid, info):
+def fetch_signature_stats(uuid, info, siblings=()):
     """``(first, {count, installs})`` for this signature at/after this buildid -- the same
     Socorro aggregation the hand-drafted ``bug.txt`` comment uses, so both comments quote
-    the same numbers. ``(True, {})`` when unavailable. Cached + best-effort."""
-    if uuid in _STATS_CACHE:
-        return _STATS_CACHE[uuid]
+    the same numbers. ``(True, {})`` when unavailable. Cached + best-effort.
+
+    ``siblings`` are the other LIVE spellings of the same crash (`sigfamily`, the dossier's
+    ``signature_siblings_live``): their per-signature report counts over the same builds and
+    channel come back under ``stats["siblings"]`` for the volume sentence to add -- :jstutte on
+    bug 2067059, "signature search undercounts this because the site produces different
+    signatures depending on inlining": 13 crashes under three names, and we said 4. The number
+    for THIS signature is byte-identical to what it was; the siblings are a second sentence."""
+    sibs = [s for s in (siblings or ()) if s and s != (info.get("signature") or "")]
+    key = (uuid, tuple(sibs)) if sibs else uuid
+    if key in _STATS_CACHE:
+        return _STATS_CACHE[key]
     buildid = utils.get_buildid(info.get("buildid"))
     out = (True, {})
     got: dict = {}
@@ -511,7 +533,45 @@ def fetch_signature_stats(uuid, info):
         out = get_stats(got, int(buildid))
     except Exception:
         logger.warning("bug preview: signature stats lookup failed", exc_info=True)
-    _STATS_CACHE[uuid] = out
+    if sibs and out[1]:
+        per = _sibling_counts(sibs, buildid, info)
+        if per:
+            out = (out[0], dict(out[1], siblings=per))
+    _STATS_CACHE[key] = out
+    return out
+
+
+def _sibling_counts(siblings, buildid, info):
+    """``{sibling_signature: reports}`` over the same builds, channel and product as the main
+    count, ``{}`` when Socorro could not be asked. Its own request, on the rare family case
+    only, so the main query keeps the shape every test of it pins."""
+    got: dict = {}
+
+    def handler(json, data):
+        data.update(json)
+
+    try:
+        socorro.SuperSearch(
+            params={
+                "signature": ["=" + s for s in siblings],
+                "build_id": ">=" + str(buildid),
+                "date": ">=" + _day_str(buildid),
+                "product": info.get("product"),
+                "release_channel": utils.get_search_channel(info.get("channel")),
+                "_results_number": 0,
+                "_facets": "signature",
+                "_facets_size": 50,
+            },
+            handler=handler,
+            handlerdata=got,
+        ).wait()
+    except Exception:
+        logger.warning("bug preview: sibling signature stats lookup failed", exc_info=True)
+        return {}
+    out = {}
+    for row in ((got.get("facets") or {}).get("signature") or []):
+        if row.get("term") in siblings and int(row.get("count") or 0) > 0:
+            out[row["term"]] = int(row["count"])
     return out
 
 
@@ -541,6 +601,10 @@ def build_signature_since_note(corroborations, buildid=None):
     ever = c.get("signature_first_seen_ever")
     age_ever = c.get("signature_age_days_ever")
     drift = c.get("signature_clock_drift_days")
+    if c.get("signature_predecessor"):
+        # A RENAME (`sigfamily`): the crash's onset is the predecessor's, and the affirmative
+        # sentence names both names -- what the reader will search crash-stats for.
+        return _signature_rename_since(c, buildid)
     if c.get("signature_rename_suspected") and ever and drift is not None:
         return ("Socorro first recorded this signature in build {} ({}); crash-stats holds "
                 "reports of the same crash on builds up to {:.0f} days older than that, under an "
@@ -586,6 +650,11 @@ def build_signature_age_note(corroborations, buildid=None):
     age_win = c.get("signature_age_days_windowed")
     drift = c.get("signature_clock_drift_days")
 
+    if c.get("signature_predecessor"):
+        # THE NAME IS NEW, THE CRASH IS NOT (`sigfamily`): an older name of this crash stopped
+        # reporting on the build this one started. Said first, because "This signature is new"
+        # followed by the true age is the sentence 2071606's comment 0 should have led with.
+        return _signature_rename_note(c, buildid)
     if c.get("signature_rename_suspected") and ever and drift is not None:
         # Never a novelty claim, only ever the withdrawal of one -- see `sigage.age_facts`.
         return ("Socorro first recorded this signature in build {} ({}), but crash-stats holds "
@@ -618,6 +687,92 @@ def build_signature_age_note(corroborations, buildid=None):
     return ""
 
 
+def _predecessor_clause(c):
+    """``since build B (day) the crash previously reported as `P` reports under it (change)``,
+    the shared core of the two rename sentences, off the recorded family facts."""
+    from crashclouseau import sigage
+
+    p = c.get("signature_predecessor")
+    build = c.get("signature_handoff_build")
+    since = ("since build {} ({}) ".format(build, sigage.buildid_day(build)) if build else "")
+    change = c.get("signature_predecessor_change") or ""
+    return "{}the crash previously reported as `{}` reports under it{}".format(
+        since, p, " ({})".format(change) if change else "")
+
+
+def _rename_discriminators(c):
+    """The catch-all and the date-alignment sentences, when the facts carry them."""
+    from crashclouseau import sigage
+
+    out = ""
+    fan_in = int(c.get("signature_fan_in") or 0)
+    others = [s for s in (c.get("signature_predecessors") or [])
+              if s != c.get("signature_predecessor")]
+    if fan_in >= 2:
+        fix = ("symbols for that module or a Socorro skip-list entry"
+               if c.get("signature_handoff_alignment") == "date"
+               else "a Socorro skip-list entry for that frame")
+        out += (" This name absorbed {} previously distinct signatures{}, so it is a catch-all "
+                "minted by a generic frame; the durable fix is {}, not a crash bug.".format(
+                    fan_in, " ({})".format(", ".join("`{}`".format(s) for s in others[:3]))
+                    if others else "", fix))
+    elif others:
+        out += " Other spellings of the old name stopped on the same build: {}.".format(
+            ", ".join("`{}`".format(s) for s in others[:3]))
+    alignment = c.get("signature_handoff_alignment")
+    build = c.get("signature_handoff_build")
+    if alignment == "date":
+        out += (" The old name stopped on every live build at once{}, which is what a Socorro "
+                "skip-list change or a symbol gap does, not a code change.".format(
+                    " on {}".format(sigage.buildid_day(build)) if build else ""))
+    elif alignment == "build":
+        out += " The old name kept reporting on older builds afterwards, so a change in this build renamed it."
+    return out
+
+
+def _signature_rename_note(c, buildid=None):
+    """The age note of a RENAMED signature: not new, what it was called, since when, and how
+    old the crash really is (`sigfamily`; bug 2071606, whose comment 0 said "renamed form of a
+    longstanding SpiderMonkey OOM abort" and whose title said "new")."""
+    from crashclouseau import sigage
+
+    p = c.get("signature_predecessor")
+    note = "This signature is a new NAME for an older crash: {}.".format(_predecessor_clause(c))
+    before, after = c.get("signature_predecessor_before"), c.get("signature_predecessor_after")
+    if before is not None and after is not None:
+        note += (" `{}` had {} reports on the builds of the 28 days before and {} since."
+                 .format(p, before, after))
+    ever = c.get("signature_predecessor_first_seen_ever") or c.get("signature_family_first_seen_ever")
+    if ever:
+        age = sigage.signature_age_days(ever, buildid) if buildid else None
+        note += " `{}` was first recorded in build {} ({}){}.".format(
+            p, ever, sigage.buildid_day(ever),
+            ", {:.0f} days before the build above".format(age) if age is not None and age >= 1
+            else "")
+    return note + _rename_discriminators(c)
+
+
+def _signature_rename_since(c, buildid=None):
+    """The onset line of an `actionable` bug on a RENAMED signature, said affirmatively."""
+    from crashclouseau import sigage
+
+    p = c.get("signature_predecessor")
+    ever = c.get("signature_predecessor_first_seen_ever") or c.get("signature_family_first_seen_ever")
+    build = c.get("signature_handoff_build")
+    if ever:
+        head = "This crash has been reported since build {} ({}), under the signature `{}`".format(
+            ever, sigage.buildid_day(ever), p)
+    else:
+        head = "This crash was reported under the signature `{}`".format(p)
+    if build:
+        head += " until build {} ({}) and under the signature above since".format(
+            build, sigage.buildid_day(build))
+    else:
+        head += " before it took the signature above"
+    change = c.get("signature_predecessor_change") or ""
+    return head + (" ({})".format(change) if change else "") + "." + _rename_discriminators(c)
+
+
 def _novelty_caveat(c):
     """The sentence(s) that take "new" back when the NAME's age is not the crash's, or ``""``.
 
@@ -627,6 +782,8 @@ def _novelty_caveat(c):
     two facts below would not have needed Ryan's comment 1 to see it."""
     reasons = str(c.get("signature_novelty_unreliable") or "").split(",")
     out = ""
+    if "predecessor_handoff" in reasons and c.get("signature_predecessor"):
+        out += " The name is new because the crash was renamed: {}.".format(_predecessor_clause(c))
     mods = c.get("signature_module_frames") or []
     if "module_frames" in reasons and mods:
         out += (" The name is not a reliable clock, though: it carries unsymbolicated module "
@@ -701,6 +858,11 @@ def build_stale_signature_note(corroborations):
     # be one fact. The crashstack chip already names the build for exactly this reason.
     seen = c.get("signature_first_seen_buildid")
     where = " in build {},".format(seen) if seen else ""
+    if c.get("stale_signature_family_clock"):
+        # The gap was measured from the PREDECESSOR's first build (`sigfamily`, the family clock
+        # in `_apply_signature_age_gate`): name it, or the reader looks the build up under this
+        # signature and finds nothing.
+        where = " under its earlier name `{}`{}".format(c["stale_signature_family_clock"], where)
     note = (
         "Timing check: this signature was already being reported{} {:.0f} days before the "
         "changeset named below landed, so that changeset cannot be what INTRODUCED this "
@@ -2486,7 +2648,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             version = models.UUID.get_info(uuid).get("version")
         except Exception:
             version = None
-    first, stats = fetch_signature_stats(uuid, uuid_info)
+    # The same crash's other LIVE spellings (`sigfamily`, recorded by the orchestrator) ride
+    # along so the volume sentence can count what the signature search alone undercounts.
+    first, stats = fetch_signature_stats(
+        uuid, uuid_info,
+        siblings=((dossier or {}).get("corroborations") or {}).get("signature_siblings_live") or ())
     # The channel's filing marks (`config.get_agent_autofile`): release titles its bugs
     # "[new in release] Crash in [@ ...]" and nominates the crash's version for tracking; every
     # other channel has neither. Read here so the page preview shows the bug the filer will post

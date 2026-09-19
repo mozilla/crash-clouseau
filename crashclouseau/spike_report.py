@@ -75,6 +75,15 @@ def is_new_signature(brief):
     spike = brief.get("spike") or {}
     if spike.get("kind") != "build_day":
         return False
+    # A NEW NAME IS NOT A NEW CRASH (`sigfamily`): an older name that stopped on this build
+    # (a handoff predecessor), or a spelling that was already live before it, means the mark
+    # would be false -- 2072770 was titled `[new in release]` over 756 reports of
+    # `shutdownhang | CanEnterBaselineJIT`.
+    if brief.get("signature_predecessors"):
+        return False
+    if any((s or {}).get("status") in ("older", "coexisting", "undecided")
+           for s in brief.get("signature_siblings") or []):
+        return False
     if any(int(b or 0) > 0 for b in (spike.get("baseline") or [])):
         return False
     if any(int((h or {}).get("count") or 0) > 0 for h in (spike.get("history") or [])):
@@ -87,9 +96,13 @@ def is_new_signature(brief):
 
 
 def signature_age_sentence(brief):
-    """When the signature first appeared: on this channel, and anywhere (the unbounded clock)."""
+    """When the signature first appeared: on this channel, and anywhere (the unbounded clock).
+    On a RENAMED signature (`sigfamily`), what it was called before and how old THAT is."""
     channel = brief.get("channel") or "this channel"
     buildid = str(brief.get("buildid") or "")
+    preds = brief.get("signature_predecessors") or []
+    if preds:
+        return _renamed_signature_sentence(brief, preds[0])
     ever = brief.get("first_seen_ever") or brief.get("first_seen")
     chan = brief.get("first_seen_channel")
     new_on_channel = bool(buildid and chan and str(chan) >= buildid)
@@ -113,6 +126,32 @@ def signature_age_sentence(brief):
     return "This signature is {}: its first report is in build {} ({}), {:.0f} days before this build.".format(
         "new" if days <= sigage.NEW_SIGNATURE_DAYS else "not new", ever,
         sigage.buildid_day(ever), days)
+
+
+def _renamed_signature_sentence(brief, top):
+    """``This signature is a new name for an older crash: until build B it reported as `P`
+    (...); `P` was first recorded in build F (day).``"""
+    p = top.get("signature")
+    fam = brief.get("signature_family") or {}
+    build = fam.get("s_first_build")
+    head = "This signature is a new name for an older crash: {}it reported as `{}`".format(
+        "until build {} ({}) ".format(build, sigage.buildid_day(build)) if build else "", p)
+    numbers = []
+    if top.get("before") is not None and top.get("after") is not None:
+        numbers.append("{} reports on the builds of the 28 days before, {} since".format(
+            top["before"], top["after"]))
+    if top.get("change"):
+        numbers.append(top["change"])
+    if numbers:
+        head += " ({})".format("; ".join(numbers))
+    ever = top.get("first_seen_ever") or brief.get("signature_family_first_seen_ever")
+    if ever:
+        head += "; `{}` was first recorded in build {} ({})".format(p, ever, sigage.buildid_day(ever))
+    alignment = fam.get("alignment")
+    if alignment == "date":
+        head += (". The old name stopped on every live build at once, which is what a Socorro "
+                 "skip-list change or a symbol gap does, not a code change")
+    return head + "."
 
 
 def _culprit_paragraph(findings, brief, author_display=None, link_regressor=False):

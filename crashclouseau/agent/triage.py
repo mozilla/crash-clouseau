@@ -1020,6 +1020,13 @@ def _signature_age_lines(crash: dict) -> list[str]:
         crash.get("signature_first_seen_ever"),
         observed=crash.get("signature_first_seen_any") or windowed_seed,
     )
+    if crash.get("signature_predecessors"):
+        # THE NAME IS NEW, THE CRASH IS NOT: `sigfamily` found an older name of this crash that
+        # stopped on the build this one started. That block replaces the age block -- the age
+        # worth stating is the predecessor's -- and it is the one case the prompt's own closer
+        # used to promise ("where we can detect that, it is said above") and never delivered:
+        # the reprocessing inversion fired 3 times in 5968 dossiers.
+        return _signature_rename_lines(crash, facts)
     if not facts:
         return []
     ever = facts.get("signature_first_seen_ever")
@@ -1094,14 +1101,109 @@ def _signature_age_lines(crash: dict) -> list[str]:
     return ["", *said, guidance]
 
 
+def _signature_rename_lines(crash: dict, facts: dict) -> list[str]:
+    """The ``SIGNATURE RENAME:`` block: what this crash used to be called, the numbers that say
+    the old name stopped when this one started, how old the crash really is, and what that
+    means for the candidates below. See ``sigfamily`` for the instrument and plans/24 for the
+    filings it would have changed (2073210, 2071620, 2071606, 2069647, 2072770, 2070554)."""
+    preds = crash.get("signature_predecessors") or []
+    top = preds[0]
+    p = top.get("signature")
+    build = crash.get("signature_handoff_build") or facts.get("signature_first_seen_windowed")
+    channel = crash.get("channel") or "this channel"
+    label = _CHANNEL_LABEL.get((channel or "").lower()) or channel
+    where = " in build {} ({})".format(build, sigage.buildid_day(build)) if build else ""
+    head = ("SIGNATURE RENAME: this NAME is new -- crash-stats first sees it on {}{} -- but the"
+            " CRASH is not: it is `{}` under a new name.".format(label, where, p))
+    before, after = top.get("before"), top.get("after")
+    if before is not None and after is not None:
+        head += (" `{}` had {} reports on the builds of the 28 days before that build and {} on"
+                 " builds from it on{}".format(
+                     p, before, after,
+                     ", against {} under this name".format(top["s_after"])
+                     if top.get("s_after") is not None else ""))
+        head += "; {}.".format(top["change"]) if top.get("change") else "."
+    elif top.get("change"):
+        head += " {}.".format(top["change"][0].upper() + top["change"][1:])
+    said = [head]
+    ever = top.get("first_seen_ever") or crash.get("signature_family_first_seen_ever")
+    if ever:
+        age = sigage.signature_age_days(ever, crash.get("buildid"))
+        said.append("`{}` was first seen anywhere in build {} ({}){}.".format(
+            p, ever, sigage.buildid_day(ever),
+            ", {}".format(_before_this_build(age, ever, crash.get("buildid")))
+            if age is not None else ""))
+    others = [q.get("signature") for q in preds[1:] if q.get("signature")]
+    fan_in = int(crash.get("signature_fan_in") or 0)
+    if fan_in >= 2:
+        added = ((top.get("changed_frames") or {}).get("added") or [])
+        # A date-aligned catch-all was minted by a symbol gap or a skip-list change, and the fix
+        # is symbols, not another list entry (2070554's `ntdll.dll | kernelbase.dll`).
+        fix = ("and the durable fix is symbols for that module or a Socorro skip-list entry, not"
+               " a crash bug" if crash.get("signature_handoff_alignment") == "date" else
+               "and the durable fix is a Socorro skip-list entry for that frame, not a crash bug")
+        said.append(
+            "This name absorbed {} previously DISTINCT signatures ({}): it is a CATCH-ALL minted"
+            " by a generic frame{}, {}. Say so.".format(
+                fan_in, ", ".join("`{}`".format(s) for s in [p] + others[:3]),
+                " ({})".format(", ".join("`{}`".format(a) for a in added[:2])) if added else "",
+                fix))
+    elif others:
+        said.append("Other spellings of the old name stopped on the same build: {}.".format(
+            ", ".join("`{}`".format(s) for s in others[:3])))
+    alignment = crash.get("signature_handoff_alignment")
+    if alignment == "date":
+        said.append(
+            "The handoff is DATE-aligned: `{}` stopped on every live build at once, which is what"
+            " a Socorro skip-list change or a symbol gap does. No changeset can be the cause of"
+            " that.".format(p))
+        guidance = _DATE_RENAMED_SIGNATURE_GUIDANCE
+    else:
+        if alignment == "build":
+            said.append(
+                "The handoff is BUILD-aligned: `{}` kept reporting on older builds afterwards, so"
+                " a change in this build's window is what renamed the crash.".format(p))
+        guidance = _RENAMED_SIGNATURE_GUIDANCE.format(
+            change=top.get("change") or "the changed frame", predecessor=p)
+    return ["", *said, guidance]
+
+
+_RENAMED_SIGNATURE_GUIDANCE = (
+    "What to do with that: judge this crash on `{predecessor}`'s history, not on this name's. A"
+    " candidate that only renamed, moved, wrapped or added the frame that changed ({change}) is"
+    " the RENAMER, not the regressor -- it changed what the crash is called, not whether it"
+    " happens, and 'this changeset introduced this crash' is false for it. The pushlog window"
+    " below is trustworthy for the RENAME and not for the crash's origin. If the crash also got"
+    " more frequent, that is a rate claim and needs the CRASH RATE BY VERSION block's denominator"
+    " measured over BOTH names. If the mechanism is established and nothing in the window created"
+    " the condition, report the crash as `actionable` with the failing code's origin from blame,"
+    " as for any long-standing signature; if the renamer is a fix that added a diagnostic or an"
+    " assert, name it as the EXPOSER and never as 'regressed by'."
+)
+
+_DATE_RENAMED_SIGNATURE_GUIDANCE = (
+    "What to do with that: this is an OLD crash whose name changed on a date, not in a build."
+    " Nothing in the pushlog window below can have created it or renamed it, so do not name a"
+    " regressor for the appearance of this name. Judge the candidates as for a long-standing"
+    " signature -- what a change did to a crash that was already happening, with a measured rate"
+    " over both names behind any 'more frequent' claim -- or abstain as pre-existing."
+)
+
+
 def _novelty_reliability_lines(crash: dict) -> tuple[list[str], str | None]:
     """``(lines, guidance)`` withdrawing a novelty claim the facts do not support, or
     ``([], None)``. The facts are ``sigage.novelty_facts``; this is only their prose."""
     facts = sigage.novelty_facts(
         crash.get("signature"), crash.get("signature_first_report_date"), crash.get("version"),
-        crash.get("version_rates"), crash.get("channel"))
+        crash.get("version_rates"), crash.get("channel"),
+        predecessors=crash.get("signature_predecessors"))
     reasons = (facts.get("signature_novelty_unreliable") or "").split(",")
     lines = []
+    if "predecessor_handoff" in reasons:
+        top = (crash.get("signature_predecessors") or [{}])[0]
+        lines.append(
+            "BUT IT IS A RENAME: until this build the same crash reported as `{}` (see the"
+            " SIGNATURE RENAME block).".format(top.get("signature")))
     if "module_frames" in reasons:
         lines.append(
             "BUT THE NAME IS NOT TRUSTWORTHY: it carries unsymbolicated module frames ({}). Socorro"

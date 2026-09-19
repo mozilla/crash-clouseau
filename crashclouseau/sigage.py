@@ -1503,7 +1503,7 @@ def module_frames(signature):
 
 
 def novelty_facts(signature, first_report_date=None, version=None, version_rates=None,
-                  channel=None):
+                  channel=None, predecessors=None):
     """Whether "this signature is new" can be trusted, as corroboration facts. ``{}`` when there
     is nothing to say.
 
@@ -1532,6 +1532,11 @@ def novelty_facts(signature, first_report_date=None, version=None, version_rates
       rather than a cycle's, and only when the version's first reporting day is inside the
       window (a version older than the window has no visible first day).
 
+    * ``predecessor_handoff`` -- ``sigfamily`` found an older name of this crash that STOPPED
+      on the build this one started (*predecessors*, the seed's ``signature_predecessors``). The
+      name is a rename; the crash's age is the predecessor's. The one reason here that can also
+      say what the crash WAS called -- the others only say the name is not a clock.
+
     ``signature_novelty_unreliable`` names whichever fired, comma-joined, so the brief and the
     bug can say WHY the name's age is not the crash's. Never a novelty claim: this may only ever
     take "new" away."""
@@ -1541,6 +1546,8 @@ def novelty_facts(signature, first_report_date=None, version=None, version_rates
     if mods:
         facts["signature_module_frames"] = mods
         reasons.append("module_frames")
+    if predecessors:
+        reasons.append("predecessor_handoff")
     family = config.channel_family(channel) if channel else None
     rows = (version_rates or {}).get("versions") or []
     row = next((r for r in rows if str(r.get("version")) == str(version or "")), None)
