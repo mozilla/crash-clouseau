@@ -170,6 +170,14 @@ class TestPushedDownSiblingsAreNotFilingNames(unittest.TestCase):
         self.assertEqual(sigfamily.spellings(family), ["P", A],
                          "a pushed-down predecessor is still a name")
 
+    def test_an_undecided_one_stays_a_filing_name(self):
+        undecided = dict(SIBLINGS[0], status="undecided")
+        d = Dossier(crash={"uuid": "u", "signature": "S", "frames": []})
+        orch._record_signature_age_facts(d, {"signature": "S", "signature_family_lookup": "ok",
+                                             "signature_siblings": [undecided, SIBLINGS[1]]})
+        self.assertEqual(d.corroborations["signature_siblings_live"], [B, A])
+        self.assertEqual(sigfamily.spellings({"siblings": [undecided]}), [B])
+
     def test_name_only_rows_pass(self):
         self.assertTrue(sigfamily.is_filing_sibling(A))
         self.assertTrue(sigfamily.is_filing_sibling({"signature": A}))

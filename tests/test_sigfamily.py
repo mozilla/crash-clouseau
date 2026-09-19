@@ -344,10 +344,8 @@ class TestCheckLogMessage(_Base):
         self.assertEqual(fam["alignment"], "build")
         self.assertEqual(fam["changed_frames"], {"added": [CHECK], "removed": [PATCH]})
         statuses = {s["signature"]: s["status"] for s in fam["siblings"]}
-        self.assertEqual(statuses, {self.NORETURN: "younger", self.OOM_CHECK: "other_channel"})
-        # NORETURN remains a sibling but is excluded from filing names.
-        relations = {s["signature"]: s["relation"] for s in fam["siblings"]}
-        self.assertEqual(relations[self.NORETURN], "pushed-down")
+        # Exclude the younger pushed-down name; retain the OOM frame variant.
+        self.assertEqual(statuses, {self.OOM_CHECK: "other_channel"})
         self.assertEqual(sf.spellings(fam), [PATCH, self.OOM_CHECK])
 
     def test_the_anchors_skip_what_socorro_skips(self):
@@ -438,7 +436,8 @@ class TestJsOomAbort(_Base):
         self.assertEqual(p["change"], "the OOM size class `unknown` became `large`")
         self.assertEqual(fam["family_first_seen_ever"], "20240430094738")
         statuses = {s["signature"]: s["status"] for s in fam["siblings"]}
-        self.assertEqual(statuses, {self.OLD_LARGE: "older", self.ALLOC_CELL: "other_channel"})
+        # Exclude the other-channel pushed-down name; retain the older frame variant.
+        self.assertEqual(statuses, {self.OLD_LARGE: "older"})
 
     def test_the_spike_on_the_handoff_build_is_a_re_bucketing(self):
         fake = self.fake()
@@ -521,6 +520,8 @@ class TestSymbolGap(_Base):
         self.assertEqual(fam["family_first_seen_ever"], "20240416043247")
         statuses = {s["signature"]: s["status"] for s in fam["siblings"]}
         self.assertEqual(statuses, {WAIT2: "undecided", HANG_VARIANT: "younger"})
+        # The undecided pushed-down name remains eligible for venue lookup.
+        self.assertIn(WAIT2, sf.spellings(fam))
         # The bare (non-hang) spelling is a different crash and never entered the family.
         self.assertNotIn(WAIT_BARE, sf.spellings(fam))
         self.assertIn("took over the name from `RtlWaitOnAddress`, `WaitOnAddress`", top["change"])

@@ -63,6 +63,8 @@ ONE DETERMINISTIC LOOKUP, AT SEED TIME, from data we already hold -- the signatu
    SHARES a specific frame with S (a spelling or a frame variant), a pushed-down predecessor
    sharing none is a sibling name's predecessor, not S's, and is dropped: the JS OOM change
    renamed two abort sites on one build, and each new name has exactly one old one.
+   A pushed-down relation alone does not establish a shared crash site. After classification,
+   keep these names only as handoff predecessors or `undecided` siblings.
 4. **Two discriminators**, recorded because they change what the model may claim. ALIGNMENT:
    a code rename hands off at a build boundary and the old name keeps reporting on old builds
    afterwards (``build``); a skip-list change or a symbol gap hands off on a DATE, on every live
@@ -748,6 +750,15 @@ def _lookup(sig, proto, product, channel, cfg, until):
                             "total_all_channels": t} for c, r, t in related]
         return out
     predecessors = [r for r in rows if r["status"] == "handoff"]
+
+    def is_sibling(r):
+        if r["status"] in ("handoff", "quiet"):
+            return False
+        # Keep undecided candidates available for venue lookup while handoff is unconfirmed.
+        return r["relation"] in ("frame-variant", "spelling") or r["status"] == "undecided"
+
+    siblings = [dict(r, total_all_channels=totals_all.get(r["signature"], 0))
+                for r in rows if is_sibling(r)]
     # A predecessor that shares a specific frame with S (a spelling, a frame variant) is S's
     # own old name; beside one, a pushed-down predecessor sharing no frame with S or with it is
     # the old name of a SIBLING that appeared on the same build (the JS OOM change renamed two
@@ -764,8 +775,6 @@ def _lookup(sig, proto, product, channel, cfg, until):
 
         predecessors = [r for r in predecessors if own_or_shared(r)]
     predecessors.sort(key=lambda r: -r["before"])
-    siblings = [dict(r, total_all_channels=totals_all.get(r["signature"], 0))
-                for r in rows if r["status"] not in ("handoff", "quiet")]
     for row in predecessors:
         row["changed_frames"] = changed_frames(sig, row["signature"])
         row["change"] = describe_change(sig, row["signature"], row["relation"])
@@ -876,9 +885,11 @@ def handoff_for_spike(signature, proto, product, channel, buildid, until=None):
 
 
 def is_filing_sibling(row):
-    """Exclude ``pushed-down`` siblings from filing names: they share no specific frame and
-    have no detected handoff. Rows without a relation pass, including older saved names."""
-    return not isinstance(row, dict) or row.get("relation") != "pushed-down"
+    """Allow pushed-down siblings only when undecided, for potential handoff venues.
+    Names without a relation remain eligible for compatibility with saved records."""
+    if not isinstance(row, dict) or row.get("relation") != "pushed-down":
+        return True
+    return row.get("status") == "undecided"
 
 
 def spellings(family):
