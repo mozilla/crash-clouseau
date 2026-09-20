@@ -248,34 +248,10 @@ def _create_bug(payload, token):
 
 
 def _link_blockers(bug_id, blockers, token):
-    """Set ``blocks`` on a freshly-created bug. Returns what actually got linked.
+    """Add ``blocks`` after it was removed from the create request.
 
-    Has to be a SECOND call: BMO's create endpoint accepts ``blocks`` (and ``blocked``)
-    without complaint and silently discards both — verified on allizom, where three test
-    filings came back 200 with an empty blocks list. Only ``PUT {"blocks": {"add": [...]}}``
-    works.
-
-    THE DOCUMENTATION SAYS OTHERWISE, so do not re-derive this from it. ``Bug.create`` at
-    https://bmo.readthedocs.io/en/latest/api/core/v1/bug.html#create-bug lists ``blocked``,
-    ``dependson`` and ``regressed_by`` as create parameters taking "one or more valid bug
-    ids", and documents error 116 for a create-time dependency loop. That page carries
-    UPSTREAM Bugzilla's contract; BMO does not implement it. Re-probed 2026-08-28 on allizom
-    with five creates — a valid numeric id, the ``blocks`` spelling, an alias string, an
-    INVALID id, and valid-plus-invalid together: **all five answered 200 and all five read
-    back empty**, and an invalid id is not even rejected, so create discards these fields
-    before it validates them. The probe is not measuring its own read: ``keywords``,
-    ``cf_crash_signature`` and ``see_also`` survived the same creates, and a ``PUT`` on one
-    of those very bugs, same account and session, set both fields. Bugs 1852371-1852376 on
-    allizom.
-
-    The PUT is atomic and strict: one unknown id rejects the WHOLE list with code 101, so a bug
-    that is restricted, wrong, or simply not visible to this account would otherwise also cost us
-    the ``clouseau`` meta-bug link. Hence the retry with the aliases alone — dormant while the
-    preview sends ``["clouseau"]`` and nothing else (the regressor is linked by ``regressed_by``
-    now), which is why identical attempts are collapsed rather than posted twice.
-
-    Best-effort throughout — a bug that is filed but unlinked is a small loss; an exception here
-    would strand a filing we have already made."""
+    A PUT containing an invalid bug rejects the whole list, so retry with aliases alone when the
+    first attempt mixes aliases and ids. Linking is best-effort because the bug already exists."""
     if not blockers:
         return []
     attempts = [list(blockers)]
@@ -292,22 +268,10 @@ def _link_blockers(bug_id, blockers, token):
 
 
 def _link_regressed_by(bug_id, regressors, token):
-    """Set ``regressed_by`` on a freshly-created bug. Returns what actually got linked.
+    """Add ``regressed_by`` after it was removed from the create request.
 
-    Its OWN PUT, deliberately not another key in the one ``_link_blockers`` sends. Create discards
-    ``regressed_by`` exactly as silently as it discards ``blocks`` (probed on allizom: 200, and
-    the field comes back empty), and the PUT is atomic ACROSS fields as well as within one --
-    ``{"blocks": {"add": ["clouseau"]}, "regressed_by": {"add": [<unknown bug>]}}`` came back
-    404/code 101 with the perfectly good blocks add dropped too. Re-probed 2026-08-28: a
-    combined PUT with BOTH ids valid does work (200, both fields set), so the atomicity only
-    bites on a bad id — which is precisely the ordinary case here, hence still two PUTs. A regressor bug we cannot read
-    is the ordinary case rather than the exotic one (BMO answers 102 for 2043188, which cost 2 of
-    the first 3 filings their blocker link), so sharing one PUT would put the meta-bug link back
-    at the mercy of the field likeliest to fail.
-
-    No retry with a shorter list, because there is nothing to shorten: the pipeline names one
-    changeset, so a rejection means the claim cannot land at all. Best-effort like the blockers —
-    the bug is already filed and the changeset is named in the comment prose."""
+    Keep this separate from ``blocks`` because one rejected field makes the combined PUT fail.
+    The update is best-effort because the bug already exists."""
     if not regressors:
         return []
     try:
@@ -396,23 +360,17 @@ def _record_train_flags(result, flags, refused=()):
             result.setdefault("status_flags_failed", []).append(flag)
 
 
-# The preview keys a create posts. `groups` and `cc` are in this tuple, and a test asserts they
-# reach the POSTED BODY rather than merely the preview. A key the preview sets and this filter
-# drops is a SILENT no-op -- that is how `blocks` and `regressed_by` were dead for weeks -- and
-# for `groups` the silent no-op publishes a use-after-free. `tracking_flag` and `status_flags`
-# are NOT here because they are not the body's shape: the create carries them under BMO's field
-# names (`cf_tracking_firefox155: "?"`, `cf_status_firefox158: "affected"`), which the caller
-# hands `_create_payload` as `train_flags` (built by `_train_flags`).
+# Preview keys copied unchanged into the create request. `_create_payload` maps relations and
+# train flags separately because their API field names differ from the preview's.
 _CREATE_KEYS = ("product", "component", "version", "type", "keywords",
                 "cf_crash_signature", "groups", "cc")
 
 
 def _create_payload(preview, email, train_flags=None):
-    """The body ``POST /rest/bug`` gets for *preview*, for BOTH filers (``autofile_bug`` and
-    the spike escalation's). The two used to build it by hand, side by side, and a key added to
-    one whitelist and not the other is exactly the silent no-op ``_CREATE_KEYS`` warns about.
+    """Build the create request shared by the ordinary and spike filers.
 
-    ``train_flags`` go into the same POST under their BMO field names."""
+    Empty relations are omitted. Preview key ``blocked`` becomes API field ``blocks``; train
+    flags already use their API ``cf_*`` names."""
     payload = {k: v for k, v in preview.items() if k in _CREATE_KEYS}
     # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
     # byte-identical to what it was before this existed. `cf_crash_signature` is empty on a
@@ -429,6 +387,10 @@ def _create_payload(preview, email, train_flags=None):
     # can never cost a bug: an account outside the group is not refused, it silently gets
     # UNCONFIRMED (proved on allizom, 2026-09-07), and BugBot confirms it later as before.
     payload["status"] = "NEW"
+    if preview.get("blocked"):
+        payload["blocks"] = list(preview["blocked"])
+    if preview.get("regressed_by"):
+        payload["regressed_by"] = list(preview["regressed_by"])
     payload.update(train_flags or {})
     if email:
         payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
@@ -436,24 +398,22 @@ def _create_payload(preview, email, train_flags=None):
 
 
 def _create_bug_keeping_the_bug(payload, token):
-    """Create a bug while isolating optional train fields and needinfo.
+    """Create a bug, removing optional fields after a 4xx refusal.
 
-    On a 4xx, retry first without train fields and then without needinfo. Return the successful
-    bug id and the categories removed from that request. Callers retry removed train fields one
-    at a time and record removed needinfo.
-
-    Do not retry transport errors or 5xx responses: the POST may have succeeded. If every rung
-    returns a 4xx, raise the first refusal and log any differing later refusal."""
+    The retry order is ``regressed_by``, ``blocks``, train fields, then needinfo. Return the bug
+    id and the removed categories so callers can retry them by PUT. Never retry transport errors
+    or 5xx responses because the POST may have succeeded. If all retries fail, raise the first
+    refusal."""
     rungs = [(payload, frozenset())]
     body, dropped = payload, frozenset()
-    train = [k for k in body if _is_train_flag(k)]
-    if train:
-        body = {k: v for k, v in body.items() if k not in train}
-        dropped = dropped | {"train_flags"}
-        rungs.append((body, dropped))
-    if body.get("flags"):
-        body = {k: v for k, v in body.items() if k != "flags"}
-        dropped = dropped | {"needinfo"}
+    for name, keys in (("regressed_by", ("regressed_by",)),
+                       ("blocks", ("blocks",)),
+                       ("train_flags", tuple(k for k in payload if _is_train_flag(k))),
+                       ("needinfo", ("flags",))):
+        if not any(body.get(k) for k in keys):
+            continue
+        body = {k: v for k, v in body.items() if k not in keys}
+        dropped = dropped | {name}
         rungs.append((body, dropped))
     first = None
     for i, (body, dropped) in enumerate(rungs):
@@ -2631,10 +2591,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 result["bucket_title"] = preview.get("title")
                 if preview["bucket"].get("key"):
                     result["bucket"] = preview["bucket"]["key"]
-            # Blockers need a second call — create discards them silently (see
-            # ``_link_blockers``). After the bug exists, so a link failure can't lose it.
+            # Retry relations by PUT only if the create fallback removed them.
             wanted = preview.get("blocked") or []
-            linked = _link_blockers(bug_id, wanted, token)
+            linked = _link_blockers(bug_id, wanted, token) if "blocks" in dropped else list(wanted)
             result.update({"filed": True, "bug": bug_id, "mode": "new_bug",
                            "needinfo": email or None, "blocks": linked})
             # Record what did NOT link. Two of the first three real filings lost their
@@ -2647,12 +2606,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 result["blocks_unlinked"] = missing
                 logger.warning("autofile: bug %s could not link %s (restricted or unknown)",
                                bug_id, missing)
-            # The structured causal claim, in its own PUT (see ``_link_regressed_by``). Only on
-            # a bug we FILED: on somebody else's open bug the field is often already curated —
-            # 2 of the 6 filings that commented on an existing bug found a human-set
-            # ``regressed_by`` there, and on bug 2057980 ours would have contradicted it.
+            # Set the causal claim only on bugs we create; existing bugs may already be curated.
             regressors = preview.get("regressed_by") or []
-            result["regressed_by"] = _link_regressed_by(bug_id, regressors, token)
+            result["regressed_by"] = (_link_regressed_by(bug_id, regressors, token)
+                                      if "regressed_by" in dropped else list(regressors))
             unset = [b for b in regressors if b not in result["regressed_by"]]
             if unset:
                 result["regressed_by_unlinked"] = unset

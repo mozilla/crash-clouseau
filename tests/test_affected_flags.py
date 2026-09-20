@@ -265,14 +265,16 @@ class TestTheFilerSetsTheFlags(_Base):
         bugzilla_apply._put_bug.side_effect = put
         res = self._file(trains={("firefox", 157)})
         self.assertTrue(res["filed"])
-        self.assertEqual(len(self.created), 2)                  # with the flags, then without
-        self.assertEqual(self._status_in(self.created[1]), {})
-        self.assertIn("flags", self.created[1])                 # the needinfo stayed aboard
+        # The retry ladder removes both relations before the train flags.
+        self.assertEqual(len(self.created), 4)
+        self.assertEqual(self._status_in(self.created[-1]), {})
+        self.assertIn("flags", self.created[-1])                # the needinfo stayed aboard
         self.assertEqual(res["needinfo"], "dev@moz.example")
         self.assertEqual(self._status_puts(), [(999, _OWN)])    # the supported PUT succeeded
         self.assertEqual(res["status_flags"], _OWN)
         self.assertEqual(res["status_flags_failed"], ["cf_status_firefox157"])
-        self.assertEqual(res["regressed_by"], [42])             # the other PUTs were untouched
+        self.assertEqual(res["regressed_by"], [42])
+        self.assertEqual(res["blocks"], ["clouseau"])
         self.assertEqual(len(self.filed), 1)                    # and the filing is on record
 
     def test_a_server_error_with_flags_aboard_is_never_retried(self):
@@ -287,8 +289,8 @@ class TestTheFilerSetsTheFlags(_Base):
         self.assertEqual(len(self.created), 1)
         self.assertEqual(self.filed, [])
 
-    def test_the_ladder_drops_the_flags_before_the_needinfo_and_surfaces_the_first_refusal(self):
-        # If every smaller body receives a 4xx, surface the first response.
+    def test_the_ladder_takes_off_the_claim_the_blockers_the_flags_then_the_needinfo(self):
+        # Every retry removes the next optional category; the first refusal is preserved.
         calls = []
 
         def create(payload, token):
@@ -298,8 +300,11 @@ class TestTheFilerSetsTheFlags(_Base):
         bugzilla_apply._create_bug.side_effect = create
         res = self._file(trains={("firefox", 157)})
         self.assertFalse(res["filed"])
-        self.assertEqual([("cf_status_firefox157" in c, "flags" in c) for c in calls],
-                         [(True, True), (False, True), (False, False)])
+        aboard = [("regressed_by" in c, "blocks" in c, "cf_status_firefox157" in c, "flags" in c)
+                  for c in calls]
+        self.assertEqual(aboard, [(True, True, True, True), (False, True, True, True),
+                                  (False, False, True, True), (False, False, False, True),
+                                  (False, False, False, False)])
         self.assertIn("the component is closed", res["skipped"])
         self.assertNotIn("less useful", res["skipped"])
         self.assertEqual(self.filed, [])
@@ -320,7 +325,7 @@ class TestTheFilerSetsTheFlags(_Base):
         with self.assertLogs(level="ERROR") as logs:
             res = self._file(trains={("firefox", 157)})
         self.assertFalse(res["filed"])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)          # three 400s down the ladder, then the 503: stop
         self.assertIn("503", res["skipped"])
         self.assertNotIn("code 53", res["skipped"])
         self.assertTrue(any("code 53" in m for m in logs.output))   # the first refusal is logged

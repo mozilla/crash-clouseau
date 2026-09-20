@@ -73,8 +73,9 @@ class TestAReleaseFilingIsTitledAndNominated(_Base):
         res = self._file_release(
             preview={**_RELEASE_PREVIEW, "tracking_flag": "cf_tracking_firefox150"})
         self.assertTrue(res["filed"])
-        self.assertEqual(len(self.created), 2)           # with the flag, then without
-        self.assertIn("flags", self.created[1])          # the needinfo stayed aboard
+        self.assertEqual(len(self.created), 4)           # -regressed_by, -blocks, then -flag
+        self.assertNotIn("cf_tracking_firefox150", self.created[-1])
+        self.assertIn("flags", self.created[-1])         # the needinfo stayed aboard
         self.assertEqual(res["tracking_failed"], "cf_tracking_firefox150")
         self.assertNotIn("tracking_nominated", res)
         self.assertEqual(res["regressed_by"], [42])      # the other PUTs were untouched

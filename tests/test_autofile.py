@@ -1266,25 +1266,42 @@ class TestPayload(_Base):
         self.assertNotIn("flags", self.created[0])
         self.assertIsNone(res["needinfo"])
 
-    def test_regressed_by_is_never_sent_on_create(self):
-        # Create DISCARDS it, silently and with a 200, exactly as it discards blocks (probed on
-        # allizom). Sending it there would read as "we set the field" while setting nothing.
-        self._file()
-        self.assertNotIn("regressed_by", self.created[0])
+    def test_the_relations_ride_the_create(self):
+        res = self._file()
+        self.assertEqual(self.created[0]["blocks"], ["clouseau"])
+        self.assertEqual(self.created[0]["regressed_by"], [42])
+        self.assertEqual([c for _, c in self.puts if "blocks" in c or "regressed_by" in c], [])
+        self.assertEqual((res["blocks"], res["regressed_by"]), (["clouseau"], [42]))
 
 
 class TestBlockerLinking(_Base):
-    """BMO's create endpoint accepts `blocks`/`blocked` and silently DISCARDS both —
-    allizom filings 1852344/1852345/1852346 all came back 200 with blocks=[]. Only a
-    follow-up PUT works, and that PUT is atomic: one unknown id rejects the whole list."""
+    """``blocks`` uses the create request, with a PUT fallback after a 4xx."""
 
-    def test_blockers_are_never_sent_on_create(self):
-        self._file()
-        for key in ("blocked", "blocks"):
-            self.assertNotIn(key, self.created[0])
+    def _refuse_while(self, key, status=400):
+        """Reject the create while *key* is present."""
+        def create(payload, token):
+            self.created.append(payload)
+            if key in payload:
+                raise bugzilla_apply.BugzillaRejected(
+                    "bugzilla create failed ({}): code 102, You are not authorized to access "
+                    "bug 42".format(status), status=status)
+            return 999
+        bugzilla_apply._create_bug.side_effect = create
 
-    def test_blockers_are_linked_by_a_follow_up_put(self):
+    def test_blockers_ride_the_create(self):
         res = self._file()
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["blocks"], ["clouseau"])
+        self.assertEqual([c for _, c in self.puts if "blocks" in c], [])
+        self.assertEqual(res["blocks"], ["clouseau"])
+
+    def test_a_blocker_bmo_refuses_on_the_create_is_linked_by_a_follow_up_put(self):
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, regressed_by=[])
+        self._refuse_while("blocks")
+        res = self._file()
+        self.assertEqual(len(self.created), 2)                 # with blocks, then without
+        self.assertNotIn("blocks", self.created[1])
+        self.assertIn("flags", self.created[1])                # the needinfo stayed aboard
         self.assertEqual(self.puts[0], (999, {"blocks": {"add": ["clouseau"]}}))
         self.assertEqual(res["blocks"], ["clouseau"])
 
@@ -1302,7 +1319,9 @@ class TestBlockerLinking(_Base):
                 raise RuntimeError("Bug 42 does not exist.")
             return bug
 
-        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=["clouseau", 42])
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=["clouseau", 42],
+                                                         regressed_by=[])
+        self._refuse_while("blocks")
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
         self.assertTrue(res["filed"])
@@ -1320,12 +1339,16 @@ class TestBlockerLinking(_Base):
                 raise RuntimeError("bugzilla 500")
             return bug
 
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, regressed_by=[])
+        self._refuse_while("blocks")
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
         self.assertEqual(res["blocks"], [])
         self.assertEqual(len(calls), 1)
 
     def test_a_failed_link_never_unfiles_the_bug(self):
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, regressed_by=[])
+        self._refuse_while("blocks")
         bugzilla_apply._put_bug.side_effect = RuntimeError("bugzilla 500")
         res = self._file()
         self.assertTrue(res["filed"])
@@ -1339,7 +1362,9 @@ class TestBlockerLinking(_Base):
             if 42 in changes.get("blocks", {}).get("add", []):
                 raise RuntimeError("Bug 42 does not exist.")
             return bug
-        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=["clouseau", 42])
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=["clouseau", 42],
+                                                         regressed_by=[])
+        self._refuse_while("blocks")
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
         self.assertEqual(res["blocks"], ["clouseau"])
@@ -1351,26 +1376,46 @@ class TestBlockerLinking(_Base):
 
 
 class TestRegressedBy(_Base):
-    """The structured causal claim. Set since 2026-08-17, under the pushlog-window gate that
-    `report_bug.build_bug_preview` applies (the preview is mocked here, so these tests are about
-    the WRITE: the create discards the field, and one PUT must not cost the other)."""
+    """``regressed_by`` uses the create request, with a PUT fallback after a 4xx."""
 
-    def test_it_is_set_by_its_own_put_after_the_blockers(self):
+    def _refuse_while(self, key):
+        def create(payload, token):
+            self.created.append(payload)
+            if key in payload:
+                raise bugzilla_apply.BugzillaRejected(
+                    "bugzilla create failed (401): code 102, You are not authorized to access "
+                    "bug 42", status=401)
+            return 999
+        bugzilla_apply._create_bug.side_effect = create
+
+    def test_it_rides_the_create_with_the_blockers(self):
         res = self._file()
-        self.assertEqual(self.puts, [(999, {"blocks": {"add": ["clouseau"]}}),
-                                     (999, {"regressed_by": {"add": [42]}})])
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["regressed_by"], [42])
+        self.assertEqual(self.created[0]["blocks"], ["clouseau"])
+        self.assertEqual([c for _, c in self.puts if "regressed_by" in c or "blocks" in c], [])
         self.assertEqual(res["regressed_by"], [42])
         # ...and the regressor is claimed ONCE, not also as a blocker.
         self.assertEqual(res["blocks"], ["clouseau"])
 
+    def test_a_restricted_regressor_comes_off_the_create_first_and_lands_by_put(self):
+        self._refuse_while("regressed_by")
+        res = self._file()
+        self.assertEqual(len(self.created), 2)                 # with the claim, then without
+        self.assertNotIn("regressed_by", self.created[1])
+        self.assertEqual(self.created[1]["blocks"], ["clouseau"])   # the blockers stayed aboard
+        self.assertIn("flags", self.created[1])                     # and so did the needinfo
+        self.assertEqual(self.puts, [(999, {"regressed_by": {"add": [42]}})])
+        self.assertEqual((res["regressed_by"], res["blocks"]), ([42], ["clouseau"]))
+        self.assertNotIn("regressed_by_unlinked", res)
+
     def test_a_rejected_regressed_by_does_not_cost_the_blocker_link(self):
-        # The reason it is a separate PUT: a combined one is atomic ACROSS fields, and on
-        # allizom `{"blocks": …, "regressed_by": {"add": [<unknown>]}}` dropped the valid blocks
-        # add along with the bad regressed_by (404, code 101).
+        # Separate PUTs keep one rejected relation from rejecting the other.
         def put(bug, changes, token):
             if "regressed_by" in changes:
                 raise RuntimeError("Bug 42 does not exist.")
             return bug
+        self._refuse_while("regressed_by")
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
         self.assertEqual(res["blocks"], ["clouseau"])
@@ -1378,18 +1423,20 @@ class TestRegressedBy(_Base):
         self.assertEqual(res["regressed_by_unlinked"], [42])
 
     def test_a_rejected_blocker_link_still_sets_regressed_by(self):
-        # And the other way round: the `clouseau` link failing is no reason to drop the claim
-        # a triager actually reads.
+        # A create refused over blocks has removed both relations, so each gets its own PUT.
         def put(bug, changes, token):
             if "blocks" in changes:
                 raise RuntimeError("bugzilla 500")
             return bug
+        self._refuse_while("blocks")
         bugzilla_apply._put_bug.side_effect = put
         res = self._file()
+        self.assertEqual(len(self.created), 3)      # whole, without the claim, without both
         self.assertEqual(res["blocks"], [])
         self.assertEqual(res["regressed_by"], [42])
 
     def test_a_failed_claim_never_unfiles_the_bug(self):
+        self._refuse_while("regressed_by")
         bugzilla_apply._put_bug.side_effect = RuntimeError("bugzilla 500")
         res = self._file()
         self.assertTrue(res["filed"])
@@ -1397,10 +1444,11 @@ class TestRegressedBy(_Base):
 
     def test_an_ungated_candidate_claims_nothing(self):
         # `build_bug_preview` returns [] for a candidate outside the build's pushlog window (and
-        # for one with no bug at all). Nothing to add means no PUT, not a PUT with an empty list.
+        # for one with no bug at all). Nothing to add means no key, not a key with an empty list.
         report_bug.build_bug_preview.return_value = dict(_PREVIEW, regressed_by=[])
         res = self._file()
-        self.assertEqual(self.puts, [(999, {"blocks": {"add": ["clouseau"]}})])
+        self.assertNotIn("regressed_by", self.created[0])
+        self.assertEqual([c for _, c in self.puts if "regressed_by" in c], [])
         self.assertEqual(res["regressed_by"], [])
         self.assertNotIn("regressed_by_unlinked", res)
 
@@ -1611,10 +1659,12 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         self.assertEqual(res["bug"], 999)
         self.assertIsNone(res["needinfo"])                    # not claimed
         self.assertEqual(res["needinfo_dropped"], "dev@moz.example")
-        self.assertEqual(len(calls), 2)                       # with flags, then without
-        self.assertNotIn("flags", calls[1])
+        # Needinfo is last in the retry ladder.
+        self.assertEqual(len(calls), 4)
+        self.assertNotIn("flags", calls[-1])
+        self.assertEqual((res["blocks"], res["regressed_by"]), (["clouseau"], [42]))
         # everything else about the bug is unchanged by the retry
-        self.assertEqual(calls[1]["summary"], calls[0]["summary"])
+        self.assertEqual(calls[-1]["summary"], calls[0]["summary"])
         self.assertEqual(self.filed[0][1]["bug"], 999)        # recorded, so no re-file
 
     def test_a_create_that_fails_for_its_own_reasons_is_not_masked(self):
@@ -1631,7 +1681,7 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         bugzilla_apply._create_bug.side_effect = create
         res = self._file()
         self.assertFalse(res["filed"])
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)                       # every rung, then the FIRST error
         self.assertIn("component is invalid", res["skipped"])
         self.assertNotIn("less useful", res["skipped"])
         self.assertEqual(self.filed, [])
@@ -1688,10 +1738,8 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         self.assertIn("timed out", res["skipped"])
         self.assertEqual(self.filed, [])
 
-    def test_a_create_without_flags_is_never_retried(self):
-        # Must be a 4xx BugzillaRejected, i.e. a failure that WOULD be retried if flags were
-        # present. A plain RuntimeError never enters the retry block at all, so it would
-        # pass this test without the flags guard existing.
+    def test_a_create_with_nothing_optional_aboard_is_never_retried(self):
+        # A 4xx is retried only when an optional category can be removed.
         calls = []
 
         def create(payload, token):
@@ -1699,6 +1747,7 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
             raise bugzilla_apply.BugzillaRejected("boom", status=400)
 
         bugzilla_apply._create_bug.side_effect = create
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, blocked=[], regressed_by=[])
         self.assertFalse(self._file(needinfo=False)["filed"])
         self.assertEqual(len(calls), 1)
 
@@ -2017,9 +2066,10 @@ class TestTheSecurityVenue(_Base):
         with mock.patch.object(bugzilla_apply, "_create_bug", side_effect=refuse_once):
             res = self._file_unsafe()
         self.assertTrue(res["filed"])
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[1]["groups"], ["core-security"])
-        self.assertNotIn("flags", calls[1])
+        self.assertGreaterEqual(len(calls), 2)
+        for body in calls:                       # every rung of the ladder keeps the group
+            self.assertEqual(body["groups"], ["core-security"])
+        self.assertNotIn("flags", calls[-1])
 
 
 class TestTheSecurityGroupIsReadFromBMO(unittest.TestCase):

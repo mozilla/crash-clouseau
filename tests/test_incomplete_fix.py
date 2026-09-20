@@ -410,10 +410,11 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
         self.assertEqual(p["keywords"], ["crash", "regression"])
         self.assertEqual(p["regressed_by"], [self.CAND["bug"]])
         res = self._autofile(p)
-        # ...and the filer takes both back before the create and before the regressed_by PUT.
+        # The filer removes both before creating the bug.
         self.assertTrue(res["filed"], res)
         self.assertEqual(self.created["keywords"], ["crash"])
-        self.assertEqual(self.regressed, [])
+        self.assertNotIn("regressed_by", self.created)
+        self.assertIsNone(self.regressed)
         self.assertEqual(res["regressed_by"], [])
 
     def test_the_filing_row_records_which_reason_filed_it(self):

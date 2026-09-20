@@ -463,7 +463,13 @@ fields visible for its product and component. A known retired or invisible field
 silently omitted. An unknown field name instead fails validation before insertion with HTTP 400,
 code 53. `_create_bug_keeping_the_bug` retries a rejected create without train fields and, if
 needed, without needinfo; `_put_train_flags` then attempts each removed field separately.
-`blocks` and `regressed_by` continue to use their existing link updates.
+
+**Relations in the create (2026-09-20).** `blocks` and `regressed_by` now ride the create.
+`Bugzilla::Bug::_check_relationship` keeps them on entry only for an account with `editbugs`.
+Create also checks access to every related bug; update permits an `editbugs` account to add a
+bug it cannot see. On a 4xx, the retry ladder removes `regressed_by`, then `blocks`, then train
+fields, then needinfo. Callers restore removed relations by PUT. BMO logs create-time relations
+only on the related bugs, not on the new bug.
 
 Check after a deploy: verify the actual fields on BMO. `filed_bug.status_flags` records fields
 submitted in a successful create or fallback PUT, not a BMO readback. `status_flags_failed`

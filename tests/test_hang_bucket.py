@@ -883,8 +883,9 @@ class TestTheFilerRecordsTheBucket(_Base):
         self.assertEqual(res["meta_bugs"], [1866944])
         self.assertEqual(self.created[0]["summary"], _SUGGEST_TITLE)
         self.assertNotIn("cf_crash_signature", self.created[0])
-        # The tracker is linked in the blocks PUT with the `clouseau` alias.
-        self.assertEqual(self.puts[0][1], {"blocks": {"add": ["clouseau", 1866944]}})
+        # The tracker is linked in the create's `blocks`, beside the `clouseau` alias.
+        self.assertEqual(self.created[0]["blocks"], ["clouseau", 1866944])
+        self.assertEqual([c for _, c in self.puts if "blocks" in c], [])
 
     def test_bucket_helpers(self):
         self.assertEqual(bugzilla_apply._bucket_of(

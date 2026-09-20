@@ -1460,7 +1460,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             if "needinfo" in dropped:
                 result["needinfo_dropped"] = email
                 email = ""
-            linked = bugzilla_apply._link_blockers(bug_id, preview.get("blocked") or [], token)
+            # Retry relations by PUT only if the create fallback removed them.
+            wanted = preview.get("blocked") or []
+            linked = (bugzilla_apply._link_blockers(bug_id, wanted, token)
+                      if "blocks" in dropped else list(wanted))
             result.update({"filed": True, "bug": bug_id, "mode": "spike_new_bug",
                            "product": bz_product, "component": component, "component_from": how,
                            "needinfo": email or None, "blocks": linked,
@@ -1472,7 +1475,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                     result["bucket"] = preview["bucket"]["key"]
             regressors = preview.get("regressed_by") or []
             if regressors:
-                result["regressed_by"] = bugzilla_apply._link_regressed_by(bug_id, regressors, token)
+                result["regressed_by"] = (
+                    bugzilla_apply._link_regressed_by(bug_id, regressors, token)
+                    if "regressed_by" in dropped else list(regressors))
             # Retry train fields individually if a 4xx forced them off the create.
             if "train_flags" in dropped:
                 landed, refused = bugzilla_apply._put_train_flags(bug_id, train_flags, token)
