@@ -468,7 +468,9 @@ needed, without needinfo; `_put_train_flags` then attempts each removed field se
 Check after a deploy: verify the actual fields on BMO. `filed_bug.status_flags` records fields
 submitted in a successful create or fallback PUT, not a BMO readback. `status_flags_failed`
 records fallback PUTs that raised. The bug history should have no separate post-create
-per-train changes unless the combined fields invoked the fallback.
+per-train changes unless the combined fields invoked the fallback. `bug_end_of_create` inserts
+create-time tracking flags without `LogActivityEntry`, so verify the field itself. For example,
+bug 2073887 has `cf_status_firefox158 = affected` but no matching history entry.
 
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
