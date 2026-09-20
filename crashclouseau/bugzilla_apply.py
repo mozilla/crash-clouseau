@@ -397,18 +397,48 @@ def _create_payload(preview, email, train_flags=None):
     return payload
 
 
+_EDITBUGS_BY_TOKEN = {}
+
+
+def _can_create_relationships(token):
+    """Return whether the account has ``editbugs``, cached per token.
+
+    BMO silently ignores create-time relationships without that group. A failed lookup returns
+    ``False`` without being cached, so this filing uses the PUT fallback."""
+    if token in _EDITBUGS_BY_TOKEN:
+        return _EDITBUGS_BY_TOKEN[token]
+    root = _bz_rest().rsplit("/bug", 1)[0]
+    headers = {"X-Bugzilla-API-Key": token}
+    try:
+        r = net.get("{}/whoami".format(root), headers=headers, timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        groups = set((r.json() or {}).get("groups") or [])
+    except Exception as exc:
+        logger.warning("autofile: could not read the account's groups (%s); relationships go "
+                       "by PUT this time", exc)
+        return False
+    _EDITBUGS_BY_TOKEN[token] = "editbugs" in groups
+    if not _EDITBUGS_BY_TOKEN[token]:
+        logger.warning("autofile: the account is not in editbugs; relationships go by PUT")
+    return _EDITBUGS_BY_TOKEN[token]
+
+
 def _create_bug_keeping_the_bug(payload, token):
     """Create a bug, removing optional fields after a 4xx refusal.
 
     The retry order is ``regressed_by``, ``blocks``, train fields, then needinfo. Return the bug
-    id and the removed categories so callers can retry them by PUT. Never retry transport errors
-    or 5xx responses because the POST may have succeeded. If all retries fail, raise the first
-    refusal."""
-    rungs = [(payload, frozenset())]
+    id and removed categories so callers can retry them by PUT. Relationships are removed before
+    the first attempt when the account lacks ``editbugs``. Never retry transport errors or 5xx
+    responses because the POST may have succeeded. If all retries fail, raise the first refusal."""
     body, dropped = payload, frozenset()
+    relations = [k for k in ("regressed_by", "blocks") if payload.get(k)]
+    if relations and not _can_create_relationships(token):
+        body = {k: v for k, v in payload.items() if k not in relations}
+        dropped = frozenset(relations)
+    rungs = [(body, dropped)]
     for name, keys in (("regressed_by", ("regressed_by",)),
                        ("blocks", ("blocks",)),
-                       ("train_flags", tuple(k for k in payload if _is_train_flag(k))),
+                       ("train_flags", tuple(k for k in body if _is_train_flag(k))),
                        ("needinfo", ("flags",))):
         if not any(body.get(k) for k in keys):
             continue

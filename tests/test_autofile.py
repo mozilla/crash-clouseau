@@ -132,6 +132,8 @@ class _Base(unittest.TestCase):
             # product-details read: the signature is on no other live train unless a test says
             # so (`None` = could not ask, which states the crash's own train alone).
             mock.patch("crashclouseau.sigage.affected_trains", return_value=None),
+            # Create-time relationships are allowed unless a test says otherwise.
+            mock.patch.object(bugzilla_apply, "_can_create_relationships", return_value=True),
             mock.patch.object(bugzilla_apply, "_create_bug",
                               side_effect=lambda p, t: self.created.append(p) or 999),
             mock.patch.object(bugzilla_apply, "_post_comment",
@@ -1373,6 +1375,93 @@ class TestBlockerLinking(_Base):
     def test_nothing_unlinked_records_nothing(self):
         res = self._file()
         self.assertNotIn("blocks_unlinked", res)
+
+
+class TestWithoutEditbugsRelationshipsGoByPut(_Base):
+    """Without ``editbugs``, relationships bypass create and use the PUT fallback."""
+
+    def test_the_relations_leave_the_create_and_go_by_put(self):
+        bugzilla_apply._can_create_relationships.return_value = False
+        report_bug.build_bug_preview.return_value = dict(
+            _PREVIEW, status_flags={"cf_status_firefox158": "affected"})
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(len(self.created), 1)                 # one POST, accepted as it is
+        body = self.created[0]
+        for key in ("blocks", "regressed_by"):
+            self.assertNotIn(key, body)
+        self.assertEqual(body["cf_status_firefox158"], "affected")
+        self.assertEqual(body["flags"][0]["requestee"], "dev@moz.example")   # needinfo stays
+        self.assertEqual(self.puts, [(999, {"blocks": {"add": ["clouseau"]}}),
+                                     (999, {"regressed_by": {"add": [42]}})])
+        self.assertEqual((res["blocks"], res["regressed_by"]), (["clouseau"], [42]))
+        self.assertEqual(res["status_flags"], {"cf_status_firefox158": "affected"})
+
+    def test_a_refused_put_is_then_recorded_as_it_always_was(self):
+        bugzilla_apply._can_create_relationships.return_value = False
+
+        def put(bug, changes, token):
+            if "regressed_by" in changes:
+                raise RuntimeError("Bug 42 does not exist.")
+            self.puts.append((bug, changes))
+            return bug
+        bugzilla_apply._put_bug.side_effect = put
+        res = self._file()
+        self.assertEqual(res["blocks"], ["clouseau"])
+        self.assertEqual(res["regressed_by"], [])
+        self.assertEqual(res["regressed_by_unlinked"], [42])
+
+    def test_a_4xx_with_only_the_needinfo_aboard_still_drops_it(self):
+        bugzilla_apply._can_create_relationships.return_value = False
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            if payload.get("flags"):
+                raise bugzilla_apply.BugzillaRejected("code 51, no user named X", status=404)
+            return 999
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(len(calls), 2)                        # nothing else left to take off
+        self.assertEqual(res["needinfo_dropped"], "dev@moz.example")
+
+
+class TestTheEditbugsRead(unittest.TestCase):
+    """The authenticated ``editbugs`` lookup is cached only after a successful response."""
+
+    def setUp(self):
+        bugzilla_apply._EDITBUGS_BY_TOKEN.clear()
+        self.addCleanup(bugzilla_apply._EDITBUGS_BY_TOKEN.clear)
+
+    @staticmethod
+    def _resp(payload):
+        r = mock.MagicMock()
+        r.json.return_value = payload
+        return r
+
+    def test_membership_is_read_once_and_cached(self):
+        answer = self._resp({"id": 793736, "groups": ["editbugs", "canconfirm"]})
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=answer) as get:
+            self.assertTrue(bugzilla_apply._can_create_relationships("tok"))
+            self.assertTrue(bugzilla_apply._can_create_relationships("tok"))
+        get.assert_called_once()
+        self.assertIn("/whoami", get.call_args.args[0])
+        self.assertEqual(get.call_args.kwargs["headers"], {"X-Bugzilla-API-Key": "tok"})
+
+    def test_without_the_group_the_answer_is_no_and_cached(self):
+        with mock.patch.object(bugzilla_apply.net, "get",
+                               return_value=self._resp({"groups": ["canconfirm"]})) as get:
+            self.assertFalse(bugzilla_apply._can_create_relationships("tok"))
+            self.assertFalse(bugzilla_apply._can_create_relationships("tok"))
+        get.assert_called_once()
+
+    def test_an_unreadable_answer_is_no_and_asked_again_next_time(self):
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=RuntimeError("BMO 503")) as get:
+            self.assertFalse(bugzilla_apply._can_create_relationships("tok"))
+            self.assertFalse(bugzilla_apply._can_create_relationships("tok"))
+        self.assertEqual(get.call_count, 2)
+        self.assertNotIn("tok", bugzilla_apply._EDITBUGS_BY_TOKEN)
 
 
 class TestRegressedBy(_Base):

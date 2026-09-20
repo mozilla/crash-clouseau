@@ -471,6 +471,10 @@ bug it cannot see. On a 4xx, the retry ladder removes `regressed_by`, then `bloc
 fields, then needinfo. Callers restore removed relations by PUT. BMO logs create-time relations
 only on the related bugs, not on the new bug.
 
+Before creating a bug, `_can_create_relationships` reads `groups` from authenticated `GET
+/rest/whoami` and caches the result per token. Without `editbugs`, or if the lookup fails, the
+relations go by PUT instead. This avoids treating BMO's silent omission as success.
+
 Check after a deploy: verify the actual fields on BMO. `filed_bug.status_flags` records fields
 submitted in a successful create or fallback PUT, not a BMO readback. `status_flags_failed`
 records fallback PUTs that raised. The bug history should have no separate post-create
