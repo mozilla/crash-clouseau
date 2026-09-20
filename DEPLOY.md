@@ -452,15 +452,23 @@ gets `cf_status_firefox<major> = affected` for:
   two ESR lines -- a stale 150.0 install reporting once is not a train). A bucket bug states its
   own train only: the catch-all signature says nothing about which trains have THAT cause.
 
-`affected` only, one PUT per flag after the create (a retired flag would reject a create whole,
-and a PUT is atomic across fields), best-effort like the tracking nomination. `unaffected` is
-left to BugBot's `regression_set_status_flags`, which derives it from `regressed_by` one flag at
-a time and only where the flag is still `---`, so the two never fight. A COMMENT on somebody
-else's bug touches no flag (Calixte: new bugs only). Not a knob.
+`affected` only. BugBot's `regression_set_status_flags` derives other values from `regressed_by`
+and leaves any value other than `---` unchanged. A comment on an existing bug touches no flag.
 
-Check after a deploy: the first new filing's `filed_bug` carries `status_flags` (what landed) and,
-if BMO refused one, `status_flags_failed`; the bug's own version reads `affected` on BMO, plus
-the other trains its signature is on. Nothing else in the filing changed.
+**In the create, since 2026-09-20.** Previously each train field used a separate PUT; bug
+2073874's history shows the create followed by `blocks` and two status-field changes. Now
+`_train_flags` adds the tracking and status fields to the create POST. BMO's TrackingFlags
+create hooks remove known tracking fields before inserting the bug, then write only active
+fields visible for its product and component. A known retired or invisible field is therefore
+silently omitted. An unknown field name instead fails validation before insertion with HTTP 400,
+code 53. `_create_bug_keeping_the_bug` retries a rejected create without train fields and, if
+needed, without needinfo; `_put_train_flags` then attempts each removed field separately.
+`blocks` and `regressed_by` continue to use their existing link updates.
+
+Check after a deploy: verify the actual fields on BMO. `filed_bug.status_flags` records fields
+submitted in a successful create or fallback PUT, not a BMO readback. `status_flags_failed`
+records fallback PUTs that raised. The bug history should have no separate post-create
+per-train changes unless the combined fields invoked the fallback.
 
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 

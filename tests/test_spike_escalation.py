@@ -417,15 +417,13 @@ class _FilerBase(unittest.TestCase):
             mock.patch.object(bugzilla_apply, "_post_comment",
                               side_effect=lambda b, t, p, tok: self.comments.append((b, t)) or 1),
             mock.patch.object(bugzilla_apply, "_create_bug_keeping_the_bug",
-                              side_effect=lambda p, tok: (self.created.append(p) or (2070000, False))),
+                              side_effect=lambda p, tok: (self.created.append(p) or (2070000, set()))),
             mock.patch.object(bugzilla_apply, "_link_blockers", side_effect=lambda b, w, t: list(w)),
             mock.patch.object(bugzilla_apply, "_link_regressed_by",
                               side_effect=lambda b, r, t: list(r)),
-            mock.patch.object(bugzilla_apply, "_nominate_tracking", return_value=True),
-            # Its sibling: a SuperSearch and PUTs. The crash's own train, as the preview states
-            # it, and nothing refused, unless a test says so.
-            mock.patch.object(bugzilla_apply, "_set_status_flags",
-                              side_effect=lambda b, p, s, pr, t: (dict(p.get("status_flags") or {}), [])),
+            # Unless a test overrides this, train discovery fails and the preview's own-train
+            # field remains.
+            mock.patch("crashclouseau.sigage.affected_trains", return_value=None),
             mock.patch.object(bugzilla_apply, "_set_needinfo", return_value=None),
             mock.patch.object(report_bug, "fetch_crash_reason",
                               return_value={"moz_crash_reason": "MOZ_CRASH(oops)"}),

@@ -319,56 +319,22 @@ def _link_regressed_by(bug_id, regressors, token):
     return []
 
 
-def _nominate_tracking(bug_id, flag, token):
-    """Set ``<flag> = ?`` on a freshly-created bug -- the release channel's tracking NOMINATION
-    (``cf_tracking_firefox<major>`` for the crash's own version). Returns the flag on success,
-    ``None`` when BMO refused.
-
-    Its own PUT, after the create and after ``regressed_by``, for the reason the other two have
-    theirs: a create carrying an unknown field is rejected WHOLE, and the flag for a version is
-    retired a few cycles after that version ships (the live range on 2026-09-07 is 152-157) while
-    a release crash from an older version is ordinary -- so the nomination must be the one thing
-    that can fail. A PUT is atomic across fields too, so it shares nobody else's. Verified on
-    allizom 2026-09-07: ``PUT {"cf_tracking_firefox119": "?"}`` answers 200 and reads back ``?``.
-    Best-effort like its siblings: the bug is filed, the title already says it is new in release."""
-    if not flag:
-        return None
-    try:
-        _put_bug(bug_id, {flag: "?"}, token)
-        return flag
-    except Exception as exc:
-        logger.warning("autofile: nominating %s on bug %s failed: %s", flag, bug_id, exc)
-    return None
+# The per-train flags a bug we file carries, by field-name prefix: `cf_tracking_firefox<N>` (an
+# ask) and `cf_status_firefox<N>` (a statement), `_esr<N>` for the ESR family of either.
+_TRAIN_FLAG_PREFIXES = ("cf_status_firefox", "cf_tracking_firefox")
 
 
-def _set_status_flags(bug_id, preview, signature, product, token):
-    """``cf_status_firefox<N> = affected`` on a bug we FILED, for every train that has the crash:
-    its own (``preview["status_flags"]``, which the preview states from the version alone) and
-    every other live train Socorro shows the signature on today (``sigage.affected_trains``,
-    asked here and not in the preview because it is a SuperSearch and the page renders the
-    preview). Returns ``(set, refused)``: what landed, as ``{flag: value}``, and the flag names
-    BMO refused.
+def _is_train_flag(key):
+    return str(key).startswith(_TRAIN_FLAG_PREFIXES)
 
-    WHY. Relman feedback relayed by Calixte, 2026-09-18: "Could clouseau set the affected
-    versions automatically? That would help relman a lot to surface these bugs." Release
-    management finds bugs through these flags; a crash bug carrying none sits in a component's
-    backlog until somebody sets them by hand (sledru did, on ours). NEW BUGS ONLY, Calixte's
-    call: on somebody else's open bug the flags are curated by hand, and a venue comment is not
-    the place to override them -- the comment branch of ``autofile_bug`` never reaches this.
 
-    ``affected`` ONLY, and only where a report exists. ``unaffected`` would be an inference from
-    the regressor's landing version, and BugBot's ``regression_set_status_flags`` rule already
-    draws exactly that from ``regressed_by`` -- one flag at a time, and only where the flag is
-    still ``---`` (read 2026-09-18), so what is set here is never overwritten and never blocks
-    the rest of its work. Where the two would disagree (a report on a train the regressor never
-    reached), the report is the fact, and the flag is what puts a human on the contradiction.
+def _status_flags(preview, signature, product):
+    """Return ``affected`` status fields for the crash's own train and every other live train
+    on which Socorro reports the signature. If discovery fails, keep the preview's own-train
+    field. Bucket signatures are catch-alls, so do not use them to discover other trains.
 
-    ONE PUT PER FLAG, after the create, for the reason ``_nominate_tracking`` has: BMO retires a
-    version's flags a few cycles after it ships, a PUT is atomic across fields, and a refused
-    flag must cost that flag alone. Best-effort like its siblings: the bug is filed and the
-    comment names the version. A BUCKET bug's signature is the [meta] tracker's catch-all and
-    says nothing about which trains have THIS cause, so a bucket bug states its own train only
-    and Socorro is not asked."""
+    This runs only when filing a new bug. BugBot may infer other statuses from ``regressed_by``;
+    its ``regression_set_status_flags`` rule leaves values other than ``---`` unchanged."""
     preview = preview or {}
     flags = dict(preview.get("status_flags") or {})
     if signature and not preview.get("bucket"):
@@ -378,13 +344,32 @@ def _set_status_flags(bug_id, preview, signature, product, token):
             for flag, value in report_bug.status_flags_for_trains(trains or ()).items():
                 flags.setdefault(flag, value)
         except Exception as exc:
-            # This enrichment runs after the bug exists. No upstream response or parser bug may
-            # turn that successful create into an unrecorded "filing failed" result; the own
-            # train from the preview remains independently useful and is still written below.
             logger.warning("autofile: discovering affected trains for %r failed: %s",
                            signature, exc)
+    return flags
+
+
+def _train_flags(preview, signature, product):
+    """Return the tracking nomination and ``affected`` status fields for a new bug's create
+    body. BMO's TrackingFlags create hooks remove known tracking fields before inserting the
+    bug, then write only active fields visible for its product and component. An unknown field
+    name instead rejects the create before insertion; the caller can retry without these fields
+    and submit them separately. See ``extensions/TrackingFlags/Extension.pm`` in BMO."""
+    preview = preview or {}
+    flags = {}
+    if preview.get("tracking_flag"):
+        flags[preview["tracking_flag"]] = "?"
+    flags.update(_status_flags(preview, signature, product))
+    return flags
+
+
+def _put_train_flags(bug_id, flags, token):
+    """Submit each train flag separately after a create rejected them.
+
+    Return fields whose PUT returned successfully and names whose PUT raised. This is not a
+    readback: an ambiguous network failure may have applied a change."""
     done, refused = {}, []
-    for flag in sorted(flags):
+    for flag in sorted(flags or {}):
         try:
             _put_bug(bug_id, {flag: flags[flag]}, token)
             done[flag] = flags[flag]
@@ -395,20 +380,39 @@ def _set_status_flags(bug_id, preview, signature, product, token):
     return done, refused
 
 
+def _record_train_flags(result, flags, refused=()):
+    """Record submitted train fields and fields whose fallback PUT raised.
+
+    This records request outcomes, not a BMO readback. Omit empty result keys."""
+    for flag, value in (flags or {}).items():
+        if flag.startswith("cf_tracking_"):
+            result["tracking_nominated"] = flag
+        else:
+            result.setdefault("status_flags", {})[flag] = value
+    for flag in refused or ():
+        if flag.startswith("cf_tracking_"):
+            result["tracking_failed"] = flag
+        else:
+            result.setdefault("status_flags_failed", []).append(flag)
+
+
 # The preview keys a create posts. `groups` and `cc` are in this tuple, and a test asserts they
 # reach the POSTED BODY rather than merely the preview. A key the preview sets and this filter
 # drops is a SILENT no-op -- that is how `blocks` and `regressed_by` were dead for weeks -- and
 # for `groups` the silent no-op publishes a use-after-free. `tracking_flag` and `status_flags`
-# are NOT here on purpose: each is a PUT of its own after the create (`_nominate_tracking`,
-# `_set_status_flags`), because a create carrying a retired flag is rejected whole.
+# are NOT here because they are not the body's shape: the create carries them under BMO's field
+# names (`cf_tracking_firefox155: "?"`, `cf_status_firefox158: "affected"`), which the caller
+# hands `_create_payload` as `train_flags` (built by `_train_flags`).
 _CREATE_KEYS = ("product", "component", "version", "type", "keywords",
                 "cf_crash_signature", "groups", "cc")
 
 
-def _create_payload(preview, email):
+def _create_payload(preview, email, train_flags=None):
     """The body ``POST /rest/bug`` gets for *preview*, for BOTH filers (``autofile_bug`` and
     the spike escalation's). The two used to build it by hand, side by side, and a key added to
-    one whitelist and not the other is exactly the silent no-op ``_CREATE_KEYS`` warns about."""
+    one whitelist and not the other is exactly the silent no-op ``_CREATE_KEYS`` warns about.
+
+    ``train_flags`` go into the same POST under their BMO field names."""
     payload = {k: v for k, v in preview.items() if k in _CREATE_KEYS}
     # Empty ones would be sent as `[]`; drop them so an ordinary filing's payload is
     # byte-identical to what it was before this existed. `cf_crash_signature` is empty on a
@@ -425,54 +429,49 @@ def _create_payload(preview, email):
     # can never cost a bug: an account outside the group is not refused, it silently gets
     # UNCONFIRMED (proved on allizom, 2026-09-07), and BugBot confirms it later as before.
     payload["status"] = "NEW"
+    payload.update(train_flags or {})
     if email:
         payload["flags"] = [{"name": "needinfo", "status": "?", "requestee": email}]
     return payload
 
 
 def _create_bug_keeping_the_bug(payload, token):
-    """``(bug_id, needinfo_dropped)`` — create the bug, and never let the needinfo cost it.
+    """Create a bug while isolating optional train fields and needinfo.
 
-    BMO validates the ``flags`` requestee while CREATING the bug and rejects the WHOLE post
-    if it cannot resolve them: an hg commit address that is not a Bugzilla account came back
-    ``code 51, "There is no user named 'farre@mozilla.com'"`` and crash f6fe186b got no bug
-    at all. ``report_bug`` now resolves a verified account, so this should never fire — but
-    "should never fire" is exactly what the last unattended write said, and the failure mode
-    is silent: it surfaces as ``skipped: bugzilla write failed``, indistinguishable from a
-    transient blip.
+    On a 4xx, retry first without train fields and then without needinfo. Return the successful
+    bug id and the categories removed from that request. Callers retry removed train fields one
+    at a time and record removed needinfo.
 
-    The retry is deliberately NOT keyed on code 51. A disabled account, a requestee who
-    cannot be needinfo'd, a flag renamed on BMO's side — each would reject the create the
-    same way, and a narrow match would let those keep costing us bugs. Instead: if we sent
-    flags and the create failed, try once without them, and let the ORIGINAL error surface
-    if it fails again (the second failure means the flags were never the problem).
-
-    Safe against double-filing, and this is the whole reason ``BugzillaRejected`` carries a
-    status: ONLY a 4xx is retried. A timeout or a reset arrives as a plain ``requests``
-    exception and a 5xx arrives as a non-client rejection; in both cases we cannot tell
-    whether the POST landed, and re-posting could file the same bug twice — exactly what the
-    rest of this module (``already_filed``, ``record_filed_bug``) exists to prevent. A 5xx
-    also has nothing to do with the flags, so "retry without them" would throw away a good
-    needinfo every time BMO is mid-deploy."""
-    try:
-        return _create_bug(payload, token), False
-    except BugzillaRejected as exc:
-        if not payload.get("flags") or not exc.is_client_error:
-            raise
-        logger.warning("autofile: create rejected with a needinfo flag (%s); "
-                       "retrying without it rather than losing the bug", exc)
-        retry = {k: v for k, v in payload.items() if k != "flags"}
+    Do not retry transport errors or 5xx responses: the POST may have succeeded. If every rung
+    returns a 4xx, raise the first refusal and log any differing later refusal."""
+    rungs = [(payload, frozenset())]
+    body, dropped = payload, frozenset()
+    train = [k for k in body if _is_train_flag(k)]
+    if train:
+        body = {k: v for k, v in body.items() if k not in train}
+        dropped = dropped | {"train_flags"}
+        rungs.append((body, dropped))
+    if body.get("flags"):
+        body = {k: v for k, v in body.items() if k != "flags"}
+        dropped = dropped | {"needinfo"}
+        rungs.append((body, dropped))
+    first = None
+    for i, (body, dropped) in enumerate(rungs):
         try:
-            return _create_bug(retry, token), True
-        except BugzillaRejected as second:
-            # Refused again: the flags were never the problem. Surface the FIRST rejection —
-            # it describes what BMO objected to about the bug itself — but LOG the second,
-            # because if it differs it is the one naming a systemic failure (a lost
-            # permission, a newly mandatory field) that would block every filing, and the
-            # caller only logs ``str(exc)`` with no ``__context__`` chain.
-            if str(second) != str(exc):
-                logger.error("autofile: create refused again without the flag: %s", second)
-            raise exc
+            return _create_bug(body, token), set(dropped)
+        except BugzillaRejected as exc:
+            if first is None:
+                first = exc
+            elif str(exc) != str(first):
+                logger.error("autofile: create refused again without %s: %s (first: %s)",
+                             " and ".join(sorted(dropped)), exc, first)
+            if not exc.is_client_error:
+                raise exc               # This POST may have succeeded; preserve its ambiguity.
+            if i == len(rungs) - 1:
+                raise first
+            logger.warning("autofile: create rejected (%s); retrying without %s rather than "
+                           "losing the bug", exc, " and ".join(sorted(rungs[i + 1][1])))
+    raise first  # pragma: no cover - the loop returns or raises
 
 
 def _existing_needinfos(bug_id, token):
@@ -1843,8 +1842,8 @@ def _attach_signature(bug_id, signature, token):
     Calixte's rule from bug 2063003: a crash filed under a bug that carries another name MUST add
     its own name to that bug, or the next Socorro click and the next triager start from zero.
     Append, never rewrite -- the field is read back and the old entries are kept verbatim -- and
-    a PUT of its own, because BMO's PUT is atomic across fields and a refused flag elsewhere
-    must not cost the signature (`_link_regressed_by`, `_nominate_tracking`)."""
+    a PUT of its own, because BMO's PUT is atomic across fields and a refused link elsewhere
+    must not cost the signature (`_link_regressed_by`)."""
     sig = (signature or "").strip()
     if not sig or not bug_id:
         return "failed"
@@ -1948,7 +1947,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       the same signature are analysed independently and all land on the same bug.
 
     A RELEASE filing is titled ``[new in release] Crash in [@ ...]`` and nominates the crash's
-    version for tracking (``cf_tracking_firefox<major>`` = ?, its own PUT, ``_nominate_tracking``);
+    version for tracking (``cf_tracking_firefox<major>`` = ?, in the create, ``_train_flags``);
     both come from ``config.get_agent_autofile(channel)`` via the preview.
 
     ``regressed_by`` is set — under the pushlog-window gate, on a bug we filed ourselves, and in
@@ -2599,9 +2598,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 # this rule is next audited.
                 result["needinfo_already_set"] = email
         else:
-            payload = _create_payload(preview, email)
+            # Put the train fields and needinfo in the create request.
+            train_flags = _train_flags(preview, signature, product)
+            payload = _create_payload(preview, email, train_flags)
             bug_id, dropped = _create_bug_keeping_the_bug(payload, token)
-            if dropped:
+            if "needinfo" in dropped:
                 result["needinfo_dropped"] = email
                 email = ""
             # Filed PAST an open bug on the same signature. Recorded so the choice is
@@ -2657,22 +2658,12 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 result["regressed_by_unlinked"] = unset
                 logger.warning("autofile: bug %s could not be marked regressed_by %s",
                                bug_id, unset)
-            # Release's tracking nomination, in its own PUT (see ``_nominate_tracking``). Recorded
-            # either way: a refused flag is the one part of a release filing a human has to add.
-            flag = preview.get("tracking_flag")
-            if flag:
-                if _nominate_tracking(bug_id, flag, token):
-                    result["tracking_nominated"] = flag
-                else:
-                    result["tracking_failed"] = flag
-            # WHICH TRAINS HAVE THE BUG (`_set_status_flags`): the crash's own, and every live
-            # train Socorro shows the signature on, `affected` each in its own PUT. Recorded
-            # either way, like the nomination: a refused flag is one a human has to add.
-            flags, refused = _set_status_flags(bug_id, preview, signature, product, token)
-            if flags:
-                result["status_flags"] = flags
-            if refused:
-                result["status_flags_failed"] = refused
+            # If a 4xx forced the train fields off the create, retry each independently.
+            if "train_flags" in dropped:
+                landed, refused = _put_train_flags(bug_id, train_flags, token)
+            else:
+                landed, refused = train_flags, []
+            _record_train_flags(result, landed, refused)
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
         # PERSIST THE REJECTION. A failed write used to return here having written nothing, so

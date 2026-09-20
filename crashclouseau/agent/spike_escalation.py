@@ -1453,9 +1453,11 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                     "a memory-safety fault and that bug is public._".format(
                         preview["comment"], public_venue_declined))
             email = preview.get("needinfo_email") if config.get_agent_autofile(channel)["needinfo"] else ""
-            payload = bugzilla_apply._create_payload(preview, email)
+            # Use the same create payload as the ordinary filer.
+            train_flags = bugzilla_apply._train_flags(preview, signature, product)
+            payload = bugzilla_apply._create_payload(preview, email, train_flags)
             bug_id, dropped = bugzilla_apply._create_bug_keeping_the_bug(payload, token)
-            if dropped:
+            if "needinfo" in dropped:
                 result["needinfo_dropped"] = email
                 email = ""
             linked = bugzilla_apply._link_blockers(bug_id, preview.get("blocked") or [], token)
@@ -1471,17 +1473,12 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             regressors = preview.get("regressed_by") or []
             if regressors:
                 result["regressed_by"] = bugzilla_apply._link_regressed_by(bug_id, regressors, token)
-            flag = preview.get("tracking_flag")
-            if flag:
-                result["tracking_nominated" if bugzilla_apply._nominate_tracking(bug_id, flag, token)
-                       else "tracking_failed"] = flag
-            # Which trains have the bug, `affected` each in its own PUT (`_set_status_flags`).
-            flags, refused = bugzilla_apply._set_status_flags(
-                bug_id, preview, signature, product, token)
-            if flags:
-                result["status_flags"] = flags
-            if refused:
-                result["status_flags_failed"] = refused
+            # Retry train fields individually if a 4xx forced them off the create.
+            if "train_flags" in dropped:
+                landed, refused = bugzilla_apply._put_train_flags(bug_id, train_flags, token)
+            else:
+                landed, refused = train_flags, []
+            bugzilla_apply._record_train_flags(result, landed, refused)
             if public_venue_declined is not None:
                 result["public_venue_declined"] = public_venue_declined
             if related:

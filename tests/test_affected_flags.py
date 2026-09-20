@@ -1,17 +1,13 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-"""A bug we FILE says which trains have the crash: `cf_status_firefox<major> = affected` for the
-crash's own version and for every live train Socorro shows the signature on, each in its own PUT
-after the create (`bugzilla_apply._set_status_flags`). New bugs only: a comment on somebody
-else's bug touches no flag. Relman feedback of 2026-09-18, relayed by Calixte.
+"""Tests for the train fields added when filing a new bug.
 
     DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \\
         uv run python -m unittest tests.test_affected_flags
 
-The preview's half is pure (the flag for the crash's own version); the trains are
-`sigage.trains_from_versions` on a version facet; the filer's half runs against `_Base`'s
-stubbed BMO (tests/test_autofile.py) and the spike filer against `_FilerBase`'s.
+The preview supplies the crash's own train. The filer adds live trains reported by Socorro,
+submits the fields in the create, and falls back to individual PUTs after a client rejection.
 """
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -141,7 +137,7 @@ class TestWhichTrainsHaveTheSignature(unittest.TestCase):
 
 class TestThePreviewStatesTheCrashsOwnTrain(unittest.TestCase):
     """The preview's half is pure: the flag for the crash's own version, whatever the channel.
-    The other trains need a SuperSearch, which is the filer's business (`_set_status_flags`)."""
+    The filer obtains other trains with a SuperSearch (`_train_flags`)."""
 
     def _preview(self, channel, version, **dossier_over):
         uuid_info = {"uuid": "u-1", "signature": "Foo::Bar", "channel": channel,
@@ -189,20 +185,33 @@ class TestThePreviewStatesTheCrashsOwnTrain(unittest.TestCase):
                                                  product="Core", component="General")
         self.assertEqual(p["status_flags"], {})
 
-    def test_the_flags_never_ride_the_create(self):
-        # Their own PUTs after the create, like the tracking flag: a retired flag would reject the
-        # create whole. A test elsewhere asserts the tuple's members reach the body; this one
-        # asserts these two never do.
-        payload = bugzilla_apply._create_payload(
-            {**_NIGHTLY_PREVIEW, "tracking_flag": "cf_tracking_firefox158"}, "")
+    def test_the_flags_ride_the_create(self):
+        # `_train_flags` combines the preview fields with trains reported by Socorro;
+        # `_create_payload` posts them under their BMO field names.
+        preview = {**_NIGHTLY_PREVIEW, "tracking_flag": "cf_tracking_firefox158"}
+        with mock.patch("crashclouseau.sigage.affected_trains",
+                        return_value={("firefox", 157)}) as trains:
+            flags = bugzilla_apply._train_flags(preview, "Foo::Bar", "Firefox")
+        trains.assert_called_once_with("Foo::Bar", "Firefox")
+        self.assertEqual(flags, {"cf_tracking_firefox158": "?", "cf_status_firefox158": "affected",
+                                 "cf_status_firefox157": "affected"})
+        payload = bugzilla_apply._create_payload(preview, "dev@moz.example", flags)
+        for flag, value in flags.items():
+            self.assertEqual(payload[flag], value)
+        self.assertEqual(payload["flags"][0]["name"], "needinfo")
         self.assertNotIn("status_flags", payload)
         self.assertNotIn("tracking_flag", payload)
-        self.assertFalse(any(k.startswith("cf_status_") for k in payload))
+        # Omitting train fields and passing an empty mapping produce the same body.
+        self.assertEqual(bugzilla_apply._create_payload(preview, ""),
+                         bugzilla_apply._create_payload(preview, "", {}))
+        self.assertFalse(any(k.startswith("cf_") and k != "cf_crash_signature"
+                             for k in bugzilla_apply._create_payload(preview, "")))
 
 
 class TestTheFilerSetsTheFlags(_Base):
-    """`_Base` stubs every BMO write (PUTs land in `self.puts`) and has `sigage.affected_trains`
-    answer `None` -- could not ask -- unless a test says otherwise."""
+    """`_Base` stubs every BMO write (the create's body lands in `self.created`, PUTs in
+    `self.puts`) and has `sigage.affected_trains` answer `None` -- could not ask -- unless a test
+    says otherwise."""
 
     def _file(self, preview=None, trains=None):
         report_bug.build_bug_preview.return_value = preview or _NIGHTLY_PREVIEW
@@ -210,59 +219,126 @@ class TestTheFilerSetsTheFlags(_Base):
         return bugzilla_apply.autofile_bug(
             "u-1", _INFO, {}, {"candidate": {"node": "n"}}, "lead", 70)
 
+    @staticmethod
+    def _status_in(body):
+        return {k: v for k, v in body.items() if k.startswith("cf_status_")}
+
     def _status_puts(self):
         return [(b, c) for b, c in self.puts if any(k.startswith("cf_status_") for k in c)]
 
-    def test_the_own_train_and_the_observed_trains_each_in_their_own_put(self):
+    def test_the_own_train_and_the_observed_trains_ride_the_create(self):
         res = self._file(trains={("firefox", 158), ("firefox", 157)})
         self.assertTrue(res["filed"])
         self.assertEqual(res["mode"], "new_bug")
-        self.assertEqual(res["status_flags"],
-                         {"cf_status_firefox157": "affected", "cf_status_firefox158": "affected"})
-        # Each flag ALONE in its PUT: a PUT is atomic across fields, and a retired flag must cost
-        # that flag only...
-        self.assertEqual(sorted(self._status_puts(), key=lambda x: sorted(x[1])),
-                         [(999, {"cf_status_firefox157": "affected"}),
-                          (999, {"cf_status_firefox158": "affected"})])
-        # ...and never inside the create, which an unknown field rejects whole.
-        self.assertFalse(any(k.startswith("cf_status_") for k in self.created[0]))
+        both = {"cf_status_firefox157": "affected", "cf_status_firefox158": "affected"}
+        # The train fields are in the create body, with no separate status PUT.
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self._status_in(self.created[0]), both)
+        self.assertEqual(self._status_puts(), [])
+        self.assertEqual(res["status_flags"], both)
         self.assertNotIn("status_flags_failed", res)
         # The crash's signature and PRODUCT (Socorro's, not Bugzilla's): a Fenix signature is
         # asked about on Fenix.
         sigage.affected_trains.assert_called_once_with("Foo::Bar", "Firefox")
-        # The other PUTs are where they were.
+        # Existing blocker and regression-link updates are unchanged.
         self.assertEqual(res["regressed_by"], [42])
         self.assertEqual(res["blocks"], ["clouseau"])
         self.assertEqual(len(self.filed), 1)
 
-    def test_a_refused_flag_costs_that_flag_alone(self):
+    def test_a_flag_bmo_has_never_created_costs_that_flag_alone(self):
+        # Simulate BMO rejecting an unknown field before creation. The retry keeps needinfo and
+        # fallback PUTs isolate the unsupported field.
+        def create(payload, token):
+            self.created.append(payload)
+            if "cf_status_firefox157" in payload:
+                raise bugzilla_apply.BugzillaRejected(
+                    "bugzilla create failed (400): code 53, Can't use cf_status_firefox157 as "
+                    "a field name", status=400)
+            return 999
+
         def put(bug, changes, token):
             if "cf_status_firefox157" in changes:
-                raise RuntimeError("There is no field named 'cf_status_firefox157'")
+                raise RuntimeError("Can't use cf_status_firefox157 as a field name")
             self.puts.append((bug, changes))
             return bug
+        bugzilla_apply._create_bug.side_effect = create
         bugzilla_apply._put_bug.side_effect = put
         res = self._file(trains={("firefox", 157)})
         self.assertTrue(res["filed"])
+        self.assertEqual(len(self.created), 2)                  # with the flags, then without
+        self.assertEqual(self._status_in(self.created[1]), {})
+        self.assertIn("flags", self.created[1])                 # the needinfo stayed aboard
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+        self.assertEqual(self._status_puts(), [(999, _OWN)])    # the supported PUT succeeded
         self.assertEqual(res["status_flags"], _OWN)
         self.assertEqual(res["status_flags_failed"], ["cf_status_firefox157"])
-        self.assertEqual(res["regressed_by"], [42])        # the other PUTs were untouched
-        self.assertEqual(len(self.filed), 1)               # and the filing is on record
+        self.assertEqual(res["regressed_by"], [42])             # the other PUTs were untouched
+        self.assertEqual(len(self.filed), 1)                    # and the filing is on record
+
+    def test_a_server_error_with_flags_aboard_is_never_retried(self):
+        # A 5xx is not a verdict on the flags, and the POST may have landed: never re-post.
+        def create(payload, token):
+            self.created.append(payload)
+            raise bugzilla_apply.BugzillaRejected("bugzilla create failed (503): gateway",
+                                                  status=503)
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file(trains={("firefox", 157)})
+        self.assertFalse(res["filed"])
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.filed, [])
+
+    def test_the_ladder_drops_the_flags_before_the_needinfo_and_surfaces_the_first_refusal(self):
+        # If every smaller body receives a 4xx, surface the first response.
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            raise bugzilla_apply.BugzillaRejected(
+                "the component is closed" if len(calls) == 1 else "less useful", status=400)
+        bugzilla_apply._create_bug.side_effect = create
+        res = self._file(trains={("firefox", 157)})
+        self.assertFalse(res["filed"])
+        self.assertEqual([("cf_status_firefox157" in c, "flags" in c) for c in calls],
+                         [(True, True), (False, True), (False, False)])
+        self.assertIn("the component is closed", res["skipped"])
+        self.assertNotIn("less useful", res["skipped"])
+        self.assertEqual(self.filed, [])
+
+    def test_a_server_error_on_the_retry_is_what_the_record_says(self):
+        # A 503 on the retry is ambiguous, so report it and do not attempt another POST.
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            if "cf_status_firefox157" in payload:
+                raise bugzilla_apply.BugzillaRejected(
+                    "bugzilla create failed (400): code 53, Can't use cf_status_firefox157 as "
+                    "a field name", status=400)
+            raise bugzilla_apply.BugzillaRejected("bugzilla create failed (503): gateway",
+                                                  status=503)
+        bugzilla_apply._create_bug.side_effect = create
+        with self.assertLogs(level="ERROR") as logs:
+            res = self._file(trains={("firefox", 157)})
+        self.assertFalse(res["filed"])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("503", res["skipped"])
+        self.assertNotIn("code 53", res["skipped"])
+        self.assertTrue(any("code 53" in m for m in logs.output))   # the first refusal is logged
+        self.assertEqual(self.filed, [])
 
     def test_an_unreachable_socorro_leaves_the_own_train(self):
-        # `None` from `affected_trains` is "could not ask", not "on no train": the crash's own
-        # train is still a fact.
+        # `None` means discovery failed; retain the preview's own-train field.
         res = self._file(trains=None)
         self.assertEqual(res["status_flags"], _OWN)
-        self.assertEqual(self._status_puts(), [(999, _OWN)])
+        self.assertEqual(self._status_in(self.created[0]), _OWN)
         self.assertNotIn("status_flags_failed", res)
 
-    def test_an_unexpected_train_discovery_error_cannot_lose_the_created_bug(self):
+    def test_an_unexpected_train_discovery_error_cannot_cost_the_filing(self):
         sigage.affected_trains.side_effect = ValueError("unexpected facet")
         res = self._file()
         self.assertTrue(res["filed"])
         self.assertEqual(res["status_flags"], _OWN)
-        self.assertEqual(self._status_puts(), [(999, _OWN)])
+        self.assertEqual(self._status_in(self.created[0]), _OWN)
         self.assertEqual(len(self.created), 1)
         self.assertEqual(len(self.filed), 1)
 
@@ -275,23 +351,24 @@ class TestTheFilerSetsTheFlags(_Base):
         res = self._file(preview=preview, trains={("firefox", 158), ("firefox", 157)})
         self.assertTrue(res["filed"])
         self.assertEqual(res["status_flags"], _OWN)
-        self.assertEqual(self._status_puts(), [(999, _OWN)])
+        self.assertEqual(self._status_in(self.created[0]), _OWN)
         sigage.affected_trains.assert_not_called()
 
-    def test_nothing_to_state_means_no_put_and_no_key(self):
+    def test_nothing_to_state_means_no_flag_and_no_key(self):
         res = self._file(preview={**_PREVIEW, "status_flags": {}}, trains=set())
         self.assertTrue(res["filed"])
+        self.assertEqual(self._status_in(self.created[0]), {})
         self.assertEqual(self._status_puts(), [])
         self.assertNotIn("status_flags", res)
         self.assertNotIn("status_flags_failed", res)
 
     def test_a_comment_on_an_existing_bug_touches_no_flag(self):
-        # Somebody else's bug: its flags are curated by hand, and the venue comment is not the
-        # place to override them. New bugs only (Calixte, 2026-09-18).
+        # Train fields apply only to newly filed bugs.
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345)]
         res = self._file(trains={("firefox", 158), ("firefox", 157)})
         self.assertTrue(res["filed"])
         self.assertEqual(res["mode"], "comment_on_existing")
+        self.assertEqual(self.created, [])
         self.assertEqual(self._status_puts(), [])
         self.assertNotIn("status_flags", res)
         sigage.affected_trains.assert_not_called()
@@ -299,35 +376,57 @@ class TestTheFilerSetsTheFlags(_Base):
     def test_a_preview_from_before_this_existed_is_byte_identical_on_no_other_train(self):
         res = self._file(preview=_PREVIEW, trains=None)
         self.assertTrue(res["filed"])
+        self.assertFalse(any(k.startswith("cf_") and k != "cf_crash_signature"
+                             for k in self.created[0]))
         self.assertEqual(self._status_puts(), [])
         self.assertNotIn("status_flags", res)
         self.assertNotIn("status_flags_failed", res)
 
 
 class TestTheSpikeFilerSetsThem(_FilerBase):
-    """The spike filer shares `_set_status_flags`; `_FilerBase` stubs it to answer the preview's
-    own train. Here a recorder stands in, to see what the spike filer hands it and keeps."""
+    """The spike filer shares `_train_flags`, `_create_payload` and `_record_train_flags`.
+    `_FilerBase` stubs the create (its body lands in `self.created`) and has Socorro answer
+    "could not ask", so a spike bug states the crash's own train unless a test says otherwise."""
 
-    def test_a_spike_bug_states_its_trains(self):
-        calls = []
+    @staticmethod
+    def _status_in(body):
+        return {k: v for k, v in body.items() if k.startswith("cf_status_")}
 
-        def set_flags(bug_id, preview, signature, product, token):
-            calls.append((bug_id, preview.get("status_flags"), signature, product))
-            return ({"cf_status_firefox157": "affected", "cf_status_firefox156": "affected"},
-                    ["cf_status_firefox150"])
-
-        with mock.patch.object(bugzilla_apply, "_set_status_flags", side_effect=set_flags):
+    def test_a_spike_bug_states_its_trains_in_the_create(self):
+        with mock.patch("crashclouseau.sigage.affected_trains",
+                        return_value={("firefox", 157), ("firefox", 156)}) as trains:
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual(res["mode"], "spike_new_bug")
-        self.assertEqual(calls, [(2070000, {"cf_status_firefox157": "affected"},
-                                  "mozilla::Foo::Bar", "Firefox")])
-        self.assertEqual(res["status_flags"],
-                         {"cf_status_firefox157": "affected", "cf_status_firefox156": "affected"})
+        trains.assert_called_once_with("mozilla::Foo::Bar", "Firefox")
+        both = {"cf_status_firefox157": "affected", "cf_status_firefox156": "affected"}
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self._status_in(self.created[0]), both)
+        self.assertEqual(res["status_flags"], both)
+        self.assertNotIn("status_flags_failed", res)
+
+    def test_flags_that_came_off_a_refused_create_are_set_one_put_each(self):
+        puts = []
+
+        def put(bug, changes, token):
+            if "cf_status_firefox150" in changes:
+                raise RuntimeError("Can't use cf_status_firefox150 as a field name")
+            puts.append((bug, changes))
+            return bug
+        bugzilla_apply._create_bug_keeping_the_bug.side_effect = (
+            lambda p, tok: self.created.append(p) or (2070000, {"train_flags"}))
+        with mock.patch("crashclouseau.sigage.affected_trains",
+                        return_value={("firefox", 157), ("firefox", 150)}), \
+             mock.patch.object(bugzilla_apply, "_put_bug", side_effect=put):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertTrue(res["filed"])
+        self.assertEqual(puts, [(2070000, {"cf_status_firefox157": "affected"})])
+        self.assertEqual(res["status_flags"], {"cf_status_firefox157": "affected"})
         self.assertEqual(res["status_flags_failed"], ["cf_status_firefox150"])
 
     def test_the_default_stub_keeps_the_own_train(self):
         res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual(res["status_flags"], {"cf_status_firefox157": "affected"})
+        self.assertEqual(self._status_in(self.created[0]), {"cf_status_firefox157": "affected"})
         self.assertNotIn("status_flags_failed", res)
 
 

@@ -1,16 +1,13 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
-"""A RELEASE filing is titled "[new in release] Crash in [@ ...]" and nominates the crash's own
-version for tracking: `cf_tracking_firefox<major>` = ?, in its own PUT after the create.
+"""Release and ESR filing tests for title prefixes and tracking nominations.
 
     DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \
         uv run python -m unittest tests.test_release_filing
 
-Both marks come from `config.get_agent_autofile(channel)` through the preview; this file tests
-the FILER's half -- that the title reaches the posted body and that the nomination is a separate,
-best-effort write -- with the preview mocked the way `tests.test_autofile` does. The preview's
-half (prefix and flag out of the shipped config) is in tests/test_bug_title_limit.py.
+The nomination normally rides the create. After a client rejection, the filer retries the
+create without train fields and attempts each field separately.
 """
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -47,29 +44,37 @@ class TestAReleaseFilingIsTitledAndNominated(_Base):
         # The signature FIELD is untouched by the prefix: it is what dedupes the bug.
         self.assertEqual(self.created[0]["cf_crash_signature"], "[@ Foo::Bar]")
 
-    def test_the_version_is_nominated_for_tracking_in_its_own_put(self):
+    def test_the_version_is_nominated_for_tracking_in_the_create(self):
         res = self._file_release()
-        self.assertIn((999, {"cf_tracking_firefox155": "?"}), self.puts)
+        # The nomination uses its BMO field name in the create body.
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]["cf_tracking_firefox155"], "?")
         self.assertEqual(res["tracking_nominated"], "cf_tracking_firefox155")
-        # Its OWN PUT -- shares nobody's, because a PUT is atomic across fields...
-        for _, changes in self.puts:
-            if "cf_tracking_firefox155" in changes:
-                self.assertEqual(list(changes), ["cf_tracking_firefox155"])
-        # ...and AFTER the create, never inside it: an unknown field rejects a create whole.
-        self.assertNotIn("cf_tracking_firefox155", self.created[0])
+        self.assertFalse(any("cf_tracking_firefox155" in c for _, c in self.puts))
         self.assertEqual(res["regressed_by"], [42])
 
     def test_a_refused_nomination_costs_the_flag_not_the_bug(self):
-        # The ordinary failure: a release crash from a version whose flag BMO has retired.
+        # Simulate an unknown field: retry the create without it, then attempt it separately.
+        def create(payload, token):
+            self.created.append(payload)
+            if "cf_tracking_firefox150" in payload:
+                raise bugzilla_apply.BugzillaRejected(
+                    "bugzilla create failed (400): code 53, Can't use cf_tracking_firefox150 "
+                    "as a field name", status=400)
+            return 999
+
         def put(bug, changes, token):
             if any(k.startswith("cf_tracking_firefox") for k in changes):
-                raise RuntimeError("There is no field named 'cf_tracking_firefox150'")
+                raise RuntimeError("Can't use cf_tracking_firefox150 as a field name")
             self.puts.append((bug, changes))
             return bug
+        bugzilla_apply._create_bug.side_effect = create
         bugzilla_apply._put_bug.side_effect = put
         res = self._file_release(
             preview={**_RELEASE_PREVIEW, "tracking_flag": "cf_tracking_firefox150"})
         self.assertTrue(res["filed"])
+        self.assertEqual(len(self.created), 2)           # with the flag, then without
+        self.assertIn("flags", self.created[1])          # the needinfo stayed aboard
         self.assertEqual(res["tracking_failed"], "cf_tracking_firefox150")
         self.assertNotIn("tracking_nominated", res)
         self.assertEqual(res["regressed_by"], [42])      # the other PUTs were untouched
@@ -78,6 +83,7 @@ class TestAReleaseFilingIsTitledAndNominated(_Base):
     def test_no_flag_on_the_preview_means_no_nomination(self):
         res = self._file_release(preview={**_RELEASE_PREVIEW, "tracking_flag": None})
         self.assertTrue(res["filed"])
+        self.assertFalse(any(k.startswith("cf_tracking") for k in self.created[0]))
         self.assertFalse(any(k.startswith("cf_tracking") for _, c in self.puts for k in c))
         self.assertNotIn("tracking_nominated", res)
         self.assertNotIn("tracking_failed", res)
@@ -88,6 +94,7 @@ class TestAReleaseFilingIsTitledAndNominated(_Base):
             "u-1", _INFO, {}, {"candidate": {"node": "n"}}, "lead", 70)
         self.assertTrue(res["filed"])
         self.assertEqual(self.created[0]["summary"], "Crash in [@ Foo::Bar]")
+        self.assertFalse(any(k.startswith("cf_tracking") for k in self.created[0]))
         self.assertFalse(any(k.startswith("cf_tracking") for _, c in self.puts for k in c))
         self.assertNotIn("tracking_nominated", res)
 
@@ -117,9 +124,9 @@ class TestAnEsrFilingIsTitledAndNominatedLikeRelease(_Base):
         self.assertTrue(res["filed"])
         self.assertEqual(self.created[0]["summary"], "[new in esr] Crash in [@ Foo::Bar]")
         self.assertEqual(self.created[0]["cf_crash_signature"], "[@ Foo::Bar]")
-        self.assertIn((999, {"cf_tracking_firefox_esr153": "?"}), self.puts)
+        self.assertEqual(self.created[0]["cf_tracking_firefox_esr153"], "?")   # in the create
         self.assertEqual(res["tracking_nominated"], "cf_tracking_firefox_esr153")
-        self.assertNotIn("cf_tracking_firefox_esr153", self.created[0])   # its own PUT
+        self.assertFalse(any("cf_tracking_firefox_esr153" in c for _, c in self.puts))
         self.assertEqual(res["channel"], "esr153")
 
     def test_the_filer_asks_for_the_lines_own_policy(self):

@@ -358,7 +358,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
 
         def _create(payload, token):
             self.created = payload
-            return 2099999, False
+            return 2099999, set()
 
         def _regress(bug, bugs, token):
             self.regressed = list(bugs)
@@ -438,7 +438,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
              mock.patch.object(ba, "_fixed_after_build_bug", return_value=None), \
              mock.patch.object(ba, "_known_on_train_bug", return_value=None), \
              mock.patch.object(ba, "_create_bug_keeping_the_bug",
-                               return_value=(2099998, False)), \
+                               return_value=(2099998, set())), \
              mock.patch.object(ba, "_link_blockers", return_value=[]), \
              mock.patch.object(ba, "_link_regressed_by", side_effect=lambda b, x, t: list(x)), \
              mock.patch.object(report_bug, "build_bug_preview",

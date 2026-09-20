@@ -2012,23 +2012,14 @@ def _tracking_flag(version, channel=None):
     """``cf_tracking_firefox<major>`` for a Firefox version string (``"155.0.1"`` -> firefox155),
     or ``cf_tracking_firefox_esr<major>`` when the crash is on an ESR channel
     (``"140.15.0esr"`` on ``esr140`` -> firefox_esr140), or ``None`` when the version is unknown
-    or unparseable.
-
-    The FIELD NAME only. Whether BMO still carries a flag for that version is for the filer's PUT
-    to find out (``bugzilla_apply._nominate_tracking``): today the live range is 152-157 for
-    release, and ``_esr115`` / ``_esr140`` / ``_esr153`` for ESR (both read off
-    ``GET /rest/field/bug`` 2026-09-07); a crash from an older version is ordinary, not exotic.
-    ESR is a different flag FAMILY on BMO, not a different number: ``cf_tracking_firefox140``
-    is Firefox 140's release flag, long retired, and nominating it for an ESR crash would put
-    the bug in nobody's queue."""
+    or unparseable. ESR uses a separate ``firefox_esr`` field family."""
     return _train_flag("tracking", version, channel)
 
 
 def _status_flag(version, channel=None):
     """``cf_status_firefox<major>`` for the crash's own version (``cf_status_firefox_esr<major>``
     on an ESR line), or ``None``: the flag whose ``affected`` says this train HAS the bug. Named
-    like ``_tracking_flag`` and unlike it in kind -- a status flag is a statement of fact about a
-    version, which release management reads to find the bug; the tracking flag is an ask."""
+    like ``_tracking_flag`` but represents a status rather than a tracking request."""
     return _train_flag("status", version, channel)
 
 
@@ -2759,19 +2750,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # the pipeline only ever names a single changeset.
         "regressed_by": [candidate["bug"]] if link_regressor else [],  # noqa: E501 (candidate is set whenever link_regressor is)
         "needinfo": _needinfo_line(person),
-        # The tracking NOMINATION, release only: `cf_tracking_firefox<major>` = ? for the crash's
-        # own version, set by the filer in its own PUT after the create. `None` everywhere else.
+        # Optional tracking nomination for the crash's own train.
         "tracking_flag": (_tracking_flag(version, channel)
                           if policy.get("nominate_tracking") and not actionable else None),
-        # THE CRASH'S OWN TRAIN HAS THE BUG: `cf_status_firefox<major>` = affected, on every
-        # channel and under every verdict, because it is the one thing this bug can state without
-        # asking anyone -- the report exists. A fact about a version, not a regression claim, so
-        # `actionable` keeps it. The filer sets it in a PUT of its own after the create
-        # (`bugzilla_apply._set_status_flags`) and adds the other live trains Socorro shows the
-        # signature on -- asked there and not here, because that is a SuperSearch and the page
-        # renders this preview. New bugs we file only, never a venue bug, whose flags a human
-        # curates. Relman feedback relayed by Calixte, 2026-09-18: "Could clouseau set the
-        # affected versions automatically? That would help relman a lot to surface these bugs".
+        # The preview states the crash's own train. The filer adds other live trains reported by
+        # Socorro when creating a new bug; preview rendering does not run that SuperSearch.
         "status_flags": {own_train: "affected"} if own_train else {},
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the

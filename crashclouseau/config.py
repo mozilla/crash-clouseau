@@ -1158,22 +1158,10 @@ def get_agent_autofile(channel=None, product=None):
         # separate by three orders of magnitude — the correct comment landed on a bug filed 9
         # days AFTER its regressor, the wrong one on a bug filed 1375 days BEFORE.
         "comment_max_bug_age_days": a.get("comment_max_bug_age_days", 30),
-        # RELEASE'S TWO MARKS. A bug filed from the release channel is titled
-        # "[new in release] Crash in [@ ...]" and nominates `cf_tracking_firefox<major>` = ? for the
-        # crash's own version, so release management meets it in the tracking queue rather than
-        # in a component's backlog (Calixte, 2026-09-07). ESR has the same two, as a family:
-        # "[new in esr]" and `cf_tracking_firefox_esr<major>` (`report_bug._tracking_flag` picks
-        # the ESR flag name from the channel). Empty / off everywhere else; an overlay
-        # sets them per channel like the rest of this dict. The prefix counts against BMO's 255
-        # (`report_bug.bug_title`); the nomination is its own best-effort PUT after the create
-        # (`bugzilla_apply._nominate_tracking`), because the flag for an old version may not
-        # exist any more and a create carrying an unknown field is rejected whole.
-        #
-        # NOT A KNOB, and on every channel: a bug we file also says which trains HAVE the crash,
-        # `cf_status_firefox<major>` = affected for the crash's own version and for every live
-        # train Socorro shows the signature on, each its own PUT after the create
-        # (`bugzilla_apply._set_status_flags`; relman feedback relayed by Calixte, 2026-09-18).
-        # New bugs only -- a comment on somebody else's bug touches no flag.
+        # Channel overlays enable the release/ESR title prefix and tracking nomination. New bugs
+        # also carry `affected` fields for the crash's own train and the live trains on which
+        # Socorro reports its signature. See `report_bug._train_flag` and
+        # `bugzilla_apply._train_flags`.
         "summary_prefix": (a.get("summary_prefix") or "").strip(),
         "nominate_tracking": bool(a.get("nominate_tracking", False)),
     }

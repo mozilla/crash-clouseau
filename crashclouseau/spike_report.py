@@ -379,13 +379,10 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
         "regressed_by": regressed_by,
         "needinfo": report_bug._needinfo_line(person) if person else None,
         "needinfo_email": account,
-        # The channel's tracking nomination applies to a spike too: a release spike is exactly
-        # what release management tracks.
+        # Apply the channel's tracking policy to spike bugs too.
         "tracking_flag": (report_bug._tracking_flag(brief.get("version"), channel)
                           if policy.get("nominate_tracking") else None),
-        # The crash's own train has the bug (`report_bug.build_bug_preview`'s key of the same
-        # name): set by the filer after the create, with the other live trains Socorro shows the
-        # signature on (`bugzilla_apply._set_status_flags`).
+        # State the crash's own train; the filer adds other live trains reported by Socorro.
         "status_flags": ({own: "affected"} if (own := report_bug._status_flag(
             brief.get("version"), channel)) else {}),
         "groups": [group] if (withhold and group) else [],
