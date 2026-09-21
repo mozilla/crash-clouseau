@@ -186,7 +186,9 @@ _MEASURED = {
     # an old condition and is named as the exposer, never as "regressed by". Bought by bug
     # 2071287, where the assert-adding fix was named as the regressor and the module owner
     # corrected it to the change three releases earlier that made the condition true.
-    "system.md": (21687, 400),
+    # +126 on 2026-09-21 (beta and java with it): name the violated invariant and path, not
+    # crash/assert/panic mechanics (bug 2074119 c0).
+    "system.md": (21813, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     "crash facts, 40-thread parent hang": (2508, 200),
@@ -202,7 +204,7 @@ _MEASURED = {
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (22227, 400),
+    "system.md, beta": (22353, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
@@ -221,7 +223,7 @@ _MEASURED = {
     # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
     # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
     # long Java signature / paths; it carries no line numbers on its frames.
-    "system.md, java": (22850, 400),
+    "system.md, java": (22976, 400),
     "crash facts, fenix java": (325, 60),
     "user prompt, fenix java": (3240, 300),
 }

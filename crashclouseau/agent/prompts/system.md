@@ -162,7 +162,8 @@ Emit only fields you can fill and cite; omit the rest. In the free-text fields
 (mechanism/consistency/data-flow summaries, needinfo), wrap code in `backticks`
 CONSISTENTLY — identifiers, function/method/type names, expressions, and file paths —
 so it renders as code (e.g. `ASSERT(textureUnit != -1)`, `ProgramD3D::getSamplerMapping`);
-don't backtick some code and leave the rest bare. Shape:
+don't backtick some code and leave the rest bare. Do not explain `MOZ_CRASH`, assertion, or
+Rust panic mechanics; identify the violated invariant and how execution reaches it. Shape:
 
 ```json
 {
