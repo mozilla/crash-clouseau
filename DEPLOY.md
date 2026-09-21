@@ -348,8 +348,9 @@ startup by `_ensure_enum_values` (`_ENUM_ADDITIONS`).
 release]` prefix and no tracking nomination (both say "new regression"), keyword `crash` only, no
 `regressed_by`; the crash link, reason, frames, volume, "This signature has been reported since
 build X (date), N days before the build above.", then **"This bug looks actionable because:"** +
-the verdict's mechanism and consistency statements (the prompt asks for them as affirmative
-facts) + "The failing code comes from <changeset> (bug N) by :nick.", the code references,
+the verdict's mechanism statement, whole, + "The failing code comes from <changeset> (bug N) by
+:nick." (the consistency claim stays in the dossier for audit; age and volume already have
+deterministic lines in the bug), the mechanism's code references,
 ":nick, can you have a look please?" (the origin's author, verified account) and the provenance
 footer. Nothing about what the crash is NOT: no skeptic block, no "Starting point", no "% worth
 investigating".
@@ -401,10 +402,10 @@ signature-titled bug beside it. Now, on such a signature:
   gate's actionable flip is waived for it (`hang_bucket_age_waived`): the signature's first-seen
   is the catch-all's clock, not the bucket's. The bug says "was last changed by", because blame on
   vendored code is the vendor bump;
-- a NEW bug is a BUCKET bug or nothing: titled for its cause (`verdict.title`, else `<work> blocks
-  <pool> shutdown inside <call>` from the awaited thread, else the mechanism's first sentence),
-  no `cf_crash_signature`, `blocks` the tracker(s) and `clouseau`, opening with "Bucket of bug N,
-  filed without the signature"; with nothing to name the bucket the filer declines
+- a NEW bug is a BUCKET bug or nothing: titled from the awaited thread as `<work> blocks <pool>
+  shutdown inside <call>`, never from model-authored `verdict.title` or claim prose; no
+  `cf_crash_signature`, `blocks` the tracker(s) and `clouseau`, opening with "Bucket of bug N,
+  filed without the signature"; with nothing deterministic to name the bucket the filer declines
   (`skipped: signature is held by [meta] bug N; the verdict names no bucket`);
 - one bug per BUCKET, not per signature: a prior filing of ours stops a new one only when its
   recorded `bucket` (the awaited thread's key: `<work> | <call>`, the same on every platform) is
@@ -436,6 +437,39 @@ heroku run -a crash-clouseau-augmented -- python bin/backfill_bucket.py --bug 20
 
 Cleanup owed on BMO from before: 2069191 still carries the signature and the `topcrash` keyword
 BugBot added for it (Jens moves both to the tracker, as on 2071528).
+
+## OOM aborts and the `actionable` verdict (2026-09-21)
+
+Bug 2073760 filed a `Zone::New` OOM-unsafe abort as actionable. :iain closed it WONTFIX and noted
+that the report did not identify useful work beyond the OOM. In contrast, bug 2071557's recorded
+large request led to a patch four hours after filing, re-landed the same day and later uplifted to
+beta and ESR153. On bug 2073879, :jstutte verified a local `BigBuffer::TryAlloc` change and audited
+its eight callers; :nika agreed that switching the caller looked reasonable.
+
+`orchestrator._apply_oom_gate` now changes only `actionable` verdicts to
+`resource_exhaustion` when any of these holds:
+
+- the signature class is `OOM | unknown` or `OOM | small`;
+- `moz_crash_reason` starts with `[unhandlable oom]`;
+- the class is `OOM | large`, no allocation size was recorded, and
+  `JSLargeAllocationFailure` is `Reporting`.
+
+The last case matters because Socorro checks `Reporting` before `OOMAllocationSize` and assigns
+`large` even without a recorded size. Leads and strong-evidence verdicts are unchanged. The gate
+stores `{kind, reason, memory}` in `corroborations.oom_not_actionable`; the replay fixture in
+`tests/test_oom_gate.py` pins its behavior on the captured examples.
+
+Ordinary triage and the spike report tool now expose the allocation-size and memory annotations.
+`available_page_file` is described as available commit space; a small
+`total_virtual_memory` value is reported without inferring process architecture.
+
+For actionable filings, `report_bug.build_actionable_comment` publishes the cited mechanism but
+not the consistency claim or its citations. Age and volume already have deterministic lines, and
+the full dossier retains consistency for audit. Actionable bucket titles likewise come only from
+the deterministic awaited-work title, not model-authored claim text.
+
+The gate is unconditional. Monitor `oom_not_actionable` corroborations and the log message
+`actionable verdict with unsupported OOM evidence` after deployment.
 
 ## Affected versions on a bug we file (2026-09-18)
 

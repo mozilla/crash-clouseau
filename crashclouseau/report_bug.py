@@ -1138,7 +1138,7 @@ def build_awaited_work_block(corroborations, max_frames=_MAX_AWAITED_FRAMES):
 
 
 def _first_sentence(text, limit=150):
-    """The first sentence of a mechanism statement, as a title: code spans un-backticked,
+    """The first sentence of a free-text claim, as a title: code spans un-backticked,
     markdown links reduced to their text, cut at a word boundary under *limit*."""
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(text or ""))
     text = " ".join(text.replace("`", "").split())
@@ -1155,23 +1155,18 @@ def _first_sentence(text, limit=150):
 
 
 def bucket_title(dossier):
-    """The title of a bug filed on a BUCKET-HOLDER signature -- one an open ``[meta]`` tracker
-    already carries -- or ``""`` when nothing in the dossier can name the bucket.
+    """Return a bucket-bug title, or ``""`` when the dossier cannot name the bucket.
 
-    A signature the meta holds bundles every cause under one main-thread wait, so a bug named
-    ``Crash in [@ sig]`` there is a second catch-all beside the tracker (:jstutte, bugs 2073349
-    c1 and 2069191 c5: "not create parallel catch-all bugs with the same signature as the meta
-    bug"). Named for its CAUSE instead, in this order: the model's own ``verdict.title`` (asked
-    for in the prompt's shape), the deterministic hang title built from the awaited thread
-    (``hang.bucket_title``: ``<work> blocks <pool> shutdown inside <call>``, the shape Jens gave
-    2071528 and 2073426), else the first sentence of the mechanism. Nothing usable means NO
-    bucket bug -- ``bugzilla_apply.autofile_bug`` declines rather than filing the catch-all."""
+    Actionable buckets use only the deterministic awaited-work title. Other verdicts retain the
+    historical model-title, awaited-work and claim fallbacks."""
     d = dossier or {}
     v = d.get("verdict") or {}
+    work = (d.get("corroborations") or {}).get("hang_awaited_work") or {}
+    if v.get("decision") == "actionable":
+        return str(work.get("title") or "")[:_MAX_BUCKET_TITLE]
     title = " ".join(str(v.get("title") or "").split())
     if title:
         return title[:_MAX_BUCKET_TITLE]
-    work = (d.get("corroborations") or {}).get("hang_awaited_work") or {}
     if work.get("title"):
         return str(work["title"])[:_MAX_BUCKET_TITLE]
     for claim in (v.get("mechanism"), v.get("consistency")):
@@ -1203,21 +1198,17 @@ def build_bucket_opener(meta_bugs, signature):
 def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
                              version=None, needinfo=None, author_display=None,
                              max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None):
-    """The SINGLE comment an ``actionable`` bug opens with -- a crash filed on its own facts,
-    with no regressor claimed (Calixte, 2026-09-17). Every line states what IS:
+    """Build the opening comment for an ``actionable`` bug, with no regressor claim.
 
     1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
     2. how much this signature is crashing, and since which build;
-    3. **This bug looks actionable because:** the verdict's mechanism and consistency
-       statements, which the prompt asks for as affirmative facts (what fails, where, under
-       which condition, what to look at first), and where the failing code comes from -- the
-       origin changeset by blame, named for routing, accused of nothing;
-    4. the code references, the ask, the provenance footer.
+    3. the cited mechanism and the blamed origin used for routing;
+    4. the mechanism's code references, the ask, the provenance footer.
 
-    Deliberately ABSENT, because each says what the crash is not or hedges a claim this bug
-    does not make: the skeptic block, the dissent note, the exposer / stale / trend / hardware
-    notes, the "Starting point -- NOT a suspected cause" paragraph and the "% worth
-    investigating" phrase (no calibration exists for this verdict)."""
+    The mechanism is copied whole. Consistency stays in the dossier because age and volume are
+    rendered from deterministic data and free-form prose cannot be filtered safely. Skeptic,
+    dissent, diagnostic and calibration text is also omitted because this verdict makes no
+    changeset claim."""
     uuid = (uuid_info or {}).get("uuid", "")
     channel = (uuid_info or {}).get("channel")
     info = dict(uuid_info or {})
@@ -1225,11 +1216,8 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         info["version"] = version
     verdict = (dossier or {}).get("verdict") or {}
     candidate = (dossier or {}).get("candidate") or {}
-    facts = []
-    for claim in (verdict.get("mechanism"), verdict.get("consistency")):
-        statement = ((claim or {}).get("statement") or "").strip()
-        if statement:
-            facts.append("- " + statement)
+    mechanism = ((verdict.get("mechanism") or {}).get("statement") or "").strip()
+    facts = ["- " + mechanism] if mechanism else []
     if candidate.get("node"):
         link = changeset_links(candidate["node"], channel, candidate.get("git_commit") or "")
         if candidate.get("bug"):
@@ -1259,7 +1247,8 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         build_stats_sentence(first, stats, info),
         build_signature_since_note((dossier or {}).get("corroborations"), info.get("buildid")),
         because,
-        build_code_references(verdict, channel),
+        # Only publish references for the claim printed above.
+        build_code_references({"mechanism": verdict.get("mechanism")}, channel),
         needinfo,
         _provenance(channel),
     ]

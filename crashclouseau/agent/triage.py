@@ -1613,6 +1613,31 @@ def _thread_inventory(raw: dict) -> list[str]:
     return ["", header, rule, ", ".join(shown)]
 
 
+def _is_oom(crash, raw):
+    """Whether the signature or processed-crash annotations identify an OOM."""
+    raw = raw or {}
+    signature = str((crash or {}).get("signature") or raw.get("signature") or "")
+    if signature.startswith("OOM | "):
+        return True
+    dump = raw.get("json_dump") or {}
+    reason = str(raw.get("moz_crash_reason") or dump.get("moz_crash_reason") or "")
+    if utils.OOM_REASON_RE.search(reason):
+        return True
+    # `Reporting` only: `Recovered` means the GC satisfied the allocation after all, and a later
+    # unrelated crash carrying it is not an OOM.
+    if _oom_allocation_size(raw) is not None:
+        return True
+    return raw.get("js_large_allocation_failure") == "Reporting"
+
+
+def _oom_allocation_size(raw):
+    """``OOMAllocationSize`` with thousands separators (``"1,046,872"``), or ``None``."""
+    v = (raw or {}).get("oom_allocation_size")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return "{:,}".format(int(v))
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
@@ -1674,6 +1699,17 @@ def _crash_facts(crash: dict) -> list[str]:
             raw.get("moz_crash_reason"), dump.get("moz_crash_reason")
         )),
         ("Crash reason", raw.get("reason")),
+        # These annotations are useful for OOM analysis but noisy for unrelated Windows crashes.
+        # Socorro uses a recorded size of at most 256 KiB for ``small`` and a larger one for
+        # ``large``; no usable size normally yields ``unknown``.
+        ("OOM allocation size (bytes)",
+         _oom_allocation_size(raw) if _is_oom(crash, raw) else None),
+        ("Memory at crash (what the machine had left)",
+         utils.memory_picture(raw) if _is_oom(crash, raw) else None),
+        # Socorro checks ``Reporting`` before ``OOMAllocationSize`` and assigns ``large``.
+        ("JS large allocation failure (`Reporting` = crash while responding to a large-"
+         "allocation OOM; Socorro assigns `OOM | large` even with no size)",
+         raw.get("js_large_allocation_failure") if _is_oom(crash, raw) else None),
         ("Assertion", info.get("assertion")),
         ("PHC kind", _first_present(raw.get("phc_kind"), info.get("phc_kind"))),
         ("PHC alloc stack", _first_present(

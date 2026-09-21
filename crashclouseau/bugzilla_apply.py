@@ -2421,9 +2421,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
 
     # A NEW bug on a bucket-holder signature is a BUCKET BUG or nothing (`report_bug.
     # build_bug_preview`'s bucket mode: named for its cause, no `cf_crash_signature`, blocks the
-    # tracker). Nothing in the verdict to name the bucket -- no `title`, no awaited work, no
-    # mechanism sentence -- means the only bug we could file is the catch-all Jens asked us to
-    # stop filing, so none is.
+    # tracker). An actionable bucket needs the deterministic awaited-work title; without it we
+    # would file another catch-all. Other verdicts retain `report_bug.bucket_title`'s fallbacks.
     if bug_id is None and meta_bugs and not report_bug.bucket_title(dossier):
         tracker = meta_bugs[0]["id"]
         logger.info("autofile: %r is held by [meta] bug %s and the verdict names no bucket to "

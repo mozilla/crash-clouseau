@@ -549,9 +549,10 @@ These are stable facts that cost turns when rediscovered.
   `quota_manager_shutdown_timeout`, `async_shutdown_timeout`, `gmp_plugin`,
   `graphics_critical_error`, `signature`, `proto_signature`, `topmost_filenames`,
   `accessibility`, `accessibility_client`, `safe_mode`, `background_task_name`,
-  `crash_report_keys`, and the numeric `install_time`, `uptime`, `system_memory_use_percentage`,
+  `js_large_allocation_failure`, `crash_report_keys`, and the numeric `install_time`, `uptime`, `system_memory_use_percentage`,
   `available_physical_memory`, `available_virtual_memory`, `total_physical_memory`,
-  `install_age`, `oom_allocation_size`. A facet returns at most 20 values by count. The query is
+  `available_page_file`, `total_page_file`, `total_virtual_memory`, `install_age`,
+  `oom_allocation_size`. A facet returns at most 20 values by count. The query is
   scoped to the spike's product and channel (beta includes DevEdition's `aurora`); its window is
   `days` back from now.
 - `crash_report_keys` is the list of annotation keys the crashing process set, protected ones
@@ -566,8 +567,13 @@ These are stable facts that cost turns when rediscovered.
 - The pinned tools redirect an empty or `tip` revision to the crash build's revision; pass an
   explicit node to read another revision deliberately, for instance the parent of a candidate.
 - Annotations are declared in `toolkit/crashreporter/CrashAnnotations.yaml` (name, description,
-  scope); read it with `raw_file`. `JSOutOfMemory` is written by the JS engine's OOM callback
-  when a small allocation fails; JS OOM does not set `OOMAllocationSize`.
+  scope); read it with `raw_file`. Treat their values as evidence: `available_page_file` is
+  available commit space, `total_page_file` its limit, and `total_virtual_memory` the process's
+  virtual-address-space size, not proof of its architecture. `oom_allocation_size` records the
+  failing request when available. Socorro assigns `OOM | large` from
+  `js_large_allocation_failure: Reporting` before checking that size, so a size-less `large`
+  does not prove a recorded large request. An actionable OOM needs both a recorded large
+  request and a caller-specific defect or remediation.
   `toolkit.asyncshutdown.crash_timeout` (60 s default) governs AsyncShutdownTimeout aborts.
 - Build flavours: Nightly and Release are opt builds where `MOZ_ASSERT` is compiled out;
   `MOZ_DIAGNOSTIC_ASSERT` is active on Nightly and early Beta; `MOZ_RELEASE_ASSERT` is active

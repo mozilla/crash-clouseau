@@ -227,7 +227,8 @@ class TestTheBugItFiles(unittest.TestCase):
         c = p["comment"]
         self.assertIn("**This bug looks actionable because:**", c)
         self.assertIn("- " + _MECH, c)
-        self.assertIn("- " + _FACT, c)
+        # Consistency stays in the dossier; the bug gets deterministic age and volume lines.
+        self.assertNotIn("- " + _FACT, c)
         self.assertIn("- The failing code comes from [507a4c21a8eb](", c)
         self.assertIn("(bug 2010557) by :bobowen.", c)
         self.assertIn("There are 85 crashes (from 77 installations) in 155.0.1 starting with "

@@ -2861,25 +2861,16 @@ def _apply_hang_origin_gate(dossier, seed):
 
 
 def _ensure_actionable_title(dossier):
-    """An ``actionable`` verdict leaves without an empty ``title``: the model's, else the awaited
-    work's (`<work> blocks <pool> shutdown inside <call>`), else the mechanism's first sentence.
-    The 2026-09-18 verification run left the field empty -- an optional descriptive field the
-    prompt asks for is filled rarely (`crash.moz_crash_reason`: 0 of 189) -- and the filer's
-    fallback did the same derivation at filing time; doing it here puts the title on the page and
-    in the record too. Never on an abstain."""
+    """Put the deterministic awaited-work title on an untitled ``actionable`` hang.
+
+    Ordinary actionable bugs use their signature. Bucket filings require the awaited-work title
+    and never derive one from model claim prose. ``report_bug.bucket_title`` enforces the same
+    rule at filing time."""
     v = dossier.verdict if dossier is not None else None
     if v is None or v.decision != Decision.actionable or (v.title or "").strip():
         return
     work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
     title = str(work.get("title") or "")
-    if not title:
-        from crashclouseau import report_bug
-
-        for claim in (v.mechanism, v.consistency):
-            sentence = report_bug._first_sentence((claim.statement if claim else "") or "")
-            if len(sentence) >= 20:
-                title = sentence
-                break
     if title:
         dossier.verdict = v.model_copy(update={"title": title[:200]})
 
@@ -2969,6 +2960,93 @@ def _apply_hang_wait_gate(dossier, seed):
     logger.info("agent: actionable mechanism on a hang cites only the wait code %s -> abstain "
                 "pre_existing for %s (awaited work: %s)", sorted(cited),
                 (seed or {}).get("uuid"), where)
+
+
+# Socorro uses ``unknown`` when no usable OOM allocation size is present and ``small`` for a
+# recorded size of at most 256 KiB. ``JSLargeAllocationFailure: Reporting`` forces ``large``
+# before Socorro checks the size, so that class does not always prove a recorded large request.
+_OOM_NOT_LARGE_KINDS = ("unknown", "small")
+_JS_LARGE_ALLOC_REPORTING = "Reporting"
+# Prefix written by ``js::AutoEnterOOMUnsafeRegion::crash``.
+_UNHANDLABLE_OOM = "[unhandlable oom]"
+
+
+def _oom_kind(signature):
+    """The OOM size class a Socorro name carries (``OOM | <kind> | ...`` -> ``unknown`` /
+    ``large`` / ``small``), or ``None`` for every other name."""
+    from crashclouseau import sigfamily
+
+    parts = [p.strip() for p in str(signature or "").split("|")]
+    if len(parts) >= 2 and parts[0] == "OOM" and parts[1] in sigfamily._OOM_KINDS:
+        return parts[1]
+    return None
+
+
+# The clause the abstain reason and the prompt's crash facts share (``utils.memory_picture``).
+_memory_picture = utils.memory_picture
+
+
+def _apply_oom_gate(dossier, seed):
+    """Downgrade unsupported ``actionable`` OOM verdicts to ``resource_exhaustion``.
+
+    The gate covers ``OOM | unknown``, ``OOM | small``, ``[unhandlable oom]`` reasons, and
+    size-less ``OOM | large`` reports classified by ``JSLargeAllocationFailure: Reporting``.
+    Bug 2073760 motivated the rule: its ``Zone::New`` OOM-unsafe abort was filed and then closed
+    WONTFIX. Leads and strong-evidence verdicts make changeset claims and are left unchanged.
+    The original claims remain on the abstain for audit and display."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None or v.decision != Decision.actionable:
+        return
+    raw = (seed or {}).get("raw_crash") or {}
+    dump = raw.get("json_dump") or {}
+    signature = (seed or {}).get("signature") or raw.get("signature") or ""
+    reason = str(raw.get("moz_crash_reason") or dump.get("moz_crash_reason") or "").strip()
+    kind = _oom_kind(signature)
+    named = kind is not None
+    size = raw.get("oom_allocation_size")
+    size = size if isinstance(size, (int, float)) and not isinstance(size, bool) else None
+    if kind is None and utils.OOM_REASON_RE.search(reason):
+        # ``OOMSignature`` does not inspect ``moz_crash_reason``. Apply its size thresholds when
+        # that field is the only indication that this is an OOM.
+        kind = "unknown" if not size else ("small" if size <= utils.OOM_SMALL_MAX else "large")
+    if reason.lower().startswith(_UNHANDLABLE_OOM):
+        trigger = reason
+        why = ("the crash reason is `{}`: this OOM-unsafe region terminates the process instead "
+               "of propagating allocation failure".format(reason))
+    elif kind in _OOM_NOT_LARGE_KINDS:
+        trigger = "OOM | {}".format(kind)
+        recorded = ("a request of {:,} bytes".format(int(size)) if size
+                    else "no allocation size")
+        why = (("the signature's OOM size class is `{}` and the report recorded {}"
+                ).format(kind, recorded) if named else
+               ("the crash reason is `{}` and the report recorded {}"
+                ).format(reason, recorded))
+    elif kind == "large" and not size and (
+            raw.get("js_large_allocation_failure") == _JS_LARGE_ALLOC_REPORTING):
+        trigger = "OOM | large by JSLargeAllocationFailure"
+        why = ("Socorro assigned `large` from `JSLargeAllocationFailure: Reporting` before "
+               "checking the allocation size; this report has no recorded size")
+    else:
+        return
+    picture = _memory_picture(raw)
+    dossier.corroborations = {
+        **dossier.corroborations,
+        "oom_not_actionable": {"kind": kind, "reason": reason or None, "memory": picture or None},
+    }
+    dossier.verdict = Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=("the report does not establish enough caller-specific evidence for an "
+                        "actionable OOM bug: {}{}"
+                        .format(why, "; the report shows {}".format(picture) if picture else "")),
+        abstain_kind=AbstainKind.resource_exhaustion,
+        mechanism=v.mechanism,
+        consistency=v.consistency,
+        title=v.title,
+    )
+    logger.info("agent: actionable verdict with unsupported OOM evidence (%s) -> "
+                "abstain resource_exhaustion for %s%s", trigger, (seed or {}).get("uuid"),
+                " ({})".format(picture) if picture else "")
 
 
 def _apply_bad_machine_gate(dossier, seed):
@@ -4256,6 +4334,8 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # which owns the other actionable->abstain flip, and before the fold, which skips
         # `actionable` anyway.
         _apply_hang_wait_gate(result.dossier, seed)
+        # Reject generic actionable OOMs before the fold, which skips `actionable` verdicts.
+        _apply_oom_gate(result.dossier, seed)
         # Second-opinion fold: an independent blind re-analysis corroborates (boost) or
         # confidently refutes (downgrade) the reported lead. Runs AFTER the corroboration
         # gate (so a corroboration-bumped lead is what's boosted/refuted) and BEFORE the
@@ -4296,8 +4376,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # at once on an abstain, so everything above it has already had its chance to abstain
         # for free.
         _apply_compiled_out_gate(result.dossier, seed)
-        # An `actionable` verdict that survived the gates carries a title (bug 2073349's
-        # verification run left the field empty; the bug it would file is named by it).
+        # Give an actionable hang its deterministic bucket title; never derive it from claims.
         _ensure_actionable_title(result.dossier)
         # Not a gate — a label. Whether the candidate came from this build's pushlog window is
         # what decides if the filed bug may call it a "regression" at all.

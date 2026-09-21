@@ -670,11 +670,9 @@ class Verdict(BaseModel):
             if self.confidence == Confidence.high:
                 self.confidence = Confidence.probable
         elif self.decision == Decision.actionable:
-            # THE CLAIM IS THE MECHANISM, so it must be cited; nothing else is asserted (no
-            # causal link, no regression). ``high`` is clamped as a lead's is: no deterministic
-            # corroborator applies here, and ``probable`` -- the filing floor -- is "the skeptic
-            # could not contradict it". A stray ``abstain_reason`` is dropped rather than fatal:
-            # a descriptive field the model should not have filled must not destroy a verdict.
+            # The actionable bug publishes the cited mechanism; consistency stays in the
+            # dossier. Clamp ``high`` because no deterministic corroborator applies, and ignore
+            # a stray descriptive ``abstain_reason`` rather than rejecting the verdict.
             if self.mechanism is None or not self.mechanism.citations:
                 raise ValueError("actionable requires a cited mechanism claim")
             if self.confidence == Confidence.high:

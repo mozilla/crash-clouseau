@@ -602,3 +602,40 @@ def bugzilla_signature_entries(field):
             piece = piece[:-1]
         entries.append(piece.strip())
     return [entry for entry in entries if entry]
+
+
+# Values commonly written to ``moz_crash_reason`` for OOM aborts. Socorro's ``OOMSignature``
+# rule does not inspect that field; this application uses it when the signature is unprefixed.
+OOM_REASON_RE = re.compile(r"\boom\b|out of memory", re.IGNORECASE)
+# Socorro's `OOM | small` ceiling: a recorded `OOMAllocationSize` above it is `large`.
+OOM_SMALL_MAX = 256 * 1024
+
+# Suppress totals of 8 GiB or more in the compact summary; never infer architecture from the value.
+_SMALL_ADDRESS_SPACE = 8 * 1024 ** 3
+
+
+def memory_picture(raw):
+    """Render the available commit, address-space and physical-memory annotations."""
+    def num(key):
+        v = (raw or {}).get(key)
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    out = []
+    page, total_page = num("available_page_file"), num("total_page_file")
+    if page is not None:
+        out.append("{:.0f} MB of commit space available{}".format(
+            page / 1e6,
+            " of {:.1f} GB limit".format(total_page / 1e9) if total_page else ""))
+    total_vm = num("total_virtual_memory")
+    if total_vm is not None and total_vm < _SMALL_ADDRESS_SPACE:
+        avail_vm = num("available_virtual_memory")
+        out.append("{:.0f} GB total virtual address space{}".format(
+            total_vm / 1024 ** 3,
+            " with {:.1f} GB free".format(avail_vm / 1024 ** 3) if avail_vm is not None else ""))
+    phys, total_phys = num("available_physical_memory"), num("total_physical_memory")
+    if phys is not None and total_phys:
+        out.append("{:.1f} GB of {:.1f} GB physical memory free".format(phys / 1e9, total_phys / 1e9))
+    pct = num("system_memory_use_percentage")
+    if pct is not None:
+        out.append("{:.0f}% of system memory in use".format(pct))
+    return ", ".join(out)

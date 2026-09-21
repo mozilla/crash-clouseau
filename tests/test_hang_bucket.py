@@ -694,7 +694,7 @@ class TestTheOrchestrator(unittest.TestCase):
         self.assertEqual(d.corroborations["hang_bucket_age_waived"], "20220906224751")
         self.assertNotIn("actionable_origin_postdates_signature", d.corroborations)
 
-    def test_a_title_is_ensured_on_an_actionable_verdict(self):
+    def test_only_awaited_work_ensures_an_actionable_title(self):
         d = _actionable(["x/y.cpp"])
         orch._record_hang_awaited_work(d, _seed(_hang([_IDLE_POOL, _SUGGEST])))
         orch._ensure_actionable_title(d)
@@ -704,8 +704,7 @@ class TestTheOrchestrator(unittest.TestCase):
             statement="`nsFoo::Bar` dereferences a null `mDoc` after the window unloads. "
                       "More text.", citations=[RefCitation(filename="x/y.cpp", line=1)])})
         orch._ensure_actionable_title(d)
-        self.assertEqual(d.verdict.title,
-                         "nsFoo::Bar dereferences a null mDoc after the window unloads")
+        self.assertEqual(d.verdict.title, "")
         d = _actionable(["x/y.cpp"], title="mine")
         orch._ensure_actionable_title(d)
         self.assertEqual(d.verdict.title, "mine")
@@ -762,21 +761,25 @@ def _dossier(**over):
 
 
 class TestTheBucketBug(unittest.TestCase):
-    def test_the_title_comes_from_the_model_then_the_awaited_thread_then_the_mechanism(self):
+    def test_an_actionable_title_comes_only_from_the_deterministic_awaited_thread(self):
         d = _dossier()
         d["verdict"]["title"] = "  Suggest ingest blocks   BgIOThreadPool shutdown "
         self.assertEqual(report_bug.bucket_title(d),
-                         "Suggest ingest blocks BgIOThreadPool shutdown")
+                         _SUGGEST_TITLE)
         d["verdict"]["title"] = ""
         self.assertEqual(report_bug.bucket_title(d), _SUGGEST_TITLE)
         d["corroborations"] = {}
-        self.assertEqual(report_bug.bucket_title(d),
-                         "BackgroundEventTarget::Shutdown() shuts the pool down with no timer, "
-                         "so the wait is unbounded")
+        self.assertEqual(report_bug.bucket_title(d), "")
         d["verdict"]["mechanism"]["statement"] = "short"
-        d["verdict"]["consistency"]["statement"] = ""
+        # Neither model claim becomes an actionable bucket title.
         self.assertEqual(report_bug.bucket_title(d), "")
         self.assertEqual(report_bug.bucket_title({}), "")
+
+        # Non-actionable previews retain their historical free-text fallbacks.
+        d["verdict"]["decision"] = "lead"
+        d["verdict"]["title"] = "  Suggest ingest blocks   BgIOThreadPool shutdown "
+        self.assertEqual(report_bug.bucket_title(d),
+                         "Suggest ingest blocks BgIOThreadPool shutdown")
 
     def test_the_first_sentence_is_a_title(self):
         self.assertEqual(report_bug._first_sentence(

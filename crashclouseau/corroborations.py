@@ -382,6 +382,11 @@ REGISTRY = {
         "explains the wait every report under the signature shares, which is the [meta] "
         "tracker's subject -- became a `pre_existing` abstain. Instance-level on purpose: the "
         "next run on the cluster may read the awaited thread."),
+    "oom_not_actionable": (
+        "suppression", ("templates/crashstack.html",),
+        "An `actionable` verdict matched the OOM gate and became a `resource_exhaustion` "
+        "abstain. `{kind, reason, memory}` records the size class, crash reason and available "
+        "memory annotations used by the explanation."),
     "archetypes": (
         "evidence", ("feedback.py",),
         "The slugs that fired, copied onto `Feedback` so `scoreboard()[\"by_archetype\"]` can "

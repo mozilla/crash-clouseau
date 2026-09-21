@@ -44,16 +44,19 @@ TERM_FIELDS = (
     "quota_manager_shutdown_timeout", "async_shutdown_timeout", "gmp_plugin",
     "graphics_critical_error", "signature", "proto_signature", "topmost_filenames",
     "accessibility", "accessibility_client", "safe_mode", "background_task_name",
+    "js_large_allocation_failure",
     # The annotation keys the crashing process set, protected ones included: faceting it split
     # at the spike build is the annotation-presence differential the prompt asks for.
     "crash_report_keys",
     "install_time", "uptime", "system_memory_use_percentage", "available_physical_memory",
-    "available_virtual_memory", "total_physical_memory", "install_age", "oom_allocation_size",
+    "available_virtual_memory", "total_physical_memory", "available_page_file",
+    "total_page_file", "total_virtual_memory", "install_age", "oom_allocation_size",
 )
 # The numeric ones, which read better bucketed (``interval``) than as exact values.
 NUMERIC_FIELDS = frozenset({
     "uptime", "system_memory_use_percentage", "available_physical_memory",
-    "available_virtual_memory", "total_physical_memory", "install_age", "oom_allocation_size",
+    "available_virtual_memory", "total_physical_memory", "available_page_file",
+    "total_page_file", "total_virtual_memory", "install_age", "oom_allocation_size",
     "install_time",
 })
 _FACETS_SIZE = 20
@@ -65,7 +68,10 @@ _REPORT_KEYS = (
     "cpu_arch", "cpu_info", "cpu_microcode_version", "process_type", "report_type", "reason",
     "address", "moz_crash_reason", "signature", "date_processed", "uptime", "install_age",
     "startup_crash", "system_memory_use_percentage", "available_physical_memory",
-    "total_physical_memory", "shutdown_progress", "shutdown_reason", "async_shutdown_timeout",
+    "total_physical_memory", "available_virtual_memory", "total_virtual_memory",
+    "available_page_file", "total_page_file", "oom_allocation_size",
+    "js_large_allocation_failure", "shutdown_progress", "shutdown_reason",
+    "async_shutdown_timeout",
     "quota_manager_shutdown_timeout", "xpcom_spin_event_loop_stack", "ipc_channel_error",
     "ipc_message_name", "ipc_shutdown_state", "adapter_vendor_id", "adapter_device_id",
     "adapter_driver_version", "accessibility", "accessibility_client", "app_init_dlls",

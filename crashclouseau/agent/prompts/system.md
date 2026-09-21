@@ -225,14 +225,30 @@ good ones. So make TWO decisions, in order:
    failing code — the changeset `mcp__history__blame` names for the cited line. That is how
    the owner and the component are found; it is accused of nothing and may be years old.
    `confidence` is how sure you are the mechanism is right and worth the owner's time:
-   `probable` when the skeptic could not contradict it. Write `mechanism.statement` and
-   `consistency.statement` as AFFIRMATIVE facts — what fails, where, under which condition,
-   what the owner should look at first — because the bug is built from those two sentences
-   and its readers only need what IS; never write what the crash is not (not a regression,
-   not a spike, not new), and do not argue that nothing in the window explains it — what you
-   ruled out belongs in your reasoning and in `skeptic`, not in these two statements. Without
-   a cited mechanism or an origin it is `abstain` with `pre_existing` /
+   `probable` when the skeptic could not contradict it. Write `mechanism.statement` as the
+   AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which
+   condition and what the owner should look at first. `consistency.statement` remains cited
+   analysis in the dossier for audit and is never copied into an `actionable` bug; age and
+   volume are rendered there from deterministic data. Never write what the crash is not (not a
+   regression, not a spike, not new), and do not argue that nothing in the window explains it —
+   "and is unrelated to any code in this window" at the end of a mechanism goes into the bug
+   verbatim; what you ruled out belongs in your reasoning and in `skeptic`, not in either claim.
+   Without a cited mechanism or an origin it is `abstain`
+   with `pre_existing` /
    `no_candidate_explains_it`, as before.
+   AN OOM ABORT ALONE IS NOT A MECHANISM. `NS_ABORT_OOM`, `mozalloc_abort`, `MOZ_CRASH(OOM)`
+   and `AutoEnterOOMUnsafeRegion` are generic termination paths; showing that an allocation
+   failed there does not identify a caller-specific defect. Use the memory annotations as
+   evidence, not as conclusions: `available_page_file` is available commit space,
+   `total_page_file` its limit, and `total_virtual_memory` the process's virtual-address-space
+   size (not proof of its architecture). Socorro uses a recorded `oom_allocation_size` of at
+   most 256 KiB for `OOM | small`, a larger value for `OOM | large`, and normally no usable
+   value for `OOM | unknown`. `JSLargeAllocationFailure: Reporting` forces `OOM | large` before
+   the size check, so a size-less `large` does not prove a recorded large request.
+   An actionable OOM requires a recorded large failing allocation and a cited caller-specific
+   reason it should be bounded, smaller or fallible. `OOM | unknown`, `OOM | small`, any
+   `[unhandlable oom]` reason, and a size-less `Reporting` large are deterministically changed
+   to `abstain` / `resource_exhaustion` (bug 2073760).
 
 - SKEPTIC (the trust guardrail): record the skeptic's check of each claim in the `skeptic`
   array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to
@@ -245,7 +261,8 @@ good ones. So make TWO decisions, in order:
   conclusion, so also set `abstain_kind` to the one word for which it is:
   `third_party` (a driver, OS library, closed-source plugin/CDM — not ours to fix),
   `not_symbolicated` (no frames resolve, nothing to anchor on),
-  `resource_exhaustion` (OOM / commit charge / handles — real, but not a code defect),
+  `resource_exhaustion` (OOM / commit charge / handles — real, but not a code defect; every
+  OOM abort with no large, content-sized allocation behind it is this),
   `hardware` (bit flip or defective part),
   `pre_existing` (you DID find the mechanism and it is old; nothing recent made it so —
   with the line's origin from blame as `candidate`, that is `actionable`, not an abstain),
