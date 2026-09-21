@@ -629,13 +629,14 @@ class TestSeedReachesADatabaseThatAlreadyHasTheRow(unittest.TestCase):
         # nobody can point at a revision for would turn the upgrade into a blanket overwrite.
         # `shutdown-singleton` was seeded by 312e153 and rewritten by 07d593e (two texts);
         # `shutdown-hang` was seeded by 5f169b6, its closer replaced (the text prod v191 holds,
-        # 8190e68), then the AWAITED WORK step added on 2026-09-18 (two). Recheck a hash with
+        # 8190e68), the AWAITED WORK step added on 2026-09-18 (f6145fa), then the EXITED and
+        # MAIN THREAD RUNNING sentences on 2026-09-21 (three). Recheck a hash with
         # `git show <rev>:crashclouseau/archetypes.py` and
         # `_fingerprint(spec["guidance"], spec["matcher"])` on that revision's copy.
         self.assertEqual(set(archetypes._SUPERSEDED),
                          {"shutdown-singleton", "shutdown-hang"})
         self.assertEqual(len(archetypes._SUPERSEDED["shutdown-singleton"]), 2)
-        self.assertEqual(len(archetypes._SUPERSEDED["shutdown-hang"]), 2)
+        self.assertEqual(len(archetypes._SUPERSEDED["shutdown-hang"]), 3)
         for slug, fingerprints in archetypes._SUPERSEDED.items():
             for fingerprint in fingerprints:
                 with self.subTest(slug=slug, fingerprint=fingerprint[:8]):

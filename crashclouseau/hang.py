@@ -106,17 +106,59 @@ _PLUMBING_RE = re.compile(
 # The frames that decide a POOL WORKER is one: what an idle worker waits in.
 _POOL_RUN_RE = re.compile(r"^(?:nsThreadPool::Run|mozilla::ThreadFuncPoolThread)$")
 
-# Language/FFI glue between the work and the frame that names it: uniffi scaffolding, XPConnect,
-# the JS engine. Skipped only when choosing the OUTERMOST frame for a title -- the work a
-# ``uniffi_suggest_fn_method_suggeststore_ingest`` frame runs is the ``SuggestStore::ingest``
-# above it.
+# In bug 2073276's NSPR revision, ``pruthr.c:435`` is the call to ``_PR_NotifyJoinWaiters`` after
+# ``startFunc`` returned. Restrict the inference to that source location; `_pt_root` does not
+# have the same behavior.
+_RUN_LOOP_RE = re.compile(
+    r"^(?:nsThread::ThreadFunc|nsThreadPool::Run|mozilla::ThreadFuncPoolThread|"
+    r"NS_ProcessNextEvent|nsThread::ProcessNextEvent|MessageLoop::Run\w*|"
+    r"mozilla::ipc::MessagePumpForNonMainThreads::Run|base::MessagePump\w*::Run|"
+    r"base::Thread::ThreadMain)$")
+_WINDOWS_THREAD_EXIT_RE = re.compile(r"^_PR_NativeRunThread$")
+_WINDOWS_JOIN_WAIT_PATH = "nsprpub/pr/src/threads/combined/pruthr.c"
+_WINDOWS_JOIN_WAIT_LINE = 435
+
+# Recognized shutdown control-flow frames. On a running main thread, the frames above the first
+# such frame are the sampled work to investigate. Bug 2074041 demonstrated why the actor walk
+# itself is not enough: destroying managed actors necessarily runs their destructors.
+_SHUTDOWN_MACHINERY_RE = re.compile(
+    r"^(?:"
+    r"nsThread::Shutdown\w*|nsThreadPool::Shutdown\w*|nsThreadManager::Shutdown\w*|"
+    r"nsThreadManager::SpinEventLoopUntil\w*|mozilla::SpinEventLoopUntil\w*|"
+    r"mozilla::AppShutdown::\w+|mozilla::ShutdownXPCOM|NS_ShutdownXPCOM|"
+    r"mozilla::KillClearOnShutdown|nsObserverService::NotifyObservers|"
+    r"nsAppStartup::(?:Quit|Observe|ExitLastWindowClosingSurvivalArea)|"
+    r"mozilla::ipc::IProtocol::(?:ActorDisconnected|DestroySubtree|DoomSubtree|ActorDestroy)|"
+    r"mozilla::ipc::MessageChannel::(?:Close|NotifyChannelClosed|NotifyMaybeChannelError|"
+    r"OnNotifyMaybeChannelError|Clear|OnChannelErrorFromLink)|"
+    r"mozilla::dom::ContentParent::(?:ShutDownProcess|ActorDestroy|MarkAsDead|"
+    r"ShutDownMessageManager|RemoveFromList)|"
+    r"mozilla::dom::ContentProcessManager::\w+"
+    r")$")
+# Prefer the frame that names what is shutting down; use the channel close as a fallback.
+_SHUTDOWN_SUBJECT_TIERS = (
+    re.compile(r"^(?:mozilla::dom::ContentParent::ShutDownProcess|nsThread::Shutdown|"
+               r"nsThreadPool::Shutdown\w*|nsThreadManager::Shutdown\w*|mozilla::ShutdownXPCOM)$"),
+    re.compile(r"^mozilla::ipc::MessageChannel::Close$"),
+)
+
+# Language/FFI and generated IPDL glue skipped when choosing the outer title/routing frame.
+# Generated IPDL dispatch glue is also excluded from a main-thread work prefix.
+_IPDL_GLUE_RE = re.compile(
+    r"(?:^|::)P\w+(?:Parent|Child)::(?:DeallocManagee|RemoveManagee|OnMessageReceived|"
+    r"OnCallReceived)\b")
 _GLUE_RE = re.compile(
     r"^(?:mozilla::uniffi::|XPTC_|XPCWrappedNative::|XPC_WN_|js::|JS::|"
     r"mozilla::dom::\w+Binding::|mozilla::dom::binding_detail::|nsXPCWrappedJS|"
-    r"mozilla::RunMicroTask|mozilla::CycleCollectedJSContext::)|(?:^|::)uniffi_")
+    r"mozilla::RunMicroTask|mozilla::CycleCollectedJSContext::)|(?:^|::)uniffi_|"
+    r"(?:^|::)P\w+(?:Parent|Child)::(?:DeallocManagee|RemoveManagee|OnMessageReceived|"
+    r"OnCallReceived)\b")
 
 # `BgIOThreadPool #510` -> `BgIOThreadPool`; `BgIOThr~ool #15` -> `BgIOThr~ool`.
 _INSTANCE_RE = re.compile(r"\s*#?\d+$")
+
+# This signature identifies a watchdog sample rather than a main-thread fault.
+_SHUTDOWNHANG_PREFIX = "shutdownhang |"
 
 
 def spin_entries(value):
@@ -208,6 +250,111 @@ def is_idle(frames):
     return not work_frames(frames)
 
 
+def has_exited(frames):
+    """Recognize the source-mapped Windows NSPR join-wait seen in bug 2073276."""
+    frames = frames or []
+    if not frames or not is_idle(frames):
+        return False
+    labels = [clean_symbol(_function(f)) for f in frames]
+    if not any(
+            _WINDOWS_THREAD_EXIT_RE.match(clean_symbol(_function(f)))
+            and _frame_path(f.get("file")) == _WINDOWS_JOIN_WAIT_PATH
+            and f.get("line") == _WINDOWS_JOIN_WAIT_LINE
+            for f in frames if isinstance(f, dict)):
+        return False
+    return not any(_RUN_LOOP_RE.match(x) for x in labels if x)
+
+
+def is_machinery(frame):
+    return _matches(_SHUTDOWN_MACHINERY_RE, frame)
+
+
+def main_work(frames):
+    """Extract the main-thread prefix above recognized shutdown control flow.
+
+    Returns ``None`` for a parked or unsymbolized top frame, or without recognized shutdown
+    control flow below the prefix. Generated dispatch glue is excluded. ``machinery`` is the
+    preferred frame naming what is shutting down, or the first recognized control-flow frame."""
+    frames = frames or []
+    if not frames or not _function(frames[0]) or is_wait(frames[0]):
+        return None
+    work, machinery = [], None
+    subjects = [None] * len(_SHUTDOWN_SUBJECT_TIERS)
+    for f in frames[:60]:
+        if not isinstance(f, dict):
+            continue
+        if is_machinery(f):
+            if machinery is None:
+                machinery = f
+            for tier, regex in enumerate(_SHUTDOWN_SUBJECT_TIERS):
+                if subjects[tier] is None and _matches(regex, f):
+                    subjects[tier] = f
+            continue
+        if (machinery is None and _label(f) and not is_wait(f) and not is_plumbing(f)
+                and not _IPDL_GLUE_RE.search(_label(f))):
+            work.append(f)
+    if machinery is None or not work:
+        return None
+    subject = next((s for s in subjects if s is not None), None)
+    return {"frames": work, "machinery": subject or machinery}
+
+
+def main_summary(raw):
+    """The main thread caught RUNNING at shutdown, for the summary: ``{"index", "name",
+    "frames" (top ``MAX_FRAMES``, normalised), "work", "call", "machinery", "bucket", "files",
+    "title"}``, or ``None`` when it is parked or ``main_work`` finds no shape. The title reports
+    the sampled work and shutdown context without claiming that one sample proves causation.
+
+    Only under a ``shutdownhang |`` signature: there the watchdog thread crashed and the main
+    thread's frames are a live sample of what it was doing. On an ``AsyncShutdownTimeout`` the
+    MAIN thread aborted on purpose, and its top frames are the abort, not work."""
+    from crashclouseau import inspector
+
+    if not str((raw or {}).get("signature") or "").startswith(_SHUTDOWNHANG_PREFIX):
+        return None
+    threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
+    idx = inspector.thread_for_analysis(raw)
+    if not isinstance(idx, int) or not 0 <= idx < len(threads):
+        return None
+    if not isinstance(threads[idx], dict):
+        return None
+    frames = threads[idx].get("frames") or []
+    found = main_work(frames)
+    if not found:
+        return None
+    work = found["frames"]
+    outer = [f for f in work if not _GLUE_RE.search(_label(f))] or work
+    what, call = clean_symbol(_label(outer[-1])), clean_symbol(_label(work[0]))
+    machinery = clean_symbol(_label(found["machinery"]))
+    machinery_frames = [f for f in frames[:60] if isinstance(f, dict) and is_machinery(f)]
+    title = "{} during {}".format(what, machinery)
+    if call and call != what:
+        title += " inside {}".format(call)
+    return {"index": idx, "name": str(threads[idx].get("thread_name") or "").strip(),
+            "frames": normalize_frames(frames, limit=MAX_FRAMES),
+            "work": what, "call": call, "machinery": machinery,
+            "work_frames": len(work),
+            # A shared work/control-flow file cannot establish which code a citation supports.
+            "machinery_files": sorted({_frame_path(f.get("file")) for f in machinery_frames
+                                       if _frame_path(f.get("file"))}),
+            # Preserve frame lines so the gate can distinguish the two regions.
+            "work_lines": _frame_lines(work),
+            "machinery_lines": _frame_lines(machinery_frames),
+            "bucket": bucket_key(work),
+            "files": sorted({_frame_path(f.get("file")) for f in work if _frame_path(f.get("file"))}),
+            "title": title[:_MAX_TITLE]}
+
+
+def _frame_lines(frames):
+    """``[[path, line], ...]`` for the frames of *frames* that carry both, in stack order."""
+    out = []
+    for f in frames or []:
+        path, line = _frame_path((f or {}).get("file")), (f or {}).get("line")
+        if path and isinstance(line, int) and line > 0:
+            out.append([path, line])
+    return out
+
+
 def _frame_path(uri):
     """The source path of a frame's ``file`` URI, or ``""``. Hg and git URIs both carry the path
     as their second colon-separated field; no hash conversion here, because that costs a lando
@@ -216,7 +363,11 @@ def _frame_path(uri):
     m = re.match(r"^(?:hg|git):[^:]*:([^:]*):", text)
     if m:
         return m.group(1)
-    return "" if ":" in text and text.startswith(("hg:", "git:")) else text
+    # Generated source URI, e.g. an IPDL implementation.
+    m = re.match(r"^s3:gecko-generated-sources:[0-9a-f]+/([^:]+):?", text)
+    if m:
+        return m.group(1)
+    return "" if ":" in text and text.startswith(("hg:", "git:", "s3:")) else text
 
 
 def normalize_frames(frames, limit=MAX_FRAMES):
@@ -259,8 +410,9 @@ def awaited_threads(raw):
         elif not thread_matches(name, target["name"]):
             continue
         out.append({"index": i, "name": name, "frames": normalize_frames(frames, limit=60),
-                    "idle": is_idle(frames)})
-    out.sort(key=lambda d: (d["idle"], -len(d["frames"]), d["index"]))
+                    "idle": is_idle(frames), "exited": has_exited(frames)})
+    # Busy first, then the Windows exit shape, then idle.
+    out.sort(key=lambda d: (d["idle"], not d["exited"], -len(d["frames"]), d["index"]))
     return out
 
 
@@ -377,32 +529,67 @@ def bucket_title(frames, target):
     return title[:_MAX_TITLE]
 
 
+def _with_main(out, main):
+    """Promote sampled main-thread work to the summary's top-level routing fields."""
+    out["main"] = main
+    out["bucket"] = main["bucket"]
+    out["files"] = main["files"]
+    out["title"] = main["title"]
+    return out
+
+
 def awaited_summary(raw):
-    """Everything downstream wants to know about the awaited work, or ``None`` when the spin
-    stack names nothing this module can find: ``target`` (the innermost spin entry), ``kind``,
-    ``name``, ``threads``/``busy``/``idle`` counts, and -- when a thread is busy -- ``thread``
-    (``index``, ``name``, the top ``MAX_FRAMES`` frames), ``bucket``, ``files``, ``title`` and
-    ``other_busy`` (the other busy threads' indexes, names and buckets)."""
+    """Summarize the observable subject of a shutdown hang.
+
+    The subject is a busy awaited thread, a Windows thread in the proven post-``ThreadFunc``
+    join-wait shape, or sampled main-thread work when no awaited target is identifiable. An
+    all-idle awaited set yields counts only because the dump does not expose its work."""
     target = spin_target(raw)
+    main = main_summary(raw)
     if target is None:
-        return None
+        if main is None:
+            return None
+        return _with_main({"target": None, "kind": None, "name": None, "threads": 0,
+                           "busy": 0, "idle": 0, "exited": 0}, main)
     threads = awaited_threads(raw)
     busy = [t for t in threads if not t["idle"]]
+    exited = [t for t in threads if t["idle"] and t.get("exited")]
     out = {"target": target["entry"], "kind": target["kind"], "name": target["name"],
-           "threads": len(threads), "busy": len(busy), "idle": len(threads) - len(busy)}
-    if not busy:
+           "threads": len(threads), "busy": len(busy), "idle": len(threads) - len(busy),
+           "exited": len(exited)}
+    if busy:
+        head = busy[0]
+        frames = head["frames"]
+        out["thread"] = {"index": head["index"], "name": head["name"],
+                         "frames": frames[:MAX_FRAMES]}
+        out["bucket"] = bucket_key(frames)
+        # The WORK frames' files only: the thread-start and event-loop files under them are on
+        # every thread in the process and say nothing about this one.
+        out["files"] = sorted({f["filename"] for f in work_frames(frames) if f.get("filename")})
+        out["title"] = bucket_title(frames, target)
+        out["other_busy"] = [{"index": t["index"], "name": t["name"],
+                              "bucket": bucket_key(t["frames"])} for t in busy[1:4]]
         return out
-    head = busy[0]
-    frames = head["frames"]
-    out["thread"] = {"index": head["index"], "name": head["name"],
-                     "frames": frames[:MAX_FRAMES]}
-    out["bucket"] = bucket_key(frames)
-    # The WORK frames' files only: the thread-start and event-loop files under them are on
-    # every thread in the process and say nothing about this one.
-    out["files"] = sorted({f["filename"] for f in work_frames(frames) if f.get("filename")})
-    out["title"] = bucket_title(frames, target)
-    out["other_busy"] = [{"index": t["index"], "name": t["name"],
-                          "bucket": bucket_key(t["frames"])} for t in busy[1:4]]
+    if exited:
+        head = exited[0]
+        out["exited_thread"] = {"index": head["index"], "name": head["name"],
+                                "frames": head["frames"][:MAX_FRAMES]}
+        base = _INSTANCE_RE.sub("", head["name"]).strip() or target["name"] or "the awaited thread"
+        # Include the main-thread sample because it supplies the title, files and candidate.
+        out["bucket"] = "unjoined | {}".format(base)
+        if main is not None and main.get("bucket"):
+            out["bucket"] += " | {}".format(main["bucket"])
+        out["bucket"] = out["bucket"][:400]
+        if main is not None:
+            out["main"] = main
+            out["files"] = main["files"]
+            title = ("{} finished its run loop; join pending while the main thread is busy in {}"
+                     .format(base, main["work"]))
+        else:
+            out["files"] = []
+            title = "{} finished its run loop; nsThread::Shutdown has not completed its join".format(
+                base)
+        out["title"] = title[:_MAX_TITLE]
     return out
 
 
@@ -416,10 +603,10 @@ _EMAIL_RE = re.compile(r"<([^<>@\s]+@[^<>\s]+)>")
 
 
 def work_frame_candidates(frames):
-    """The frames whose blame names the owner of a busy thread's work, best first: the outermost
-    non-glue work frame (the runnable's entry, e.g. ``SuggestStore::ingest``), then inward, at
-    most ``_ORIGIN_ATTEMPTS``. Frames with no source file, or in a vendored crate, are skipped:
-    nobody here owns ``pollster`` or a Windows DLL."""
+    """Work frames to try for deterministic blame routing, best first.
+
+    Prefer the outermost non-glue frame, then move inward. Skip frames without a source line and
+    vendored code whose blame identifies an import rather than the underlying implementation."""
     work = work_frames(frames)
     outer = [f for f in work if not _GLUE_RE.search(_label(f))] or work
     out = []
@@ -473,28 +660,37 @@ def origin_from_row(row, frame, stackpos=None):
 
 
 def awaited_origin(raw, channel):
-    """Who last changed the AWAITED WORK: the blame of the awaited thread's work frame, as
-    ``origin_from_row`` shapes it, or ``None``.
+    """Blame an extracted awaited- or main-thread work frame for deterministic routing.
 
-    Bug 2073349's verification run (2026-09-18): handed the awaited thread, the model still took
-    its ``candidate`` -- the origin an ``actionable`` verdict routes by -- from the WAIT code's
-    blame (a Jens changeset in ``xpcom/threads``), and the age gate rightly refused it. The
-    routing has to be deterministic: blame the frame that names the work. Measured on the three
-    legacy buckets it lands where :jstutte routed by hand -- Suggest: bug 1952588, Application
-    Services :: General, adw; CUPS: bug 1826872, Toolkit :: Printing, emcdonough; the audio
-    session: bug 2055710, alwu. One to three hg requests, only on a hang with a busy awaited
-    thread; the frame's revision comes from its own URI (git, converted through lando the way
-    the history tool does). Never raises."""
-    from crashclouseau import inspector
-
+    Returns an ``origin_from_row`` record with ``source`` set to ``awaited`` or ``main``, or
+    ``None`` when no candidate line can be blamed."""
     threads = awaited_threads(raw)
     busy = [t for t in threads if not t["idle"]]
-    if not busy:
+    if busy:
+        index = busy[0]["index"]
+        all_frames = (((raw or {}).get("json_dump") or {}).get("threads") or [])[index].get(
+            "frames") or []
+        origin = _origin_of(work_frame_candidates(all_frames), all_frames, channel)
+        return dict(origin, source="awaited") if origin else None
+    # With no busy awaited thread, route by the extracted main-thread work when available.
+    summary = awaited_summary(raw)
+    main = (summary or {}).get("main")
+    if not main or not (summary or {}).get("title"):
         return None
-    index = busy[0]["index"]
-    all_frames = (((raw or {}).get("json_dump") or {}).get("threads") or [])[index].get(
+    all_frames = (((raw or {}).get("json_dump") or {}).get("threads") or [])[main["index"]].get(
         "frames") or []
-    for frame in work_frame_candidates(all_frames):
+    found = main_work(all_frames)
+    if not found:
+        return None
+    origin = _origin_of(work_frame_candidates(found["frames"]), all_frames, channel)
+    return dict(origin, source="main") if origin else None
+
+
+def _origin_of(candidates, all_frames, channel):
+    """The first of *candidates* whose line hg can blame, as ``origin_from_row`` shapes it."""
+    from crashclouseau import inspector
+
+    for frame in candidates:
         try:
             path, node = inspector.get_path_node(frame.get("file"))
         except Exception:  # noqa: BLE001 - lando may be down; the next frame may not need it

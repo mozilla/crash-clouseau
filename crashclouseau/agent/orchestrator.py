@@ -2740,19 +2740,11 @@ def _apply_absent_thread_gate(dossier, seed):
 
 
 def _record_hang_awaited_work(dossier, seed):
-    """Record the AWAITED WORK of a shutdown hang: the thread the main thread is waiting for,
-    its top frames, its bucket key and a deterministic bucket title (``hang.awaited_summary``).
-    Moves no rung.
+    """Persist ``hang.awaited_summary`` for a watchdog crash without changing its verdict.
 
-    Bug 2073349. The report's ``xpcom_spin_event_loop_stack`` named ``BgIOThreadPool`` and the
-    pool's one busy thread sat at index 25 in ``SuggestStore::ingest -> RemoteSettingsClient::
-    sync -> viaduct::Client::send_sync``; the verdict explained the wait instead, and the bug
-    named the wait code's author. The same extraction feeds the prompt (``triage.
-    _awaited_work_lines``), so this is the persisted copy: what the bug prints
-    (``report_bug.build_awaited_work_block``), what the filer keys a bucket-holder signature's
-    dedup and fallback title on, and what ``_apply_hang_wait_gate`` compares the mechanism to.
-    Only on a watchdog crash (``utils.is_watchdog_crash``), and unrecorded rather than empty
-    when the spin stack names nothing the thread list resolves."""
+    The subject may be busy awaited work, an exited-but-unjoined Windows thread, or sampled
+    main-thread work above recognized shutdown control flow. Nothing is recorded when the dump
+    exposes none of those shapes."""
     if dossier is None or not seed:
         return
     raw = seed.get("raw_crash") or {}
@@ -2795,31 +2787,21 @@ def _hang_awaited_origin(raw_crash, channel, signature=None):
 
 
 _ORIGIN_KEYS = ("node", "bug", "author", "author_email", "desc", "path", "line", "function",
-                "stackpos")
+                "stackpos", "source")
 
 
 def _apply_hang_origin_gate(dossier, seed):
-    """An ``actionable`` verdict on a shutdown hang is ROUTED BY THE AWAITED WORK: its
-    ``candidate`` becomes the blame of the awaited thread's work frame (the seed's
-    ``hang_awaited_origin``), whatever the model picked, and an empty ``title`` is filled from
-    the awaited work.
+    """Route an actionable hang by blame of its extracted work frame.
 
-    The verification run of 2026-09-18 (37d5021a, after the AWAITED WORK fact shipped): the
-    mechanism named Suggest -> Remote Settings -> viaduct correctly, and the candidate was still
-    `94ccd3fa3a5f`, a Jens changeset in `xpcom/threads` -- the blame of the wait's own line, which
-    is what rule 3 ("the changeset blame names for the cited line") literally asks for when the
-    first cited line is the wait. The age gate then killed it (612 days after the signature).
-    Routing is not the model's to get right: the frame that names the work is known, its blame is
-    one request, and on the three legacy buckets it lands where :jstutte routed by hand
-    (Application Services :: General / adw, Toolkit :: Printing / emcdonough, alwu). The model's
-    pick is kept as `hang_model_origin` so the disagreement stays measurable. Mutates in place;
-    never raises."""
+    This covers busy awaited work and sampled main-thread work (``source: awaited|main``).
+    Preserve a differing model choice in ``hang_model_origin`` and fill an empty deterministic
+    title. Mutates ``dossier`` in place."""
     v = dossier.verdict if dossier is not None else None
     if v is None or v.decision != Decision.actionable:
         return
     origin = (seed or {}).get("hang_awaited_origin") or {}
     work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
-    if not origin.get("node") or not work.get("thread"):
+    if not origin.get("node") or not (work.get("thread") or work.get("main")):
         return
     from crashclouseau.agent.schema import Candidate
 
@@ -2877,9 +2859,66 @@ def _ensure_actionable_title(dossier):
 
 # A searchfox permalink's path: `.../source/<path>#L1` or `.../rev/<rev>/<path>#1-2`.
 _SEARCHFOX_PATH_RE = re.compile(r"searchfox\.org/[^/\s]+/(?:source|rev/[^/\s]+)/([^#?\s]+)")
-# The code every shutdown hang's MAIN thread waits in, whatever the awaited thread does: the
-# spin loops, the pool and thread shutdown paths, XPCOM shutdown itself.
-_WAIT_CODE_PREFIXES = ("xpcom/threads/", "xpcom/build/")
+# Paths that may contain generic wait/shutdown control flow. Work-file exceptions below keep
+# real work under broad directories such as ``ipc/glue`` from being filtered.
+_WAIT_CODE_PREFIXES = (
+    "xpcom/threads/", "xpcom/build/", "xpcom/base/AppShutdown", "xpcom/ds/nsObserverService",
+    "ipc/glue/", "ipc/ipdl/", "dom/ipc/ContentParent.cpp", "dom/ipc/ContentProcessManager",
+    "toolkit/components/asyncshutdown/", "toolkit/components/terminator/",
+)
+
+
+# The line a searchfox permalink points at: `#L702`, `#702`, `#700-710` (the first number).
+_SEARCHFOX_LINE_RE = re.compile(r"#L?(\d+)")
+
+
+def _citation_locations(claim):
+    """``[(path, line), ...]`` for a claim's citations: the path as ``_citation_paths`` finds
+    it, the line as the citation carries it (``line`` on a diff-line / stack-frame / ref
+    citation, the fragment of a searchfox permalink), ``None`` when it carries none."""
+    out = []
+    for c in getattr(claim, "citations", None) or []:
+        filename = str(getattr(c, "filename", "") or "").strip().strip("/")
+        permalink = str(getattr(c, "permalink", "") or "")
+        m = _SEARCHFOX_PATH_RE.search(permalink)
+        if not filename:
+            if not m:
+                continue
+            filename = m.group(1).strip("/")
+        try:
+            line = int(getattr(c, "line", None) or 0)
+        except (TypeError, ValueError):
+            line = 0
+        # A `RefCitation` carries `filename`, `line` (default 0) and `permalink` at once, and the
+        # model fills the first and last and leaves the line at zero: the fragment is the line.
+        if line <= 0 and m:
+            n = _SEARCHFOX_LINE_RE.search(permalink[m.end():])
+            line = int(n.group(1)) if n else 0
+        out.append((filename, line if line > 0 else None))
+    return out
+
+
+# Heuristic radius for deciding whether a citation in a shared work/control-flow file supports
+# the sampled work frame. A missing or distant line remains ambiguous.
+_SHARED_FILE_LINE_WINDOW = 80
+
+
+def _cites_work_line(path, line, main_work):
+    """Is a citation in a shared file close enough to treat as sampled work?
+
+    It must be within the configured radius of a work frame and no closer to a control-flow
+    frame. Missing and distant lines are ambiguous and return ``False``."""
+    if not line:
+        return False
+    work = [ln for p, ln in main_work.get("work_lines") or [] if p == path]
+    if not work:
+        return False
+    machinery = [ln for p, ln in main_work.get("machinery_lines") or [] if p == path]
+    to_work = min(abs(line - ln) for ln in work)
+    if to_work > _SHARED_FILE_LINE_WINDOW:
+        return False
+    to_machinery = min((abs(line - ln) for ln in machinery), default=None)
+    return to_machinery is None or to_work <= to_machinery
 
 
 def _citation_paths(claim):
@@ -2898,51 +2937,62 @@ def _citation_paths(claim):
 
 
 def _apply_hang_wait_gate(dossier, seed):
-    """An ``actionable`` verdict on a shutdown hang whose cited mechanism is THE WAIT is not
-    actionable: it becomes a ``pre_existing`` abstain that keeps its mechanism.
+    """Downgrade actionable hangs supported only by generic wait/shutdown code.
 
-    Bug 2073349 (2026-09-18). The mechanism cited ``xpcom/threads/nsThreadManager.cpp:214`` and
-    ``nsThreadPool.cpp:533/588/615`` -- ``Shutdown()`` is ``ShutdownWithTimeout(-1)``, no timer,
-    unbounded ``SpinEventLoopUntil`` -- and the bug asked the author of those lines to look.
-    That is true of every report under ``shutdownhang | ... | nsThreadPool::ShutdownWithTimeout``
-    and is what its [meta] tracker (bug 1866944) is about; :jstutte: "I'd want to get that
-    isolated without explaining me each time how shutdown hangs work." The finding, when there
-    is one, is on the awaited thread (thread 25 here), and a mechanism that cites none of its
-    code and only the waiting thread's has not looked there.
-
-    THRESHOLD-FREE AND STRUCTURAL: the cited paths are all files of the analysed (waiting)
-    thread's frames or under the XPCOM threading/shutdown directories, and none is a file of
-    the awaited thread's work frames. A mechanism that reaches the awaited work through code
-    NOT on its stack -- Jens's own 2073426 cites the viaduct necko backend's timer and the
-    Suggest blocker, neither on thread 25 -- cites no wait-code-only set and is untouched. Fires
-    equally when the awaited threads are all idle (the catch-all with nothing behind it) and
-    only on ``actionable``: a ``lead`` about the wait code names a changeset that touched it,
-    which is a different claim with its own gates. Mutates in place; never raises."""
+    Citations to extracted awaited or main-thread work pass. In a file shared with shutdown
+    control flow, a nearby line must distinguish the work. If no subject was extracted, this
+    fallback applies only to ``shutdownhang |`` signatures and known control-flow paths.
+    Mutates ``dossier`` in place."""
     v = dossier.verdict if dossier is not None else None
     if v is None or v.decision != Decision.actionable:
-        return
-    work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
-    if not work:
         return
     cited = _citation_paths(v.mechanism)
     if not cited:
         return
-    if cited & set(work.get("files") or []):
-        return
+    work = (dossier.corroborations or {}).get("hang_awaited_work") or {}
     raw = (seed or {}).get("raw_crash") or {}
     from crashclouseau import hang, inspector
 
-    idx = inspector.thread_for_analysis(raw)
-    waiting = hang.thread_files(raw, idx) if isinstance(idx, int) else set()
-    if not all(p in waiting or p.startswith(_WAIT_CODE_PREFIXES) for p in cited):
-        return
-    thread = work.get("thread") or {}
-    if thread:
-        where = "thread {} `{}` ({})".format(
-            thread.get("index"), thread.get("name") or "unnamed", work.get("bucket") or "?")
+    if not work:
+        # Other timeout signatures abort on the main thread and need different interpretation.
+        signature = str((seed or {}).get("signature") or raw.get("signature") or "")
+        if not raw or not signature.startswith(hang._SHUTDOWNHANG_PREFIX):
+            return
+        if not all(p.startswith(_WAIT_CODE_PREFIXES) for p in cited):
+            return
+        where = "not visible in this dump (no specific awaited or main-thread work was extracted)"
     else:
-        where = "not visible in this dump (the {} thread{} idle)".format(
-            work.get("name") or "awaited", " is" if work.get("threads") == 1 else "s are all")
+        # Awaited work may legitimately live under a broad control-flow directory. Shared
+        # main-thread files require line-level disambiguation.
+        main_work = work.get("main") or {}
+        shared = set(main_work.get("machinery_files") or [])
+        work_files = set(work.get("files") or []) - shared
+        if cited & work_files:
+            return
+        # A missing line in a shared file remains ambiguous.
+        if any(path in shared and _cites_work_line(path, line, main_work)
+               for path, line in _citation_locations(v.mechanism)):
+            return
+        idx = inspector.thread_for_analysis(raw)
+        waiting = hang.thread_files(raw, idx) if isinstance(idx, int) else set()
+        if not all(p in waiting or p.startswith(_WAIT_CODE_PREFIXES) for p in cited):
+            return
+        thread = work.get("thread") or {}
+        exited = work.get("exited_thread") or {}
+        main = work.get("main") or {}
+        if thread:
+            where = "thread {} `{}` ({})".format(
+                thread.get("index"), thread.get("name") or "unnamed", work.get("bucket") or "?")
+        elif exited:
+            where = ("the pending join for thread {} `{}`, whose run loop has exited{}".format(
+                exited.get("index"), exited.get("name") or "unnamed",
+                "; the main thread was busy in {}".format(main.get("work")) if main else ""))
+        elif main:
+            where = "the main thread's own work above the shutdown machinery ({})".format(
+                work.get("bucket") or "?")
+        else:
+            where = "not visible in this dump (the {} thread{} idle)".format(
+                work.get("name") or "awaited", " is" if work.get("threads") == 1 else "s are all")
     dossier.corroborations = {
         **dossier.corroborations, "hang_wait_not_actionable": sorted(cited)}
     dossier.verdict = Verdict(

@@ -438,6 +438,25 @@ heroku run -a crash-clouseau-augmented -- python bin/backfill_bucket.py --bug 20
 Cleanup owed on BMO from before: 2069191 still carries the signature and the `topcrash` keyword
 BugBot added for it (Jens moves both to the tracker, as on 2071528).
 
+### Two more hang shapes: an exited awaited thread, a running main thread (2026-09-21)
+
+Bugs 2073276 and 2074041 exposed two missing shapes:
+
+- On Windows, `_PR_NativeRunThread` at the report's `pruthr.c:435`, without a run-loop frame, is
+  the post-`startFunc` join-wait path. It is recorded as `exited_thread`, not an idle worker. This
+  inference does not apply to pthread `_pt_root`.
+- When no awaited thread is named, `hang.main_work` records the sampled main-thread prefix above
+  recognized shutdown control flow. Generated IPDL dispatch glue is excluded. The title describes
+  where the sample occurred; it does not claim that one sample proves the cause of the timeout.
+
+Both shapes route by blame of the sampled main-thread work when available. The wait gate now
+recognizes more shutdown-control-flow paths and uses line proximity when work and control flow
+share a file. Awaited work under a broad path such as `ipc/glue/` remains eligible.
+
+Nothing to configure. The `shutdown-hang` archetype row gains two sentences and its previous
+fingerprint is in `_SUPERSEDED`, so `bin/release.py`'s seed upgrades an untouched prod row.
+After deploy, verify an applicable dossier contains `hang_awaited_work.main` or `exited_thread`.
+
 ## OOM aborts and the `actionable` verdict (2026-09-21)
 
 Bug 2073760 filed a `Zone::New` OOM-unsafe abort as actionable. :iain closed it WONTFIX and noted

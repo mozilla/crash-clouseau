@@ -496,8 +496,8 @@ class TestThePromptFact(unittest.TestCase):
         self.assertNotIn("AWAITED WORK", facts)
 
 
-def _actionable(paths, title="", decision=Decision.actionable):
-    cits = [RefCitation(filename=p, line=1) for p in paths]
+def _actionable(paths, title="", decision=Decision.actionable, lines=None):
+    cits = [RefCitation(filename=p, line=(lines or {}).get(p, 1)) for p in paths]
     return Dossier(
         candidate=Candidate(node="5017c221a10c", bug=1747526, author="Nika Layzell"),
         verdict=Verdict(decision=decision, confidence=Confidence.probable, title=title,
@@ -578,8 +578,14 @@ class TestTheOrchestrator(unittest.TestCase):
         orch._record_hang_awaited_work(d, seed)
         orch._apply_hang_wait_gate(d, seed)
         self.assertEqual(d.verdict.decision, Decision.actionable)
-        # No spin target recorded: nothing to compare against.
+        # No spin target recorded: the machinery prefixes alone decide (2026-09-21 -- bug
+        # 2074041's `AsyncShutdown Spinner` named no thread, this gate had nothing to read, and
+        # an `ipc/glue`-only mechanism was filed). Wait code only -> abstain; anything off the
+        # machinery -> stands.
         d = _actionable(["xpcom/threads/nsThreadPool.cpp"])
+        orch._apply_hang_wait_gate(d, _seed(_hang([_SUGGEST], spin="")))
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        d = _actionable(["xpcom/threads/nsThreadPool.cpp", _AS + "viaduct/src/client.rs"])
         orch._apply_hang_wait_gate(d, _seed(_hang([_SUGGEST], spin="")))
         self.assertEqual(d.verdict.decision, Decision.actionable)
 
@@ -1117,6 +1123,385 @@ class TestTheBackfill(unittest.TestCase):
             backfill.canonical_fields([
                 {"uuid": "u", "filing": {"mode": "spike_comment"}},
             ], lambda uuid: {})
+
+
+# ---------------------------------------------------------------------------------------------
+# Regression shapes from bugs 2073276 and 2074041: a Windows thread past `ThreadFunc`, and
+# sampled main-thread work when the spin stack names no awaited thread.
+
+# Thread 58 of e8d243bc-b984-442d-9bcd-545ac0260917 (bug 2073276, Windows), in shape: no
+# `nsThread::ThreadFunc`, no `NS_ProcessNextEvent`; `_PR_NativeRunThread` at pruthr.c:435 is
+# AFTER `startFunc` returned.
+_EXITED_SQLDB = {"thread_name": "sqldb:domain_to_categories.sqlite #7", "frames": [
+    _f("NtWaitForSingleObject", "ntdll.dll"),
+    _f("WaitForSingleObjectEx", "KERNELBASE.dll"),
+    _f("_PR_NativeRunThread(void*)", "nss3.dll", "nsprpub/pr/src/threads/combined/pruthr.c", 435),
+    _f("pr_root(void*)", "nss3.dll", "nsprpub/pr/src/md/windows/w95thred.c", 137),
+    _f("thread_start<unsigned int (__cdecl*)(void *),1>", "ucrtbase.dll"),
+    _f("BaseThreadInitThunk", "kernel32.dll"),
+    _f("RtlUserThreadStart", "ntdll.dll"),
+]}
+# Thread 48 of the same dump is still inside its event loop, unlike `_EXITED_SQLDB`.
+_IDLE_SQLDB = {"thread_name": "sqldb:places.sqlite #1", "frames": [
+    _f("ZwWaitForAlertByThreadId", "ntdll.dll"),
+    _f("RtlWaitOnAddress", "ntdll.dll"),
+    _f("WaitOnAddress", "KERNELBASE.dll"),
+    _f("mozilla::detail::ConditionVariableImpl::wait(mozilla::detail::MutexImpl&)", "xul.dll",
+       "mozglue/misc/ConditionVariable_futex.cpp", 26),
+    _f("NS_ProcessNextEvent(nsIThread*, bool)", "xul.dll", "xpcom/threads/nsThreadUtils.cpp", 471),
+    _f("mozilla::ipc::MessagePumpForNonMainThreads::Run(base::MessagePump::Delegate*)", "xul.dll",
+       "ipc/glue/MessagePump.cpp", 327),
+    _f("MessageLoop::RunHandler()", "xul.dll", "ipc/chromium/src/base/message_loop.cc", 364),
+    _f("nsThread::ThreadFunc(void*)", "xul.dll", "xpcom/threads/nsThread.cpp", 375),
+    _f("_PR_NativeRunThread(void*)", "nss3.dll", "nsprpub/pr/src/threads/combined/pruthr.c", 403),
+    _f("pr_root(void*)", "nss3.dll", "nsprpub/pr/src/md/windows/w95thred.c", 137),
+    _f("BaseThreadInitThunk", "kernel32.dll"),
+    _f("RtlUserThreadStart", "ntdll.dll"),
+]}
+# The main thread of the same dump: NOT parked -- processing a PBackground message inside the
+# nested `nsThread::Shutdown` spin that waits for the exited thread's ack.
+_MAIN_JOINING = {"thread_name": "MainThread", "frames": [
+    _f("ZwUserPostMessage", "win32u.dll"),
+    _f("PostMessageW", "user32.dll"),
+    _f("nsThread::Dispatch(already_AddRefed<nsIRunnable>, nsIEventTarget::DispatchFlags)",
+       "xul.dll", "xpcom/threads/nsThread.cpp", 702),
+    _f("mozilla::MozPromise<bool,nsresult,1>::Private::Resolve<bool>(bool&&, "
+       "mozilla::StaticString)", "xul.dll", "xpcom/threads/MozPromise.h", 1389),
+    _f("mozilla::dom::ClientHandle::OnShutdownThing()", "xul.dll",
+       "dom/clients/manager/ClientHandle.cpp", 65),
+    _f("mozilla::ipc::IProtocol::ActorDisconnected(mozilla::ipc::IProtocol::ActorDestroyReason)",
+       "xul.dll", "ipc/glue/ProtocolUtils.cpp", 614),
+    _f("mozilla::dom::PClientHandleChild::OnMessageReceived(IPC::Message const&)", "xul.dll",
+       "ipc/ipdl/PClientHandleChild.cpp", 336),
+    _f("mozilla::ipc::MessageChannel::MessageTask::Run()", "xul.dll",
+       "ipc/glue/MessageChannel.cpp", 1614),
+    _f("NS_ProcessNextEvent(nsIThread*, bool)", "xul.dll", "xpcom/threads/nsThreadUtils.cpp", 471),
+    _f("nsThread::Shutdown()", "xul.dll", "xpcom/threads/nsThread.cpp", 921),
+    _f("mozilla::storage::Connection::shutdownAsyncThread()", "xul.dll",
+       "storage/mozStorageConnection.cpp", 1639),
+    _f("XREMain::XRE_main(int, char**, mozilla::BootstrapConfig const&)", "xul.dll",
+       "toolkit/xre/nsAppRunner.cpp", 6602),
+]}
+_SQLDB_SPIN = ("default: nsThread::Shutdown: sqldb:tabnotes.sqlite #9|nsThread::Shutdown: "
+               "sqldb:domain_to_categories.sqlite #7")
+_EXITED_TITLE = ("sqldb:domain_to_categories.sqlite finished its run loop; join pending while "
+                 "the main thread is busy in mozilla::dom::ClientHandle::OnShutdownThing")
+
+# The main thread of 0150350b-4dec-4c2f-8c7f-df3b40260918 (bug 2074041): caught in a cache
+# entry's certificate-chain destructor inside a content process's synchronous actor teardown.
+_MAIN_TEARDOWN = {"thread_name": "MainThread", "frames": [
+    _f("nsNSSCertificate::Release()", "xul.dll", "security/manager/ssl/nsNSSCertificate.cpp", 54),
+    _f("mozilla::psm::TransportSecurityInfo::~TransportSecurityInfo()", "xul.dll",
+       "security/manager/ssl/TransportSecurityInfo.h", 57),
+    _f("mozilla::net::CacheEntry::~CacheEntry()", "xul.dll", "netwerk/cache2/CacheEntry.cpp", 237),
+    _f("mozilla::net::CacheEntryHandle::Release()", "xul.dll", "netwerk/cache2/CacheEntry.cpp", 47),
+    dict(_f("mozilla::net::PNeckoParent::DeallocManagee(IPCMessageStart, mozilla::ipc::IProtocol*)",
+            "xul.dll"),
+         file="s3:gecko-generated-sources:2863d390e37f/ipc/ipdl/PNeckoParent.cpp:", line=1000),
+    _f("mozilla::ipc::IProtocol::ActorDisconnected(mozilla::ipc::IProtocol::ActorDestroyReason)",
+       "xul.dll", "ipc/glue/ProtocolUtils.cpp", 616),
+    _f("mozilla::ipc::MessageChannel::NotifyChannelClosed(mozilla::ReleasableMonitorAutoLockBase"
+       "<mozilla::Monitor>&)", "xul.dll", "ipc/glue/MessageChannel.cpp", 2289),
+    _f("mozilla::ipc::MessageChannel::Close()", "xul.dll", "ipc/glue/MessageChannel.cpp", 2261),
+    _f("mozilla::dom::ContentParent::ShutDownProcess(mozilla::dom::ContentParent::ShutDownMethod)",
+       "xul.dll", "dom/ipc/ContentParent.cpp", 1766),
+    _f("mozilla::dom::PContentParent::OnMessageReceived(IPC::Message const&)", "xul.dll",
+       "ipc/ipdl/PContentParent.cpp", 10622),
+    _f("mozilla::ipc::MessageChannel::MessageTask::Run()", "xul.dll",
+       "ipc/glue/MessageChannel.cpp", 1614),
+    _f("NS_ProcessNextEvent(nsIThread*, bool)", "xul.dll", "xpcom/threads/nsThreadUtils.cpp", 471),
+    _f("nsThreadManager::SpinEventLoopUntilInternal(nsTSubstring<char> const&, "
+       "nsINestedEventLoopCondition*, mozilla::ShutdownPhase)", "xul.dll",
+       "xpcom/threads/nsThreadManager.cpp", 706),
+    _f("nsObserverService::NotifyObservers(nsISupports*, char const*, char16_t const*)", "xul.dll",
+       "xpcom/ds/nsObserverService.cpp", 286),
+    _f("mozilla::AppShutdown::AdvanceShutdownPhaseInternal(mozilla::ShutdownPhase, bool, "
+       "char16_t const*, nsCOMPtr<nsISupports> const&)", "xul.dll", "xpcom/base/AppShutdown.cpp",
+       440),
+]}
+_ASYNC_SPIN = "default: AsyncShutdown Spinner for quit-application"
+_TEARDOWN_TITLE = ("mozilla::net::CacheEntryHandle::Release during mozilla::dom::ContentParent::"
+                   "ShutDownProcess inside nsNSSCertificate::Release")
+_MAIN_ORIGIN = {"node": "c0ffee000001", "bug": 1234567, "author": "Necko Dev <necko@mozilla.com>",
+                "author_email": "necko@mozilla.com", "path": "netwerk/cache2/CacheEntry.cpp",
+                "line": 47, "function": "mozilla::net::CacheEntryHandle::Release", "stackpos": 3,
+                "desc": "Bug 1234567 - cache entry handles. r=x", "source": "main"}
+
+
+def _main_hang(main, threads, spin, **over):
+    """A hang whose MAIN thread is *main* rather than the parked ``_MAIN``."""
+    raw = _hang(threads, spin=spin, **over)
+    raw["json_dump"]["threads"][0] = main
+    return raw
+
+
+class TestTheMainThreadSubjects(unittest.TestCase):
+    def test_an_exited_thread_is_not_idle_in_its_loop(self):
+        self.assertTrue(hang.has_exited(_EXITED_SQLDB["frames"]))
+        self.assertTrue(hang.is_idle(_EXITED_SQLDB["frames"]))
+        for t in (_IDLE_SQLDB, _IDLE_POOL, _SUGGEST):
+            self.assertFalse(hang.has_exited(t["frames"]), t["thread_name"])
+        # pthread `_pt_root` returns; it does not prove the Windows join-wait state.
+        self.assertFalse(hang.has_exited([
+            _f("__psynch_cvwait", "libsystem_kernel.dylib"),
+            _f("_pt_root", "libnss3.dylib"),
+        ]))
+        self.assertFalse(hang.has_exited([
+            _f("WaitForSingleObjectEx", "KERNELBASE.dll"),
+            _f("_PR_NativeRunThread(void*)", "nss3.dll",
+               "nsprpub/pr/src/threads/combined/pruthr.c", 403),
+        ]))
+        self.assertFalse(hang.has_exited([]))
+
+    def test_the_summary_says_the_awaited_thread_has_exited(self):
+        raw = _main_hang(_MAIN_JOINING, [_IDLE_SQLDB, _EXITED_SQLDB], _SQLDB_SPIN)
+        s = hang.awaited_summary(raw)
+        self.assertEqual((s["name"], s["threads"], s["busy"], s["idle"], s["exited"]),
+                         ("sqldb:domain_to_categories.sqlite #7", 1, 0, 1, 1))
+        self.assertEqual(s["exited_thread"]["name"], "sqldb:domain_to_categories.sqlite #7")
+        self.assertNotIn("thread", s)
+        # Different main-thread samples remain distinct buckets.
+        self.assertEqual(s["bucket"], "unjoined | sqldb:domain_to_categories.sqlite | "
+                                      "mozilla::dom::ClientHandle::OnShutdownThing | "
+                                      "ZwUserPostMessage")
+        self.assertEqual(s["title"], _EXITED_TITLE)
+        self.assertEqual(s["main"]["machinery"], "nsThread::Shutdown")
+        self.assertIn("dom/clients/manager/ClientHandle.cpp", s["files"])
+        self.assertEqual(s["main"]["machinery_files"],
+                         ["ipc/glue/ProtocolUtils.cpp", "xpcom/threads/nsThread.cpp"])
+        # With a parked main thread, the dump does not explain the pending handshake.
+        s = hang.awaited_summary(_hang([_EXITED_SQLDB], spin=_SQLDB_SPIN))
+        self.assertNotIn("main", s)
+        self.assertEqual(s["bucket"], "unjoined | sqldb:domain_to_categories.sqlite")
+        self.assertEqual(s["title"], "sqldb:domain_to_categories.sqlite finished its run loop; "
+                                     "nsThread::Shutdown has not completed its join")
+        self.assertEqual(s["files"], [])
+        # An idle thread in its loop is still the old shape: counts only, no subject.
+        s = hang.awaited_summary(_hang([_IDLE_SQLDB],
+                                       spin="default: nsThread::Shutdown: sqldb:places.sqlite #1"))
+        self.assertEqual((s["idle"], s["exited"]), (1, 0))
+        self.assertNotIn("title", s)
+
+    def test_the_prompt_says_exited_not_idle(self):
+        raw = _main_hang(_MAIN_JOINING, [_EXITED_SQLDB], _SQLDB_SPIN)
+        origin = dict(_MAIN_ORIGIN, path="dom/clients/manager/ClientHandle.cpp", stackpos=4)
+        text = "\n".join(triage._awaited_work_lines(raw, origin))
+        self.assertIn("RUN LOOP HAS EXITED", text)
+        self.assertIn("nsThreadShutdownAckEvent", text)
+        self.assertNotIn("idle in its own event loop", text)
+        self.assertIn("mozilla::dom::ClientHandle::OnShutdownThing()", text)
+        self.assertIn(_EXITED_TITLE, text)
+        self.assertIn("THIS is the `candidate`", text)
+        text = "\n".join(triage._awaited_work_lines(_hang([_EXITED_SQLDB], spin=_SQLDB_SPIN)))
+        self.assertIn("does not show why the ACK/join handshake had not completed", text)
+
+    def test_main_work_is_the_frames_above_the_machinery(self):
+        found = hang.main_work(_MAIN_TEARDOWN["frames"])
+        self.assertEqual(
+            [hang.clean_symbol(f["function"]) for f in found["frames"]],
+            ["nsNSSCertificate::Release",
+             "mozilla::psm::TransportSecurityInfo::~TransportSecurityInfo",
+             "mozilla::net::CacheEntry::~CacheEntry", "mozilla::net::CacheEntryHandle::Release"])
+        # The subject frame: not the innermost machinery frame (`ActorDisconnected`), not the
+        # lower-tier channel close.
+        self.assertEqual(hang.clean_symbol(found["machinery"]["function"]),
+                         "mozilla::dom::ContentParent::ShutDownProcess")
+        # A parked main thread; an unsymbolised top frame; work with no shutdown frame under it.
+        self.assertIsNone(hang.main_work(_MAIN["frames"]))
+        self.assertIsNone(hang.main_work([{"module": "win32u.dll"}] + _MAIN_TEARDOWN["frames"]))
+        self.assertIsNone(hang.main_work(_MAIN_TEARDOWN["frames"][:5]))
+
+    def test_a_running_main_thread_with_no_awaited_thread_is_the_subject(self):
+        raw = _main_hang(_MAIN_TEARDOWN, [_IDLE_POOL], _ASYNC_SPIN)
+        s = hang.awaited_summary(raw)
+        self.assertIsNone(s["target"])
+        self.assertEqual(s["title"], _TEARDOWN_TITLE)
+        self.assertEqual(s["bucket"],
+                         "mozilla::net::CacheEntryHandle::Release | nsNSSCertificate::Release")
+        self.assertEqual(s["files"], ["netwerk/cache2/CacheEntry.cpp",
+                                      "security/manager/ssl/TransportSecurityInfo.h",
+                                      "security/manager/ssl/nsNSSCertificate.cpp"])
+        # The old answer for this dump: nothing at all.
+        self.assertIsNone(hang.awaited_summary(_hang([_IDLE_POOL], spin=_ASYNC_SPIN)))
+        # An AsyncShutdownTimeout aborts ON the main thread: its top frames are the abort, not
+        # a sample of work, so the shape is only read under a `shutdownhang |` signature.
+        self.assertIsNone(hang.awaited_summary(_main_hang(
+            _MAIN_TEARDOWN, [], _ASYNC_SPIN,
+            signature="AsyncShutdownTimeout | quit-application | Foo")))
+        text = "\n".join(triage._awaited_work_lines(raw, _MAIN_ORIGIN))
+        self.assertIn("MAIN THREAD RUNNING", text)
+        self.assertIn("AsyncShutdown Spinner for quit-application", text)
+        self.assertIn("sampled work precedes", text)
+        self.assertIn(_TEARDOWN_TITLE, text)
+        self.assertIn("changeset c0ffee000001 (bug 1234567)", text)
+
+    def test_the_bug_prints_the_exited_thread_and_reads_the_running_main_thread(self):
+        raw = _main_hang(_MAIN_JOINING, [_EXITED_SQLDB], _SQLDB_SPIN)
+        block = report_bug.build_awaited_work_block(
+            {"hang_awaited_work": hang.awaited_summary(raw)})
+        self.assertIn("has finished its run loop", block)
+        self.assertIn("_PR_NativeRunThread", block)
+        self.assertIn("inside `nsThread::Shutdown`", block)
+        raw = _main_hang(_MAIN_TEARDOWN, [], _ASYNC_SPIN)
+        block = report_bug.build_awaited_work_block(
+            {"hang_awaited_work": hang.awaited_summary(raw)})
+        self.assertIn("not parked in a wait", block)
+        self.assertIn("`mozilla::dom::ContentParent::ShutDownProcess`", block)
+        # The frames block above it already prints the main thread: no second copy.
+        self.assertNotIn("```", block)
+
+    def test_an_actionable_verdict_is_routed_by_the_main_threads_work(self):
+        # Bug 2074041 as the model wrote it: candidate 5017c221a10c / bug 1747526 / nika, the
+        # blame of an `ipc/glue` line, with the work's own file cited beside it.
+        d = _actionable(["ipc/glue/ProtocolUtils.cpp", "security/manager/ssl/nsNSSCertificate.cpp"])
+        seed = dict(_seed(_main_hang(_MAIN_TEARDOWN, [_IDLE_POOL], _ASYNC_SPIN)),
+                    hang_awaited_origin=_MAIN_ORIGIN)
+        orch._record_hang_awaited_work(d, seed)
+        orch._apply_hang_origin_gate(d, seed)
+        self.assertEqual((d.candidate.node, d.candidate.bug, d.candidate.author_email),
+                         ("c0ffee000001", 1234567, "necko@mozilla.com"))
+        self.assertEqual(d.corroborations["hang_model_origin"], "5017c221a10c")
+        self.assertEqual(d.corroborations["hang_awaited_origin"]["source"], "main")
+        self.assertEqual(d.verdict.title, _TEARDOWN_TITLE)
+        # ...and a mechanism that cites the work stands.
+        orch._apply_hang_wait_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+
+    def test_a_machinery_only_mechanism_abstains_even_with_no_awaited_thread(self):
+        # 2074041's mechanism: `ProtocolUtils.cpp` 601-616 and `MessageChannel::Close`.
+        d = _actionable(["ipc/glue/ProtocolUtils.cpp", "ipc/glue/MessageChannel.cpp"])
+        seed = _seed(_main_hang(_MAIN_TEARDOWN, [_IDLE_POOL], _ASYNC_SPIN))
+        orch._record_hang_awaited_work(d, seed)
+        orch._apply_hang_wait_gate(d, seed)
+        self.assertEqual((d.verdict.decision, d.verdict.abstain_kind),
+                         (Decision.abstain, AbstainKind.pre_existing))
+        self.assertIn("main thread's own work above the shutdown machinery",
+                      d.verdict.abstain_reason)
+        # No subject recorded at all (parked main thread, a spinner naming no thread): the
+        # machinery prefixes alone decide.
+        d = _actionable(["xpcom/threads/nsThreadManager.cpp", "dom/ipc/ContentParent.cpp"])
+        seed = _seed(_hang([_IDLE_POOL], spin=_ASYNC_SPIN))
+        orch._record_hang_awaited_work(d, seed)
+        self.assertNotIn("hang_awaited_work", d.corroborations)
+        orch._apply_hang_wait_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("no specific awaited or main-thread work was extracted",
+                      d.verdict.abstain_reason)
+        # ...a citation off the machinery stands there, and a fault is never touched.
+        d = _actionable(["xpcom/threads/nsThreadManager.cpp", "netwerk/cache2/CacheEntry.cpp"])
+        orch._apply_hang_wait_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        d = _actionable(["xpcom/threads/nsThreadManager.cpp"])
+        fault = dict(_hang([_IDLE_POOL], spin=""), report_type="crash", moz_crash_reason=None)
+        orch._apply_hang_wait_gate(d, _seed(fault, signature="mozilla::Foo::Bar"))
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        # Nor is any other watchdog crash: an AsyncShutdownTimeout aborted on the main thread
+        # itself, so "the spin-loop stack names no awaited thread" is not a sentence about it,
+        # and an `ipc/glue`-only mechanism may be exactly right there.
+        d = _actionable(["ipc/glue/ProtocolUtils.cpp"])
+        timeout = _hang([_IDLE_POOL], spin="",
+                        signature="AsyncShutdownTimeout | quit-application | Foo")
+        orch._apply_hang_wait_gate(d, _seed(timeout, signature=timeout["signature"]))
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+
+    def test_the_awaited_threads_work_may_live_under_a_machinery_directory(self):
+        # The IPC launch thread: its work IS `ipc/glue`. Widening the prefixes to `ipc/glue/`
+        # must not turn a mechanism about it into "the wait".
+        launch = {"thread_name": "BgIOThreadPool #7", "frames": [
+            _f("__psynch_cvwait", "libsystem_kernel.dylib"),
+            _f("mozilla::ipc::GeckoChildProcessHost::WaitUntilConnected(int)", "XUL",
+               "ipc/glue/GeckoChildProcessHost.cpp", 690),
+            _f("mozilla::ipc::GeckoChildProcessHost::SyncLaunch(std::vector<std::string>, int)",
+               "XUL", "ipc/glue/GeckoChildProcessHost.cpp", 612),
+            _f("nsThreadPool::Run()", "XUL", "xpcom/threads/nsThreadPool.cpp", 442),
+            _f("nsThread::ThreadFunc(void*)", "XUL", "xpcom/threads/nsThread.cpp", 375),
+            _f("_pt_root", "libnss3.dylib"),
+        ]}
+        d = _actionable(["xpcom/threads/nsThreadPool.cpp", "ipc/glue/GeckoChildProcessHost.cpp"])
+        seed = _seed(_hang([_IDLE_POOL, launch]))
+        orch._record_hang_awaited_work(d, seed)
+        self.assertEqual(d.corroborations["hang_awaited_work"]["files"],
+                         ["ipc/glue/GeckoChildProcessHost.cpp"])
+        orch._apply_hang_wait_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        # A file the main thread's work shares with its machinery is the only one set aside.
+        d = _actionable(["xpcom/threads/MozPromise.h"])
+        seed = _seed(_main_hang(_MAIN_JOINING, [_EXITED_SQLDB], _SQLDB_SPIN))
+        orch._record_hang_awaited_work(d, seed)
+        orch._apply_hang_wait_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+
+    def test_the_exited_shape_does_not_let_the_wait_through_on_a_shared_file(self):
+        # `nsThread::Dispatch` (nsThread.cpp:702) is a WORK frame of 2073276's main thread and
+        # `nsThread::Shutdown` (nsThread.cpp:921) is the wait: same file, so the file alone
+        # vouches for nothing and the LINE decides.
+        seed = _seed(_main_hang(_MAIN_JOINING, [_EXITED_SQLDB], _SQLDB_SPIN))
+        nsthread = "xpcom/threads/nsThread.cpp"
+
+        def gated(paths, lines=None):
+            d = _actionable(paths, lines=lines)
+            orch._record_hang_awaited_work(d, seed)
+            orch._apply_hang_wait_gate(d, seed)
+            return d
+
+        d = gated([nsthread, "storage/mozStorageConnection.cpp"], {nsthread: 921})
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertIn("whose run loop has exited", d.verdict.abstain_reason)
+        self.assertEqual(d.corroborations["hang_awaited_work"]["main"]["work_lines"][-1],
+                         ["dom/clients/manager/ClientHandle.cpp", 65])
+        self.assertIn([nsthread, 921],
+                      d.corroborations["hang_awaited_work"]["main"]["machinery_lines"])
+        # The same file cited AT THE WORK'S LINE stands: `Dispatch`, not `Shutdown`.
+        self.assertEqual(gated([nsthread], {nsthread: 702}).verdict.decision, Decision.actionable)
+        # A line nearer shutdown is gated; a line within the work radius passes. Distant or
+        # missing lines remain ambiguous and are gated.
+        self.assertEqual(gated([nsthread], {nsthread: 900}).verdict.decision, Decision.abstain)
+        self.assertEqual(gated([nsthread], {nsthread: 650}).verdict.decision, Decision.actionable)
+        self.assertEqual(gated([nsthread], {nsthread: 500}).verdict.decision, Decision.abstain)
+        self.assertEqual(gated([nsthread], {nsthread: 1}).verdict.decision, Decision.abstain)
+        self.assertEqual(gated([nsthread], {nsthread: 0}).verdict.decision, Decision.abstain)
+        # A searchfox permalink carries its line in the fragment -- on its own, and beside a
+        # `filename` whose `line` the model left at zero (the shape a `RefCitation` usually has).
+        permalink = ("https://searchfox.org/firefox-release/rev/36f4/xpcom/threads/"
+                     "nsThread.cpp#700-704")
+        for citation in (
+                {"kind": "searchfox", "symbol_id": "x", "repo": "mozilla-release",
+                 "permalink": permalink},
+                RefCitation(filename=nsthread, permalink=permalink)):
+            d = _actionable([nsthread], {nsthread: 921})
+            d.verdict = d.verdict.model_copy(update={"mechanism": Claim(
+                statement="each resolution posts a native message", citations=[citation])})
+            orch._record_hang_awaited_work(d, seed)
+            orch._apply_hang_wait_gate(d, seed)
+            self.assertEqual(d.verdict.decision, Decision.actionable)
+            self.assertEqual(orch._citation_locations(d.verdict.mechanism), [(nsthread, 700)])
+        # An explicit line wins over the fragment.
+        self.assertEqual(orch._citation_locations(Claim(statement="s", citations=[
+            RefCitation(filename=nsthread, line=921, permalink=permalink)])), [(nsthread, 921)])
+        d = gated(["dom/clients/manager/ClientHandle.cpp"])
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+
+    def test_the_origin_comes_from_the_main_threads_work_frame(self):
+        raw = _main_hang(_MAIN_TEARDOWN, [_IDLE_POOL], _ASYNC_SPIN)
+        row = {"node": "c0ffee000001abcdef", "author": "Necko Dev <necko@mozilla.com>",
+               "desc": "Bug 1234567 - cache entry handles. r=x", "lineno": 47}
+        with mock.patch("crashclouseau.inspector.get_path_node",
+                        side_effect=lambda uri: (hang._frame_path(uri), "36f485dbc605")), \
+                mock.patch.object(hang, "_annotate_line", return_value=row) as annotate:
+            origin = hang.awaited_origin(raw, "release")
+        self.assertEqual((origin["source"], origin["function"], origin["path"], origin["stackpos"]),
+                         ("main", "mozilla::net::CacheEntryHandle::Release",
+                          "netwerk/cache2/CacheEntry.cpp", 3))
+        annotate.assert_called_once_with("netwerk/cache2/CacheEntry.cpp", "release",
+                                         "36f485dbc605", 47)
+        # Nothing to route by when the main thread is parked and the spinner names no thread.
+        self.assertIsNone(hang.awaited_origin(_hang([_IDLE_POOL], spin=_ASYNC_SPIN), "release"))
+        # The busy awaited thread still wins, and says so.
+        with mock.patch("crashclouseau.inspector.get_path_node",
+                        side_effect=lambda uri: (hang._frame_path(uri), "36f485dbc605")), \
+                mock.patch.object(hang, "_annotate_line", return_value=row):
+            origin = hang.awaited_origin(_hang([_IDLE_POOL, _SUGGEST]), "release")
+        self.assertEqual(origin["source"], "awaited")
 
 
 if __name__ == "__main__":

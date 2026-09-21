@@ -295,14 +295,16 @@ _SHUTDOWN_HANG = {
         "itself, which is the HUNG MAIN THREAD (not the watchdog) and reads outside-in — the "
         "innermost Gecko frame is who is waiting, not who is stuck. "
         "(1b) the `AWAITED WORK` fact, when present: that is the thread the main thread is "
-        "waiting FOR, with its stack. What it is doing and why it does not finish is the "
-        "finding; the wait itself (`ShutdownWithTimeout(-1)` arms no timer, `SpinEventLoopUntil` "
-        "is unbounded) is true of every report under the signature and is what the signature's "
-        "[meta] tracker is about -- it is never the mechanism to file, and its code's blame is "
-        "not the owner. Cite the awaited thread's code, take `candidate` (blame) and the owner "
-        "from there, and fill `verdict.title` as `<work> blocks <pool> shutdown inside <call>`; "
+        "waiting FOR, with its stack. Its sampled work is the lead; generic wait code alone does "
+        "not explain why the timeout expired. Cite the awaited work, route `candidate` from its "
+        "blame, and fill `verdict.title` as `<work> blocks <pool> shutdown inside <call>`; "
         "when the fact says the awaited threads are all idle, the work is not visible and no "
-        "subsystem may be named for it. "
+        "subsystem may be named for it. When it says the awaited thread's run loop has exited, "
+        "investigate the pending join and any sampled main-thread work without claiming "
+        "that one sample caused the delay. When the fact is `MAIN THREAD RUNNING`, there is no "
+        "awaited thread: investigate the sampled work above the recognized shutdown control "
+        "flow. Do not choose generic actor, channel, spin, thread-shutdown or phase-advance code "
+        "merely because it appears underneath that work. "
         "BEFORE YOU NAME A SUBSYSTEM, find its thread in the `THREADS IN THIS PROCESS` fact. If "
         "it is not there it was not running here and the mechanism is refuted. Two traps that "
         "cost bug 2064436: a subsystem present in a CONTENT process says nothing about a hang in "
@@ -362,12 +364,8 @@ def _fingerprint(guidance, matcher):
 # the whole failure this mechanism exists for. The list is `git log --oneline -- \
 # crashclouseau/archetypes.py`; each hash is `_fingerprint(spec["guidance"], spec["matcher"])`
 # evaluated on that revision's copy of the file.
-#   shutdown-singleton 854a7c1d = 312e153, first seeded, unchanged through 5f169b6
-#                      24092d24 = 07d593e, the require_shutdown_progress/no_moz_crash_reason fix
-#   shutdown-hang      2bb22027 = 5f169b6, the row as first seeded and unchanged until now
-# Both slugs are listed because both rows' closers changed in this commit; a prod row can hold
-# any of these three texts depending on which deploy last touched it, and none of them was
-# written by hand.
+# Initial revisions: shutdown-singleton 854a7c1d = 312e153; shutdown-hang 2bb22027 = 5f169b6.
+# Later revision mappings are recorded beside their hashes below.
 _SUPERSEDED = {
     "shutdown-singleton": frozenset({
         "854a7c1dc52988e5df1da7db6dd442bcc0b8559690c6c609000c74b100625a4c",
@@ -378,6 +376,9 @@ _SUPERSEDED = {
         # f030d587 = 8190e68, the row with the population-prior closer rewritten; superseded
         # 2026-09-18 by the AWAITED WORK step (bug 2073349).
         "f030d587bed0c9357fdf22b6391c09947bd10aede38b6f5cab7e2470eea6590b",
+        # d7f863eb = f6145fa, the AWAITED WORK step; superseded 2026-09-21 by the EXITED and
+        # MAIN THREAD RUNNING sentences (bugs 2073276 and 2074041).
+        "d7f863ebb757ee0bcb6c4361ddc41b40d3e4a60499f365ca41670f353146a2a3",
     }),
 }
 

@@ -223,7 +223,10 @@ good ones. So make TWO decisions, in order:
    this window. It claims nothing about any changeset: a bug will be filed asking the code's
    owner to look. It REQUIRES a cited `mechanism`, and `candidate` set to the ORIGIN of the
    failing code — the changeset `mcp__history__blame` names for the cited line. That is how
-   the owner and the component are found; it is accused of nothing and may be years old.
+   the owner and the component are found; it is accused of nothing and may be years old. On
+   a shutdown hang, prefer the WORK's line (the awaited thread's, or sampled main-thread work
+   above shutdown control flow); generic spin, thread-shutdown or IPC teardown frames are not
+   evidence merely because the work runs through them.
    `confidence` is how sure you are the mechanism is right and worth the owner's time:
    `probable` when the skeptic could not contradict it. Write `mechanism.statement` as the
    AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which

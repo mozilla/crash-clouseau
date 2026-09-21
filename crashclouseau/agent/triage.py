@@ -761,34 +761,22 @@ _AWAITED_FRAMES = 14
 
 
 def _awaited_work_lines(raw: dict, origin: dict | None = None) -> list[str]:
-    """The AWAITED WORK of a shutdown hang, as prompt lines, or ``[]`` when the spin-loop stack
-    names nothing the thread list can resolve (see ``hang.spin_target``). ``origin`` is the
-    seed's ``hang_awaited_origin`` -- who last changed that work -- rendered as the `candidate`
-    an actionable verdict must carry, so the routing is not the model's to find.
+    """Render the shutdown-hang subject for both model passes.
 
-    BUG 2073349, and the same lesson as bug 2064436 one step further along. That fix put the
-    thread LIST and the blocked spin-loop stack in front of the model; this puts the awaited
-    thread's STACK there. Without it the model explained the wait -- `ShutdownWithTimeout(-1)`
-    arms no timer, so `SpinEventLoopUntil` is unbounded -- which is true of every report under the
-    signature and is what its `[meta]` tracker is about, took the owner from that code's blame
-    (nika, Core::XPCOM) and never read thread 25, `BgIOThreadPool #510`, parked in
-    `SuggestStore::ingest -> RemoteSettingsClient::sync -> viaduct::Client::send_sync`. :jstutte
-    filed that bucket himself (bug 2073426) and asked us to stop filing the catch-all.
-
-    A FACT block, not archetype guidance, because both models must see it: the blind second
-    opinion is the instrument that refutes a lead, and a refuter blind to the awaited thread
-    corroborates the wait story as readily as the principal writes it. The rule sentence is the
-    minimum that turns the stack into a direction: the wait is the symptom, the awaited work is
-    the finding, and the owner is the awaited code's. A dump whose pool threads are ALL idle is
-    said outright -- the honest reading is that the work finished after the watchdog fired, and a
-    model told nothing would invent the subsystem."""
+    The subject is busy awaited work, the pending join of a proven Windows exit shape, or sampled
+    main-thread work above recognized shutdown control flow. ``origin`` is deterministic blame
+    for the extracted work frame and supplies an actionable verdict's candidate."""
     from crashclouseau import hang
 
     summary = hang.awaited_summary(raw)
     if not summary:
         return []
+    if summary.get("target") is None:
+        return _main_running_lines(raw, summary, origin)
     what = summary["name"] or ("the thread pool" if summary["kind"] == "pool" else "a thread")
     if not summary.get("thread"):
+        if summary.get("exited_thread"):
+            return _exited_lines(summary, what, origin)
         if summary["threads"]:
             n = summary["threads"]
             idle = ("all idle in the pool's own wait" if summary["kind"] == "pool"
@@ -796,8 +784,8 @@ def _awaited_work_lines(raw: dict, origin: dict | None = None) -> list[str]:
             return [
                 "",
                 "AWAITED WORK: the main thread is waiting for {} ({} thread{} in this dump, {}). "
-                "The work it waited for is not visible here -- it finished after the watchdog "
-                "fired, or ran on a thread that had already exited -- so do NOT name a subsystem "
+                "The work it waited for is not visible here -- it may have completed before the "
+                "threads were captured or run elsewhere -- so do NOT name a subsystem "
                 "for it; the wait itself is the signature's known, tracked shape and is not a "
                 "finding.".format(what, n, "" if n == 1 else "s", idle),
             ]
@@ -829,15 +817,85 @@ def _awaited_work_lines(raw: dict, origin: dict | None = None) -> list[str]:
     lines += ["  " + ln for ln in hang.frames_text(t["frames"], _AWAITED_FRAMES).split("\n")]
     if summary.get("bucket"):
         lines.append("  Bucket (the work | the blocking call): {}".format(summary["bucket"]))
-    if (origin or {}).get("node"):
-        lines.append(
-            "  Last changed by (blame of frame {} `{}`, {}:{}): changeset {}{} by {}. THIS is the "
-            "`candidate` of an actionable verdict -- its bug's component and its author are where "
-            "the bucket bug goes; the wait's own changesets are not.".format(
-                origin.get("stackpos"), origin.get("function") or "?", origin.get("path") or "?",
+    lines += _origin_lines(origin)
+    return lines
+
+
+def _origin_lines(origin: dict | None) -> list[str]:
+    """The blame of the work's frame as the `candidate` an actionable verdict must carry."""
+    if not (origin or {}).get("node"):
+        return []
+    return [
+        "  Last changed by (blame of frame {} `{}`, {}:{}): changeset {}{} by {}. THIS is the "
+        "`candidate` of an actionable verdict; do not substitute blame from generic wait or "
+        "shutdown control flow."
+        .format(origin.get("stackpos"), origin.get("function") or "?", origin.get("path") or "?",
                 origin.get("line") or "?", origin["node"],
                 " (bug {})".format(origin["bug"]) if origin.get("bug") else "",
-                origin.get("author") or "?"))
+                origin.get("author") or "?")]
+
+
+def _main_frames_lines(main: dict) -> list[str]:
+    """Render the main stack and mark its extracted work prefix."""
+    from crashclouseau import hang
+
+    lines = ["  " + ln for ln in hang.frames_text(main["frames"], _AWAITED_FRAMES).split("\n")]
+    if main.get("work_frames"):
+        lines.append("  (sampled work precedes `{}`, the selected shutdown-context frame)".format(
+            main.get("machinery") or "?"))
+    if main.get("bucket"):
+        lines.append("  Bucket (the work | the innermost call): {}".format(main["bucket"]))
+    return lines
+
+
+def _exited_lines(summary: dict, what: str, origin: dict | None) -> list[str]:
+    """Render a Windows NSPR thread waiting for its join to complete."""
+    t = summary["exited_thread"]
+    main = summary.get("main")
+    head = (
+        "AWAITED WORK: the awaited thread's RUN LOOP HAS EXITED -- thread {} `{}` has returned "
+        "from `nsThread::ThreadFunc` (no run-loop frame left) and is "
+        "parked in NSPR's `_PR_NativeRunThread` waiting to be joined. Its own work is DONE: do "
+        "NOT name its subsystem, and do NOT explain the wait. The join has not completed: "
+        "the exiting `ThreadFunc` dispatches an `nsThreadShutdownAckEvent` to the joining thread, "
+        "and `nsThread::Shutdown` returns only once that event runs THERE -- on the main thread. "
+        "Investigate the main thread and the pending ACK/join handshake.".format(
+            t["index"], t["name"] or what))
+    lines = ["", head]
+    if main:
+        lines.append(
+            "  The main thread was NOT parked; the watchdog sampled the work below while the "
+            "join was pending. Treat it as a lead, not proof of why the ACK had not run. Cite "
+            "that work; `verdict.title` is `{}`; the `candidate` is the blame below.".format(
+                summary.get("title") or "?"))
+        lines += _main_frames_lines(main)
+        lines += _origin_lines(origin)
+    else:
+        lines.append("  The main thread was parked; this dump does not show why the ACK/join "
+                     "handshake had not completed.")
+    return lines
+
+
+def _main_running_lines(raw: dict, summary: dict, origin: dict | None) -> list[str]:
+    """Render sampled main-thread work when the spin stack names no awaited thread."""
+    from crashclouseau import hang
+
+    main = summary["main"]
+    entries = hang.spin_entries((raw or {}).get("xpcom_spin_event_loop_stack"))
+    head = (
+        "MAIN THREAD RUNNING -- this shutdown hang's main thread is not parked in a wait: its top "
+        "frame is live code the watchdog caught mid-work, and the spin-loop stack names no "
+        "awaited thread ({}). Investigate the sampled work above the shutdown control flow. "
+        "`{}` and the recognized frames beneath it provide shutdown context; do not cite "
+        "them merely because they contain the sampled work. One sample does not prove which "
+        "frame consumed the timeout. State only what the evidence supports, cite the sampled "
+        "work, and use `verdict.title` `{}`; the `candidate` is the blame below.".format(
+            "spin stack: " + " | ".join(entries) if entries else "no spin stack recorded",
+            main.get("machinery") or "?",
+            summary.get("title") or "?"))
+    lines = ["", head]
+    lines += _main_frames_lines(main)
+    lines += _origin_lines(origin)
     return lines
 
 

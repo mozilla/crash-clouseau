@@ -1121,7 +1121,7 @@ def build_awaited_work_block(corroborations, max_frames=_MAX_AWAITED_FRAMES):
     work = (corroborations or {}).get("hang_awaited_work") or {}
     thread = work.get("thread") or {}
     if not thread.get("frames"):
-        return None
+        return _main_subject_block(work, max_frames)
     from crashclouseau import hang
 
     what = work.get("name") or ("the thread pool" if work.get("kind") == "pool" else "it")
@@ -1135,6 +1135,31 @@ def build_awaited_work_block(corroborations, max_frames=_MAX_AWAITED_FRAMES):
         thread.get("index"), thread.get("name") or "unnamed",
         " ({})".format(", ".join(notes)) if notes else "")
     return head + "\n" + _fenced(hang.frames_text(thread["frames"], max_frames))
+
+
+def _main_subject_block(work, max_frames):
+    """Describe an exited awaited thread or sampled main-thread work, or return ``None``."""
+    exited = work.get("exited_thread") or {}
+    main = work.get("main") or {}
+    if exited.get("frames"):
+        from crashclouseau import hang
+
+        text = ("The thread the main thread is waiting for -- thread {} `{}` -- has finished "
+                "its run loop. Its Windows NSPR stack is waiting to be joined, so the join has "
+                "not completed:\n{}".format(
+                    exited.get("index"), exited.get("name") or "unnamed",
+                    _fenced(hang.frames_text(exited["frames"], max_frames))))
+        if main.get("work"):
+            text += ("\n\nThe main thread was not parked at sample time: the frames above show "
+                     "code running inside `{}`.".format(
+                         main.get("machinery") or "the shutdown machinery"))
+        return text
+    if main.get("work"):
+        return ("The main thread is not parked in a wait: the frames above are live code the "
+                "watchdog sampled during `{}`. They are an investigation lead; one sample does "
+                "not prove which frame consumed the timeout.".format(
+                    main.get("machinery") or "the shutdown machinery"))
+    return None
 
 
 def _first_sentence(text, limit=150):
@@ -1232,8 +1257,10 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
             if origin.get("path"):
                 at = ":{}".format(origin["line"]) if origin.get("line") else ""
                 where += " ({}{})".format(origin["path"], at)
-            facts.append("- The work the main thread waits for -- {} -- was last changed by {}{}."
-                         .format(where, link, " by {}".format(who) if who else ""))
+            subject = ("The code the main thread was running" if origin.get("source") == "main"
+                       else "The work the main thread waits for")
+            facts.append("- {} -- {} -- was last changed by {}{}."
+                         .format(subject, where, link, " by {}".format(who) if who else ""))
         else:
             facts.append("- The failing code comes from {}{}.".format(
                 link, " by {}".format(who) if who else ""))

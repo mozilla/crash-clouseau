@@ -190,7 +190,9 @@ _MEASURED = {
     # crash/assert/panic mechanics (bug 2074119 c0).
     # +1437 on 2026-09-21 (beta and java with it): actionable bugs publish only the complete
     # mechanism, and the OOM rule defines the annotations and deterministic gate.
-    "system.md": (23250, 400),
+    # +246 on 2026-09-21 (beta and java with it): prefer cited shutdown work over generic
+    # spin, thread-shutdown or IPC teardown frames.
+    "system.md": (23496, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     "crash facts, 40-thread parent hang": (2508, 200),
@@ -206,7 +208,7 @@ _MEASURED = {
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (23790, 400),
+    "system.md, beta": (24036, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
@@ -225,7 +227,7 @@ _MEASURED = {
     # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
     # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
     # long Java signature / paths; it carries no line numbers on its frames.
-    "system.md, java": (24413, 400),
+    "system.md, java": (24659, 400),
     "crash facts, fenix java": (325, 60),
     "user prompt, fenix java": (3240, 300),
 }
