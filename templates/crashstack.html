@@ -273,6 +273,17 @@
         {% endif -%}
       </div>
       {% endif -%}
+      {#- Display the age gate's timing facts; waiver eligibility also depends on age and novelty. -#}
+      {% if is_actionable and corrob.get('actionable_origin_age') -%}
+      {% set oa = corrob['actionable_origin_age'] -%}
+      <div class="corrob-chips">
+        {% if oa.get('predates_signature') -%}
+        <span class="corrob-chip" title="The cited changeset landed no later than every available first-seen build. This timing alone does not establish a regression or qualify for the filing waiver.">the cited changeset landed {{ oa.get('landed','')|e }}, {{ oa.get('days_before_build', 0)|round|int }}d before this build; no available first-seen build predates it</span>
+        {% else -%}
+        <span class="corrob-chip refute" title="At least one first-seen build predates the cited changeset's landing, so this origin does not qualify for the filing waiver.">the cited changeset landed {{ oa.get('landed','')|e }}, {{ oa.get('days_before_build', 0)|round|int }}d before this build; an available first-seen build predates it</span>
+        {% endif -%}
+      </div>
+      {% endif -%}
       {% if is_lead -%}
       {% if is_probable -%}
       {#- `is_probable` is just conf >= 65, which a lead reaches by the model asserting it as

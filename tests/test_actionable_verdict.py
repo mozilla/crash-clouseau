@@ -38,7 +38,7 @@ from tests.test_autofile import _Base, _bug  # noqa: E402
 # The module, not its classes: binding a TestCase name here would run its tests twice.
 from tests import test_product_wiring as tpw  # noqa: E402
 from tests.test_prompt_schema_drift import _quoted_tokens  # noqa: E402
-from tests.test_signature_age_gate import _SEED, _seed  # noqa: E402
+from tests.test_signature_age_gate import _FIRST_SEEN, _SEED, _lead, _seed  # noqa: E402
 
 _SF_DICT = {"kind": "searchfox", "permalink": "https://searchfox.org/x#392",
             "symbol_id": "_ZN7sandbox19InterceptionManager10PatchNtdllE", "repo": "mozilla-central"}
@@ -168,6 +168,58 @@ class TestWhatTheGatesDoWithIt(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.actionable)
         self.assertNotIn("actionable_origin_postdates_signature", d.corroborations or {})
 
+    def test_a_fresh_origin_is_recorded_with_its_age(self):
+        # The origin predates the first-seen build by 6.5 days; the verdict stays actionable.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN})
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        self.assertEqual(d.corroborations["actionable_origin_age"],
+                         {"landed": "2025-12-25", "days_before_build": 6.5,
+                          "predates_signature": True})
+
+    def test_an_origin_the_signature_was_reported_before_is_not_fresh(self):
+        # Three days after the first-seen build is within the age gate's tolerance,
+        # but fails the waiver's stricter ordering check.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(3.0), "buildid": "20260110000000"})
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        age = d.corroborations["actionable_origin_age"]
+        self.assertEqual((age["landed"], age["days_before_build"]), ("2026-01-04", 6.0))
+        self.assertFalse(age["predates_signature"])
+
+    def test_every_first_seen_clock_must_agree_the_signature_is_younger(self):
+        # An older build in SignatureFirstDate vetoes the windowed ordering.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN,
+                                           "signature_first_seen_ever": "20251201000000"})
+        self.assertFalse(d.corroborations["actionable_origin_age"]["predates_signature"])
+        # So does an older build in the unfloored all-channel history.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN,
+                                           "signature_first_seen_any": "20251201000000"})
+        self.assertFalse(d.corroborations["actionable_origin_age"]["predates_signature"])
+        # All three first-seen builds postdate the landing.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN,
+                                           "signature_first_seen_ever": _FIRST_SEEN,
+                                           "signature_first_seen_any": _FIRST_SEEN})
+        self.assertTrue(d.corroborations["actionable_origin_age"]["predates_signature"])
+
+    def test_the_origin_age_is_recorded_before_the_gate_returns_and_on_nothing_else(self):
+        # Timing is recorded even when the age gate subsequently changes the verdict to abstain.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(178.0), "buildid": "20260701000000"})
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertFalse(d.corroborations["actionable_origin_age"]["predates_signature"])
+        # Leads do not get actionable origin timing.
+        d = _lead(Confidence.probable)
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN})
+        self.assertNotIn("actionable_origin_age", d.corroborations or {})
+        # A missing crash build date leaves the timing unrecorded.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, _seed(-6.5))
+        self.assertNotIn("actionable_origin_age", d.corroborations or {})
+
     def test_the_blind_second_opinion_is_not_bought_for_it(self):
         with mock.patch.object(orch.config, "get_agent_second_opinion",
                                return_value={"enabled": True, "min_confidence": 25,
@@ -274,6 +326,40 @@ class TestTheBugItFiles(unittest.TestCase):
         self.assertEqual(p["keywords"], ["crash", "regression"])
         self.assertIn("Suspected regressor:", p["comment"])
 
+    def test_a_fresh_origin_says_when_it_landed_and_that_nothing_predates_it(self):
+        fresh = {"landed": "2026-09-12", "days_before_build": 6.5, "predates_signature": True}
+        c = _build_preview(_preview_dossier(actionable_origin_age=fresh))["comment"]
+        self.assertIn("- The failing code comes from [507a4c21a8eb](", c)
+        self.assertIn("(bug 2010557) by :bobowen, which landed on 2026-09-12 (6 days before this "
+                      "build); the available first-seen data contains no build from before "
+                      "that landing.", c)
+        for phrase in _FORBIDDEN:
+            self.assertNotIn(phrase, c, phrase)
+        # An origin older than the configured limit gets no timing clause.
+        c = _build_preview(_preview_dossier(actionable_origin_age={
+            **fresh, "landed": "2026-01-12", "days_before_build": 250.0}))["comment"]
+        self.assertIn("(bug 2010557) by :bobowen.", c)
+        self.assertNotIn("which landed on", c)
+
+    def test_the_predicate_the_filer_and_the_bug_share(self):
+        age = {"landed": "2026-09-12", "days_before_build": 6.5, "predates_signature": True}
+        fresh = report_bug.fresh_origin_days
+        self.assertEqual(fresh({"actionable_origin_age": age}, 14), 6.5)
+        self.assertEqual(fresh({"actionable_origin_age": {**age, "days_before_build": 14.0}}, 14),
+                         14.0)
+        for corro, limit in (
+            ({"actionable_origin_age": age}, 0),                              # knob off
+            ({"actionable_origin_age": age}, None),
+            ({}, 14),                                                         # never dated
+            ({"actionable_origin_age": {**age, "days_before_build": 14.1}}, 14),
+            ({"actionable_origin_age": {**age, "days_before_build": -0.5}}, 14),
+            ({"actionable_origin_age": {**age, "predates_signature": False}}, 14),
+            ({"actionable_origin_age": age, "signature_novelty_unreliable": "module_frames"}, 14),
+            ({"actionable_origin_age": age, "signature_rename_suspected": True}, 14),
+        ):
+            with self.subTest(corro=corro, limit=limit):
+                self.assertIsNone(fresh(corro, limit))
+
     def test_the_onset_line_in_its_three_shapes(self):
         c = {"signature_first_seen_ever": "20260903215306", "signature_age_days_ever": 0.0}
         self.assertEqual(report_bug.build_signature_since_note(c, "20260903215306"),
@@ -325,6 +411,59 @@ class TestWhatTheFilerChecks(_Base):
         self.assertEqual(res["skipped"], "1 installation on this signature, below the actionable "
                                          "floor of {}".format(floor))
         self.assertEqual(self.created, [])
+
+    def _fresh(self, **over):
+        age = {"landed": "2026-09-12", "days_before_build": 6.5, "predates_signature": True}
+        age.update(over)
+        return {"candidate": {"node": "n"}, "corroborations": {"actionable_origin_age": age}}
+
+    def test_one_installation_on_fresh_code_files(self):
+        # Eligible timing allows filing below the installation floor.
+        self.stats.return_value = (True, {"count": 1, "installs": 1})
+        res = self._file(verdict="actionable", confidence=70, dossier=self._fresh())
+        self.assertTrue(res["filed"], res)
+        self.assertEqual((res["bug"], res["mode"]), (999, "new_bug"))
+        self.assertEqual(len(self.created), 1)
+
+    def test_the_waiver_needs_a_recent_origin_a_younger_signature_and_a_trustworthy_name(self):
+        self.stats.return_value = (True, {"count": 1, "installs": 1})
+        unreliable = self._fresh()
+        unreliable["corroborations"]["signature_novelty_unreliable"] = "module_frames"
+        renamed = self._fresh()
+        renamed["corroborations"]["signature_rename_suspected"] = True
+        cases = {
+            "old code": self._fresh(days_before_build=30.0),
+            "the signature was reported before the code": self._fresh(predates_signature=False),
+            "landed after the build": self._fresh(days_before_build=-0.5),
+            "a name a symbol gap minted": unreliable,
+            "an older crash re-signatured onto the name": renamed,
+            "never dated": {"candidate": {"node": "n"}},
+        }
+        for name, dossier in cases.items():
+            with self.subTest(name):
+                res = self._file(verdict="actionable", confidence=70, dossier=dossier)
+                self.assertFalse(res["filed"], res)
+                self.assertIn("1 installation on this signature, below the actionable floor of",
+                              res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_the_waiver_is_a_knob(self):
+        self.stats.return_value = (True, {"count": 1, "installs": 1})
+        # None/zero disables the waiver; a limit below the recorded age also rejects it.
+        for limit in (None, 0, 6):
+            with self.subTest(limit=limit):
+                res = self._file(verdict="actionable", confidence=70, dossier=self._fresh(),
+                                 fresh_origin_days=limit)
+                self.assertFalse(res["filed"], res)
+                self.assertIn("below the actionable floor", res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_an_unknown_population_is_not_waived(self):
+        # Missing counts are rejected before the waiver check.
+        self.stats.return_value = (True, {})
+        res = self._file(verdict="actionable", confidence=70, dossier=self._fresh())
+        self.assertFalse(res["filed"])
+        self.assertIn("population unknown", res["skipped"])
 
     def test_an_unknown_population_does_not_file(self):
         self.stats.return_value = (True, {})
@@ -394,6 +533,21 @@ class TestThePage(unittest.TestCase):
         self.assertNotIn("Working hypothesis", html)
         # The bug preview is built for it, in its own words.
         self.assertIn("This bug looks actionable because", html)
+
+    def test_how_new_the_code_is_shows_as_a_chip(self):
+        for predates, tail in ((True, "no available first-seen build predates it"),
+                               (False, "an available first-seen build predates it")):
+            with self.subTest(predates=predates):
+                ev = tpw._evidence(verdict="actionable", confidence=70)
+                ev["dossier"]["verdict"]["decision"] = "actionable"
+                ev["dossier"]["corroborations"] = {"actionable_origin_age": {
+                    "landed": "2026-09-12", "days_before_build": 6.5,
+                    "predates_signature": predates}}
+                panel = tpw.TestCrashstackPanel(methodName="setUp")
+                panel.setUp()
+                html = panel._get(ev).get_data(as_text=True)
+                self.assertIn("the cited changeset landed 2026-09-12, ", html)
+                self.assertIn("d before this build; " + tail, html)
 
 
 if __name__ == "__main__":

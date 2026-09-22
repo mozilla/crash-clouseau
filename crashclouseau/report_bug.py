@@ -590,6 +590,44 @@ def _sibling_counts(siblings, buildid, info):
 _HARDWARE_NOTE_LIFT = 2.0
 
 
+def fresh_origin_days(corroborations, limit):
+    """Return the recorded origin age if it qualifies for the floor waiver, else ``None``.
+
+    Shared by the filer and bug comment. Requires ``predates_signature``, a recorded age in
+    ``[0, limit]``, and neither ``signature_novelty_unreliable`` nor ``signature_rename_suspected``.
+    ``limit`` is ``autofile.fresh_origin_days``; ``0`` or ``None`` disables the waiver.
+    This is a filing policy, not proof that the candidate introduced the crash."""
+    c = corroborations or {}
+    age = c.get("actionable_origin_age") or {}
+    days = age.get("days_before_build")
+    if not limit or not age.get("predates_signature") or days is None:
+        return None
+    if c.get("signature_novelty_unreliable") or c.get("signature_rename_suspected"):
+        return None
+    try:
+        days, limit = float(days), float(limit)
+    except (TypeError, ValueError):
+        return None
+    if days < 0 or days > limit:
+        return None
+    return days
+
+
+def _fresh_origin_clause(corroborations, limit):
+    """Describe the landing and available first-seen builds, or return ``""`` if ineligible
+    or the landing date is missing."""
+    days = fresh_origin_days(corroborations, limit)
+    if days is None:
+        return ""
+    landed = ((corroborations or {}).get("actionable_origin_age") or {}).get("landed")
+    if not landed:
+        return ""
+    when = ("less than a day" if days < 1 else "1 day" if days < 2
+            else "{:.0f} days".format(days))
+    return (", which landed on {} ({} before this build); the available first-seen data "
+            "contains no build from before that landing".format(landed, when))
+
+
 def build_signature_since_note(corroborations, buildid=None):
     """The onset line of an ``actionable`` bug: the fact ``build_signature_age_note`` states,
     said affirmatively. That note says "not new", a true sentence about what the crash is NOT;
@@ -1222,12 +1260,14 @@ def build_bucket_opener(meta_bugs, signature):
 
 def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
                              version=None, needinfo=None, author_display=None,
-                             max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None):
+                             max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None,
+                             fresh_limit=None):
     """Build the opening comment for an ``actionable`` bug, with no regressor claim.
 
     1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
     2. how much this signature is crashing, and since which build;
-    3. the cited mechanism and the blamed origin used for routing;
+    3. the cited mechanism and origin used for routing, with timing when the origin qualifies
+       for the waiver (``fresh_limit`` = ``autofile.fresh_origin_days``);
     4. the mechanism's code references, the ask, the provenance footer.
 
     The mechanism is copied whole. Consistency stays in the dossier because age and volume are
@@ -1262,8 +1302,9 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
             facts.append("- {} -- {} -- was last changed by {}{}."
                          .format(subject, where, link, " by {}".format(who) if who else ""))
         else:
-            facts.append("- The failing code comes from {}{}.".format(
-                link, " by {}".format(who) if who else ""))
+            facts.append("- The failing code comes from {}{}{}.".format(
+                link, " by {}".format(who) if who else "",
+                _fresh_origin_clause((dossier or {}).get("corroborations"), fresh_limit)))
     because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
     sections = [
         bucket_opener,
@@ -2711,6 +2752,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             uuid_info, stack, dossier, details=fetch_crash_reason(uuid), stats=stats,
             first=first, version=version, needinfo=_needinfo_line(person),
             author_display=_person_display(person), bucket_opener=opener,
+            fresh_limit=policy.get("fresh_origin_days"),
         ) if actionable else build_bug_comment(
             uuid_info,
             stack,

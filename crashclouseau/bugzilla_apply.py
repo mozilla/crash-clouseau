@@ -2091,9 +2091,19 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             return {"filed": False,
                     "skipped": "population unknown; an actionable crash is filed on its volume"}
         if installs < floor:
-            return {"filed": False,
-                    "skipped": "{} installation{} on this signature, below the actionable floor "
-                               "of {}".format(installs, "" if installs == 1 else "s", floor)}
+            # A recent origin can waive this floor. Share the eligibility check with the bug
+            # comment; the remaining filing gates still apply.
+            fresh = report_bug.fresh_origin_days(
+                (dossier or {}).get("corroborations"), cfg.get("fresh_origin_days"))
+            if fresh is None:
+                return {"filed": False,
+                        "skipped": "{} installation{} on this signature, below the actionable "
+                                   "floor of {}".format(installs, "" if installs == 1 else "s",
+                                                        floor)}
+            logger.info("autofile: %s -- %s installation%s on this signature, below the "
+                        "actionable floor of %s, waived: the failing code landed %.1f days "
+                        "before the build and no available first-seen build predates it",
+                        uuid, installs, "" if installs == 1 else "s", floor, fresh)
 
     # THE SECOND REASON TO FILE. A verdict we cannot file on is the ordinary case (90% of runs
     # abstain), so this is the last gate rather than an early one: everything above it is local

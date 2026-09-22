@@ -457,6 +457,31 @@ Nothing to configure. The `shutdown-hang` archetype row gains two sentences and 
 fingerprint is in `_SUPERSEDED`, so `bin/release.py`'s seed upgrades an untouched prod row.
 After deploy, verify an applicable dossier contains `hang_awaited_work.main` or `exited_thread`.
 
+## A fresh origin waives the actionable installation floor (2026-09-22)
+
+An `actionable` verdict can now pass the `spike.real_installs` floor on recent origin timing.
+`agent.autofile.fresh_origin_days` defaults to 14; `0` or `null` disables the waiver. This is a
+policy default, not a calibrated cutoff.
+
+The age gate records `corroborations.actionable_origin_age` =
+`{landed, days_before_build, predates_signature}` when it reaches the actionable timing check
+and has a landing date, crash build date, and at least one parseable first-seen build. Earlier
+returns still apply, including a disabled age gate and the awaited-work hang exemption.
+
+`report_bug.fresh_origin_days` requires the recorded age (rounded to 0.1 days) to lie in
+`[0, fresh_origin_days]`, `predates_signature` to be true, and neither
+`signature_novelty_unreliable` nor `signature_rename_suspected` to be set. The first-seen
+comparison uses all parseable values from the gate's windowed/family history,
+`SignatureFirstDate`, and the unfloored all-channel history. It compares build timestamps,
+not report dates, and does not prove the candidate introduced the crash.
+
+The filer and bug comment share this eligibility check. Unknown installation counts still
+decline, and all other filing gates remain in force. The page displays the timing facts;
+its supporting chip alone does not establish waiver eligibility.
+
+After deployment, inspect `actionable_origin_age` and the `actionable floor ... waived` log
+entries. The behavior is covered in `tests/test_actionable_verdict.py`.
+
 ## OOM aborts and the `actionable` verdict (2026-09-21)
 
 Bug 2073760 filed a `Zone::New` OOM-unsafe abort as actionable. :iain closed it WONTFIX and noted

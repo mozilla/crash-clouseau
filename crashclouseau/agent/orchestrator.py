@@ -2270,6 +2270,35 @@ def _frequency_regression_reasons(seed):
     return reasons
 
 
+def _actionable_origin_age_facts(seed, first_seen, pushdate):
+    """Return the candidate's landing date and age relative to the crash build.
+
+    ``predates_signature`` compares the landing timestamp with every parseable first-seen
+    build: the age gate's windowed/family value, ``SignatureFirstDate``, and the unfloored
+    all-channel value. These are build timestamps, not report dates; missing history does
+    not prove the crash is new. Return ``{}`` if either date or all first-seen values are
+    unavailable. The age is rounded to 0.1 days, regardless of the filer's recency limit;
+    ``report_bug.fresh_origin_days`` decides whether it qualifies for the floor waiver."""
+    from crashclouseau import sigage
+
+    s = seed or {}
+    push_dt = sigage.to_datetime(pushdate)
+    # Stringify buildids so `to_datetime` does not interpret an integer buildid as an epoch.
+    build_dt = sigage.to_datetime(str(s["buildid"])) if s.get("buildid") else None
+    if push_dt is None or build_dt is None:
+        return {}
+    clocks = [sigage.to_datetime(str(c)) for c in (
+        first_seen, s.get("signature_first_seen_ever"), s.get("signature_first_seen_any")) if c]
+    clocks = [c for c in clocks if c is not None]
+    if not clocks:
+        return {}
+    return {"actionable_origin_age": {
+        "landed": push_dt.strftime("%Y-%m-%d"),
+        "days_before_build": round((build_dt - push_dt).total_seconds() / 86400.0, 1),
+        "predates_signature": all(push_dt <= c for c in clocks),
+    }}
+
+
 def _apply_signature_age_gate(dossier, seed):
     """DOWNWEIGHT a lead whose CANDIDATE landed after the crash already existed.
 
@@ -2371,6 +2400,10 @@ def _apply_signature_age_gate(dossier, seed):
     if pushdate is None:
         return
     landed_after = sigage.days_landed_after_first_seen(first_seen, pushdate)
+    if v.decision == Decision.actionable:
+        # Record before the return so origins that pass the age gate can qualify for the waiver.
+        dossier.corroborations = {**(dossier.corroborations or {}),
+                                  **_actionable_origin_age_facts(seed, first_seen, pushdate)}
     if landed_after is None or landed_after <= cfg["min_age_days"]:
         return
     if v.decision == Decision.actionable:

@@ -163,6 +163,12 @@ REGISTRY = {
         "age gate turned the verdict into a `pre_existing` abstain (the age argument's sign flips "
         "when no causation is claimed). The abstain reason carries the sentence; the flag is the "
         "count, to read once the outcome has a month of runs (2026-09-17)."),
+    "actionable_origin_age": (
+        "evidence", ("report_bug.py", "templates/crashstack.html"),
+        "Candidate timing: `{landed, days_before_build, predates_signature}`, recorded by "
+        "`orchestrator._actionable_origin_age_facts` when the age gate reaches that check and "
+        "the required dates are available. `report_bug.fresh_origin_days` reads it for the "
+        "filer's installation-floor waiver and the bug's timing clause; the page displays it."),
 
     # -- signature crash RATE (`sigtrend.trend_facts`) -----------------------------------------
     # The quantity the build-day spike rule structurally cannot compute, and the reason bug
