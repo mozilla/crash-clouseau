@@ -106,18 +106,27 @@ class TestTheProvenance(unittest.TestCase):
         self.assertEqual([c["empty"] for c in calls], [True, False])
         self.assertEqual({c["tool"] for c in calls}, {"calls_to"})
 
-    def test_only_the_searchfox_family_gets_a_per_call_record(self):
+    def test_completed_calls_get_records_and_only_searchfox_an_empty_flag(self):
         t = _RunTrace()
         _run(t, [
             ("a", _SF, {"symbol": "ns::Foo::bar"}, "## X\n- Y"),
             ("b", "mcp__patch__diff", {"node": "abc123"}, "diff --git ..."),
-            ("c", "Read", {"file_path": "/tmp/x"}, "contents"),
+            ("c", "mcp__crash__threads", {"thread": 40, "max_frames": 40}, "threads (68):"),
+            ("d", "mcp__crashstats__report", {"uuid": "4e579d27", "thread": 59}, "crash report"),
         ])
         prov = t.provenance()
-        self.assertEqual(len(prov["calls"]), 1)
-        # ...but the aggregate still sees all three, so nothing became invisible.
-        self.assertEqual(set(prov["totals"]), {_SF, "mcp__patch__diff", "Read"})
+        self.assertEqual([(c["tool"], c["arg"]) for c in prov["calls"]], [
+            ("calls_to", "symbol=ns::Foo::bar"), ("diff", "node=abc123"),
+            ("threads", "max_frames=40, thread=40"), ("report", "thread=59, uuid=4e579d27")])
+        self.assertEqual(["empty" in c for c in prov["calls"]], [True, False, False, False])
         self.assertEqual(prov["totals"][_SF]["n"], 1)
+
+    def test_a_long_argument_is_cut(self):
+        t = _RunTrace()
+        _run(t, [("a", "mcp__crashstats__facets",
+                  {"signature": "x" * 300, "field": "release_channel", "by_day": True}, "ok")])
+        arg = t.provenance()["calls"][0]["arg"]
+        self.assertEqual(arg, "by_day=True, field=release_channel, signature=" + "x" * 60)
 
     def test_the_cap_is_counted_not_silent(self):
         t = _RunTrace()
@@ -194,3 +203,60 @@ class TestItReachesThePayload(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheSpikeRunKeepsItsCalls(unittest.TestCase):
+    """The spike investigator stores completed calls through the shared trace."""
+
+    def test_the_run_carries_the_calls(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from crashclouseau.agent import spike_agent
+
+        final = SimpleNamespace(result="no handoff", num_turns=2, total_cost_usd=0.1,
+                                is_error=False, usage=None, model_usage=None)
+
+        class _Client:
+            def __init__(self, options=None):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def query(self, prompt):
+                pass
+
+            async def receive_response(self):
+                yield _use("r1", "mcp__crashstats__report", {"uuid": "u-1", "thread": 40})
+                yield _result("r1", "crash report u-1")
+                yield final
+
+        class _Reporter:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def header(self, *a):
+                pass
+
+            def message(self, *a):
+                pass
+
+        with mock.patch.object(spike_agent, "ClaudeSDKClient", _Client), \
+                mock.patch.object(spike_agent, "Reporter", _Reporter), \
+                mock.patch.object(spike_agent, "ResultMessage", SimpleNamespace), \
+                mock.patch.object(spike_agent, "build_options", return_value=object()):
+            run = asyncio.run(spike_agent.run_spike_agent({"signature": "sig"}))
+        self.assertEqual(run.tool_calls, 1)
+        self.assertEqual([(c["tool"], c["arg"]) for c in run.provenance["calls"]],
+                         [("report", "thread=40, uuid=u-1")])

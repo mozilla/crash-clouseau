@@ -870,6 +870,7 @@ def run_spike_escalation(escalation_id):
         findings, dropped = validate_findings(run.findings, brief)
         esc.merge_payload({
             "usage": run.usage(),
+            "tool_calls": run.provenance,
             "result": _elide(run.result),
             "run_error": run.error,
             "grounded": run.grounded,

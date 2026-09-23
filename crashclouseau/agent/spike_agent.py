@@ -280,6 +280,8 @@ class SpikeRun:
     cache_read_tokens: int = 0
     tool_calls: int = 0
     tools_used: dict = field(default_factory=dict)
+    # Capped completed-call records from ``triage._RunTrace.provenance()``.
+    provenance: dict = field(default_factory=dict)
     is_error: bool = False
     error: str | None = None
     model: str | None = None
@@ -520,6 +522,7 @@ async def run_spike_agent(brief: dict, *, searchfox_client=None) -> SpikeRun:
         "spike: investigator prompt bytes system=%d user=%d for %s on %s",
         len(_SYSTEM), len(prompt), brief.get("signature", "?"), brief.get("buildid", "?"))
     result_msg = None
+    trace = triage._RunTrace()
     try:
         with Reporter(verbose=False, log_path=None) as reporter:
             reporter.header("spike {} {}".format(brief.get("signature", "?"),
@@ -528,6 +531,7 @@ async def run_spike_agent(brief: dict, *, searchfox_client=None) -> SpikeRun:
                 await client.query(prompt)
                 async for msg in client.receive_response():
                     reporter.message(msg)
+                    trace.observe(msg)
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, ToolUseBlock):
@@ -540,7 +544,9 @@ async def run_spike_agent(brief: dict, *, searchfox_client=None) -> SpikeRun:
                      exc_info=True)
         run.is_error = True
         run.error = "{}: {}".format(type(exc).__name__, exc)
+        run.provenance = trace.provenance()
         return run
+    run.provenance = trace.provenance()
     if result_msg is None:
         run.is_error = True
         run.error = "no terminal ResultMessage"
