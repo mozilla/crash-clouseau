@@ -783,7 +783,19 @@ def build_spike_brief(esc, light=False):
         str(c.get("node") or "").lower(): c for c in onstack + window if c.get("node")}
     brief["classic_runs"] = classic_runs(siblings, esc.buildid, esc.channel)
     brief["stacks"] = _stacks(uuid, siblings, esc, seed)
+    brief["daily"] = _daily_by_channel(esc.product, siblings)
     return brief
+
+
+_DAILY_DAYS = 28
+
+
+def _daily_by_channel(product, signatures):
+    """Query the last 28 days across channels for the supplied signature spellings."""
+    from crashclouseau.agent.tools import crashstats
+
+    return crashstats.daily_counts(product or "Firefox", sorted(signatures), _DAILY_DAYS,
+                                   "release_channel", "")
 
 
 def _stacks(uuid, siblings, esc, seed):
@@ -896,6 +908,7 @@ def _public_brief(brief):
         "window": len(cands.get("window") or []),
         "window_extent": cands.get("window_extent"),
         "is_hang": brief.get("is_hang"),
+        "daily": brief.get("daily"),
         "trend_sentence": brief.get("trend_sentence"),
         "version_step": brief.get("version_step"),
         "first_seen_ever": brief.get("first_seen_ever"),

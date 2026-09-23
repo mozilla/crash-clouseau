@@ -437,6 +437,10 @@ def _user_prompt(brief: dict) -> str:
                     spike.get("min_installs")))
     if brief.get("trend_sentence"):
         lines.append("Rate over the last week: " + brief["trend_sentence"])
+    if brief.get("daily"):
+        lines += ["", "REPORTS PER DAY, all channels queried, {} date buckets, this signature and its "
+                      "other spellings (up to five channels shown per day):".format(len(brief["daily"]))]
+        lines += crashstats_tools.daily_lines(brief["daily"])
     if brief.get("is_hang"):
         lines.append(
             "This is a HANG / TIMEOUT signature: the stack is what the awaited thread was doing "

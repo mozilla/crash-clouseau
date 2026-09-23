@@ -26,8 +26,9 @@ Determine, as far as the available evidence permits:
 ## What the runtime gives you
 
 The brief in the user message is assembled by the pipeline from measured facts: the spike
-numbers and the selector's bar; the signature's age and rate history; the representative crash
-report's facts and stack, and up to two more distinct proto-signature clusters of the same spike;
+numbers and the selector's bar; the signature's age and rate history; when available, daily
+counts over four weeks queried across channels (up to five channels shown per day); the
+representative report's facts and stack, and up to two more distinct proto-signature clusters;
 what the ordinary pushlog triage on this build concluded and why it filed nothing; and the
 candidate changesets, both the ones that touched a file on the stack (line-proximity scored) and
 the whole pushlog window of the spiking build, widened when the rate was already rising.
@@ -55,7 +56,8 @@ Never construct a URL or ask for a raw endpoint instead of calling a tool.
   in it are shown side by side. This annotation diff is the instrument that finds what the
   spiking population has in common that the earlier one did not: an OS or driver version, a
   process type, a version, a shutdown phase, an annotation value, a memory state. `days` defaults
-  to 14 and goes to 364. Numeric fields take an `interval` bucket width. The field must be one the
+  to 14 and goes to 364. Numeric fields take an `interval` bucket width. `by_day` counts per day,
+  each day split by the field; `all_channels` drops the channel scope. The field must be one the
   tool knows; an unknown name is refused with the list.
 - `mcp__crashstats__report`: one processed report: its report-level annotations, `crash_info`
   (type, address, decoded instruction, memory accesses, assertion), the list of threads in the
@@ -342,6 +344,12 @@ narrows your view: `mcp__socorro__crash_stats` for the first-seen build over the
 the split-at-build diffs on the dimensions a hypothesis names. The default 14-day window is a
 recent slice, not a population.
 
+A rise on similar dates across channels or older versions suggests checking changes shared
+across builds: OS or third-party updates, server changes, reporting changes, or shared code
+uplifts. Timing alone does not establish the cause, and report counts are not rates. Use
+`facets` with `by_day` and `all_channels` to compare versions or OS versions; check the
+population and deployment history before attributing the rise.
+
 Request only the dimensions needed to evaluate:
 
 - time (`build_id`, `version`, `install_time`);
@@ -553,8 +561,9 @@ These are stable facts that cost turns when rediscovered.
   `available_physical_memory`, `available_virtual_memory`, `total_physical_memory`,
   `available_page_file`, `total_page_file`, `total_virtual_memory`, `install_age`,
   `oom_allocation_size`. A facet returns at most 20 values by count. The query is
-  scoped to the spike's product and channel (beta includes DevEdition's `aurora`); its window is
-  `days` back from now.
+  scoped to the spike's product and channel (beta includes DevEdition's `aurora`) unless
+  `all_channels`; its window is `days` back from now. `by_day` prints each returned date bucket
+  with up to five field values; omitted dates or terms are not shown as explicit zeroes.
 - `crash_report_keys` is the list of annotation keys the crashing process set, protected ones
   included, so faceting it split at the build counts a hidden annotation's presence across the
   two populations.

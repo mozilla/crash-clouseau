@@ -128,14 +128,14 @@ def _render(label: str, total: int, rows, field: str) -> list[str]:
 
 
 def _facet_params(ctx: CrashStatsCtx, signature: str, field: str, since: str, interval,
-                  build_lo=None, build_hi=None) -> dict:
+                  build_lo=None, build_hi=None, all_channels=False) -> dict:
     params = {
         "signature": "=" + signature,
         "product": ctx.product,
         "date": ">=" + since,
         "_results_number": 0,
     }
-    if ctx.channel:
+    if ctx.channel and not all_channels:
         params["release_channel"] = utils.get_search_channel(ctx.channel)
     build = []
     if build_lo:
@@ -151,6 +151,42 @@ def _facet_params(ctx: CrashStatsCtx, signature: str, field: str, since: str, in
         params["_facets"] = field
         params["_facets_size"] = _FACETS_SIZE
     return params
+
+
+_DAY_TERMS = 5
+
+
+def daily_counts(product, signatures, days, field="release_channel", channel=""):
+    """Return Socorro's daily buckets as ``[(day, total, [(term, count), ...])]``.
+    An empty channel omits the channel filter; lookup failures return ``None``.
+    Preserve response order and missing dates; do not normalize counts to rates."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    params = {"signature": ["=" + s for s in signatures], "product": product,
+              "date": ">=" + since, "_results_number": 0,
+              "_histogram.date": field, "_histogram_interval.date": "1d"}
+    if channel:
+        params["release_channel"] = utils.get_search_channel(channel)
+    try:
+        result = _search(params)
+    except Exception:  # noqa: BLE001 - a failed lookup is a missing series, not an error
+        return None
+    if not result or result.get("errors"):
+        return None
+    out = []
+    for row in (result.get("facets") or {}).get("histogram_date") or []:
+        split = [(str(t.get("term")), int(t.get("count") or 0))
+                 for t in (row.get("facets") or {}).get(field) or []]
+        out.append((str(row.get("term"))[:10], int(row.get("count") or 0), split))
+    return out
+
+
+def daily_lines(rows) -> list[str]:
+    """Format each daily total with at most five split terms from the response."""
+    out = []
+    for day, total, split in rows or []:
+        terms = ", ".join("{} {}".format(t, n) for t, n in split[:_DAY_TERMS])
+        out.append("  {}: {}{}".format(day, total, " ({})".format(terms) if terms else ""))
+    return out
 
 
 @tool
@@ -174,13 +210,17 @@ async def facets(
         description="For a NUMERIC field only (uptime, system_memory_use_percentage, "
                     "available_physical_memory, ...): the bucket width, e.g. 60 for uptime in "
                     "seconds, 10 for a percentage. Ignored for term fields.")] = "",
+    by_day: Annotated[bool, Field(
+        description="Count reports per DAY instead of over the whole window, each day split by "
+                    "`field` (a term field, e.g. release_channel, version, platform_version). "
+                    "Does not combine with split_at_build.")] = False,
+    all_channels: Annotated[bool, Field(
+        description="Remove the channel filter. With by_day and field=release_channel, "
+                    "compare daily counts across channels (up to five shown per day).")] = False,
 ) -> str:
-    """Break this signature's recent crash reports down by one field (top values with counts
-    and shares), optionally SPLIT at a build so the reports before the spike and the reports in
-    it can be compared side by side. Use it to find what the spiking population has in common
-    that the earlier one did not: an OS version, a driver, a process type, a version, a
-    shutdown phase, a memory state, an annotation value. Read-only; scoped to this signature on
-    the crash's own product and channel."""
+    """Count a signature's reports by field, optionally split at a build or by day.
+    Use the spike's product and channel unless ``all_channels`` removes the channel filter.
+    Daily output shows up to five terms per bucket; these are counts, not rates. Read-only."""
     field = (field or "").strip()
     if field not in TERM_FIELDS:
         return ("facets: {!r} is not a field this tool will facet. Known fields: {}".format(
@@ -191,15 +231,30 @@ async def facets(
     split = (split_at_build or "").strip()
     if split and not (split.isdigit() and len(split) == 14):
         return "facets: split_at_build must be a 14-digit buildid, got {!r}.".format(split)
-    head = "crash-stats facets for [@ {}] by {} (product {}, channel {}, last {}d{})".format(
-        signature, field, ctx.product, ctx.channel or "any", days,
+    scope = "all channels" if all_channels else "channel {}".format(ctx.channel or "any")
+    if by_day:
+        if split:
+            return "facets: by_day does not combine with split_at_build; ask for one of them."
+        if field in NUMERIC_FIELDS:
+            return "facets: by_day splits each day by a term field, not by {!r}.".format(field)
+        rows = await asyncio.to_thread(daily_counts, ctx.product, [signature], days, field,
+                                       "" if all_channels else ctx.channel)
+        if rows is None:
+            return "facets: the per-day lookup failed or was refused for {!r}.".format(signature)
+        head = "crash-stats reports per day for [@ {}], each day by {} (product {}, {}, last " \
+               "{}d)".format(signature, field, ctx.product, scope, days)
+        return "\n".join([head] + (daily_lines(rows) or ["  (no reports)"]))
+    head = "crash-stats facets for [@ {}] by {} (product {}, {}, last {}d{})".format(
+        signature, field, ctx.product, scope, days,
         ", buckets of {}".format(interval) if interval else "")
     try:
         if split:
             before = await asyncio.to_thread(
-                _search, _facet_params(ctx, signature, field, since, interval, build_hi=split))
+                _search, _facet_params(ctx, signature, field, since, interval, build_hi=split,
+                                       all_channels=all_channels))
             during = await asyncio.to_thread(
-                _search, _facet_params(ctx, signature, field, since, interval, build_lo=split))
+                _search, _facet_params(ctx, signature, field, since, interval, build_lo=split,
+                                       all_channels=all_channels))
             lines = [head]
             total, rows = _facet_rows(before, field, interval)
             lines += _render("BEFORE build {} (older builds)".format(split), total, rows, field)
@@ -207,7 +262,8 @@ async def facets(
             lines += _render("FROM build {} on".format(split), total, rows, field)
             return "\n".join(lines)
         result = await asyncio.to_thread(
-            _search, _facet_params(ctx, signature, field, since, interval))
+            _search, _facet_params(ctx, signature, field, since, interval,
+                                   all_channels=all_channels))
     except Exception as exc:  # noqa: BLE001 - a tool must not raise into the agent loop
         return "facets: lookup failed for {!r} by {} ({}: {}).".format(
             signature, field, type(exc).__name__, exc)
