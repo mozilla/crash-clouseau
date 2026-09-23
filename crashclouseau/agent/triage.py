@@ -785,6 +785,29 @@ def _awaited_work_lines(raw: dict, origin: dict | None = None) -> list[str]:
     return lines
 
 
+_CENSUS_ROWS = 6
+
+
+def _census_lines(raw: dict) -> list[str]:
+    """Format up to six ranked work rows from ``hang.census``."""
+    from crashclouseau import hang
+
+    census = hang.census(raw)
+    rows = (census or {}).get("rows") or []
+    if not rows:
+        return []
+    lines = [
+        "",
+        "THREADS NOT IDLE ({} of {}, common states last; analysed, crashing and crash-reporter "
+        "threads not listed). Not idle is not the same as involved:".format(
+            len(rows), census["threads"]),
+    ]
+    lines += ["  " + hang.census_row(r, width=70) for r in rows[:_CENSUS_ROWS]]
+    if len(rows) > _CENSUS_ROWS:
+        lines.append("  ({} more not idle)".format(len(rows) - _CENSUS_ROWS))
+    return lines
+
+
 def _origin_lines(origin: dict | None) -> list[str]:
     """The blame of the work's frame as the `candidate` an actionable verdict must carry."""
     if not (origin or {}).get("node"):
@@ -1787,6 +1810,7 @@ def _crash_facts(crash: dict) -> list[str]:
     # a shutdown hang and tell the model to investigate the awaited thread instead of the fault.
     if watchdog:
         lines += _awaited_work_lines(raw, crash.get("hang_awaited_origin"))
+        lines += _census_lines(raw)
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)

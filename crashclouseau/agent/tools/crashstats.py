@@ -29,7 +29,7 @@ from typing import Annotated
 from pydantic import Field
 
 from libmozdata import socorro
-from crashclouseau import inspector, utils
+from crashclouseau import hang, inspector, utils
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
 # Facetable term fields a spike investigation has wanted so far. Unknown names are refused with
@@ -250,6 +250,35 @@ def _frames_text(frames, max_frames) -> list[str]:
     return out
 
 
+def _thread_lines(raw, threads) -> list[str]:
+    """Format the census: skipped threads, ranked work rows, idle threads and missing stacks.
+    Each category except skipped threads is capped at ``_MAX_THREADS_LISTED``."""
+    census = hang.census(raw) or {}
+
+    def label(i):
+        return "{} {}".format(i, _short(threads[i].get("thread_name") or "", 80) or "(unnamed)")
+
+    out = ["threads ({}):".format(len(threads))]
+    for i, why in sorted((census.get("skipped") or {}).items()):
+        if 0 <= i < len(threads):
+            out.append("  {}: {}".format(label(i), why))
+    rows = census.get("rows") or []
+    if rows:
+        out.append("  not idle ({}), ranked: common states last, then by "
+                   "inferred wait kind:".format(len(rows)))
+        out += ["    " + hang.census_row(r) for r in rows[:_MAX_THREADS_LISTED]]
+        if len(rows) > _MAX_THREADS_LISTED:
+            out.append("    ... {} more".format(len(rows) - _MAX_THREADS_LISTED))
+    for what, indexes in (("idle", [i for i, _name in census.get("idle") or []]),
+                          ("no stack", census.get("no_stack") or [])):
+        if indexes:
+            shown = ", ".join(label(i) for i in indexes[:_MAX_THREADS_LISTED])
+            more = " ... {} more".format(len(indexes) - _MAX_THREADS_LISTED) \
+                if len(indexes) > _MAX_THREADS_LISTED else ""
+            out.append("  {} ({}): {}{}".format(what, len(indexes), shown, more))
+    return out
+
+
 @tool
 async def report(
     ctx: CrashStatsCtx,
@@ -262,14 +291,10 @@ async def report(
                     "QuotaManager IO thread or a thread pool worker.")] = -1,
     max_frames: Annotated[int, Field(description="Frames to print (default 40, max 60).")] = 40,
 ) -> str:
-    """One processed crash report from crash-stats: the report-level annotations (OS, CPU,
-    process type, reason, MOZ_CRASH reason, uptime, memory state, shutdown phase, shutdown-timeout
-    annotations, the crash_report_keys, ...), crash_info with the decoded instruction and memory
-    accesses, the list of threads in the minidump, and the stack of ONE thread with each frame's
-    trust and inline frames -- by default the thread the signature describes, or the thread you
-    ask for. Use it to read other
-    threads of a hang (what was the awaited thread doing?), to compare reports from different
-    machines, or to see annotations the summary did not carry. Read-only."""
+    """Read a processed crash: report annotations, crash_info, a thread census and one stack.
+    Infer work and wait kinds from symbols; cap work, idle and missing-stack groups at
+    80 entries each. Print up to 60 frames of the selected thread, with trust and inlines.
+    Use other threads to investigate a hang or compare reports. Read-only."""
     try:
         raw = await asyncio.to_thread(inspector.get_crash_data, uuid)
     except Exception as exc:  # noqa: BLE001
@@ -299,14 +324,7 @@ async def report(
     if chosen is None:
         default = inspector.thread_for_analysis(raw)
         chosen = default if isinstance(default, int) and 0 <= default < len(threads) else 0
-    lines.append("threads ({}):".format(len(threads)))
-    for i, t in enumerate(threads[:_MAX_THREADS_LISTED]):
-        name = t.get("thread_name") or ""
-        mark = "  <- printed below" if i == chosen else ""
-        lines.append("  {}: {} ({} frames){}".format(
-            i, _short(name, 80) or "(unnamed)", len(t.get("frames") or []), mark))
-    if len(threads) > _MAX_THREADS_LISTED:
-        lines.append("  ... {} more threads".format(len(threads) - _MAX_THREADS_LISTED))
+    lines += _thread_lines(raw, threads)
     t = threads[chosen]
     lines.append("thread {} ({}) stack:".format(chosen, t.get("thread_name") or "unnamed"))
     lines += _frames_text(t.get("frames"), max(1, min(int(max_frames or 40), _MAX_FRAMES)))

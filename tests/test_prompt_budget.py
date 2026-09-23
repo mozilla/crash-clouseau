@@ -197,16 +197,18 @@ _MEASURED = {
     "system.md": (23667, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
-    "crash facts, 40-thread parent hang": (2508, 200),
-    "user prompt, 40-thread parent hang": (3285, 300),
+    # 2026-09-23: add up to six census rows on watchdog crashes.
+    "crash facts, 40-thread parent hang": (2955, 200),
+    "user prompt, 40-thread parent hang": (3732, 300),
     # 2026-09-18, the AWAITED WORK block (bug 2073349): ~2,550 bytes over the same hang without
     # it -- the awaited thread's 14 frames (long Rust symbols and source paths) and the rule
     # sentence. Paid only on a hang whose spin-loop stack names a thread the dump has.
     # +576 on 2026-09-18 (second pass): the origin line -- who last changed the awaited work,
     # the `candidate` an actionable verdict is routed by -- and the rule that the mechanism
     # starts with the work and does not restate how the wait works (Jens, 2073349 c1).
-    "crash facts, hang with awaited work": (5449, 300),
-    "user prompt, hang with awaited work": (6277, 400),
+    # 2026-09-23: include the census block.
+    "crash facts, hang with awaited work": (5672, 300),
+    "user prompt, hang with awaited work": (6500, 400),
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.

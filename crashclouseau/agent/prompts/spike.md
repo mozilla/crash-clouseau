@@ -171,9 +171,9 @@ it returned) and can exclude whole hypotheses; read them for at least the first 
 
 Treat scan-derived frames cautiously.
 
-For other threads, begin with the thread list `report` prints, grouped by thread name and first
-non-wait, non-event-loop frame. Inspect individual threads only when their state tests a concrete
-hypothesis. Do not infer creation or execution order from thread-array position.
+Use `report`'s thread census to choose stacks that test a hypothesis. It infers work labels
+and wait kinds from symbols; an idle label does not rule out involvement. Unnamed threads
+are included. Do not infer creation or execution order from thread-array position.
 
 Do not infer annotation semantics from a key name alone. For an important annotation, inspect its
 declaration, scope, producer, clearing behavior, and lifetime. A key listed in `crash_report_keys`
@@ -560,7 +560,9 @@ These are stable facts that cost turns when rediscovered.
   two populations.
 - `report` prints the report-level fields when present, `crash_info.type` / `address` /
   `instruction` / `memory_accesses` / `assertion` / `crashing_thread`, the thread list with
-  indexes, and one thread's frames as `#i function path:line trust [module] [inlined: ...]`. On a
+  indexes (`index name: work | call [inferred wait kind]`, up to 80 per category),
+  and up to 60 frames of one thread as
+  `#i function path:line trust [module] [inlined: ...]`. On a
   shutdown hang `crash_info.crashing_thread` names the watchdog that called `MOZ_CRASH` on
   purpose; the tool's default thread is the hung one, and the awaited work is usually on yet
   another thread.

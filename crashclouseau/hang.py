@@ -25,7 +25,9 @@ thread in ``json_dump.threads``.
 
 Everything here is deterministic and reads the processed crash only; it reaches the prompt
 (``triage._awaited_work_lines``), the dossier (``orchestrator._record_hang_awaited_work``), the
-bug (``report_bug.build_awaited_work_block``) and the filer (a bucket's key and title).
+bug (``report_bug.build_awaited_work_block``) and the filer (a bucket's key and title). ``census``
+ranks other threads classified as busy for the prompt (``triage._census_lines``) and
+the spike investigator's ``report`` tool.
 
 MEASURED on 120 release reports of bug 1866944's three signatures, 40 per platform, 2026-09-18:
 the pool named by the spin stack has exactly one busy thread in most dumps, and its top
@@ -35,6 +37,8 @@ threads per report, two of them on the printer mutex), Windows 8/40 in the audio
 connect, 7/40 in the taskbar pin, 5/40 in Suggest/viaduct too. Thread names are what Linux
 leaves of them: 15 bytes, middle elided (``BgIOThr~ool #15`` for ``BgIOThreadPool #15``).
 """
+import json
+import os
 import re
 
 MAX_FRAMES = 16
@@ -79,7 +83,21 @@ _WAIT_RE = re.compile(
     r"WSAWaitForMultipleEvents|mach_msg\w*|__CFRunLoopServiceMachPort|"
     r"read|__read|__GI___read|write|__write|__GI___write|pread\w*|pwrite\w*|recv\w*|__recv\w*|"
     r"send|sendto|__send\w*|connect|__connect|fsync|fdatasync|__fsync|"
-    r"(?:Nt|Zw)(?:Read|Write)File|ReadFile|WriteFile|FlushFileBuffers|(?:Nt|Zw)FlushBuffersFile"
+    r"(?:Nt|Zw)(?:Read|Write)File|ReadFile|WriteFile|FlushFileBuffers|(?:Nt|Zw)FlushBuffersFile|"
+    # OS and runtime wait symbols; callers determine whether the thread is idle.
+    r"(?:Nt|Zw)RemoveIoCompletion(?:Ex)?|GetQueuedCompletionStatus(?:Ex)?|"
+    r"(?:Nt|Zw)WaitForWorkViaWorkerFactory|WaitCoalesced|"
+    r"(?:Nt|Zw)UserGetMessage|GetMessage[AW]?|(?:Nt|Zw)UserMsgWaitForMultipleObjectsEx|"
+    r"MsgWaitForMultipleObjects(?:Ex)?|RealMsgWaitForMultipleObjectsEx|(?:Nt|Zw)UserWaitMessage|"
+    r"WaitMessage|mozilla::widget::WinUtils::WaitForMessage|"
+    r"Microsoft::CoreUI::Dispatch::Wait\w+::Callback_WaitAny|"
+    r"_PR_MD_WAIT_CV|_PR_MD_WAIT|PR_WaitCondVar|PR_Wait|pt_TimedWait|"
+    r"g_cond_wait(?:_until)?|g_async_queue_pop\w*|cnd_wait|cnd_timedwait|"
+    r"semaphore_wait_trap|semaphore_timedwait_trap|__workq_kernreturn|"
+    r"__libc_read|__libc_recvmsg|base::WaitableEvent::(?:Timed)?Wait|"
+    r"rayon_core::sleep::Sleep::sleep|rayon_core::registry::WorkerThread::wait_until_cold|"
+    r"crossbeam_channel::\S*recv\S*|crossbeam_channel::context::Context::wait_until\S*|"
+    r"mio::poll::Poll::poll|mio::sys::\S*select\S*|std::sync::\S*[Cc]ondvar\S*"
     r")$")
 
 # THREAD MACHINERY: the runnable/pool/thread-start frames every pool worker's stack ends in.
@@ -91,7 +109,8 @@ _PLUMBING_RE = re.compile(
     r"_pt_root|_PR_NativeRunThread|pr_root|_pthread_start|thread_start(?:<T>)?|"
     r"BaseThreadInitThunk|patched_BaseThreadInitThunk|_{0,2}RtlUserThreadStart|start_thread|"
     r"NS_New\w*Runnable\w*(?:<T>)?(?:::[\w$]+)*|"
-    r"__clone3?|clone3?|set_alt_signal_stack_and_start|mozilla::ThreadFuncPoolThread|ThreadFunc|"
+    r"__clone3?|clone3?|set_alt_signal_stack_and_start|mozilla::ThreadFuncPoolThread|"
+    r"(?:\(anonymous namespace\)::)?ThreadFunc|"
     r"mozilla::detail::RunnableFunction<T>::Run|mozilla::detail::RunnableMethodImpl<T>::Run|"
     r"mozilla::RunnableTask::Run|mozilla::TaskController::\w+|mozilla::runnable_args_\w+.*|"
     r"nsRunnableMethod\w*::Run|mozilla::detail::ProxyRunnable<T>::Run|"
@@ -100,8 +119,32 @@ _PLUMBING_RE = re.compile(
     r"js::detail::ThreadTrampoline<T>::Start|"
     r"mozilla::net::nsSocketTransportService::Run|mozilla::net::nsSocketTransportService::Poll|"
     r"base::Thread::ThreadMain|base::MessagePumpDefault::Run|base::MessagePumpKqueue::Run|"
-    r"base::MessagePumpForIO::\w+|base::MessagePumpLibevent::Run|WatchdogMain"
+    r"base::MessagePumpForIO::\w+|base::MessagePumpLibevent::Run|WatchdogMain|"
+    # OS and runtime thread-pool and loop machinery.
+    r"Tpp\w+|CRpcThreadCache::RpcWorkerThreadEntry|CRpcThread::WorkerLoop|"
+    r"CDllHost::STAWorkerLoop|CDllHost::WorkerThread|DLLHostThreadEntry|"
+    r"base::MessagePumpWin::Run|base::MessagePumpForUI::\w+|"
+    r"g_thread_proxy|g_main_context_iterate(?:_unlocked)?|g_main_context_iteration|g_main_loop_run|"
+    r"impl_thrd_routine|start_wqthread|_pthread_wqthread|event_base_loop|"
+    r"__CFRunLoopRun|CFRunLoopRunSpecific|CFRunLoopRun|"
+    r"rayon_core::registry::ThreadBuilder::run|rayon_core::registry::main_loop"
     r")$")
+
+# Ignore these syscall stubs and unsymbolised OS frames when extracting work labels.
+# An unknown OS frame alone does not establish that the thread is idle.
+_STUB_RE = re.compile(r"^(?:KiFastSystemCallRet|KiFastSystemCall|KiIntSystemCall)$")
+_OS_MODULE_RE = re.compile(
+    r"^(?:ntdll\.dll|kernelbase\.dll|kernel32\.dll|win32u\.dll|user32\.dll|libc\.so\.\d+|"
+    r"libpthread\.so\.\d+|ld-linux[\w.-]*|libsystem_\w+\.dylib|libdispatch\.dylib|libdyld\.dylib)$",
+    re.I)
+
+# Treat these thread-entry symbols as the stack boundary; discard trailing frames.
+_ROOT_RE = re.compile(
+    r"^(?:_{0,2}RtlUserThreadStart|_pthread_start|start_thread|__clone3?|clone3?|thread_start)$")
+
+# COM modal-loop symbols make a top wait eligible for main-thread work extraction.
+_COM_MODAL_RE = re.compile(
+    r"^(?:CCliModalLoop::\w+|ModalLoop|CoWaitForMultipleHandles|CoWaitForMultipleObjects)$")
 
 # The frames that decide a POOL WORKER is one: what an idle worker waits in.
 _POOL_RUN_RE = re.compile(r"^(?:nsThreadPool::Run|mozilla::ThreadFuncPoolThread)$")
@@ -240,13 +283,26 @@ def is_plumbing(frame):
     return _matches(_PLUMBING_RE, frame)
 
 
+def is_transparent(frame):
+    """Whether work extraction skips this syscall stub or unsymbolised OS frame."""
+    fn = _function(frame)
+    if fn:
+        return bool(_STUB_RE.match(fn))
+    return bool(_OS_MODULE_RE.match(str((frame or {}).get("module") or "").strip()))
+
+
+def to_root(frames):
+    """Keep dict frames through the first recognized thread-entry symbol, inclusive."""
+    frames = [f for f in (frames or []) if isinstance(f, dict)]
+    for i, f in enumerate(frames):
+        if _ROOT_RE.match(clean_symbol(_function(f))):
+            return frames[:i + 1]
+    return frames
+
+
 def is_idle(frames):
-    """Is this thread doing NOTHING that names a subsystem -- every frame a wait or thread
-    machinery? True of a pool worker parked in ``nsThreadPool::Run``'s own wait for an event,
-    of the socket thread in its poll, of a thread that has already left its run loop; false as
-    soon as one frame says what the thread is doing, a mutex it is blocked on included (two of
-    the three CUPS threads in the census sit on the printer's ``RecursiveMutex``, and they are
-    part of that bucket, not idle)."""
+    """Whether ``work_frames`` finds no work labels. This is a stack heuristic,
+    not proof that the thread is uninvolved in the hang."""
     return not work_frames(frames)
 
 
@@ -270,13 +326,15 @@ def is_machinery(frame):
 
 
 def main_work(frames):
-    """Extract the main-thread prefix above recognized shutdown control flow.
+    """Extract work frames above recognized shutdown control flow.
 
-    Returns ``None`` for a parked or unsymbolized top frame, or without recognized shutdown
-    control flow below the prefix. Generated dispatch glue is excluded. ``machinery`` is the
-    preferred frame naming what is shutting down, or the first recognized control-flow frame."""
-    frames = frames or []
-    if not frames or not _function(frames[0]) or is_wait(frames[0]):
+    Return ``None`` without work or shutdown frames, or for an unsymbolised top frame.
+    A top wait is rejected unless a COM modal-loop symbol occurs in the first eight frames.
+    ``machinery`` prefers a shutdown subject over the first control-flow frame."""
+    frames = [f for f in to_root(frames) if not _STUB_RE.match(_function(f))]
+    if not frames or not _function(frames[0]):
+        return None
+    if is_wait(frames[0]) and not any(_matches(_COM_MODAL_RE, f) for f in frames[:8]):
         return None
     work, machinery = [], None
     subjects = [None] * len(_SHUTDOWN_SUBJECT_TIERS)
@@ -290,8 +348,8 @@ def main_work(frames):
                 if subjects[tier] is None and _matches(regex, f):
                     subjects[tier] = f
             continue
-        if (machinery is None and _label(f) and not is_wait(f) and not is_plumbing(f)
-                and not _IPDL_GLUE_RE.search(_label(f))):
+        if (machinery is None and _label(f) and not is_transparent(f) and not is_wait(f)
+                and not is_plumbing(f) and not _IPDL_GLUE_RE.search(_label(f))):
             work.append(f)
     if machinery is None or not work:
         return None
@@ -457,8 +515,10 @@ def clean_symbol(function):
     Trait>::method`` where macOS and Windows symbolise ``viaduct::client::Client::send_sync``;
     the leading impl block is the type's path, so it is kept as one (``_rust_impl_path``) --
     otherwise the same cohort reads ``<T>::send_sync`` on one platform and
-    ``viaduct::client::Client::send_sync`` on the others (6b31256d vs 37d5021a, 2026-09-18)."""
-    text = _rust_impl_path(str(function or "").strip())
+    ``viaduct::client::Client::send_sync`` on the others (6b31256d vs 37d5021a, 2026-09-18).
+
+    Preserve ``(anonymous namespace)`` while removing argument lists."""
+    text = _rust_impl_path(str(function or "").strip()).replace(_ANON, "\0")
     out, depth = [], 0
     for ch in text:
         if ch == "<":
@@ -471,21 +531,23 @@ def clean_symbol(function):
             if ch == "(":
                 break
             out.append(ch)
-    return "".join(out).strip()
+    return "".join(out).strip().replace("\0", _ANON)
+
+
+_ANON = "(anonymous namespace)"
 
 
 def work_frames(frames):
-    """The frames that say what a thread is DOING: neither a wait nor thread machinery,
-    innermost first. Module-only frames (no symbol) are kept under their module name."""
-    return [f for f in frames or [] if _label(f) and not is_wait(f) and not is_plumbing(f)]
+    """Return frames with work labels, in stack order, through the recognized thread entry.
+    Skip wait, machinery and transparent frames; retain other module-only frames."""
+    return [f for f in to_root(frames)
+            if _label(f) and not (is_transparent(f) or is_wait(f) or is_plumbing(f))]
 
 
 def work_and_call(frames):
-    """``(work, call)``: the two ends of what the thread is doing, cleaned. The WORK is the
-    outermost work frame that is not language glue (the runnable's entry, e.g.
-    ``SuggestStore::ingest`` rather than the uniffi scaffolding under it); the CALL is the
-    innermost work frame (``viaduct::Client::send_sync``, ``_cupsCreateDest``). ``("", "")``
-    when the thread has no work frame."""
+    """Return cleaned outermost and innermost work labels, or ``("", "")``.
+    Prefer an outer label outside language glue. The inner label is not necessarily
+    the blocking operation; inspect the full stack to establish that."""
     work = work_frames(frames)
     if not work:
         return "", ""
@@ -732,3 +794,153 @@ def frames_text(frames, limit=MAX_FRAMES):
         desc = "  ".join(x for x in (f.get("module") or "", fn, loc) if x)
         lines.append("{}  {}".format(f.get("stackpos"), desc).rstrip())
     return "\n".join(lines)
+
+
+# Thread census: classify and rank threads from their stack symbols.
+
+# Infer a wait kind from symbols, checking each pattern within its depth limit.
+# The first matching kind wins; these labels do not identify the awaited resource.
+_KINDS = tuple((kind, depth, re.compile(r"^(?:" + pattern + r")$")) for kind, depth, pattern in (
+    ("com-out-mta", 20, r"MTAThreadWaitForCall|MTAThreadDispatchCrossApartmentCall"),
+    ("com-out-sta", 20, r"CCliModalLoop::\w+|ModalLoop|CoWaitForMultipleHandles|"
+                        r"CoWaitForMultipleObjects"),
+    ("activation", 24, r"CRpcResolver::\w+"),
+    ("rpc-out", 12, r"(?:Nt|Zw)AlpcSendWaitReceivePort|(?:Nt|Zw)AlpcConnectPort\w*|LRPC_\w+::\w+|"
+                    r"I_RpcSendReceive|Ndr\w*ClientCall\w*"),
+    ("sync-ipc", 12, r"mozilla::ipc::MessageChannel::Wait\w*Notify"),
+    ("sendmessage", 10, r"(?:Nt|Zw)UserMessageCall|SendMessage\w*|(?:Nt|Zw)UserSendMessage\w*"),
+    ("lock", 10, r"\w*EnterCriticalSection\w*|RtlpWaitOnCriticalSection|\w*AcquireSRWLock\w*|"
+                 r"_{0,3}pthread_mutex_lock\w*|_{0,3}lll_lock_wait\w*|__GI___lll_lock_wait\w*|"
+                 r"mozilla::detail::MutexImpl::lock|mozilla::RecursiveMutex::LockInternal|"
+                 r"os_unfair_lock\w*|__psynch_mutexwait|mozilla::StaticMutex::Lock|"
+                 r"mozilla::OffTheBooksMutex::Lock|std::sys::sync::mutex::\S+"),
+    ("process", 8, r"(?:Nt|Zw)CreateUserProcess|CreateProcess\w*|waitpid|__waitpid|wait4"),
+    ("file-io", 8, r"(?:Nt|Zw)(?:Create|Open|Read|Write|FlushBuffers|SetInformation|"
+                   r"QueryInformation|QueryAttributes|QueryFullAttributes|QueryDirectory|"
+                   r"DeviceIoControl|FsControl|CancelSynchronousIo|LockFile|UnlockFile|"
+                   r"QueryVolumeInformation)File\w*|(?:Nt|Zw)Close|CreateFile\w*|ReadFile|"
+                   r"WriteFile|FlushFileBuffers|(?:__GI_|__libc_|_)?f(?:data)?sync|"
+                   r"(?:__GI_|__libc_)?p(?:read|write)\w*|(?:__GI_|__libc_)?open(?:at)?\w*|"
+                   r"unlink|rename|fcntl|__fcntl\w*"),
+    ("net", 8, r"recv\w*|__recv\w*|send|sendto|__send\w*|connect|__connect|getaddrinfo|"
+               r"__GI_getaddrinfo|WSA\w+|SockWaitForSingleObject|WSPSelect"),
+    ("sleep", 6, r"(?:Nt|Zw)DelayExecution|SleepEx|Sleep|__clock_nanosleep|__GI___nanosleep|"
+                 r"__nanosleep|nanosleep|usleep|__sleep|sleep"),
+    ("message-wait", 8, r"(?:Nt|Zw)UserGetMessage|GetMessage[AW]?|"
+                        r"(?:Nt|Zw)UserMsgWaitForMultipleObjectsEx|MsgWaitForMultipleObjects\w*|"
+                        r"RealMsgWaitForMultipleObjectsEx|(?:Nt|Zw)UserWaitMessage|WaitMessage|"
+                        r"(?:Nt|Zw)UserPeekMessage|PeekMessage[AW]?|_PeekMessage|"
+                        r"__CFRunLoopServiceMachPort|mach_msg\w*"),
+))
+# Waits on another thread or process first, then locks and I/O, then the rest.
+_KIND_RANK = {"com-out-mta": 0, "com-out-sta": 0, "activation": 0, "rpc-out": 0, "sync-ipc": 0,
+              "sendmessage": 0, "process": 0, "lock": 1, "file-io": 1, "net": 1, "sleep": 2,
+              "running": 2, "wait": 3, "message-wait": 3}
+# Symbols used to recognize incoming COM dispatch.
+_SERVING_COM_RE = re.compile(
+    r"^(?:ComInvokeWithLockAndIPID|ServerCall::ContextInvoke|CStdStubBuffer_Invoke|"
+    r"DefaultStubInvoke|AppInvoke|ReentrantSTAInvokeInApartment|STAInvoke)$")
+# Symbols used to recognize crash-reporter threads.
+_REPORTER_RE = re.compile(r"^(?:google_breakpad::\S+|CrashGenerationServer::\S+)$")
+_STATE_DEPTH = 6
+_STATES_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "config", "thread_states.json")
+_COMMON_STATES = None
+
+
+def wait_kind(frames):
+    """Infer a kind from the top frames; ``running`` means no wait pattern matched."""
+    frames = [f for f in to_root(frames) if not is_transparent(f)]
+    names = [clean_symbol(_function(f)) for f in frames[:24]]
+    for kind, depth, regex in _KINDS:
+        if any(n and regex.match(n) for n in names[:depth]):
+            return kind
+    return "wait" if any(is_wait(f) for f in frames[:8]) else "running"
+
+
+def serving_com(frames):
+    return any(_matches(_SERVING_COM_RE, f) for f in to_root(frames)[:60])
+
+
+def is_reporter(thread):
+    thread = thread or {}
+    if str(thread.get("thread_name") or "").startswith("Breakpad"):
+        return True
+    return any(_matches(_REPORTER_RE, f) for f in (thread.get("frames") or [])[:8])
+
+
+def state_key(frames):
+    """Join up to six cleaned labels, skipping transparent frames and stopping at the root."""
+    frames = [f for f in to_root(frames) if not is_transparent(f)]
+    return " < ".join(clean_symbol(_label(f)) for f in frames[:_STATE_DEPTH])
+
+
+def common_states():
+    """Load common-state keys; empty if the table is unreadable or invalid JSON.
+    The builder counts distinct signature strings, which may describe related crashes."""
+    global _COMMON_STATES
+    if _COMMON_STATES is None:
+        try:
+            with open(_STATES_PATH) as handle:
+                _COMMON_STATES = frozenset((json.load(handle) or {}).get("states") or {})
+        except (OSError, ValueError):
+            _COMMON_STATES = frozenset()
+    return _COMMON_STATES
+
+
+def census(raw):
+    """Classify threads and rank those with work labels; ``None`` without a thread list:
+    ``{"threads", "rows": [{"index", "name", "work", "call", "kind", "serving_com", "common"}],
+    "idle": [(index, name)], "no_stack": [index], "skipped": {index: why}}``.
+
+    Skip analysed, crashing and recognized crash-reporter threads. Rank work rows by
+    common-state membership (members last), wait kind, then thread index. Display caps
+    are applied by callers."""
+    from crashclouseau import inspector
+
+    dump = (raw or {}).get("json_dump") or {}
+    threads = dump.get("threads") or []
+    if not threads:
+        return None
+    skipped = {}
+    analysed = inspector.thread_for_analysis(raw)
+    if isinstance(analysed, int):
+        skipped[analysed] = "analysed thread"
+    crashing = (dump.get("crash_info") or {}).get("crashing_thread")
+    if isinstance(crashing, int) and crashing not in skipped:
+        skipped[crashing] = "crashing thread"
+    common = common_states()
+    rows, idle, no_stack = [], [], []
+    for i, t in enumerate(threads):
+        if not isinstance(t, dict) or i in skipped:
+            continue
+        if is_reporter(t):
+            skipped[i] = "crash reporter"
+            continue
+        frames = t.get("frames") or []
+        name = str(t.get("thread_name") or "").strip()
+        if not frames:
+            no_stack.append(i)
+        elif is_idle(frames):
+            idle.append((i, name))
+        else:
+            work, call = work_and_call(frames)
+            rows.append({"index": i, "name": name, "work": work, "call": call,
+                         "kind": wait_kind(frames), "serving_com": serving_com(frames),
+                         "common": state_key(frames) in common})
+    rows.sort(key=lambda r: (r["common"], _KIND_RANK.get(r["kind"], 2), r["index"]))
+    return {"threads": len(threads), "rows": rows, "idle": idle, "no_stack": no_stack,
+            "skipped": skipped}
+
+
+def census_row(row, width=90):
+    """``<index> <name>: <work> | <call> [<kind>, ...]`` for one census row."""
+    work, call = (row.get("work") or "?")[:width], (row.get("call") or "")[:width]
+    what = work if call in ("", work) else "{} | {}".format(work, call)
+    tags = [row.get("kind") or "?"]
+    if row.get("serving_com"):
+        tags.append("serving a COM call")
+    if row.get("common"):
+        tags.append("common state")
+    return "{} {}: {} [{}]".format(row.get("index"), row.get("name") or "(unnamed)", what,
+                                   ", ".join(tags))
