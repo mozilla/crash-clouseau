@@ -2,15 +2,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""A REAL spike files a bug, culprit or not -- and Claude Fable 5.1 gets one shot at the culprit.
+"""Investigate real spikes and file their volume with any grounded culprit.
 
 THE RULE (Calixte, 2026-09-07). Whatever the channel, a real spike of crashes -- not 0 -> 1, but
 a volume a human would call a spike (``spikes``) -- is a fact by itself and MUST reach Bugzilla,
 with a culprit when we have one and without when we do not. The ordinary pipeline files only
 what it can defend at rung 70, so on a spike where it abstained, was refuted, or never ran, this
-module takes over: it hands everything we know to a single strong investigator (``spike_agent``,
-Claude Fable 5.1 at effort xhigh) and files the volume plus whatever the investigator could
-GROUND. Fable is never spent on noise: the predicate runs first, and it is strict on purpose.
+module takes over: it gives the spike brief to ``spike_agent`` (model and effort from
+``agent.spike_escalation``) and files the volume with any grounded findings. The spike
+predicate runs before the investigator.
 
 THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
 
@@ -123,15 +123,7 @@ def sweep_real_spikes():
 
 
 def _filing_held(product):
-    """Is *product* one whose spike is NOT worth a run because nothing could be filed for it?
-
-    An escalation exists to FILE -- the volume is the finding -- so investigating a Fenix spike
-    at Opus xhigh cost (up to `max_cost_usd` a run) while ``file_spike_bug`` would decline
-    every result buys a brief nobody reads. A product whose filing is HELD
-    (``agent.autofile.products.<p>.enabled: false``, Fenix while its verdicts are counted) and
-    a product nobody has DECIDED about (no entry, not the default) are both skipped, and each
-    is logged: a sweep that silently leaves a product out is the silent-no-op shape this
-    codebase keeps being bitten by, and the log line is the only trace on a tick."""
+    """Skip and log products with held filing or no explicit autofile decision."""
     if config.autofile_product_held(product):
         logger.info("spike: %s is not swept: its filing is held "
                     "(agent.autofile.products.%s.enabled: false) and an escalation exists "
@@ -349,8 +341,7 @@ def _enqueue(escalation_id, cfg):
     queue = worker.get_queue(config.get_agent_queue())
     queue.enqueue_call(
         func=run_spike_escalation, args=(escalation_id,), result_ttl=0,
-        # Its own timeout: a Fable run at xhigh over a whole pushlog window can outlast the
-        # ordinary run's 1800s, and RQ's default would kill it at 180s.
+        # A spike investigation can outlast ordinary triage, so use its configured timeout.
         timeout=cfg["job_timeout"],
     )
 

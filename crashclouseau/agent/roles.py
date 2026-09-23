@@ -4,13 +4,8 @@
 
 """Per-role subagents as SDK-native ``AgentDefinition``s (#02).
 
-Clouseau authors its five senior roles (hackbot ships only one generic
-``investigator``). Each gets a role prompt, a curated read-only tool allowlist
-(``mcp__searchfox__*`` + built-ins), and a per-role model tier from the
-``agent.llm.roles`` config block. Children get NO ``Task`` tool (no recursion).
-``effort`` is options-level (the principal session, set in ``triage.py``), never
-a per-``AgentDefinition`` field, so the per-role ``effort`` in config is advisory
-and not applied here."""
+Each of Clouseau's five roles has a prompt, read-only MCP tools, and a model and
+effort from ``agent.llm.roles``. Roles cannot launch subagents."""
 from __future__ import annotations
 
 from claude_agent_sdk import AgentDefinition
@@ -47,9 +42,7 @@ _SOURCE = ["mcp__source__raw_file"]
 # arbitrary-query tool even without a shell.
 _BUGZILLA = [f"mcp__bugzilla__{name}" for name in ("bug", "signature_bugs")]
 _SOCORRO = ["mcp__socorro__crash_stats"]
-# EMPTY, since 2026-09-07 -- see `triage._BUILTIN_TOOLS`. The built-in set is switched off at the
-# session level (`triage.build_options` sets `tools`), so a name here would be ignored anyway;
-# leaving the list empty keeps the role definitions honest about what they can reach.
+# Roles request only their scoped MCP tools.
 _BUILTIN_READ = []
 
 _GROUND = (
@@ -457,52 +450,8 @@ def make_role(name: str, llm_cfg: dict | None = None, channel: str | None = None
         prompt=prompt,
         tools=list(spec["tools"]),
         model=rcfg.get("model", "inherit"),
-        # DOCUMENTATION ONLY -- this line does NOT keep the subagent inline. Keep it
-        # anyway (it is the honest statement of intent, and the one path that DOES read
-        # the field wants exactly this value), but do not mistake it for the control:
-        # the control is ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`` in
-        # ``triage._CLI_ENV``. Deleting that env var and trusting this line reinstates
-        # the outage described below -- it already happened once, in eac7285.
-        #
-        # WHY IT IS INERT, so a future reader can re-verify against a new CLI build.
-        # Two independent reasons, either alone fatal, both checked against the bundled
-        # CLI 2.1.223 shipped inside claude-agent-sdk 0.2.131:
-        #
-        #   1. The value never survives the trip. The SDK sends the AgentDefinition over
-        #      the ``initialize`` control request, and the CLI rebuilds it with a TRUTHY
-        #      conditional spread -- ``...n.background&&{background:n.background},`` --
-        #      so ``false`` contributes NOTHING and the resolved definition has no
-        #      ``background`` key at all. (Sibling fields use ``!==void 0``; this one
-        #      does not.) By the time the Task tool looks, the field is ``undefined``.
-        #   2. Even a surviving ``false`` would be ignored. The Task/Agent launch decides
-        #      backgrounding with
-        #          let q = F === "remote",
-        #              ee = q || (o === !0 || V.background === !0 || K || G || !A && o !== !1) && !U;
-        #      where ``o`` is the model's ``run_in_background`` tool input, ``V`` the
-        #      resolved agent definition, ``U`` the env kill switch, and K/G/A the
-        #      coordinator / fork-subagent / in-process-teammate modes (all false for us).
-        #      ``V.background`` is only ever tested ``=== true``: the definition can force
-        #      backgrounding ON, never off. There is no ``background === !1`` anywhere in
-        #      the 290MB binary. With K/G/A false the expression collapses to
-        #      ``o !== false`` -- i.e. background is ON unless the MODEL explicitly asks
-        #      for a synchronous run, which the CLI's own tool description and system
-        #      prompt actively discourage ("Agents run in the background by default...").
-        #
-        # What that costs when it fires: the principal launches its subagents, is told
-        # not to poll, and correctly ends its turn to wait for a completion notification.
-        # The SDK reports that as a clean terminal ResultMessage (is_error False!) whose
-        # text is a progress note -- "Still waiting on the call-graph-explorer and
-        # patch-scout background agents" -- with no ```json handoff. 84 runs and ~$68 in
-        # the three days after claude-agent-sdk 0.2.110 -> 0.2.131 (5f23df4) landed that
-        # way, every one persisted as a plausible-looking "insufficient evidence" abstain.
-        # ``build_result`` now raises ``MissingHandoffError`` on that shape so the next
-        # such regression is a visible error rate instead of a quiet verdict.
-        #
-        # This whole module assumes an inline fan-out: ``build_result`` folds exactly one
-        # terminal ResultMessage, and ``run_crash_triage`` stops reading at the first one.
-        # Backgrounding is a real feature -- the parent gets woken for a continuation turn
-        # -- but adopting it means consuming turns until the task ledger drains, which is a
-        # different program from the one here.
+        # CLI 2.1.223 ignored `background=False` for inline fan-out. Keep the
+        # session-level switch in `triage._CLI_ENV`; recheck it on SDK upgrades.
         background=False,
     )
     if rcfg.get("effort"):

@@ -1259,9 +1259,7 @@ def get_agent_second_opinion():
     NO context from the first pipeline (verifier if we have a candidate, mechanism-generator
     if not). Returned as one normalized dict so callers never re-derive defaults. Gated OFF
     by default; ``SECOND_OPINION_ENABLED`` is the env canary lever (like ``OFFSTACK_ENABLED``).
-    A strong model (opus/effort=max) is deliberate: this is a rare, single-shot, no-context
-    call — the blanket effort=max OOM/no-gain finding was about the full multi-agent pipeline,
-    not one blind call."""
+    ``agent.second_opinion`` overrides the model and effort defaults below."""
     o = get_agent().get("second_opinion", {})
     return {
         "enabled": _env_bool("SECOND_OPINION_ENABLED", o.get("enabled", False)),
@@ -1304,7 +1302,7 @@ def get_agent_spike_escalation():
     (``spikes.judge_selection``) and the ordinary pushlog triage did not file anything.
 
     ``enabled`` is a spend switch, like ``AGENT_CHANNELS``: one escalation is a single
-    Claude Opus 5 run at ``effort`` xhigh (tens of dollars at the cap), so it has to be
+    investigator run, so it has to be
     stoppable from ``heroku config:set SPIKE_ESCALATION_ENABLED=0`` without a deploy. The
     FILING half is gated by the global ``AUTOFILE_BUGS`` kill switch and by nothing else: a
     real spike is filed on every channel, including one whose ordinary filing is held with

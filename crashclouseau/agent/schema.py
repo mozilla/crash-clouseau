@@ -582,11 +582,10 @@ class AreaExpert(BaseModel):
 class SecondOpinion(BaseModel):
     """A blind second reviewer's INDEPENDENT conclusion (#SO).
 
-    Produced by ``agent.second_opinion.run_second_opinion`` — a fresh Opus-4.8 agent
-    given the crash (and, in verify mode, only the candidate changeset) with NONE of the
-    first pipeline's reasoning, so its read is an unbiased plausibility signal. It is set
-    programmatically on the dossier by ``orchestrator._fold_second_opinion`` (NOT parsed
-    from a claim block, so it is not a ``Cited`` model and carries no citations); it rides
+    ``agent.second_opinion.run_second_opinion`` gives a fresh agent the crash and, in
+    verify mode, the candidate changeset, without the first pipeline's reasoning.
+    ``orchestrator._fold_second_opinion`` adds the result to the dossier rather than
+    parsing it from a claim block, so it is not a ``Cited`` model; it rides
     the dossier JSONB payload and is additive + backward compatible (older dossiers omit it
     and validate to ``None``). ``mode`` is ``"verify"`` when a candidate was given (then
     ``corroborates`` is the boost/refute signal) and ``"mechanism"`` otherwise (an

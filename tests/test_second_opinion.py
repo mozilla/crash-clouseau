@@ -32,22 +32,15 @@ class TestSecondOpinionOptions(unittest.TestCase):
         # No shell / builtins / subagents -> the agent cannot GET hg json-pushes (no pushlog).
         for banned in ("Bash", "Read", "Grep", "Glob", "Task"):
             self.assertNotIn(banned, allowed)
-        # ...and that is now a REGISTRATION fact, not an allowlist one: with `tools` unset and
-        # bypassPermissions the CLI's whole built-in set was live whatever this list said
-        # (live-probed 2026-09-07: the same prompt ran `Bash` with `tools` unset and reported
-        # NO-BASH with `tools=[]`, while the MCP tools kept working under both).
+        # Request no built-in tools; the allowlist alone does not disable them.
         self.assertEqual(opts.tools, [])
         self.assertEqual(
             set(opts.mcp_servers),
             {"searchfox", "patch", "history", "source", "bugzilla", "socorro"})
-        self.assertEqual(opts.model, "claude-opus-4-8")   # Opus 4.8
-        self.assertEqual(opts.effort, "high")             # measured better than max; see config
+        self.assertEqual((opts.model, opts.effort), ("claude-opus-5-5", "medium"))
 
-    def test_background_tasks_disabled(self):
-        # Same inline pin as the principal. The allowlist has no Task, but it is not a
-        # REGISTRATION control (no `tools=`, and bypassPermissions), so the Agent tool is
-        # still live; a backgrounded launch would turn the SO's final message into a
-        # progress note and parse_second_opinion would silently return None.
+    def test_cli_env_requests_inline_tasks(self):
+        # This checks the option value, not the CLI's runtime behavior.
         opts = build_options(_CRASH, None, searchfox_client=object())
         self.assertEqual(opts.env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"), "1")
 
@@ -98,7 +91,10 @@ class TestSecondOpinionPrompt(unittest.TestCase):
 
 class TestSecondOpinionConfig(unittest.TestCase):
     def test_defaults(self):
-        cfg = config.get_agent_second_opinion()
+        # The getter's own defaults, without the shipped `agent.second_opinion` block.
+        agent = {k: v for k, v in config.get_agent().items() if k != "second_opinion"}
+        with mock.patch.object(config, "get_agent", return_value=agent):
+            cfg = config.get_agent_second_opinion()
         self.assertFalse(cfg["enabled"])
         self.assertEqual(cfg["model"], "opus")
         # `high` beat `max` head-to-head on 51 ground-truth corpus cases (equal-or-better
@@ -106,6 +102,11 @@ class TestSecondOpinionConfig(unittest.TestCase):
         self.assertEqual(cfg["effort"], "high")
         # 25 (= Confidence.low), NOT 50: any `lead` is REPORTED, so a threshold of 50 left the
         # weakest shown leads with no second opinion at all (4 of 31 over the first prod days).
+        self.assertEqual(cfg["min_confidence"], 25)
+
+    def test_shipped_model_and_effort(self):
+        cfg = config.get_agent_second_opinion()
+        self.assertEqual((cfg["model"], cfg["effort"]), ("claude-opus-5-5", "medium"))
         self.assertEqual(cfg["min_confidence"], 25)
 
     def test_env_enable(self):

@@ -332,9 +332,8 @@ class TestRerunCorpus(unittest.TestCase):
         ad = roles.make_role("skeptic", cfg)
         self.assertEqual(ad.model, "opus")
         self.assertEqual(ad.effort, "max")
-        base = roles.make_role("skeptic")            # no llm_cfg -> base config tier, no effort
-        self.assertEqual(base.model, "haiku")
-        self.assertIsNone(base.effort)
+        base = roles.make_role("skeptic")            # no llm_cfg -> base config
+        self.assertEqual((base.model, base.effort), ("claude-opus-5-5", "medium"))
 
     def test_case_to_crash_carries_raw_crash_for_facts(self):
         # The frozen processed crash must reach the prompt as raw_crash, else eval reruns

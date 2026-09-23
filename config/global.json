@@ -349,11 +349,16 @@
                 }
             }
         },
+        "second_opinion":
+        {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+        },
         "spike_escalation":
         {
             "enabled": true,
-            "model": "opus-5",
-            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "effort": "medium",
             "fallback_model": "opus",
             "max_turns": 40,
             "max_cost_usd": 40.0,
@@ -399,14 +404,14 @@
         },
         "llm":
         {
-            "principal": {"model": "sonnet", "effort": "high", "max_turns": 60},
+            "principal": {"model": "claude-opus-5-5", "effort": "medium", "max_turns": 60},
             "roles":
             {
-                "crash-interpreter": {"model": "haiku"},
-                "call-graph-explorer": {"model": "sonnet", "effort": "medium"},
-                "patch-scout": {"model": "haiku"},
-                "data-flow-tracer": {"model": "sonnet", "effort": "medium"},
-                "skeptic": {"model": "haiku"}
+                "crash-interpreter": {"model": "claude-opus-5-5", "effort": "medium"},
+                "call-graph-explorer": {"model": "claude-opus-5-5", "effort": "medium"},
+                "patch-scout": {"model": "claude-opus-5-5", "effort": "medium"},
+                "data-flow-tracer": {"model": "claude-opus-5-5", "effort": "medium"},
+                "skeptic": {"model": "claude-opus-5-5", "effort": "medium"}
             },
             "pricing":
             {
@@ -414,6 +419,7 @@
                 "claude-sonnet-5": {"in": 3.0, "out": 15.0},
                 "claude-opus-4-8": {"in": 5.0, "out": 25.0},
                 "claude-opus-5": {"in": 5.0, "out": 25.0},
+                "claude-opus-5-5": {"in": 4.0, "out": 20.0},
                 "claude-fable-5": {"in": 10.0, "out": 50.0},
                 "claude-fable-5-1": {"in": 10.0, "out": 50.0}
             },

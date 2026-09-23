@@ -67,58 +67,22 @@ from crashclouseau.vendor.hackbot_runtime.errors import AgentError
 # The needinfo actions the agent may RECORD (nothing is executed; #12 applies).
 NEEDINFO_ACTIONS = ["bugzilla.add_comment", "bugzilla.update_bug"]
 
-# EMPTY, since 2026-09-07. `Read`/`Grep`/`Glob`/`Bash` were allowlisted here for a checkout the
-# worker does not have: in production their only reachable targets are the dyno's own files --
-# the environment with the Anthropic, Socorro and Bugzilla credentials -- and the crash brief
-# they act on is built from client-supplied annotations and Bugzilla titles. Measured in a
-# 2.4-hour worker-log window on 2026-09-07: 6 runs made 21 `Grep`, 9 `Read` and 4 `Bash` calls
-# against nothing. The registration control is `ClaudeAgentOptions.tools` in `build_options`
-# (`allowed_tools` only decides what runs without a prompt, and permissions are bypassed).
+# The worker has no Mozilla source checkout. `build_options` selects subagent tools explicitly;
+# `allowed_tools` only controls auto-approval.
 _BUILTIN_TOOLS = []
 
-# THE thing that keeps the five subagents inline. Handed to the bundled CLI subprocess
-# via ``ClaudeAgentOptions.env``, which the SDK MERGES over ``os.environ`` (options.env
-# wins) -- see subprocess_cli.connect() -- so this one key adds nothing and clobbers
-# nothing else.
-#
-# Why an env var and not ``AgentDefinition.background=False`` (which we also set, and
-# which does NOT work -- the long WHY is in ``roles.make_role``): the CLI's Task/Agent
-# launch computes
-#     let q = F === "remote",
-#         ee = q || (o === !0 || V.background === !0 || K || G || !A && o !== !1) && !U;
-# ``V.background`` is only ever compared ``=== true``, so the agent definition is a
-# one-way opt-IN to backgrounding; the trailing ``&& !U``, where ``U`` is this env var,
-# is the only term in that expression that can turn it OFF. Setting it additionally
-# makes the CLI omit ``run_in_background`` from the Agent (and Bash) tool schemas and
-# drop the "agents run in the background by default, you will be notified" prompt
-# bullets -- so it removes the model's incentive, not just the mechanism. Verified by
-# live repro against the bundled CLI: 3/3 runs with it set emitted the ```json handoff,
-# 4/4 comparable runs without it ended on a progress note. It also closes the MCP
-# auto-background path (a >120s main-thread MCP call being parked as a task).
-#
-# The value MUST be one of "1"/"true"/"yes"/"on": the CLI parses it through a typed
-# boolean, so "0"/"false"/"" read as OFF -- setting it to "0" does not "disable the
-# workaround", it just leaves backgrounding enabled.
-#
-# Inline is not serial: the model still emits several Agent tool_use blocks in one
-# message and the CLI runs them concurrently, which is the pre-0.2.131 behaviour this
-# restores.
+# On CLI 2.1.223 this requested inline subagents; `background=False` alone did not.
+# This is an internal CLI switch: a string-presence test cannot verify its behavior
+# on a new CLI, so check the actual handoff after an SDK upgrade.
 _CLI_ENV = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 
-# Config short names (used verbatim for AgentDefinition) -> full ids for the
-# principal ClaudeAgentOptions model= level.
+# Expand short model names for the principal; full IDs pass through unchanged.
 _MODEL_IDS = {
     "haiku": "claude-haiku-4-5",
     "sonnet": "claude-sonnet-5",
     "opus": "claude-opus-4-8",
-    # Claude Opus 5: the spike investigator's model (`agent.spike_escalation`, since 2026-09-08;
-    # Fable 5.1 before). Thinking is on by default (adaptive) and depth is the options-level
-    # `effort`; `thinking: disabled` would be rejected at the investigator's `xhigh`, so nothing
-    # here sets `thinking`.
     "opus-5": "claude-opus-5",
     "fable": "claude-fable-5",
-    # Claude Fable 5.1: thinking is always on and depth is the options-level `effort`; the raw
-    # chain of thought is never returned, so nothing here should expect `thinking` text from it.
     "fable-5-1": "claude-fable-5-1",
 }
 
@@ -2440,14 +2404,7 @@ def build_options(
         mcp_servers=mcp_servers,
         agents=roles.build_roles(llm_cfg, channel=channel, java=java),
         allowed_tools=allowed,
-        # THE REGISTRATION CONTROL: only the subagent-spawning tool from the CLI's built-in set;
-        # `Bash`/`Read`/`Grep`/`Glob`/`Write`/`WebFetch` are not offered to the principal or to
-        # any subagent, whatever their `tools` lists say. Live-probed 2026-09-07 on this SDK
-        # (CLI 2.1.226): with `tools=["Agent", "Task"]` a haiku principal spawned its subagent,
-        # the subagent's MCP tool worked, and both reported no Bash although the subagent's
-        # definition listed it; with `tools` unset the same prompt ran `Bash`. Both spellings
-        # because the CLI surfaces the tool as `Agent` and older code says `Task`
-        # (`_RunTrace._SUBAGENT_TOOLS`).
+        # Request only subagent tools from the CLI's built-in set. The roles use MCP tools.
         tools=list(_RunTrace._SUBAGENT_TOOLS),
         model=model,
         max_turns=max_turns,

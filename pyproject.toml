@@ -24,7 +24,8 @@ dependencies = [
     "requests>=2.34.2",
     "validate_email>=1.3",
     "pydantic>=2.6",
-    "claude-agent-sdk>=0.2",
+    # 0.2.158 bundles Claude Code 2.1.280 for the Opus 5.5 configuration.
+    "claude-agent-sdk>=0.2.158",
     "cpp-demangle>=0.1.3",
 ]
 

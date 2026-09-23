@@ -83,9 +83,9 @@ class TestBuildOptions(unittest.TestCase):
 
     def test_principal_tiering(self):
         o = self._opts()
-        self.assertEqual(o.model, "claude-sonnet-5")  # config default; short "sonnet" -> full id
+        self.assertEqual(o.model, "claude-opus-5-5")
         self.assertEqual(o.max_turns, 60)  # raised 40->60: prod cases need more turns (curl-based history)
-        self.assertEqual(getattr(o, "effort", None), "high")  # options-level
+        self.assertEqual(getattr(o, "effort", None), "medium")  # options-level
 
     def test_roles_registered_with_tiers(self):
         o = self._opts()
@@ -94,32 +94,18 @@ class TestBuildOptions(unittest.TestCase):
             {"crash-interpreter", "call-graph-explorer", "patch-scout",
              "data-flow-tracer", "skeptic"},
         )
-        # navigator is Sonnet (Phase-0 finding); seniors Haiku
-        self.assertEqual(o.agents["call-graph-explorer"].model, "sonnet")
-        self.assertEqual(o.agents["crash-interpreter"].model, "haiku")
+        for name, role in o.agents.items():
+            self.assertEqual((role.model, role.effort), ("claude-opus-5-5", "medium"), name)
         # subagents never get the Task tool (no recursion)
         self.assertNotIn("Task", o.agents["call-graph-explorer"].tools)
 
-    def test_subagents_pinned_inline_by_cli_env(self):
-        """THE assertion that keeps the fan-out inline. The CLI backgrounds a subagent
-        unless the MODEL passes ``run_in_background: false`` -- the launch predicate only
-        ever tests ``V.background === true``, so the AgentDefinition can force
-        backgrounding on but never off. This env var is the only global off-switch (the
-        ``&& !U`` term). A backgrounded fan-out makes the principal end its turn on a
-        progress note, which used to reach ``parse_and_validate`` as the final handoff:
-        one silent abstain per run, no error anywhere. See ``triage._CLI_ENV``.
-
-        Asserted as the literal ``"1"``, not truthiness: the CLI parses the value through
-        a typed boolean that accepts only 1/true/yes/on, so ``"0"`` (or any other string)
-        silently leaves backgrounding ENABLED."""
+    def test_subagents_request_inline_by_cli_env(self):
+        """Check the requested switch value; this does not prove CLI behavior."""
         self.assertEqual(
             self._opts().env.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"), "1")
 
-    def test_cli_env_does_not_clobber_the_process_env(self):
-        # options.env is MERGED over os.environ by the SDK (options.env wins), so this
-        # must stay a one-key dict -- anything else would drop ANTHROPIC_API_KEY / PATH
-        # from the subprocess. Also: a copy per call, so a caller mutating options.env
-        # cannot poison the module constant for every later run.
+    def test_cli_env_is_copied_per_call(self):
+        # Keep this override to one key and give each call its own copy.
         o1, o2 = self._opts(), self._opts()
         self.assertEqual(set(o1.env), {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"})
         o1.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "0"
@@ -127,10 +113,7 @@ class TestBuildOptions(unittest.TestCase):
         self.assertEqual(triage._CLI_ENV["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
 
     def test_roles_declare_background_false(self):
-        """Kept as the statement of intent, NOT as the control: the CLI drops
-        ``background: false`` at parse time (a truthy conditional spread) and would
-        ignore it anyway. If it ever starts honouring the field, ``False`` is the value
-        we want. See the long comment in ``roles.make_role``."""
+        """Declare the desired behavior even though older CLIs ignored this field."""
         for name, agent in self._opts().agents.items():
             self.assertIs(agent.background, False, name)
 
@@ -169,13 +152,7 @@ class TestBuildOptions(unittest.TestCase):
             self.assertIn("FULLY QUALIFIED", o.agents[role].prompt, role)
 
     def test_the_builtin_toolset_is_off_and_the_subagent_tool_stays(self):
-        """`ClaudeAgentOptions.tools` is the REGISTRATION control; `allowed_tools` only decides
-        what runs without a permission prompt, and permissions are bypassed. With `tools` unset
-        the CLI's whole built-in set was live for the principal and every subagent -- and in a
-        2.4-hour prod log window on 2026-09-07, 6 runs made 21 `Grep`, 9 `Read` and 4 `Bash`
-        calls on a worker that has no checkout, only credentials. Live-probed the same day:
-        `tools=["Agent", "Task"]` still spawns a subagent and keeps every MCP tool, and neither
-        side has Bash even when the subagent's definition lists it."""
+        """Check the requested tool lists; runtime registration needs a CLI probe."""
         o = self._opts()
         self.assertEqual(o.tools, ["Agent", "Task"])
         banned = {"Bash", "Read", "Grep", "Glob", "Write", "Edit", "WebFetch", "WebSearch"}
@@ -607,27 +584,10 @@ def _bundled_cli():
 
 
 class TestBundledCLICanary(unittest.TestCase):
-    """Fail HERE, offline, when an SDK bump removes the switch the inline fan-out
-    depends on — rather than in prod, silently, at ~$25/day of abstains.
+    """Catch removal of the CLI switch used for inline subagents.
 
-    ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`` is an internal env var of the bundled CLI,
-    not public SDK API, so nothing else notices if it disappears: the CLI ignores an
-    unknown variable, the subagents background again, and the principal starts leaving
-    progress notes. That is exactly how 0.2.110 -> 0.2.131 got through — the lock bump
-    diffed ``ClaudeAgentOptions``' fields across every release and never looked at what
-    the CLI does with them.
-
-    KNOW WHAT THIS DOES NOT CATCH. It is a presence check on a string, and the variable
-    is read at ~22 sites of which only one — the ``&& !U`` in the Agent launch predicate
-    — is load-bearing for the fan-out; the rest are Bash/PowerShell/Monitor/TUI. An SDK
-    bump that keeps the variable for the Bash schema while restructuring the Agent launch
-    would leave this green and prod broken. Asserting the predicate itself is not an
-    option: every identifier in it is minified and renames between builds. So on any SDK
-    bump, re-derive it by hand —
-        grep -a -o -b -E '.{80}V?\\.background===.{160}' <bundled>/claude
-    — and check the term is still ``&& !U``. The runtime backstop for the case this
-    misses is ``MissingHandoffError``: a backgrounded fan-out now errors loudly instead
-    of persisting as a plausible abstain."""
+    String presence cannot prove the switch still controls agent launch. Verify a
+    complete JSON handoff with the upgraded CLI before relying on it."""
 
     def test_switch_still_exists_in_the_bundled_binary(self):
         cli = _bundled_cli()
@@ -637,9 +597,8 @@ class TestBundledCLICanary(unittest.TestCase):
             self.assertNotEqual(
                 mm.find(b"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"), -1,
                 "the bundled CLI no longer mentions "
-                "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: triage._CLI_ENV is now inert and "
-                "the subagent fan-out is backgrounding again. Re-derive the launch "
-                "predicate (grep -a for 'V.background===') before shipping this SDK bump.",
+                "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: verify inline subagents "
+                "before shipping this SDK bump.",
             )
 
 

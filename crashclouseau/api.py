@@ -171,7 +171,7 @@ def selection():
 
 def spikes():
     """Read-only: the REAL spikes the pipeline escalated (``agent.spike_escalation``) -- what
-    fired, what Claude Fable 5.1 concluded, what was filed or why not. ``?signature=X`` narrows
+    fired, what the investigator concluded, what was filed or why not. ``?signature=X`` narrows
     to one signature; ``?channel=`` / ``?product=`` filter; ``?limit=`` caps (default 200)."""
     product = request.args.get("product") or None
     channel = request.args.get("channel") or None

@@ -488,9 +488,8 @@
       </div>
       {% endif -%}
 
-      {# Blind second opinion (#SO): a fresh Opus-4.8 agent re-analysed the crash given NONE
-         of the reasoning above — an independent plausibility read. In verify mode it judged
-         the candidate; in mechanism mode (no candidate) it proposed its own mechanism. #}
+      {# A fresh second-opinion agent saw the crash without the first analysis.
+         It judged the candidate, or proposed a mechanism when there was none. #}
       {% set so = d.get('second_opinion') -%}
       {% if so and so.get('mode') -%}
       <div class="evidence-section second-opinion">

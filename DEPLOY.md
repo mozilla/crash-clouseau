@@ -567,6 +567,26 @@ per-train changes unless the combined fields invoked the fallback. `bug_end_of_c
 create-time tracking flags without `LogActivityEntry`, so verify the field itself. For example,
 bug 2073887 has `cf_status_firefox158 = affected` but no matching history entry.
 
+## Claude Opus 5.5 configuration (2026-09-23)
+
+`config/global.json` sets `claude-opus-5-5` at effort `medium` for the triage principal and five
+roles, the second opinion when enabled, and the spike investigator. The investigator's configured
+fallback remains `opus` (Opus 4.8). The previous config selected Sonnet 5 at `high` for the
+principal, Haiku 4.5 for three roles, Sonnet 5 at `medium` for two roles, Opus 4.8 at `high` for
+the second opinion, and Opus 5 at `xhigh` for the investigator.
+
+The SDK requirement is 0.2.158, which [bundles Claude Code 2.1.280](https://github.com/anthropics/claude-agent-sdk-python/blob/v0.2.158/CHANGELOG.md).
+The previous lock used SDK 0.2.134 (Claude Code 2.1.226). These versions establish what was
+bundled, not the first CLI version to support the model. No one-off dyno transcript or crash
+replay output is retained in this repository.
+
+[Anthropic's model documentation](https://platform.claude.com/docs/en/models/opus-5-5/overview)
+confirms the model ID, $4/$20 per million input/output tokens, always-on thinking, and the
+restriction on forced tool use. Classifier declines can return
+[`stop_reason: "refusal"`](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback);
+CLI handling remains unverified here. After deploy, check errors, abstains, and per-run cost;
+`max_cost_usd_per_crash` only logs a warning.
+
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct
@@ -575,7 +595,7 @@ the 21 days before (`spike.history_days`, read from Socorro per judgement; unrea
 spike — added 2026-09-08 after bug 2070317 was filed on a one-build zero baseline), and a Poisson
 excess at the crash-spikes dashboard's `major` alert rate (`crashclouseau/spikes.py`) — that the
 ordinary triage did not
-file gets one **Claude Opus 5 run at effort xhigh** (`agent.spike_escalation`) and a bug on
+file gets one **Claude Opus 5.5 run at effort medium** (`agent.spike_escalation`) and a bug on
 **every triaged channel**, the per-channel culprit-filing hold notwithstanding. The bug leads
 with the volume; the investigator's analysis follows only where it grounded its claims in tool
 reads. An open bug on the signature gets it as a comment; so does a bug we filed ourselves that a
@@ -595,19 +615,13 @@ crash or signature the spike path filed shows that bug in its Bug column marked 
 | `AGENT_CHANNELS` | which channels are swept, as for triage |
 | `agent.spike_escalation.max_runs_per_day` / `daily_cap` (4 / 3 per channel) | bound a bad predicate at a nuisance, not an incident |
 
-The investigator ran on Claude Fable 5.1 until 2026-09-08 and on Claude Opus 5 since
-(`agent.spike_escalation.model`; the prompt is `crashclouseau/agent/prompts/spike.md`, the
-generic crash-analysis prompt adapted to the MCP tools, which are what carry the tokens and the
-allowlisted UA); an unavailable model falls back to `fallback_model` (opus 4.8). A run is $5–40
-(`max_cost_usd`, a backstop whose CLI enforcement is unverified). The investigator and the second
-opinion set `ClaudeAgentOptions.tools=[]` and the triage principal `tools=["Agent", "Task"]`
-(all since 2026-09-07): the CLI's built-in `Bash`/`Read`/`Grep`/`Glob`/`Write`/`WebFetch` are no
-longer registered for any agent, the MCP tools stay — live-probed on this SDK that day (a toy
-MCP tool ran, a subagent still spawned, and the models reported no Bash; with `tools` unset the
-same prompt ran `Bash`). Before that, 6 triage runs in a 2.4-hour window had made 21 `Grep`, 9
-`Read` and 4 `Bash` calls on a dyno with no checkout. `payload->'usage'->'tools_used'` on a done
-spike row is still the cheap day-one glance; for triage, watch that runs still spawn their
-subagents (`▶ spawn` lines in the worker log) and that the abstain rate does not move.
+The investigator uses `agent.spike_escalation.model`; its prompt is
+`crashclouseau/agent/prompts/spike.md`. `fallback_model` is `opus` (Opus 4.8).
+`max_cost_usd` is a backstop whose CLI enforcement is unverified. The investigator and second
+opinion pass `tools=[]`; the triage principal passes `tools=["Agent", "Task"]`. All three configure
+MCP servers separately. After deploy, check `payload->'usage'->'tools_used'` for built-in tool
+calls, `▶ spawn` lines for triage roles, and the abstain rate. No saved probe establishes these
+tool controls on the upgraded CLI.
 
 ## Before you deploy: check for live triage runs
 

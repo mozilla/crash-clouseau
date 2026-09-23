@@ -40,7 +40,7 @@ flowchart TD
         SEED["build seed<br/>stack frames + candidate diffs"]
         TRIAGE["run_crash_triage · hackbot runtime"]
         subgraph TEAM["agent team · Claude Agent SDK"]
-            PRINCIPAL["principal<br/>Sonnet 5 @ high"]
+            PRINCIPAL["principal<br/>Opus 5.5 @ medium"]
             EXPERTS["area-experts<br/>call-graph · data-flow"]
             SCOUT["patch-scout<br/>raw diffs + searchfox"]
             SKEPTIC["skeptic — veto"]
@@ -112,9 +112,9 @@ flowchart TD
 3. **Triage (agentworker).** The worker **atomically claims** the run
    (`claim_running` — skips anything already done or running, so dyno restarts
    don't double-pay), builds a seed from the crash stack + candidate diffs, and
-   runs the agent team via the hackbot runtime: a principal (Sonnet 5 @ high)
-   coordinating area-experts (call-graph / data-flow), patch-scout (raw diffs +
-   searchfox), a skeptic (veto) and a noise-filter. The result is validated
+   runs the agent team via the hackbot runtime, with every member configured for Opus 5.5 @ medium:
+   a principal coordinating area-experts (call-graph / data-flow), patch-scout (raw
+   diffs + searchfox), a skeptic (veto) and a noise-filter. The result is validated
    against the Pydantic schema and persisted as a **Dossier** (status, cost,
    tokens, models) plus a **Verdict** (culprit / lead / abstain + confidence).
 
@@ -133,7 +133,7 @@ flowchart TD
    the loudest preceding build-day and a Poisson excess at the dashboard's `major`
    alert rate — never `0 → 1`) and that the ordinary triage did not file is escalated
    by `spike_escalation.sweep_real_spikes` (every 10 min, after a grace period, once
-   per signature family per week): one Claude Fable 5.1 run at effort xhigh over the
+   per signature family per week): one Claude Opus 5.5 run at effort medium over the
    brief (spike numbers, history, up to three distinct stacks, the ordinary runs'
    conclusions, the on-stack candidates and the build's whole pushlog window, plus
    the `crashstats` population tools), then a bug — a comment on the open bug about

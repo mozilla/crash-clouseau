@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""The spike investigator: one Claude Opus 5 run over everything we know about a REAL spike.
+"""The spike investigator: one agent run over a real spike's brief.
 
 WHEN IT RUNS. ``spike_escalation.sweep_real_spikes`` found a (signature, build-day) the selector
 analysed that is a real spike by ``spikes.judge_selection`` -- a floor, several installations,
@@ -28,11 +28,9 @@ stamped by libmozdata / ``crashclouseau.net`` at import); its written report is 
 JSON handoff the filer renders, with the evidence model's observed / derived / inferred kinds
 carried through ``SpikeEvidence.kind``.
 
-WHAT IT MAY NOT DO. No shell, no file system, no subagents: ``ClaudeAgentOptions.tools=[]``
-switches the CLI's built-in toolset off (the second opinion only ALLOWLISTS, which is not a
-registration control -- see ``agent-tool-sandbox`` in the memory notes), so the model has exactly
-the scoped MCP tools and nothing that could reach the worker's credentials. The brief is built
-from client-supplied crash annotations, so this matters more here than anywhere else.
+WHAT IT MAY NOT DO. ``ClaudeAgentOptions.tools=[]`` requests no built-in shell, file, or
+subagent tools. Only scoped MCP servers are configured. The brief can contain client-supplied
+crash annotations, so check tool behavior when upgrading the CLI.
 
 WHAT COMES BACK. ``SpikeFindings``: a summary for the bug, a product::component, a culprit
 candidate or none, a checked trigger path, the evidence with its sources, what was ruled out.
@@ -303,9 +301,9 @@ class SpikeRun:
 
 
 def build_options(brief: dict, *, searchfox_client=None) -> ClaudeAgentOptions:
-    """The investigator's ``ClaudeAgentOptions``: Claude Opus 5 at the configured effort, the
-    scoped MCP tools only, and the CLI's built-in toolset OFF. Pass ``searchfox_client`` in tests
-    to avoid resolving the ``searchfox-cli`` binary."""
+    """Configure the investigator's model, effort, and scoped MCP tools.
+
+    Pass ``searchfox_client`` in tests to avoid resolving ``searchfox-cli``."""
     cfg = config.get_agent_spike_escalation()
     channel = brief.get("channel", "nightly")
     product = brief.get("product") or "Firefox"
@@ -337,16 +335,13 @@ def build_options(brief: dict, *, searchfox_client=None) -> ClaudeAgentOptions:
         system_prompt=_SYSTEM,
         mcp_servers=mcp_servers,
         allowed_tools=allowed,
-        # `tools=[]` is the REGISTRATION control the allowlist is not: the transport emits
-        # `--tools ""`, so Bash / Read / Write / WebFetch / Agent are not offered at all. The MCP
-        # servers above are unaffected (`--tools` filters the built-in set only).
+        # Disable built-in tools; MCP servers are configured separately above.
         tools=[],
         model=triage._model_id(cfg["model"]),
         max_turns=cfg["max_turns"],
         permission_mode="bypassPermissions",
         setting_sources=[],
-        # Same inline-subagent pin as every other run (``triage._CLI_ENV``); no Agent tool is
-        # registered here, so it is belt and braces.
+        # Keep the CLI environment consistent across agent sessions.
         env=dict(triage._CLI_ENV),
     )
     if cfg.get("effort"):

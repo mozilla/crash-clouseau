@@ -41,7 +41,7 @@ class TestConfig(unittest.TestCase):
     def test_shipped_knobs(self):
         cfg = config.get_agent_spike_escalation()
         self.assertTrue(cfg["enabled"])
-        self.assertEqual((cfg["model"], cfg["effort"]), ("opus-5", "xhigh"))
+        self.assertEqual((cfg["model"], cfg["effort"]), ("claude-opus-5-5", "medium"))
         self.assertEqual(cfg["comment_on_existing"], "comment")
         self.assertGreater(cfg["job_timeout"], config.get_agent_job_timeout())
 
@@ -62,11 +62,13 @@ class TestConfig(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "0"}):
             self.assertFalse(config.autofile_globally_enabled(), "the kill switch still wins")
 
-    def test_the_model_id_is_opus_5(self):
+    def test_the_model_id_is_priced(self):
         from crashclouseau.agent import triage
+        model = triage._model_id(config.get_agent_spike_escalation()["model"])
+        self.assertEqual(model, "claude-opus-5-5")
+        self.assertIn(model, config.get_llm()["pricing"])
         self.assertEqual(triage._model_id("opus-5"), "claude-opus-5")
-        self.assertIn("claude-opus-5", config.get_llm()["pricing"])
-        # The other agents' `opus` stays the previous generation; the alias is a new one.
+        # The fallback's `opus` stays the previous generation.
         self.assertEqual(triage._model_id("opus"), "claude-opus-4-8")
 
 
@@ -94,14 +96,13 @@ class TestTheInvestigator(unittest.TestCase):
                                          "pref_flip": True}],
                              "window_extent": "the 24 hours before this build"}}
 
-    def test_options_are_opus_5_xhigh_with_the_builtin_toolset_off(self):
+    def test_options_are_opus_5_5_medium_with_the_builtin_toolset_off(self):
         opts = spike_agent.build_options(self._BRIEF, searchfox_client=object())
-        self.assertEqual(opts.model, "claude-opus-5")
-        self.assertEqual(opts.effort, "xhigh")
-        # Opus 5 thinks by default; `thinking: disabled` would be rejected at xhigh, so the
-        # options must not set it.
+        self.assertEqual(opts.model, "claude-opus-5-5")
+        self.assertEqual(opts.effort, "medium")
+        # Opus 5.5 requires adaptive thinking.
         self.assertIsNone(opts.thinking)
-        self.assertEqual(opts.tools, [], "the CLI's Bash/Read/Write/WebFetch must not be registered")
+        self.assertEqual(opts.tools, [], "request no built-in tools")
         allowed = set(opts.allowed_tools)
         for t in ("mcp__crashstats__facets", "mcp__crashstats__report",
                   "mcp__socorro__crash_stats", "mcp__searchfox__define", "mcp__patch__diff",

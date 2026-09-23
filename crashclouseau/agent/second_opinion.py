@@ -4,21 +4,16 @@
 
 """Blind second-opinion pass (#SO).
 
-For a REPORTED lead that clears the report threshold, ask ONE fresh Opus-4.8 (effort=max)
-agent — with NO context from the first pipeline — for an INDEPENDENT read of the crash:
+For an eligible reported lead, a fresh agent uses ``agent.second_opinion`` settings and
+receives the crash without the first pipeline's reasoning:
 
 * VERIFIER mode (we have a candidate regressor): given only the crash + the candidate's
   changeset/bug, does that changeset PLAUSIBLY cause this crash? Prompted neutrally — it may
   well be unrelated, and saying so is a valid (valuable) answer.
 * GENERATOR mode (no candidate): given only the crash, what mechanism explains it?
 
-Independence is the whole point: agreement between two blind, differently-reasoned analyses
-is the plausibility signal. The agent is tool-equipped (searchfox / hg / patch-diff /
-Bugzilla / crash-stats) but runs on a TIGHT allowlist — the scoped MCP tools ONLY, no
-``Bash``/``Read``/``Grep``/``Glob`` and no subagents — so it cannot shell out to hg
-``json-pushes`` and redo the (expensive, first-pipeline) pushlog-window analysis. The strong
-model + effort=max is deliberate and safe here: this is a rare, single-shot, no-context call,
-not the multi-agent pipeline the blanket effort=max OOM/no-gain finding was about.
+The agent has scoped read-only MCP tools, no built-in shell or file tools, and no
+subagents. It cannot fetch an unrestricted pushlog window through these tools.
 """
 from __future__ import annotations
 
@@ -207,27 +202,13 @@ def build_options(crash: dict, candidate: dict | None = None, *,
         system_prompt=_system_prompt(product),
         mcp_servers=mcp_servers,
         allowed_tools=allowed,
-        # THE REGISTRATION CONTROL the allowlist above is not. `allowed_tools` only decides what
-        # runs without a permission prompt, and `permission_mode` is bypassPermissions, so with
-        # `tools` unset the CLI's whole built-in set (Bash, Read, Write, WebFetch, Agent) was live
-        # here -- the "TIGHT allowlist" was a comment. Probed live 2026-09-07 with a toy MCP server
-        # on this SDK (CLI 2.1.226): `tools=[]` -> `--tools ""` registers no built-in tool while the
-        # MCP tools keep working ("NO-BASH", 1 MCP call); with `tools` unset the same prompt ran
-        # `Bash`. Nothing this agent legitimately uses is built-in, so the change removes only
-        # what the comment already said was absent. The principal keeps only the subagent tool
-        # (`triage.build_options`, `tools=["Agent", "Task"]`, probed the same way).
+        # Disable built-in tools; `allowed_tools` only controls auto-approval.
         tools=[],
         model=triage._model_id(cfg["model"]),
         max_turns=cfg["max_turns"],
         permission_mode="bypassPermissions",
         setting_sources=[],
-        # Same inline-subagent pin as the principal (see ``triage._CLI_ENV``). The SO's
-        # allowlist has no Task today, but ``allowed_tools`` is not a REGISTRATION
-        # control -- neither options object sets ``tools``, so the CLI's whole default
-        # toolset (Agent included) stays registered, and ``permission_mode`` is
-        # bypassPermissions. If the SO ever launches an agent, backgrounding would turn
-        # its final message into a progress note and ``parse_second_opinion`` would
-        # quietly return None -- i.e. a silently un-reviewed lead. One key buys it out.
+        # Use the same CLI environment as triage; Agent is disabled here by `tools=[]`.
         env=dict(triage._CLI_ENV),
     )
     if cfg["effort"]:
