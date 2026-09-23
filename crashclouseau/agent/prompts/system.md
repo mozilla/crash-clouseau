@@ -30,6 +30,8 @@ prefer a cited `lead` over an `abstain` whenever something would genuinely help;
   file history / blame / changeset metadata through `mcp__history__*` — never `curl
   hg.mozilla.org` or shell out to git/hg (there is no local Firefox checkout in
   production, and no shell or file tools here).
+- `mcp__crash__threads` lists a ranked census and reads a selected thread's stack.
+  Never write that a thread's stack is missing without requesting that thread.
 - Treat scored candidate changesets as a priority queue, not a closed world. Start
   with them, but if the call graph points at off-stack files/functions not covered
   by the seed list, report that as a cited lead/caveat rather than pretending the

@@ -42,6 +42,8 @@ _SOURCE = ["mcp__source__raw_file"]
 # arbitrary-query tool even without a shell.
 _BUGZILLA = [f"mcp__bugzilla__{name}" for name in ("bug", "signature_bugs")]
 _SOCORRO = ["mcp__socorro__crash_stats"]
+# Thread census and selected stack from the seed's processed crash.
+_THREADS = ["mcp__crash__threads"]
 # Roles request only their scoped MCP tools.
 _BUILTIN_READ = []
 
@@ -231,7 +233,8 @@ _ROLES: dict[str, dict] = {
         "(uaf/null_deref/assertion/oob/shutdownhang/other) only from the decoded "
         "signals, pick the thread that matters, and list the actionable frames (skip "
         "the universal bottom-of-stack anchors: event loop, message pump, thread "
-        "entry). Prefer decoded "
+        "entry). Use `mcp__crash__threads` to inspect another thread; on a hang the "
+        "awaited work may be there. Prefer decoded "
         "crash facts (crash_info.type/address, MOZ_CRASH_REASON, PHC alloc/free "
         "stacks, assertion text, async-shutdown fields) over guessing from the "
         "signature alone. End with one fenced ```json block shaped like: "
@@ -242,7 +245,7 @@ _ROLES: dict[str, dict] = {
         "\"line\":0,\"node\":\"...\",\"inlines\":[]}]}." + _GROUND,
         # Pinned source reads, so decoding a frame can look at the line it names; it used to have
         # the (unreachable) built-in file tools and nothing else.
-        "tools": [*_BUILTIN_READ, *_SOURCE],
+        "tools": [*_BUILTIN_READ, *_SOURCE, *_THREADS],
     },
     "call-graph-explorer": {
         "description": "Navigate the searchfox call graph from crash frames to reach "
@@ -326,7 +329,8 @@ _ROLES: dict[str, dict] = {
         "Also consider Firefox-specific mechanisms: "
         "refcount/lifetime changes, task dispatch ordering, IPC actor teardown, GC "
         "marking/tracing, shutdown ordering, assertion invariant changes, thread/race "
-        "assumptions, Rust panic paths, and FFI boundary changes. Return a cited "
+        "assumptions, Rust panic paths, and FFI boundary changes; the other threads of this "
+        "report are readable with `mcp__crash__threads`. Return a cited "
         "hypothesis or 'insufficient'. End with one fenced ```json block only when "
         "you have at least one citation for the hypothesis, shaped like: {\"summary\":"
         "\"...\",\"object_name\":\"...\",\"operation\":\"free|mutate|null_deref|uaf|"
@@ -337,7 +341,7 @@ _ROLES: dict[str, dict] = {
         "\"Readable::symbol\",\"repo\":\"mozilla-central\"}]}." + _GROUND,
         "tools": [*_BUILTIN_READ, "mcp__patch__diff", *_HISTORY, *_SOURCE,
                   "mcp__searchfox__define", "mcp__searchfox__search",
-                  "mcp__searchfox__field_layout", *_CALLGRAPH],
+                  "mcp__searchfox__field_layout", *_CALLGRAPH, *_THREADS],
     },
     "skeptic": {
         "description": "Trust guardrail: catch NOISE — a coincidental or innocent "
@@ -368,12 +372,15 @@ _ROLES: dict[str, dict] = {
         "crash-line vs tip-line delta (or a symbol moved/renamed at tip) is revision "
         "drift or inlining, NOT a contradiction — never `fail` a mechanism over a line "
         "delta when the diff and field-layout confirm it; use `unverifiable` at most. "
+        "Use `mcp__crash__threads` to check any claim that a thread's stack is missing "
+        "or about another thread's state; `fail` what the dump contradicts. "
         "End with one fenced "
         "```json block holding a LIST with ONE object per claim you checked, shaped "
         "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\","
         "\"status\":\"pass|fail|unverifiable\",\"note\":\"...\",\"citations\":[...]}]"
         "." + _GROUND,
-        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff", *_HISTORY, *_SOURCE],
+        "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff", *_HISTORY, *_SOURCE,
+                  *_THREADS],
     },
 }
 
@@ -400,6 +407,10 @@ def bugzilla_tool_ids() -> list[str]:
 
 def socorro_tool_ids() -> list[str]:
     return list(_SOCORRO)
+
+
+def threads_tool_ids() -> list[str]:
+    return list(_THREADS)
 
 
 def role_names() -> list[str]:

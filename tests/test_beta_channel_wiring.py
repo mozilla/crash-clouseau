@@ -369,8 +369,9 @@ class TestEveryMcpContextGetsTheSeedChannel(unittest.TestCase):
             "product": "Firefox", "stack": "", "is_offstack": False}
 
     # A context with no channel is a DECISION, not an omission, and it has to be recorded
-    # here with its reason. Bugzilla is the only one: a bug id is not channel-scoped.
-    CHANNEL_FREE = {"BugzillaCtx"}
+    # here with its reason. A bug id is not channel-scoped; ThreadsCtx reads the report's own
+    # processed crash and makes no request.
+    CHANNEL_FREE = {"BugzillaCtx", "ThreadsCtx"}
 
     def _contexts(self, module, crash):
         """``{class name: ctx}`` for every context ``module.build_options`` constructed."""

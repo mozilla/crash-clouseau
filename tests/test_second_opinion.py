@@ -27,7 +27,8 @@ class TestSecondOpinionOptions(unittest.TestCase):
         opts = build_options(_CRASH, {"node": "abc", "bug": 1}, searchfox_client=object())
         allowed = set(opts.allowed_tools)
         for t in ("mcp__searchfox__define", "mcp__patch__diff", "mcp__history__blame",
-                  "mcp__source__raw_file", "mcp__bugzilla__bug", "mcp__socorro__crash_stats"):
+                  "mcp__source__raw_file", "mcp__bugzilla__bug", "mcp__socorro__crash_stats",
+                  "mcp__crash__threads"):
             self.assertIn(t, allowed)
         # No shell / builtins / subagents -> the agent cannot GET hg json-pushes (no pushlog).
         for banned in ("Bash", "Read", "Grep", "Glob", "Task"):
@@ -36,7 +37,7 @@ class TestSecondOpinionOptions(unittest.TestCase):
         self.assertEqual(opts.tools, [])
         self.assertEqual(
             set(opts.mcp_servers),
-            {"searchfox", "patch", "history", "source", "bugzilla", "socorro"})
+            {"searchfox", "patch", "history", "source", "bugzilla", "socorro", "crash"})
         self.assertEqual((opts.model, opts.effort), ("claude-opus-5-5", "medium"))
 
     def test_cli_env_requests_inline_tasks(self):

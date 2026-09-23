@@ -316,19 +316,25 @@ async def report(
                     "crashing_thread"):
             if info.get(key) not in (None, "", []):
                 lines.append("crash_info.{}: {}".format(key, _short(info[key], 400)))
-    threads = dump.get("threads") or []
+    lines += thread_text(raw, thread, max_frames)
+    return "\n".join(lines)
+
+
+def thread_text(raw, thread=-1, max_frames=40) -> list[str]:
+    """Format the census and one selected stack, shared with ``mcp__crash__threads``.
+    An invalid index selects the analysed thread, falling back to thread 0."""
+    threads = ((raw or {}).get("json_dump") or {}).get("threads") or []
     if not threads:
-        lines.append("(no thread list in the minidump)")
-        return "\n".join(lines)
+        return ["(no thread list in the minidump)"]
     chosen = thread if isinstance(thread, int) and 0 <= thread < len(threads) else None
     if chosen is None:
         default = inspector.thread_for_analysis(raw)
         chosen = default if isinstance(default, int) and 0 <= default < len(threads) else 0
-    lines += _thread_lines(raw, threads)
+    lines = _thread_lines(raw, threads)
     t = threads[chosen]
     lines.append("thread {} ({}) stack:".format(chosen, t.get("thread_name") or "unnamed"))
     lines += _frames_text(t.get("frames"), max(1, min(int(max_frames or 40), _MAX_FRAMES)))
-    return "\n".join(lines)
+    return lines
 
 
 TOOLS = tools_in(__name__)

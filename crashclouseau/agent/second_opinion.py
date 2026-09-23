@@ -28,12 +28,14 @@ from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
 from crashclouseau.agent.tools import socorro as socorro_tools
 from crashclouseau.agent.tools import source as source_tools
+from crashclouseau.agent.tools import threads as threads_tools
 from crashclouseau.agent.tools.bugzilla import BugzillaCtx
 from crashclouseau.agent.tools.history import HistoryCtx
 from crashclouseau.agent.tools.patch import PatchCtx
 from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
 from crashclouseau.agent.tools.socorro import SocorroCtx
 from crashclouseau.agent.tools.source import SourceCtx
+from crashclouseau.agent.tools.threads import ThreadsCtx
 from crashclouseau.logger import logger
 from crashclouseau.searchfox import SearchfoxClient
 from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
@@ -59,6 +61,7 @@ _SYSTEM = (
     "- Bugzilla (mcp__bugzilla__bug reads a bug's product::component/status/regressed_by/"
     "regressions; mcp__bugzilla__signature_bugs finds existing bugs for the crash signature "
     "so you reuse prior analysis).\n"
+    "- this report's threads (mcp__crash__threads): a ranked census and a selected stack.\n"
     "- crash-stats (mcp__socorro__crash_stats): this signature's occurrence breakdown — the "
     "buildid it was FIRST seen in (searched over a year of crash reports, so it may predate "
     "this build by months) and the OS/CPU/process-type/channel/moz_crash_reason facets; a "
@@ -190,13 +193,15 @@ def build_options(crash: dict, candidate: dict | None = None, *,
         "bugzilla": build_sdk_server("bugzilla", BugzillaCtx(), bugzilla_tools.TOOLS),
         "socorro": build_sdk_server("socorro", SocorroCtx(product=product, channel=channel),
                                     socorro_tools.TOOLS),
+        "crash": build_sdk_server("crash", ThreadsCtx(raw=crash.get("raw_crash") or {}),
+                                  threads_tools.TOOLS),
     }
     # TIGHT allowlist — scoped MCP tools ONLY. Deliberately NO builtin Read/Grep/Glob/Bash and
     # NO Task: with no shell the agent cannot GET hg json-pushes to redo the pushlog window.
     allowed = [
         *roles.searchfox_tool_ids(), *roles.patch_tool_ids(),
         *roles.history_tool_ids(), *roles.source_tool_ids(),
-        *roles.bugzilla_tool_ids(), *roles.socorro_tool_ids(),
+        *roles.bugzilla_tool_ids(), *roles.socorro_tool_ids(), *roles.threads_tool_ids(),
     ]
     kwargs = dict(
         system_prompt=_system_prompt(product),

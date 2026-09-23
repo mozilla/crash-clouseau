@@ -50,10 +50,12 @@ from crashclouseau.agent.tools import history as history_tools
 from crashclouseau.agent.tools import patch as patch_tools
 from crashclouseau.agent.tools import searchfox_cg
 from crashclouseau.agent.tools import source as source_tools
+from crashclouseau.agent.tools import threads as threads_tools
 from crashclouseau.agent.tools.history import HistoryCtx
 from crashclouseau.agent.tools.patch import PatchCtx
 from crashclouseau.agent.tools.searchfox_cg import SearchfoxCtx
 from crashclouseau.agent.tools.source import SourceCtx
+from crashclouseau.agent.tools.threads import ThreadsCtx
 from crashclouseau.searchfox import SearchfoxClient
 from crashclouseau.vendor.agent_tools.claude_sdk import build_sdk_server
 from crashclouseau.vendor.hackbot_runtime.actions import ACTIONS_SERVER_NAME
@@ -1643,6 +1645,12 @@ def _thread_inventory(raw: dict) -> list[str]:
                 "of them (0.2%) held any Gecko frame and none was a pool or subsystem thread, so "
                 "an unnamed thread is not a hiding place for a Gecko subsystem.".format(
                     unnamed, len(threads)))
+            dump = raw.get("json_dump") or {}
+            if utils.is_watchdog_crash(raw.get("signature"), raw.get("report_type"),
+                                       raw.get("moz_crash_reason") or dump.get("moz_crash_reason")):
+                parts.append(
+                    "On a hang, an unnamed thread can be waiting on a call, lock or I/O; "
+                    "inspect its stack before ruling it out.")
         parts.append(
             "The converse is weaker: a thread being present means the subsystem exists, not that "
             "it is involved. Asymmetries are evidence too — a server-side thread with no "
@@ -2407,11 +2415,13 @@ def build_options(
         "patch": build_sdk_server("patch", patch_ctx, patch_tools.TOOLS),
         "history": build_sdk_server("history", history_ctx, history_tools.TOOLS),
         "source": build_sdk_server("source", source_ctx, source_tools.TOOLS),
+        "crash": build_sdk_server("crash", ThreadsCtx(raw=crash.get("raw_crash") or {}),
+                                  threads_tools.TOOLS),
     }
     allowed = [
         *_BUILTIN_TOOLS, *_RunTrace._SUBAGENT_TOOLS,
         *roles.searchfox_tool_ids(), *roles.patch_tool_ids(),
-        *roles.history_tool_ids(), *roles.source_tool_ids(),
+        *roles.history_tool_ids(), *roles.source_tool_ids(), *roles.threads_tool_ids(),
     ]
 
     if recorder is not None:
