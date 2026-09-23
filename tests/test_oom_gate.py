@@ -6,8 +6,8 @@
     DATABASE_URL=sqlite:// REDIS_URL=redis://localhost:6379/0 \
         uv run python -m unittest tests.test_oom_gate
 
-Bug 2073760's OOM-unsafe `Zone::New` abort was closed WONTFIX. Bug 2071557's recorded large
-COLRFonts allocation was fixed and uplifted. The fixtures pin the policy distinction.
+Regression fixtures for OOM verdicts, including bug 2074622: the structured-clone reader
+records unread payload bytes, and the bug was closed WONTFIX.
 """
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -34,6 +34,9 @@ from tests import test_actionable_verdict as tav  # noqa: E402
 _ZONE_SIG = ("OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | "
              "js::AutoEnterOOMUnsafeRegion::crash | v8::internal::Zone::New<T>")
 _COLR_SIG = "OOM | large | nsTArray_Impl<T>::SetCapacity | mozilla::gfx::COLRFonts::CreateColorPalette"
+_CLONE_READ = "IPC::ParamTraits<JSStructuredCloneData>::Read"
+_CLONE_SIG = ("OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | "
+              "mozilla::dom::ipc::StructuredCloneData::ReadIPCParams")
 _MECH = "`Zone::New` allocates one parser node and calls `oomUnsafe.crash` when that returns null"
 # Bug 2073760's consistency statement, verbatim: one fact and two arguments about what is not.
 _CONS_2073760 = (
@@ -260,7 +263,106 @@ class TestTheGate(unittest.TestCase):
         self.assertLess(src.index(oom), src.index(fold))
 
 
-# Replay fixtures with crash-stats annotations captured on 2026-09-21. Each row is
+class TestASizeThatIsNotTheRequest(unittest.TestCase):
+    """The reader records unread payload bytes (bug 1843374 comment 1)."""
+
+    @staticmethod
+    def _raw_2074622(signature=_CLONE_SIG):
+        # Crash 1958f6d0-b4d1-45b0-94db-474f30260921, a 32-bit parent process.
+        return _raw(signature, "MOZ_CRASH(OOM)", process_type="parent",
+                    oom_allocation_size=7979960, available_page_file=2291494912,
+                    total_virtual_memory=4294836224, available_virtual_memory=162127872,
+                    system_memory_use_percentage=90)
+
+    def test_bug_2074622_is_resource_exhaustion(self):
+        # Bug 2074622 comment 0 lists only nsDebugImpl.cpp under Code references.
+        d = _dossier(paths=("xpcom/base/nsDebugImpl.cpp",))
+        orch._apply_oom_gate(d, _seed(self._raw_2074622()))
+        v = d.verdict
+        self.assertEqual((v.decision, v.abstain_kind, v.confidence),
+                         (Decision.abstain, AbstainKind.resource_exhaustion, Confidence.low))
+        self.assertIn("the recorded 7,979,960 bytes is not the failed request: `NS_ABORT_OOM` at "
+                      "`IPC::ParamTraits<JSStructuredCloneData>::Read` records unread payload "
+                      "bytes (`length - read`); `BufferList` segments are 4,096 bytes",
+                      v.abstain_reason)
+        self.assertIn("4 GB total virtual address space with 0.2 GB free", v.abstain_reason)
+        self.assertEqual(v.mechanism.statement, _MECH)
+        self.assertEqual(d.corroborations["oom_not_actionable"],
+                         {"kind": "large", "reason": "MOZ_CRASH(OOM)", "site": _CLONE_READ,
+                          "memory": "2291 MB of commit space available, 4 GB total virtual "
+                                    "address space with 0.2 GB free, 90% of system memory in use"})
+
+    def test_reader_signature_variants_abstain(self):
+        for sig in (
+                # Bug 1843374.
+                "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read",
+                # Bugs 2070930 and 2071726, truncated by Socorro.
+                "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | "
+                "IPC::ParamTraits<mozilla::SerializedStructuredCloneBuffer>::Read | "
+                "IPC::ParamTraits<mozilla::dom::indexedDB::SerializedStructuredCloneReadInfo>::Read"
+                " | IPC::ParamTraits<mozill...",
+                "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | "
+                "IPC::ParamTraits<mozilla::SerializedStructuredCloneBuffer>::Read | "
+                "IPC::ParamTraits<mozilla::dom::indexedDB::SerializedStructuredCloneReadInfo>::Read"
+                " | IPC::ReadSequenceParamI...",
+                # The caller also appears under PContentParent.
+                "OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | "
+                "IPC::ParamTraits<mozilla::SerializedStructuredCloneBuffer>::Read | "
+                "IPC::ParamTraits<mozilla::dom::ClonedMessageData>::Read | "
+                "mozilla::dom::PContentParent::OnMessageReceived"):
+            with self.subTest(sig=sig[76:150]):
+                d = _dossier(paths=("ipc/glue/SerializedStructuredCloneBuffer.cpp",))
+                orch._apply_oom_gate(d, _seed(self._raw_2074622(sig)))
+                self.assertEqual(d.verdict.abstain_kind, AbstainKind.resource_exhaustion)
+                self.assertEqual(d.corroborations["oom_not_actionable"]["site"], _CLONE_READ)
+
+    def test_only_the_caller_of_the_abort_is_read(self):
+        # A deeper reader frame does not identify the abort caller.
+        d = _dossier(paths=("ipc/glue/SerializedStructuredCloneBuffer.cpp",))
+        orch._apply_oom_gate(d, _seed(self._raw_2074622(
+            "OOM | large | mozalloc_abort | mozalloc_handle_oom | moz_xmalloc | "
+            "IPC::ParamTraits<JSStructuredCloneData>::Read")))
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        # The small-size rule takes precedence.
+        d = _dossier()
+        orch._apply_oom_gate(d, _seed(_raw(
+            "OOM | small | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read",
+            "MOZ_CRASH(OOM)", oom_allocation_size=65536)))
+        self.assertIn("size class is `small`", d.verdict.abstain_reason)
+        self.assertNotIn("site", d.corroborations["oom_not_actionable"])
+        # The size-less Reporting rule also takes precedence.
+        d = _dossier()
+        orch._apply_oom_gate(d, _seed(_raw(_CLONE_SIG, "MOZ_CRASH(OOM)", oom_allocation_size=None,
+                                           js_large_allocation_failure="Reporting")))
+        self.assertIn("`JSLargeAllocationFailure: Reporting`", d.verdict.abstain_reason)
+        self.assertNotIn("site", d.corroborations["oom_not_actionable"])
+
+    def test_the_caller_is_the_frame_after_ns_abort_oom(self):
+        from crashclouseau import utils
+        self.assertEqual(utils.oom_size_not_request(_CLONE_SIG)[0], _CLONE_READ)
+        # Matching also accepts a signature without the OOM prefix.
+        self.assertEqual(utils.oom_size_not_request(
+            "NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read")[0], _CLONE_READ)
+        for sig in (None, "", "OOM | large", "OOM | large | NS_ABORT_OOM",
+                    "OOM | large | NS_ABORT_OOM | mozilla::ipc::BigBuffer::AllocBuffer",
+                    "IPC::ParamTraits<JSStructuredCloneData>::Read | NS_ABORT_OOM"):
+            self.assertIsNone(utils.oom_size_not_request(sig), sig)
+
+    def test_the_crash_facts_mark_the_size(self):
+        from crashclouseau.agent import triage
+        facts = "\n".join(triage._crash_facts({"signature": _CLONE_SIG,
+                                               "raw_crash": self._raw_2074622()}))
+        self.assertIn("OOM allocation size (bytes): 7,979,960, not the failed request: "
+                      "`NS_ABORT_OOM` at `IPC::ParamTraits<JSStructuredCloneData>::Read` records "
+                      "unread payload bytes (`length - read`); `BufferList` segments are "
+                      "4,096 bytes\n", facts + "\n")
+        # Other callers keep the bare number.
+        facts = "\n".join(triage._crash_facts({"signature": _COLR_SIG, "raw_crash": {
+            "oom_allocation_size": 1046872}}))
+        self.assertIn("OOM allocation size (bytes): 1,046,872\n", facts + "\n")
+
+
+# Replay fixtures with crash-stats annotations. Each row is
 # (dossier, filed bug, signature, reason, allocation size, available commit space, total virtual
 # memory, original verdict, expected verdict). Expected values encode the gate policy.
 _OOM_REPLAY = [
@@ -314,6 +416,8 @@ _OOM_REPLAY = [
      '[unhandlable oom] Irregexp Zone::New', None, 2749665280, 4294836224, 'actionable', 'abstain'),
     (23414, None, 'OOM | large | NS_ABORT_OOM | nsTSubstring<T>::AllocFailed | nsTSubstring<T>::SetLength | mozilla::dom::SnappyUncompress',
      'MOZ_CRASH(OOM)', 1227749, 633651200, 140737488224256, 'actionable', 'actionable'),
+    (23975, 2074622, 'OOM | large | NS_ABORT_OOM | IPC::ParamTraits<JSStructuredCloneData>::Read | mozilla::dom::ipc::StructuredCloneData::ReadIPCParams',
+     'MOZ_CRASH(OOM)', 7979960, 2291494912, 4294836224, 'actionable', 'abstain'),
 ]
 
 
@@ -332,6 +436,7 @@ class TestTheReplay(unittest.TestCase):
     def test_the_replay_contains_the_documented_examples(self):
         bugs = {row[1] for row in _OOM_REPLAY}
         self.assertIn(2073760, bugs)   # dropped
+        self.assertIn(2074622, bugs)   # dropped
         self.assertIn(2073879, bugs)   # kept
         # Dossier 21755 captures the same signature and allocation size as bug 2071557.
         by_id = {row[0]: row for row in _OOM_REPLAY}
@@ -339,7 +444,7 @@ class TestTheReplay(unittest.TestCase):
         self.assertEqual(by_id[22158][8], "abstain")
         kept = [r for r in _OOM_REPLAY if r[7] == "actionable" and r[8] == "actionable"]
         dropped = [r for r in _OOM_REPLAY if r[7] == "actionable" and r[8] == "abstain"]
-        self.assertEqual((len(kept), len(dropped)), (11, 7))
+        self.assertEqual((len(kept), len(dropped)), (11, 8))
         self.assertTrue(all(r[2].startswith("OOM | large | ") for r in kept))
 
 
@@ -438,7 +543,7 @@ class TestTheModelSeesTheEvidence(unittest.TestCase):
         self.assertIn("OOM allocation size (bytes): 65,536", facts)
         d = _dossier()
         orch._apply_oom_gate(d, _seed(_raw("OOM | small", "MOZ_CRASH(OOM)", oom_allocation_size=65536)))
-        self.assertIn("size class is `small`: the report recorded a request of 65,536 bytes",
+        self.assertIn("size class is `small` and the report recorded a request of 65,536 bytes",
                       d.verdict.abstain_reason)
         d = _dossier()
         orch._apply_oom_gate(d, _seed(_raw("OOM | unknown | nsDynamicAtom::Create", "MOZ_CRASH(x)")))

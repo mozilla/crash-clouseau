@@ -496,12 +496,19 @@ its eight callers; :nika agreed that switching the caller looked reasonable.
 - the signature class is `OOM | unknown` or `OOM | small`;
 - `moz_crash_reason` starts with `[unhandlable oom]`;
 - the class is `OOM | large`, no allocation size was recorded, and
-  `JSLargeAllocationFailure` is `Reporting`.
+  `JSLargeAllocationFailure` is `Reporting`;
+- the class is `OOM | large` and the `NS_ABORT_OOM` caller is listed in
+  `utils.OOM_SIZE_NOT_REQUEST`.
 
-The last case matters because Socorro checks `Reporting` before `OOMAllocationSize` and assigns
-`large` even without a recorded size. Leads and strong-evidence verdicts are unchanged. The gate
-stores `{kind, reason, memory}` in `corroborations.oom_not_actionable`; the replay fixture in
-`tests/test_oom_gate.py` pins its behavior on the captured examples.
+Socorro checks `Reporting` before `OOMAllocationSize`, so `large` need not imply a recorded size.
+The listed caller, `IPC::ParamTraits<JSStructuredCloneData>::Read`, passes `length - read`
+to `NS_ABORT_OOM`: unread payload bytes. Its `BufferList` segments are 4,096 bytes
+([source at the crash revision](https://github.com/mozilla-firefox/firefox/blob/7a5e8543fe65f07ff596d5b26c77419ded8f8fdd/ipc/glue/SerializedStructuredCloneBuffer.cpp#L52-L60),
+[bug 1843374 comment 1](https://bugzilla.mozilla.org/show_bug.cgi?id=1843374#c1)).
+[Bug 2074622](https://bugzilla.mozilla.org/show_bug.cgi?id=2074622) was filed on this caller
+and closed WONTFIX. Triage annotates its recorded size. The gate stores `{kind, reason, memory}`
+in `corroborations.oom_not_actionable`, adding `site` when the caller rule triggers.
+`tests/test_oom_gate.py` covers these rules; leads and strong-evidence verdicts are unchanged.
 
 Ordinary triage and the spike report tool now expose the allocation-size and memory annotations.
 `available_page_file` is described as available commit space; a small

@@ -390,9 +390,9 @@ REGISTRY = {
         "next run on the cluster may read the awaited thread."),
     "oom_not_actionable": (
         "suppression", ("templates/crashstack.html",),
-        "An `actionable` verdict matched the OOM gate and became a `resource_exhaustion` "
-        "abstain. `{kind, reason, memory}` records the size class, crash reason and available "
-        "memory annotations used by the explanation."),
+        "The OOM gate changed `actionable` to `abstain` / `resource_exhaustion`. "
+        "`{kind, reason, memory}` records the size class, crash reason and memory summary; "
+        "optional `site` identifies a caller whose size is not the failed request."),
     "archetypes": (
         "evidence", ("feedback.py",),
         "The slugs that fired, copied onto `Feedback` so `scoreboard()[\"by_archetype\"]` can "

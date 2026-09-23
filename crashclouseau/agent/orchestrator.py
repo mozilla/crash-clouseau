@@ -3072,11 +3072,9 @@ _memory_picture = utils.memory_picture
 def _apply_oom_gate(dossier, seed):
     """Downgrade unsupported ``actionable`` OOM verdicts to ``resource_exhaustion``.
 
-    The gate covers ``OOM | unknown``, ``OOM | small``, ``[unhandlable oom]`` reasons, and
-    size-less ``OOM | large`` reports classified by ``JSLargeAllocationFailure: Reporting``.
-    Bug 2073760 motivated the rule: its ``Zone::New`` OOM-unsafe abort was filed and then closed
-    WONTFIX. Leads and strong-evidence verdicts make changeset claims and are left unchanged.
-    The original claims remain on the abstain for audit and display."""
+    Covers unknown/small OOMs, ``[unhandlable oom]``, size-less ``Reporting`` large OOMs,
+    and large OOMs at ``utils.OOM_SIZE_NOT_REQUEST`` callers. Preserves the title,
+    mechanism and consistency claims."""
     v = dossier.verdict if dossier is not None else None
     if v is None or v.decision != Decision.actionable:
         return
@@ -3088,10 +3086,12 @@ def _apply_oom_gate(dossier, seed):
     named = kind is not None
     size = raw.get("oom_allocation_size")
     size = size if isinstance(size, (int, float)) and not isinstance(size, bool) else None
+    site = utils.oom_size_not_request(signature)
     if kind is None and utils.OOM_REASON_RE.search(reason):
         # ``OOMSignature`` does not inspect ``moz_crash_reason``. Apply its size thresholds when
         # that field is the only indication that this is an OOM.
         kind = "unknown" if not size else ("small" if size <= utils.OOM_SMALL_MAX else "large")
+    extra = {}
     if reason.lower().startswith(_UNHANDLABLE_OOM):
         trigger = reason
         why = ("the crash reason is `{}`: this OOM-unsafe region terminates the process instead "
@@ -3109,12 +3109,18 @@ def _apply_oom_gate(dossier, seed):
         trigger = "OOM | large by JSLargeAllocationFailure"
         why = ("Socorro assigned `large` from `JSLargeAllocationFailure: Reporting` before "
                "checking the allocation size; this report has no recorded size")
+    elif kind == "large" and site:
+        trigger = "OOM size is not the request at {}".format(site[0])
+        why = ("the recorded {} is not the failed request: `NS_ABORT_OOM` at `{}` {}"
+               .format("{:,} bytes".format(int(size)) if size else "size", site[0], site[1]))
+        extra = {"site": site[0]}
     else:
         return
     picture = _memory_picture(raw)
     dossier.corroborations = {
         **dossier.corroborations,
-        "oom_not_actionable": {"kind": kind, "reason": reason or None, "memory": picture or None},
+        "oom_not_actionable": {"kind": kind, "reason": reason or None, "memory": picture or None,
+                               **extra},
     }
     dossier.verdict = Verdict(
         decision=Decision.abstain,

@@ -249,9 +249,11 @@ good ones. So make TWO decisions, in order:
    value for `OOM | unknown`. `JSLargeAllocationFailure: Reporting` forces `OOM | large` before
    the size check, so a size-less `large` does not prove a recorded large request.
    An actionable OOM requires a recorded large failing allocation and a cited caller-specific
-   reason it should be bounded, smaller or fallible. `OOM | unknown`, `OOM | small`, any
-   `[unhandlable oom]` reason, and a size-less `Reporting` large are deterministically changed
-   to `abstain` / `resource_exhaustion` (bug 2073760).
+   reason it should be bounded, smaller or fallible. For `NS_ABORT_OOM`, `oom_allocation_size`
+   records its argument; verify the actual allocation size in source. Actionable verdicts for
+   `OOM | unknown`, `OOM | small`, `[unhandlable oom]`, size-less `Reporting` large, or large
+   OOMs at known callers that record a different quantity become `abstain` /
+   `resource_exhaustion` (bugs 2073760, 2074622).
 
 - SKEPTIC (the trust guardrail): record the skeptic's check of each claim in the `skeptic`
   array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to

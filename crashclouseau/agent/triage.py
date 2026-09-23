@@ -1696,6 +1696,16 @@ def _oom_allocation_size(raw):
     return "{:,}".format(int(v))
 
 
+def _oom_size_fact(crash, raw):
+    """Format the recorded size, noting callers that record a different quantity."""
+    size = _oom_allocation_size(raw)
+    site = utils.oom_size_not_request(
+        (crash or {}).get("signature") or (raw or {}).get("signature"))
+    if size is None or site is None:
+        return size
+    return "{}, not the failed request: `NS_ABORT_OOM` at `{}` {}".format(size, *site)
+
+
 def _crash_facts(crash: dict) -> list[str]:
     """Compact processed-crash facts for the LLM.
 
@@ -1761,7 +1771,7 @@ def _crash_facts(crash: dict) -> list[str]:
         # Socorro uses a recorded size of at most 256 KiB for ``small`` and a larger one for
         # ``large``; no usable size normally yields ``unknown``.
         ("OOM allocation size (bytes)",
-         _oom_allocation_size(raw) if _is_oom(crash, raw) else None),
+         _oom_size_fact(crash, raw) if _is_oom(crash, raw) else None),
         ("Memory at crash (what the machine had left)",
          utils.memory_picture(raw) if _is_oom(crash, raw) else None),
         # Socorro checks ``Reporting`` before ``OOMAllocationSize`` and assigns ``large``.

@@ -569,8 +569,10 @@ These are stable facts that cost turns when rediscovered.
 - Annotations are declared in `toolkit/crashreporter/CrashAnnotations.yaml` (name, description,
   scope); read it with `raw_file`. Treat their values as evidence: `available_page_file` is
   available commit space, `total_page_file` its limit, and `total_virtual_memory` the process's
-  virtual-address-space size, not proof of its architecture. `oom_allocation_size` records the
-  failing request when available. Socorro assigns `OOM | large` from
+  virtual-address-space size, not proof of its architecture. For `NS_ABORT_OOM`,
+  `oom_allocation_size` records its argument: `IPC::ParamTraits<JSStructuredCloneData>::Read`
+  passes unread payload bytes, while its `BufferList` segments are 4,096 bytes (bug 1843374 c1).
+  Socorro assigns `OOM | large` from
   `js_large_allocation_failure: Reporting` before checking that size, so a size-less `large`
   does not prove a recorded large request. An actionable OOM needs both a recorded large
   request and a caller-specific defect or remediation.

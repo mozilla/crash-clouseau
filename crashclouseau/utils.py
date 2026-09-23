@@ -610,6 +610,24 @@ OOM_REASON_RE = re.compile(r"\boom\b|out of memory", re.IGNORECASE)
 # Socorro's `OOM | small` ceiling: a recorded `OOMAllocationSize` above it is `large`.
 OOM_SMALL_MAX = 256 * 1024
 
+# Callers whose `NS_ABORT_OOM` argument is not the failed allocation size.
+# See ipc/glue/SerializedStructuredCloneBuffer.cpp and mfbt/BufferList.h (bug 1843374 c1).
+OOM_SIZE_NOT_REQUEST = {
+    "IPC::ParamTraits<JSStructuredCloneData>::Read": (
+        "records unread payload bytes (`length - read`); `BufferList` segments are 4,096 bytes"),
+}
+
+
+def oom_size_not_request(signature):
+    """Return ``(caller, note)`` for a listed ``NS_ABORT_OOM`` caller, else ``None``."""
+    parts = [p.strip() for p in str(signature or "").split("|")]
+    if len(parts) >= 2 and parts[0] == "OOM":
+        parts = parts[2:]
+    if len(parts) >= 2 and parts[0] == "NS_ABORT_OOM" and parts[1] in OOM_SIZE_NOT_REQUEST:
+        return parts[1], OOM_SIZE_NOT_REQUEST[parts[1]]
+    return None
+
+
 # Suppress totals of 8 GiB or more in the compact summary; never infer architecture from the value.
 _SMALL_ADDRESS_SPACE = 8 * 1024 ** 3
 
