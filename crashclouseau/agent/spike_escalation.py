@@ -1302,6 +1302,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         return dict(result, skipped="no Bugzilla API token configured")
     if bugzilla_apply._is_unsymbolicated(signature):
         return dict(result, skipped="signature is unsymbolicated ({})".format(signature))
+    culprit = findings.culprit if findings is not None else None
+    excluded = bugzilla_apply.skipped_regressor(culprit.bug if culprit is not None else None)
+    if excluded:
+        return dict(result, skipped=bugzilla_apply._SKIPPED_REGRESSOR.format(excluded))
     filed_today = models.SpikeEscalation.count_since(
         product, channel, now - timedelta(days=1), filed_only=True)
     if filed_today >= cfg["daily_cap"]:

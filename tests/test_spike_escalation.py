@@ -1185,3 +1185,16 @@ class TestTheHistoryInTheBugText(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnExcludedCulprit(_FilerBase):
+    def test_a_spike_naming_an_excluded_regressor_is_not_filed(self):
+        with mock.patch.object(config, "autofile_skip_regressor_bugs",
+                               return_value=frozenset({22})):
+            out = se.file_spike_bug(_esc(), self.brief, self.findings)
+            self.assertFalse(out["filed"])
+            self.assertEqual(out["skipped"], "regressor bug 22 is excluded from filing "
+                                             "(agent.autofile.skip_regressor_bugs)")
+        self.assertEqual((self.created, self.comments), ([], []))
+        with mock.patch.object(config, "autofile_skip_regressor_bugs", return_value=frozenset()):
+            self.assertTrue(se.file_spike_bug(_esc(), self.brief, self.findings)["filed"])

@@ -1897,6 +1897,18 @@ def _needinfo_changes(email):
     return {"flags": [{"name": "needinfo", "status": "?", "requestee": email, "new": True}]}
 
 
+_SKIPPED_REGRESSOR = "regressor bug {} is excluded from filing (agent.autofile.skip_regressor_bugs)"
+
+
+def skipped_regressor(bug):
+    """*bug* as an int when no filing may name it (``config.autofile_skip_regressor_bugs``)."""
+    try:
+        bug = int(str(bug).strip().lstrip("#"))
+    except (TypeError, ValueError):
+        return None
+    return bug if bug in config.autofile_skip_regressor_bugs() else None
+
+
 def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     """File a Bugzilla bug for a reported crash, unattended. Returns a result dict; NEVER
     raises — a filing failure must not lose an analysis that is already persisted.
@@ -2004,6 +2016,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             return {"filed": False, "channel": channel,
                     "skipped": "autofile held for channel {!r} (triage-only)".format(channel)}
         return {"filed": False, "skipped": "autofile disabled"}
+    excluded = skipped_regressor(((dossier or {}).get("candidate") or {}).get("bug"))
+    if excluded:
+        return {"filed": False, "channel": channel, "skipped": _SKIPPED_REGRESSOR.format(excluded)}
     # TWO REASONS TO FILE, and the verdict is only the first. The second — a bug on this
     # signature whose fix is already in this build — is checked LATER (it costs a BMO request),
     # after every cheap gate below has had its chance to stop the run for free.

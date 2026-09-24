@@ -312,6 +312,7 @@
             "needinfo": true,
             "daily_cap": null,
             "comment_on_existing": "comment",
+            "skip_regressor_bugs": [2067007],
             "default_channel": "nightly",
             "default_product": "Firefox",
             "products":

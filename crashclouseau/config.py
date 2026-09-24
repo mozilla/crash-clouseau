@@ -1171,6 +1171,20 @@ def get_agent_autofile(channel=None, product=None):
     }
 
 
+def autofile_skip_regressor_bugs():
+    """Regressor bug numbers no filing may name: a crash whose candidate (a spike's culprit) is
+    one of them is neither filed nor commented on. ``agent.autofile.skip_regressor_bugs``, plus
+    the comma-separated ``AUTOFILE_SKIP_REGRESSOR_BUGS``."""
+    listed = list(get_agent().get("autofile", {}).get("skip_regressor_bugs") or [])
+    out = set()
+    for value in listed + os.environ.get("AUTOFILE_SKIP_REGRESSOR_BUGS", "").split(","):
+        try:
+            out.add(int(str(value).strip().lstrip("#")))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(out)
+
+
 def get_agent_ui():
     """UI/apply knobs for the evidence panel + apply/replay step (#12).
 

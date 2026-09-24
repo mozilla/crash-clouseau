@@ -2834,3 +2834,29 @@ class TestOurOwnBugOutOfSight(_Base):
         res = self._file()
         self.assertTrue(res["filed"], res.get("skipped"))
         bugzilla_apply._bugs_by_id.assert_not_called()
+
+
+class TestExcludedRegressors(_Base):
+    """`agent.autofile.skip_regressor_bugs`: a named regressor nobody is to be filed against."""
+
+    def test_a_crash_blaming_an_excluded_regressor_is_neither_filed_nor_commented(self):
+        with mock.patch.object(bugzilla_apply.config, "autofile_skip_regressor_bugs",
+                               return_value=frozenset({2067007})):
+            res = self._file(dossier={"candidate": {"node": "n", "bug": 2067007}})
+            self.assertEqual(res["skipped"], "regressor bug 2067007 is excluded from filing "
+                                             "(agent.autofile.skip_regressor_bugs)")
+            bugzilla_apply._open_bugs_for_signature.return_value = [_bug(5)]
+            res = self._file(dossier={"candidate": {"node": "n", "bug": "2067007"}})
+            self.assertFalse(res["filed"])
+            self.assertTrue(self._file(dossier={"candidate": {"node": "n", "bug": 42}})["filed"])
+        self.assertEqual(len(self.created) + len(self.comments), 1)
+
+    def test_the_list_reads_json_and_the_environment(self):
+        agent = {"autofile": {"skip_regressor_bugs": [2067007, "#12", "junk"]}}
+        with mock.patch.object(bugzilla_apply.config, "get_agent", return_value=agent), \
+                mock.patch.dict(os.environ, {"AUTOFILE_SKIP_REGRESSOR_BUGS": " 7, ,x"}):
+            self.assertEqual(bugzilla_apply.config.autofile_skip_regressor_bugs(),
+                             frozenset({2067007, 12, 7}))
+
+    def test_the_shipped_list_names_bug_2067007(self):
+        self.assertIn(2067007, bugzilla_apply.config.autofile_skip_regressor_bugs())
