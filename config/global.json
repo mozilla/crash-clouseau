@@ -355,6 +355,15 @@
             "model": "claude-opus-5-5",
             "effort": "medium"
         },
+        "same_defect":
+        {
+            "enabled": false,
+            "model": "claude-opus-5-5",
+            "effort": "medium",
+            "max_turns": 20,
+            "min_confidence": "medium",
+            "max_bugs": 5
+        },
         "spike_escalation":
         {
             "enabled": true,

@@ -4648,6 +4648,8 @@ def _autofile(uuid, payload, row):
             # -- `html._declined_bug` still parses the prose for the rows recorded before this.
             if res.get("bug"):
                 decline["bug"] = res["bug"]
+            if res.get("same_defect"):
+                decline["same_defect"] = res["same_defect"]
             models.Dossier.record_filing_decline(uuid, decline)
     except Exception:                                    # pragma: no cover - defensive
         logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)

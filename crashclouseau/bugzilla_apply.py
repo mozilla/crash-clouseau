@@ -1824,16 +1824,13 @@ def _signature_field(bug_id, timeout=_HTTP_TIMEOUT):
     return None if row is None else (row.get("cf_crash_signature") or "")
 
 
-def _attach_signature(bug_id, signature, token):
-    """APPEND ``[@ signature]`` to *bug_id*'s ``cf_crash_signature`` in its own PUT, and say what
-    happened: ``"attached"``, ``"already"`` (an entry for it, in any lambda spelling, is there),
-    or ``"failed"``. Never raises.
+def _attach_signature(bug_id, signature, token, comment=None):
+    """Append a signature, with an optional comment in the same PUT.
 
-    Calixte's rule from bug 2063003: a crash filed under a bug that carries another name MUST add
-    its own name to that bug, or the next Socorro click and the next triager start from zero.
-    Append, never rewrite -- the field is read back and the old entries are kept verbatim -- and
-    a PUT of its own, because BMO's PUT is atomic across fields and a refused link elsewhere
-    must not cost the signature (`_link_regressed_by`)."""
+    Return ``attached``, ``already`` (including lambda variants), or ``failed`` on a read/write
+    failure. Read the current field before appending; post no comment if the signature exists.
+    Keep this write separate from ``_link_regressed_by`` so a rejected link cannot block it.
+    """
     sig = (signature or "").strip()
     if not sig or not bug_id:
         return "failed"
@@ -1845,8 +1842,11 @@ def _attach_signature(bug_id, signature, token):
         return "already"
     entry = "[@ {}]".format(sig)
     new = (current.rstrip() + "\n" + entry) if current.strip() else entry
+    changes = {"cf_crash_signature": new}
+    if comment:
+        changes["comment"] = {"body": comment}
     try:
-        _put_bug(bug_id, {"cf_crash_signature": new}, token)
+        _put_bug(bug_id, changes, token)
     except Exception as exc:
         logger.warning("autofile: could not attach %r to bug %s: %s", sig, bug_id, exc)
         return "failed"
@@ -1895,6 +1895,231 @@ def _needinfo_changes(email):
     Not used on the create path: a bug that does not exist yet has no flag to collide with,
     and create validates its ``flags`` differently."""
     return {"flags": [{"name": "needinfo", "status": "?", "requestee": email, "new": True}]}
+
+
+def _regression_ids(regressor, timeout=_HTTP_TIMEOUT):
+    """Read regression IDs; return ``[]`` for an absent bug, ``None`` on request failure."""
+    try:
+        r = net.get(_bz_rest(), params={"id": str(regressor), "include_fields": "id,regressions"},
+                    timeout=timeout)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: regressions read failed for bug %s: %s", regressor, exc)
+        return None
+    row = next((b for b in bugs if str(b.get("id")) == str(regressor)), None)
+    return [int(b) for b in (row or {}).get("regressions") or []]
+
+
+def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT):
+    """Fetch candidate fields without authentication; return ``None`` on request failure."""
+    if not ids:
+        return []
+    params = {
+        "id": ",".join(str(i) for i in ids),
+        "include_fields": "id,summary,status,resolution,dupe_of,creation_time,product,keywords,"
+                          "cf_crash_signature,cf_last_resolved",
+    }
+    try:
+        r = net.get(_bz_rest(), params=params, timeout=timeout)
+        r.raise_for_status()
+        return (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: bug lookup failed for %s: %s", ids, exc)
+        return None
+
+
+def _is_automation(email):
+    email = (email or "").lower()
+    return "bot@" in email or email.endswith(".tld")
+
+
+def _bug_comments(bug_id, timeout=_HTTP_TIMEOUT):
+    """Return ``(first text, later comments)``; ``None`` on request failure.
+    Later comments use ``{"author", "text"}`` and exclude emails matching ``_is_automation``.
+    Missing comment data returns ``("", [])``."""
+    try:
+        r = net.get("{}/{}/comment".format(_bz_rest(), bug_id), timeout=timeout)
+        r.raise_for_status()
+        comments = (((r.json() or {}).get("bugs") or {}).get(str(bug_id)) or {}).get("comments")
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: comment read failed for bug %s: %s", bug_id, exc)
+        return None
+    comments = comments or []
+    first = (comments[0].get("text") or "") if comments else ""
+    later = [{"author": c.get("creator") or "", "text": c.get("text") or ""}
+             for c in comments[1:] if not _is_automation(c.get("creator"))]
+    return first, later
+
+
+def _filing_analysis(filing):
+    """Our analysis behind *filing*, as ``same_defect`` prompt fields; ``{}`` when unreadable."""
+    from crashclouseau.agent import same_defect
+    try:
+        d = models.Dossier.get_by_uuid(filing["uuid"])
+        dossier = ((d.payload or {}).get("dossier") if d is not None else None) or {}
+        stack, _info = models.CrashStack.get_by_uuid(filing["uuid"])
+    except Exception:
+        logger.warning("autofile: cannot read the analysis of %s", filing.get("uuid"),
+                       exc_info=True)
+        return {}
+    if not dossier.get("verdict"):
+        return {}
+    crash = same_defect.crash_from_dossier(filing.get("signature"), dossier,
+                                           (stack or {}).get("frames"))
+    return {k: crash[k] for k in ("title", "mechanism", "data_flow", "crash_reason", "frames")}
+
+
+def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
+    """Select up to *max_bugs* candidates, newest first, from our filings and ``regressions``.
+
+    Follow one duplicate hop. Exclude other applications, metas and bugs without signatures
+    or already carrying *signature*. Accept unresolved bugs, or FIXED bugs resolved after
+    *buildid*. Resolution time is a proxy; this does not check the fix's landing or uplift.
+    Supply our stored analysis (otherwise comment 0) and filtered later comments.
+    Return ``None`` if a candidate lookup or comment request fails.
+    """
+    ours = models.Dossier.filings_for_regressor(regressor)
+    listed = _regression_ids(regressor)
+    if ours is None or listed is None:
+        return None
+    filings = {}
+    for f in ours:
+        filings.setdefault(f["bug"], f)
+    rows = _crash_bug_rows(sorted(set(filings) | set(listed)))
+    if rows is None:
+        return None
+    known = {b["id"] for b in rows}
+    targets = sorted({b["dupe_of"] for b in rows
+                      if b.get("resolution") == "DUPLICATE" and b.get("dupe_of")} - known)
+    extra = _crash_bug_rows(targets)
+    if extra is None:
+        return None
+    by_id = {b["id"]: b for b in rows + extra}
+    from crashclouseau import sigage
+
+    build_dt = sigage.to_datetime(buildid if isinstance(buildid, datetime) else str(buildid or ""))
+    own = {s.lower() for s in utils.lambda_siblings(signature)}
+    picked = {}
+    for b in rows:
+        if b.get("resolution") == "DUPLICATE":
+            b = by_id.get(b.get("dupe_of"))
+            if b is None:
+                continue
+        sigs = {s.lower() for s in _signature_field_entries(b.get("cf_crash_signature"))}
+        resolved = sigage.to_datetime(b.get("cf_last_resolved"))
+        if b.get("resolution") == "FIXED":
+            usable = bool(build_dt and resolved and resolved > build_dt)
+        else:
+            usable = not b.get("resolution")
+        if usable and "meta" not in (b.get("keywords") or []) and sigs and not own & sigs:
+            picked[b["id"]] = b
+    kept = _split_by_application(list(picked.values()), product)[0]
+    kept.sort(key=lambda b: b.get("creation_time") or "", reverse=True)
+    out = []
+    for b in kept[:max_bugs]:
+        entry = {"bug": b["id"], "summary": b.get("summary") or "",
+                 "status": "RESOLVED FIXED" if b.get("resolution") else (b.get("status") or ""),
+                 "signatures": _signature_field_entries(b.get("cf_crash_signature"))}
+        analysis = _filing_analysis(filings[b["id"]]) if b["id"] in filings else {}
+        comments = _bug_comments(b["id"])
+        if comments is None:
+            return None
+        first, entry["comments"] = comments
+        if analysis:
+            entry.update(analysis)
+        else:
+            entry["description"] = first
+        out.append(entry)
+    return out
+
+
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _same_defect_bug(uuid_info, stack, dossier, signature, cfg):
+    """Ask the same-defect agent whether a crash about to get a new bug belongs on a bug already
+    attributed to its regressor. ``(bug, check)``: the matching bug number or ``None``, and the
+    record of the check (``None`` when there was nothing to compare with)."""
+    import asyncio
+    from crashclouseau.agent import same_defect
+
+    candidate = (dossier or {}).get("candidate") or {}
+    regressor = candidate.get("bug")
+    if not regressor:
+        return None, None
+    bugs = _same_regressor_bugs(regressor, signature, uuid_info.get("product"), cfg["max_bugs"],
+                                buildid=uuid_info.get("buildid"))
+    if bugs is None:
+        return None, {"regressor": regressor, "error": "bug lookup failed"}
+    if not bugs:
+        return None, None
+    check = {"regressor": regressor, "bugs": [b["bug"] for b in bugs]}
+    crash = same_defect.crash_from_dossier(signature, dossier, (stack or {}).get("frames"))
+    try:
+        answer = asyncio.run(same_defect.run_same_defect(
+            crash, {"bug": regressor, "node": candidate.get("node")}, bugs,
+            channel=uuid_info.get("channel") or "nightly", build_rev=uuid_info.get("node") or "",
+            product=uuid_info.get("product")))
+    except Exception:
+        logger.warning("autofile: same-defect check raised for %r", signature, exc_info=True)
+        answer = None
+    if answer is None:
+        check["error"] = "no usable answer"
+        return None, check
+    check.update(answer.model_dump())
+    floor = _CONFIDENCE_RANK.get(cfg["min_confidence"], 2)
+    if answer.bug is None or _CONFIDENCE_RANK.get(answer.confidence, 0) < floor:
+        return None, check
+    return answer.bug, check
+
+
+def _same_defect_comment(uuid, uuid_info, signature, check):
+    return "\n".join([
+        "Adding `[@ {}]` to this bug. This crash was attributed to the same regressor (bug {}), "
+        "and an automated comparison with this bug found the same defect:".format(
+            signature, check["regressor"]),
+        "",
+        check.get("reason") or "",
+        "",
+        "Build: {} ({})".format(utils.get_buildid(uuid_info.get("buildid")),
+                                uuid_info.get("channel") or "?"),
+        "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
+    ])
+
+
+def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
+    """Attach the signature and comparison comment in one PUT, without needinfo.
+    Decline unless the channel allows comments on existing bugs."""
+    if mode != "comment":
+        return {"filed": False, "bug": bug, "same_defect": check,
+                "skipped": "bug {} is the same defect, with the same regressor (bug {}); this "
+                           "channel does not write on existing bugs".format(bug, check["regressor"])}
+    attached = _attach_signature(bug, signature, token,
+                                 comment=_same_defect_comment(uuid, uuid_info, signature, check))
+    if attached == "already":
+        return {"filed": False, "bug": bug, "same_defect": check,
+                "skipped": "bug {} already carries this signature".format(bug)}
+    if attached != "attached":
+        try:
+            models.Dossier.record_filing_error(uuid, {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "error": "adding the signature to bug {} failed".format(bug),
+                "signature": signature, "mode": "same_defect"})
+        except Exception:                                   # pragma: no cover - defensive
+            logger.warning("autofile: could not record the filing error for %s", uuid)
+        return {"filed": False, "bug": bug, "same_defect": check,
+                "skipped": "bugzilla write failed: adding the signature to bug {}".format(bug)}
+    result = {"filed": True, "bug": bug, "mode": "same_defect", "uuid": uuid,
+              "signature": signature, "channel": uuid_info.get("channel"),
+              "product": uuid_info.get("product"),
+              "buildid": utils.get_buildid(uuid_info.get("buildid")),
+              "at": datetime.now(timezone.utc).isoformat(), "needinfo": None,
+              "same_defect": check}
+    models.Dossier.record_filed_bug(uuid, result)
+    logger.info("autofile: %s -> bug %s (same defect, regressor bug %s)",
+                uuid, bug, check["regressor"])
+    return result
 
 
 _SKIPPED_REGRESSOR = "regressor bug {} is excluded from filing (agent.autofile.skip_regressor_bugs)"
@@ -1947,6 +2172,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     * never twice on one BUG for one signature (``Dossier.already_commented``), which is a
       different question from "never twice for one crash": several proto-signature clusters of
       the same signature are analysed independently and all land on the same bug.
+    * before a new bug, optionally compare bugs sharing the regressor (``_same_defect_bug``).
+      An accepted match follows the channel's comment policy; no match continues normal filing.
 
     A RELEASE filing is titled ``[new in release] Crash in [@ ...]`` and nominates the crash's
     version for tracking (``cf_tracking_firefox<major>`` = ?, in the create, ``_train_flags``);
@@ -2456,6 +2683,15 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "signature is held by [meta] bug {}; the verdict names no bucket to "
                            "file, and a bug titled by the signature would be a second "
                            "catch-all".format(tracker)}
+    # Compare before creating a bug, except on withheld, incomplete-fix or meta-bucket paths.
+    same_defect_check = None
+    sd_cfg = config.get_agent_same_defect()
+    if bug_id is None and sd_cfg["enabled"] and not (withheld or incomplete_fix or meta_bugs):
+        same_bug, same_defect_check = _same_defect_bug(uuid_info, stack, dossier, signature,
+                                                       sd_cfg)
+        if same_bug is not None:
+            return _file_on_same_defect(uuid, uuid_info, signature, same_bug, same_defect_check,
+                                        mode, token)
     try:
         preview = report_bug.build_bug_preview(
             uuid_info, stack, dossier,
@@ -2550,6 +2786,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
               "channel": channel, "product": product,
               "buildid": utils.get_buildid(uuid_info.get("buildid")),
               "at": datetime.now(timezone.utc).isoformat()}
+    if same_defect_check:
+        result["same_defect_check"] = same_defect_check
     if withhold:
         # Persisted so the choice is auditable from the dossier, and so that "how often does the
         # security venue fire, and does anyone unrestrict it?" is answerable later from prod

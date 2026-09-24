@@ -3415,6 +3415,36 @@ class Dossier(db.Model):
         return out
 
     @staticmethod
+    def filings_for_regressor(bug):
+        """Filings whose dossier names candidate bug *bug*, ordered by dossier ID.
+        Return ``{"uuid", "bug", "signature", "mode"}`` rows, or ``None`` on query failure."""
+        try:
+            bug = int(bug)
+        except (TypeError, ValueError):
+            return []
+        fb = Dossier.payload["filed_bug"]
+        cand = Dossier.payload["dossier"]["candidate"]["bug"]
+        try:
+            rows = (
+                db.session.query(UUID.uuid, fb["bug"].astext, fb["signature"].astext,
+                                 fb["mode"].astext)
+                .select_from(Dossier)
+                .join(UUID, Dossier.uuidid == UUID.id)
+                .filter(fb["filed"].astext == "true", cand.astext == str(bug))
+                .order_by(Dossier.id)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read the filings for regressor bug %s", bug, exc_info=True)
+            try:
+                db.session.rollback()
+            except Exception:  # pragma: no cover - best-effort
+                pass
+            return None
+        return [{"uuid": u, "bug": int(b), "signature": s or "", "mode": m or ""}
+                for u, b, s, m in rows if str(b or "").isdigit()]
+
+    @staticmethod
     def filed_bugs_since(when, channel=None, product=None):
         """How many bugs the autofiler has FILED since *when* — the daily-cap counter.
 

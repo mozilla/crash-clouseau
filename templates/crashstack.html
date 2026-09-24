@@ -378,6 +378,9 @@
           {%- if filed.get('mode') == 'comment_on_existing' -%}
         <h3>Bug we commented on</h3>
         <p class="filing-status filed">The analysis was posted as a comment on <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>, which already tracked this signature.{% if filed.get('needinfo') %} Needinfo: {{ filed['needinfo']|e }}.{% endif %}</p>
+          {%- elif filed.get('mode') == 'same_defect' -%}
+        <h3>Bug we added this signature to</h3>
+        <p class="filing-status filed">The signature was added to <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>, which has the same regressor{% if (filed.get('same_defect') or {}).get('regressor') %} (bug {{ filed['same_defect']['regressor']|e }}){% endif %} and which the same-defect check found to be the same defect.{% if (filed.get('same_defect') or {}).get('reason') %} {{ filed['same_defect']['reason']|e }}{% endif %}</p>
           {%- else -%}
         <h3>Bug we filed</h3>
         <p class="filing-status filed">Filed as <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>{% if filed.get('security_groups') %} (restricted){% endif %}{% if filed.get('at') %} on {{ filed['at'][:10]|e }}{% endif %}.{% if filed.get('needinfo') %} Needinfo: {{ filed['needinfo']|e }}.{% endif %}</p>

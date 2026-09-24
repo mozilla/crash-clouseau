@@ -1311,6 +1311,20 @@ def get_agent_second_opinion():
     }
 
 
+def get_agent_same_defect():
+    """Same-defect comparison settings; ``SAME_DEFECT_ENABLED`` overrides ``enabled``.
+    ``min_confidence`` sets the acceptance floor; ``max_bugs`` caps candidate bugs."""
+    o = get_agent().get("same_defect", {})
+    return {
+        "enabled": _env_bool("SAME_DEFECT_ENABLED", o.get("enabled", False)),
+        "model": o.get("model", "opus"),
+        "effort": o.get("effort", "medium"),
+        "max_turns": o.get("max_turns", 20),
+        "min_confidence": o.get("min_confidence", "medium"),
+        "max_bugs": o.get("max_bugs", 5),
+    }
+
+
 def get_agent_spike_escalation():
     """The spike-escalation knobs: what happens when a selected build-day is a REAL spike
     (``spikes.judge_selection``) and the ordinary pushlog triage did not file anything.
