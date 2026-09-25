@@ -2783,17 +2783,72 @@ class TestOurOwnBugOutOfSight(_Base):
         bugzilla_apply._bugs_by_id.assert_not_called()
 
     def test_fixed_and_duplicate_leave_room_for_a_new_bug(self):
-        # FIXED: the defect is gone and a fresh crash is a fresh regression, gated by
-        # `_fixed_after_build_bug` / `_known_on_train_bug` (both mocked to None here). A
-        # DUPLICATE whose target is CLOSED, so no venue row carries us: the same.
+        # FIXED passes this guard, directly or via a duplicate. The later
+        # _fixed_after_build_bug and _known_on_train_bug gates are mocked to None.
         for resolution in ("FIXED", "DUPLICATE"):
             with self.subTest(resolution=resolution):
                 self.created.clear()
-                self._ours_reads(resolution)
+                self._dup_chain(resolution, "FIXED")
                 res = self._file()
                 self.assertTrue(res["filed"], res.get("skipped"))
                 self.assertEqual(res["mode"], "new_bug")
                 self.assertEqual(len(self.created), 1)
+
+    def _dup_chain(self, ours, target):
+        """Mock a prior bug and its target; target=None simulates a restricted target."""
+        rows = {2072488: {"id": 2072488, "status": "RESOLVED", "resolution": ours,
+                          "dupe_of": 2074892 if ours == "DUPLICATE" else None}}
+        if target is not None:
+            rows[2074892] = {"id": 2074892, "status": "RESOLVED" if target else "NEW",
+                             "resolution": target}
+        bugzilla_apply._bugs_by_id.side_effect = lambda ids: [rows[i] for i in ids if i in rows]
+
+    def test_a_duplicate_of_a_restricted_bug_stops_the_second_bug(self):
+        self._dup_chain("DUPLICATE", None)
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["own_bug_state"]), (2072488, "duplicate_restricted"))
+        self.assertIn("duplicate of a bug that is restricted", res["skipped"])
+        self.assertNotIn("2074892", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_a_duplicate_is_judged_by_its_target(self):
+        for target, state in (("INVALID", "duplicate_INVALID"), ("", "duplicate_open")):
+            with self.subTest(target=target):
+                self._dup_chain("DUPLICATE", target)
+                res = self._file()
+                self.assertFalse(res["filed"])
+                self.assertEqual(res["own_bug_state"], state)
+                self.assertIn("duplicate of bug 2074892", res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_a_chain_not_followed_to_its_end_stops_the_second_bug(self):
+        def dup(bid, to):
+            return {"id": bid, "status": "RESOLVED", "resolution": "DUPLICATE", "dupe_of": to}
+        # Six links to an omitted target, a cycle, and a missing dupe_of.
+        long_chain = {2072488: dup(2072488, 1)}
+        long_chain.update({i: dup(i, i + 1) for i in range(1, 6)})
+        cycle = {2072488: dup(2072488, 1), 1: dup(1, 2), 2: dup(2, 1)}
+        no_target = {2072488: dup(2072488, None)}
+        for name, rows in (("long", long_chain), ("cycle", cycle), ("no target", no_target)):
+            with self.subTest(chain=name):
+                bugzilla_apply._bugs_by_id.side_effect = (
+                    lambda ids, rows=rows: [rows[i] for i in ids if i in rows])
+                res = self._file()
+                self.assertFalse(res["filed"])
+                self.assertIn(res["own_bug_state"], ("unresolved", "duplicate_unresolved"))
+                self.assertIn("not followed to its end", res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_an_unreadable_duplicate_target_fails_closed(self):
+        self._dup_chain("DUPLICATE", "FIXED")
+        rows = bugzilla_apply._bugs_by_id.side_effect
+        bugzilla_apply._bugs_by_id.side_effect = (
+            lambda ids: None if ids == [2074892] else rows(ids))
+        res = self._file()
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["own_bug_state"], "duplicate_unreadable")
+        self.assertEqual(self.created, [])
 
     def test_a_bug_of_ours_closed_as_unwanted_stops_the_second_bug(self):
         for resolution in ("INVALID", "WORKSFORME", "INCOMPLETE", "WONTFIX"):

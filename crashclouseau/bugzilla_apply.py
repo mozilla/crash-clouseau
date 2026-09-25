@@ -952,76 +952,65 @@ def _bugs_by_id(ids, timeout=_HTTP_TIMEOUT):
         return None
 
 
-# The resolutions of a bug of ours on a signature that leave room for a NEW bug on it. FIXED:
-# the defect was real and is gone, so a fresh crash on the signature is a fresh regression --
-# `_fixed_after_build_bug` and `_known_on_train_bug` still decide whether it is one. DUPLICATE:
-# the human's verdict moved to the TARGET, which `_duplicate_targets_for_signature` folds into
-# the venue rows while it is open. Everything else -- INVALID, WORKSFORME, INCOMPLETE, WONTFIX,
-# MOVED -- is a human saying the filing was not wanted, and the `skip` channels have treated
-# every one of those as a full stop since the guard shipped.
-_REFILEABLE_RESOLUTIONS = ("FIXED", "DUPLICATE")
+# A FIXED endpoint passes this guard; the later filing gates still apply.
+# DUPLICATE must be followed to an endpoint before its resolution can be judged.
+_REFILEABLE_RESOLUTIONS = ("FIXED",)
 
 
 def _own_bug_out_of_sight(prior, existing):
-    """A ``{"filed": False, ...}`` decline when the bug WE already filed on this signature
-    (*prior*, from ``Dossier.already_filed_for_signature``) is not among the *existing* venue
-    rows and its state says a second bug must not be filed; ``None`` to carry on.
+    """Return a skip result for a prior filing, or ``None`` to continue.
 
-    THE ``comment``-MODE HALF OF THE PRIOR-FILING GUARD. On a ``skip``/``file_new`` channel a
-    prior filing is a full stop before the venue search is made. On a ``comment`` channel our
-    open bug is the ordinary venue -- the search returns it and ``already_commented`` declines
-    the second analysis -- so there is only work to do when the search CANNOT see the bug, and
-    why it cannot decides:
+    If *existing* contains our bug or lists it in ``via_duplicates``, leave it to the
+    venue selection and comment guards without another lookup.
 
-    * RESTRICTED. ``_bugs_by_id`` returns rows for the ids anonymous BMO may read and simply
-      OMITS the rest (live probe 2026-09-16: ``id=2072488,1976766`` came back as one row and an
-      empty ``faults``), so "absent" is the signal. Bug 2072488, 2026-09-16 03:02Z: a
-      poison-address crash on ``core::ptr::drop_in_place | ... | style_traits::owned_slice::
-      impl$1::drop`` filed restricted to core-security; 2072492, 2072493, 2072502 and 2072521
-      followed by 08:01Z, one per proto-signature cluster of the SAME nightly build, each
-      needinfo'ing the same developer, because the unauthenticated venue search sees none of
-      them. ``already_filed_for_signature``'s docstring had named this exact case ("IT ALSO
-      CLOSES A DISCLOSURE CASE") and nightly never called it. Skip, naming the bug -- and the
-      same skip stops a run that is NOT withheld from filing a PUBLIC bug on the signature.
-    * RESOLVED, neither FIXED nor DUPLICATE: a human closed our bug as not wanted. Skip. Never
-      observed on nightly (the only other repeat, 2069647/2070711, was a DUPLICATE and is now
-      followed), so this is the ``skip`` channels' rule applied for consistency, not a measured
-      fix.
-    * OPEN but not returned. Our bug carried the exact ``[@ sig]`` entry and title the day it
-      was filed (``report_bug.bug_title``), so a human has edited both off it. Skip: this is
-      about which way to be wrong, and a duplicate is the worse noise.
-    * BMO unreadable: skip, like the venue search itself. Fails closed.
-    * FIXED or DUPLICATE (``_REFILEABLE_RESOLUTIONS``): carry on; the existing gates own it.
+    Otherwise, read our bug anonymously and follow ``dupe_of``. Only a FIXED endpoint
+    passes this guard. Skip missing/unreadable rows, open bugs, other resolutions,
+    and incomplete chains (hop limit, cycles or missing ``dupe_of``). A missing row
+    is treated as restricted: anonymous lookups omit restricted bugs.
 
-    Not asked when our bug IS a venue row, or is the duplicate a venue row was reached through
-    (``via_duplicates``) -- ``already_commented`` covers both, and asking BMO there would cost a
-    request on every re-crash of every signature we ever filed."""
+    Called for prior filings on ``comment`` channels; other modes skip them earlier.
+    """
     bug = (prior or {}).get("bug")
     try:
         bug = int(bug)
     except (TypeError, ValueError):
-        # The fail-closed sentinel (`{"skipped": ...}`) or a record with no id: silence, not a
-        # possible duplicate, like every sibling guard.
+        # A failed prior-filing lookup or invalid bug ID must prevent another filing.
         return {"filed": False, "skipped": "prior-filing lookup failed; not risking a duplicate",
                 "prior_signature_filing": prior}
     for row in existing or []:
         if row.get("id") == bug or bug in (row.get("via_duplicates") or []):
             return None
     rows = _bugs_by_id([bug])
+    row = next((r for r in rows or [] if r.get("id") == bug), None)
+    target = None
+    for _hop in range(_DUP_CHAIN_MAX_HOPS):
+        if row is None or (row.get("resolution") or "").upper() != "DUPLICATE" \
+                or not row.get("dupe_of"):
+            break
+        target = row["dupe_of"]
+        rows = _bugs_by_id([target])
+        row = next((r for r in rows or [] if r.get("id") == target), None)
     if rows is None:
         state, why = "unreadable", "could not be read from Bugzilla"
+    elif row is None:
+        state, why = "restricted", "is restricted, so the venue search cannot see it"
     else:
-        row = next((r for r in rows if r.get("id") == bug), None)
-        if row is None:
-            state, why = "restricted", "is restricted, so the venue search cannot see it"
+        resolution = (row.get("resolution") or "").upper()
+        if resolution in _REFILEABLE_RESOLUTIONS:
+            return None
+        if not resolution:
+            state, why = "open", ("is open but was not found by the venue search" if target
+                                  else "is open but no longer carries the signature")
+        elif resolution == "DUPLICATE":
+            # The hop limit or missing dupe_of left the endpoint unknown.
+            state, why = "unresolved", "has a duplicate chain that was not followed to its end"
         else:
-            resolution = (row.get("resolution") or "").upper()
-            if resolution in _REFILEABLE_RESOLUTIONS:
-                return None
-            if not resolution:
-                state, why = "open", "is open but no longer carries the signature"
-            else:
-                state, why = resolution, "was resolved {}".format(resolution)
+            state, why = resolution, "was resolved {}".format(resolution)
+    if target:
+        # Omit restricted or unreadable target IDs from the skip message.
+        dup = "bug {}".format(target) if state not in ("restricted", "unreadable") else "a bug"
+        state, why = "duplicate_" + state, "was resolved as a duplicate of {} that {}".format(
+            dup, why)
     return {"filed": False, "bug": bug,
             "skipped": "already filed bug {} for this signature; it {} — not filing "
                        "again".format(bug, why),
@@ -2151,11 +2140,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     * verdict must be reported and at/above ``min_confidence`` (70 = the ``probable`` rung);
     * never twice for one crash (``Dossier.already_filed``), which matters because the
       orphan reaper re-runs a crashed run and would otherwise re-file on recovery;
-    * never a SECOND bug for one SIGNATURE (``Dossier.already_filed_for_signature``): a full
-      stop on a ``skip``/``file_new`` channel, and on a ``comment`` channel a stop whenever the
-      venue search cannot see the bug we filed -- restricted, resolved as unwanted, or edited
-      off the signature (``_own_bug_out_of_sight``); FIXED and DUPLICATE carry on to the gates
-      that own them;
+    * prior filings (``Dossier.already_filed_for_signature``) stop ``skip``/``file_new``
+      channels. On ``comment`` channels, ``_own_bug_out_of_sight`` checks prior bugs
+      absent from the venue results, following duplicates and allowing only FIXED
+      endpoints to proceed to the remaining gates;
     * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
       is a nuisance while a bad gate at 300/day is an incident;
     * if an OPEN bug already references the signature AND that bug belongs to this crash's own
@@ -2450,11 +2438,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "already filed bug {} for {} on {}".format(
                     prior_sig.get("bug") or "?", under, channel or "?"),
                 "prior_signature_filing": prior_sig}
-    # On a `comment` channel our own OPEN bug is the ordinary venue -- the search returns it and
-    # `already_commented` declines the second analysis -- so the guard acts only when the search
-    # CANNOT see our bug, and the reason decides (`_own_bug_out_of_sight`): restricted, resolved
-    # as unwanted, or edited off the signature is a skip; FIXED or DUPLICATE carries on to the
-    # gates that own those.
+    # Check prior filings the venue search missed, including their duplicate targets.
     if prior_sig:
         out_of_sight = _own_bug_out_of_sight(prior_sig, existing)
         if out_of_sight:
