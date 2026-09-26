@@ -1093,6 +1093,10 @@ class TestCrashStatsTools(unittest.TestCase):
         self.assertIn("crash_report_keys", crashstats.TERM_FIELDS)
         self.assertIn("crash_report_keys", crashstats._REPORT_KEYS)
 
+    def test_the_ipc_fatal_error_message_is_facetable_and_printed(self):
+        self.assertIn("ipc_fatal_error_msg", crashstats.TERM_FIELDS)
+        self.assertIn("ipc_fatal_error_msg", crashstats._REPORT_KEYS)
+
     def test_facets_refuses_an_unknown_field(self):
         out = asyncio.run(crashstats.facets(crashstats.CrashStatsCtx(), "sig", "user_comments"))
         self.assertIn("not a field this tool will facet", out)

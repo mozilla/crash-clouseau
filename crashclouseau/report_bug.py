@@ -263,22 +263,24 @@ def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES, details=None):
 
 
 def build_reason_block(details):
-    """The crash-reason section, or ``None`` when Socorro gave us nothing.
+    """Format ``moz_crash_reason``, falling back to ``reason`` and an optional address.
 
-    A ``MOZ_CRASH``/Rust panic carries a human-written ``moz_crash_reason`` and gets the
-    ``MOZ_CRASH Reason:`` heading a hand-filed crash bug uses. Anything else (a segv, an
-    access violation) has only the OS-level ``reason``, which is worth stating together
-    with the faulting ``address`` -- for a null deref that pair *is* the diagnosis."""
+    Append any IPC FatalError message, even without a crash reason. Return ``None`` if empty.
+    """
     details = details or {}
+    ipc = (details.get("ipc_fatal_error_msg") or "").strip()
+    ipc_block = "IPC FatalError message:\n{}".format(_fenced(ipc)) if ipc else None
     moz = (details.get("moz_crash_reason") or "").strip()
-    if moz:
-        return "MOZ_CRASH Reason:\n{}".format(_fenced(moz))
     reason = (details.get("reason") or "").strip()
-    if not reason:
-        return None
-    address = (details.get("address") or "").strip()
-    body = "{} at {}".format(reason, address) if address else reason
-    return "Crash Reason:\n{}".format(_fenced(body))
+    if moz:
+        block = "MOZ_CRASH Reason:\n{}".format(_fenced(moz))
+    elif reason:
+        address = (details.get("address") or "").strip()
+        body = "{} at {}".format(reason, address) if address else reason
+        block = "Crash Reason:\n{}".format(_fenced(body))
+    else:
+        block = None
+    return "\n".join(b for b in (block, ipc_block) if b) or None
 
 
 def build_stats_sentence(first, stats, uuid_info):
@@ -415,7 +417,7 @@ def build_code_references(verdict, channel, max_refs=_MAX_CODE_REFS):
 # `report_type` so the frames block can say WHICH thread it is showing: on a hang the frames
 # are the hung main thread, not a crashing one, and a reader who assumes otherwise reads the
 # stack backwards. Bug 2064436 — see `inspector.thread_for_analysis`.
-_REASON_COLUMNS = ["moz_crash_reason", "reason", "address", "report_type"]
+_REASON_COLUMNS = ["moz_crash_reason", "reason", "address", "report_type", "ipc_fatal_error_msg"]
 # Process caches: the comment is rendered on every page view of a culprit/lead crash, and
 # neither of these moves in a way that matters for a preview (a crash's reason is
 # immutable; the counts only creep up). uuid -> value; keeps the render to one fetch per

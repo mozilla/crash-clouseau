@@ -80,8 +80,9 @@ def _system_prompt(product: str | None = None) -> str:
     return _SYSTEM.replace(_SYSTEM_PRODUCT_PHRASE, "whether a {} crash".format(product), 1)
 
 
-def crash_from_dossier(signature: str, dossier: dict | None, frames: list | None) -> dict:
-    """The crash fields the prompt reads, from a persisted dossier and its stack frames."""
+def crash_from_dossier(signature: str, dossier: dict | None, frames: list | None,
+                       ipc_fatal_error_msg: str | None = None) -> dict:
+    """Build prompt fields from the dossier, frames and a caller-supplied Socorro IPC message."""
     d = dossier or {}
     verdict = d.get("verdict") or {}
     mechanism = verdict.get("mechanism") or {}
@@ -92,6 +93,7 @@ def crash_from_dossier(signature: str, dossier: dict | None, frames: list | None
         "mechanism": mechanism.get("statement") if isinstance(mechanism, dict) else "",
         "data_flow": (d.get("data_flow") or {}).get("summary") or "",
         "crash_reason": brief.get("moz_crash_reason") or brief.get("reason") or "",
+        "ipc_fatal_error_msg": ipc_fatal_error_msg or "",
         "frames": list(frames or brief.get("frames") or []),
     }
 
@@ -113,6 +115,8 @@ def _analysis_lines(item: dict) -> list[str]:
         lines.append("Analysis title: {}".format(item["title"]))
     if item.get("crash_reason"):
         lines.append("Crash reason: {}".format(item["crash_reason"]))
+    if item.get("ipc_fatal_error_msg"):
+        lines.append("IPC FatalError message: {}".format(item["ipc_fatal_error_msg"]))
     if item.get("mechanism"):
         lines.append("Mechanism: {}".format(item["mechanism"]))
     if item.get("data_flow"):

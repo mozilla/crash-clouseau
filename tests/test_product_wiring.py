@@ -1594,6 +1594,20 @@ class TestBugPreview(unittest.TestCase):
         self.assertIsNone(report_bug.build_reason_block({}))
         self.assertIsNone(report_bug.build_reason_block({"reason": "", "address": "0x0"}))
 
+    def test_build_reason_block_ipc_fatal_error_message(self):
+        msg = "SessionHistoryInfo with invalid shared state identifier"
+        b = report_bug.build_reason_block({
+            "moz_crash_reason": "MOZ_CRASH(IPC FatalError in the parent process!)",
+            "reason": "EXCEPTION_BREAKPOINT", "ipc_fatal_error_msg": msg})
+        self.assertEqual(b, "MOZ_CRASH Reason:\n```\nMOZ_CRASH(IPC FatalError in the parent "
+                            "process!)\n```\nIPC FatalError message:\n```\n{}\n```".format(msg))
+        b = report_bug.build_reason_block({"reason": "SIGSEGV", "ipc_fatal_error_msg": msg})
+        self.assertTrue(b.startswith("Crash Reason:"))
+        self.assertTrue(b.endswith("IPC FatalError message:\n```\n{}\n```".format(msg)))
+        self.assertEqual(report_bug.build_reason_block({"ipc_fatal_error_msg": msg}),
+                         "IPC FatalError message:\n```\n{}\n```".format(msg))
+        self.assertIn("ipc_fatal_error_msg", report_bug._REASON_COLUMNS)
+
     def test_build_stats_sentence(self):
         info = {"channel": "nightly", "version": "155.0a1",
                 "buildid": "20260727081724"}

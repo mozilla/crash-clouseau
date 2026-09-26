@@ -216,6 +216,24 @@ class TestBuildOptions(unittest.TestCase):
         self.assertIn("MOZ_CRASH_REASON: MOZ_DIAGNOSTIC_ASSERT(mThing)", p)
         self.assertIn("PHC alloc stack: False", p)
 
+    def test_crash_facts_include_the_ipc_fatal_error_message(self):
+        from crashclouseau.agent import second_opinion
+
+        crash = dict(_CRASH, raw_crash={
+            "moz_crash_reason": "MOZ_CRASH(IPC FatalError in the parent process!)",
+            "ipc_fatal_error_msg": "SessionHistoryInfo with invalid shared state identifier",
+        })
+        line = ("IPC FatalError message: SessionHistoryInfo with invalid shared state "
+                "identifier")
+        facts = triage._crash_facts(crash)
+        self.assertIn(line, facts)
+        self.assertEqual(facts.index(line),
+                         facts.index("MOZ_CRASH_REASON: MOZ_CRASH(IPC FatalError in the parent "
+                                     "process!)") + 1)
+        self.assertIn(line, second_opinion._user_prompt(crash, None))
+        self.assertNotIn("IPC FatalError message",
+                         "\n".join(triage._crash_facts(dict(_CRASH, raw_crash={}))))
+
     def test_user_prompt_no_candidate_block_when_absent(self):
         self.assertNotIn("candidate changesets", triage._user_prompt(_CRASH))
 

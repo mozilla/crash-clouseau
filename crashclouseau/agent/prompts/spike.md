@@ -553,7 +553,7 @@ These are stable facts that cost turns when rediscovered.
   `moz_crash_reason`, `reason`, `address`, `adapter_vendor_id`, `adapter_device_id`,
   `adapter_driver_version`, `adapter_subsys_id`, `app_init_dlls`, `shutdown_progress`,
   `shutdown_reason`, `startup_crash`, `useragent_locale`, `dom_fission_enabled`,
-  `ipc_channel_error`, `ipc_message_name`, `ipc_shutdown_state`,
+  `ipc_channel_error`, `ipc_fatal_error_msg`, `ipc_message_name`, `ipc_shutdown_state`,
   `quota_manager_shutdown_timeout`, `async_shutdown_timeout`, `gmp_plugin`,
   `graphics_critical_error`, `signature`, `proto_signature`, `topmost_filenames`,
   `accessibility`, `accessibility_client`, `safe_mode`, `background_task_name`,

@@ -40,7 +40,7 @@ TERM_FIELDS = (
     "moz_crash_reason", "reason", "address", "adapter_vendor_id", "adapter_device_id",
     "adapter_driver_version", "adapter_subsys_id", "app_init_dlls", "shutdown_progress",
     "shutdown_reason", "startup_crash", "useragent_locale", "dom_fission_enabled",
-    "ipc_channel_error", "ipc_message_name", "ipc_shutdown_state",
+    "ipc_channel_error", "ipc_fatal_error_msg", "ipc_message_name", "ipc_shutdown_state",
     "quota_manager_shutdown_timeout", "async_shutdown_timeout", "gmp_plugin",
     "graphics_critical_error", "signature", "proto_signature", "topmost_filenames",
     "accessibility", "accessibility_client", "safe_mode", "background_task_name",
@@ -73,7 +73,8 @@ _REPORT_KEYS = (
     "js_large_allocation_failure", "shutdown_progress", "shutdown_reason",
     "async_shutdown_timeout",
     "quota_manager_shutdown_timeout", "xpcom_spin_event_loop_stack", "ipc_channel_error",
-    "ipc_message_name", "ipc_shutdown_state", "adapter_vendor_id", "adapter_device_id",
+    "ipc_fatal_error_msg", "ipc_message_name", "ipc_shutdown_state", "adapter_vendor_id",
+    "adapter_device_id",
     "adapter_driver_version", "accessibility", "accessibility_client", "app_init_dlls",
     "dom_fission_enabled", "gmp_plugin", "graphics_critical_error", "crash_report_keys",
 )

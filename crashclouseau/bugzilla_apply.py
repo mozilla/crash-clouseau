@@ -1943,6 +1943,7 @@ def _bug_comments(bug_id, timeout=_HTTP_TIMEOUT):
 
 def _filing_analysis(filing):
     """Our analysis behind *filing*, as ``same_defect`` prompt fields; ``{}`` when unreadable."""
+    from crashclouseau import report_bug
     from crashclouseau.agent import same_defect
     try:
         d = models.Dossier.get_by_uuid(filing["uuid"])
@@ -1954,9 +1955,11 @@ def _filing_analysis(filing):
         return {}
     if not dossier.get("verdict"):
         return {}
+    ipc = report_bug.fetch_crash_reason(filing["uuid"]).get("ipc_fatal_error_msg")
     crash = same_defect.crash_from_dossier(filing.get("signature"), dossier,
-                                           (stack or {}).get("frames"))
-    return {k: crash[k] for k in ("title", "mechanism", "data_flow", "crash_reason", "frames")}
+                                           (stack or {}).get("frames"), ipc)
+    return {k: crash[k] for k in ("title", "mechanism", "data_flow", "crash_reason",
+                                  "ipc_fatal_error_msg", "frames")}
 
 
 def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
@@ -2026,11 +2029,12 @@ def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
-def _same_defect_bug(uuid_info, stack, dossier, signature, cfg):
+def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg):
     """Ask the same-defect agent whether a crash about to get a new bug belongs on a bug already
     attributed to its regressor. ``(bug, check)``: the matching bug number or ``None``, and the
     record of the check (``None`` when there was nothing to compare with)."""
     import asyncio
+    from crashclouseau import report_bug
     from crashclouseau.agent import same_defect
 
     candidate = (dossier or {}).get("candidate") or {}
@@ -2044,7 +2048,9 @@ def _same_defect_bug(uuid_info, stack, dossier, signature, cfg):
     if not bugs:
         return None, None
     check = {"regressor": regressor, "bugs": [b["bug"] for b in bugs]}
-    crash = same_defect.crash_from_dossier(signature, dossier, (stack or {}).get("frames"))
+    crash = same_defect.crash_from_dossier(
+        signature, dossier, (stack or {}).get("frames"),
+        report_bug.fetch_crash_reason(uuid).get("ipc_fatal_error_msg"))
     try:
         answer = asyncio.run(same_defect.run_same_defect(
             crash, {"bug": regressor, "node": candidate.get("node")}, bugs,
@@ -2671,8 +2677,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     same_defect_check = None
     sd_cfg = config.get_agent_same_defect()
     if bug_id is None and sd_cfg["enabled"] and not (withheld or incomplete_fix or meta_bugs):
-        same_bug, same_defect_check = _same_defect_bug(uuid_info, stack, dossier, signature,
-                                                       sd_cfg)
+        same_bug, same_defect_check = _same_defect_bug(uuid, uuid_info, stack, dossier,
+                                                       signature, sd_cfg)
         if same_bug is not None:
             return _file_on_same_defect(uuid, uuid_info, signature, same_bug, same_defect_check,
                                         mode, token)

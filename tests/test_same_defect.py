@@ -13,7 +13,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import bugzilla_apply, config  # noqa: E402
+from crashclouseau import bugzilla_apply, config, report_bug  # noqa: E402
 from crashclouseau.agent import same_defect  # noqa: E402
 from tests.test_autofile import _Base, _INFO, _is_postgres  # noqa: E402
 
@@ -50,6 +50,17 @@ class TestPrompt(unittest.TestCase):
         self.assertEqual(crash["mechanism"], "The change removed a guard in Foo::Layout.")
         self.assertEqual(crash["data_flow"], "Foo::Layout calls Foo::Measure again.")
         self.assertEqual(crash["frames"][1]["function"], "Foo::Layout")
+
+    def test_the_ipc_fatal_error_message_reaches_the_prompt(self):
+        msg = "SessionHistoryInfo with invalid shared state identifier"
+        crash = same_defect.crash_from_dossier("Foo::Bar", _DOSSIER, None, msg)
+        self.assertEqual(crash["ipc_fatal_error_msg"], msg)
+        self.assertEqual(
+            same_defect.crash_from_dossier("Foo::Bar", _DOSSIER, None)["ipc_fatal_error_msg"], "")
+        sib = {"bug": 7, "summary": "s", "title": "t", "ipc_fatal_error_msg": "Other check"}
+        text = same_defect.user_prompt(crash, {"bug": 42}, [sib])
+        self.assertIn("IPC FatalError message: " + msg, text)
+        self.assertIn("IPC FatalError message: Other check", text)
 
     def test_frames_fall_back_to_the_dossier(self):
         crash = same_defect.crash_from_dossier("Foo::Bar", _DOSSIER, None)
@@ -136,6 +147,20 @@ class TestParse(unittest.TestCase):
         self.assertIsNone(same_defect.parse_same_defect("no json here", [7]))
         self.assertIsNone(same_defect.parse_same_defect(
             '```json\n{"same_defect_bug": "seven"}\n```', [7]))
+
+
+class TestFilingAnalysis(unittest.TestCase):
+    def test_the_filing_carries_its_ipc_fatal_error_message(self):
+        row = mock.Mock(payload={"dossier": _DOSSIER})
+        with mock.patch.object(bugzilla_apply.models.Dossier, "get_by_uuid", return_value=row), \
+                mock.patch.object(bugzilla_apply.models.CrashStack, "get_by_uuid",
+                                  return_value=(_STACK, {})), \
+                mock.patch.object(report_bug, "fetch_crash_reason",
+                                  return_value={"ipc_fatal_error_msg": "Bad id"}) as reason:
+            out = bugzilla_apply._filing_analysis({"uuid": "u-7", "signature": "A"})
+        reason.assert_called_once_with("u-7")
+        self.assertEqual(out["ipc_fatal_error_msg"], "Bad id")
+        self.assertEqual(out["title"], "Recursion in Foo::Layout")
 
 
 class TestSameRegressorBugs(unittest.TestCase):
@@ -254,9 +279,14 @@ class TestSameDefectBug(unittest.TestCase):
             return answer
         with mock.patch.object(bugzilla_apply, "_same_regressor_bugs",
                                return_value=bugs) as lookup, \
+                mock.patch.object(report_bug, "fetch_crash_reason",
+                                  return_value={"ipc_fatal_error_msg": "Bad id"}) as reason, \
                 mock.patch.object(same_defect, "run_same_defect", side_effect=run) as agent:
-            out = bugzilla_apply._same_defect_bug(dict(_INFO, node="abc", buildid=_BUILDID),
+            out = bugzilla_apply._same_defect_bug("u-1", dict(_INFO, node="abc",
+                                                              buildid=_BUILDID),
                                                   _STACK, dossier, "Foo::Bar", cfg)
+        if agent.called:
+            reason.assert_called_once_with("u-1")
         if dossier.get("candidate", {}).get("bug"):
             self.assertEqual(lookup.call_args.kwargs["buildid"], _BUILDID)
         return out, agent
@@ -267,6 +297,7 @@ class TestSameDefectBug(unittest.TestCase):
         self.assertEqual(bug, 7)
         self.assertEqual((check["regressor"], check["bugs"], check["reason"]), (42, [7], "Same."))
         args, kwargs = agent.call_args
+        self.assertEqual(args[0]["ipc_fatal_error_msg"], "Bad id")
         self.assertEqual(args[1], {"bug": 42, "node": "85ddbfbd3a62"})
         self.assertEqual(kwargs["build_rev"], "abc")
 

@@ -1761,6 +1761,8 @@ def _crash_facts(crash: dict) -> list[str]:
         ("MOZ_CRASH_REASON", _first_present(
             raw.get("moz_crash_reason"), dump.get("moz_crash_reason")
         )),
+        # ProtocolUtils.cpp records the IPC message separately from the generic parent crash reason.
+        ("IPC FatalError message", raw.get("ipc_fatal_error_msg")),
         ("Crash reason", raw.get("reason")),
         # These annotations are useful for OOM analysis but noisy for unrelated Windows crashes.
         # Socorro uses a recorded size of at most 256 KiB for ``small`` and a larger one for
