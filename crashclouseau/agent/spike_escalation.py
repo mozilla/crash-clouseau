@@ -20,15 +20,17 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    only after ``grace_s`` since it was first selected and only once no ordinary run on its
    build is still pending or running -- "the classic pushlog stuff failed" has to be true before
    it is acted on. A spike the ordinary path DID file is recorded and left alone.
+   When the daily budget is exhausted, new escalations are recorded ``deferred``.
+   Sweeps restart retryable errors before deferred rows, outside the selection lookback.
 2. ``run_spike_escalation`` (an RQ job on the agent queue, its own timeout) builds the brief
    (``build_spike_brief``: the numbers, the signature's history, up to ``max_stacks`` distinct
    stacks, the ordinary runs' conclusions, the on-stack candidates and the spiking build's whole
    pushlog window), runs the investigator, validates what it said against what it was given
-   (``_validate_findings``: a culprit must be a real changeset that landed before the build; a
+   (``validate_findings``: a culprit must be a real changeset that landed before the build; a
    claim with no source is dropped; a run that consulted no tool grounded nothing), then files
    (``file_spike_bug``).
-3. Filing: the global ``AUTOFILE_BUGS`` switch and a per-channel daily cap are the only gates --
-   the per-channel culprit-filing hold does NOT apply, a spike is filed on every triaged channel.
+3. Filing requires the global filing switch and a declared product without a filing hold.
+   Per-channel holds do not apply, and there is no spike filing cap.
    An open same-application non-meta bug on the signature gets the spike as a COMMENT (the volume
    is news to whoever owns that bug; a bug filed FOR this spike that already names a regressor
    gets nothing); otherwise a new bug is created, with the investigator's product::component
@@ -63,13 +65,11 @@ from crashclouseau import (
 )
 from crashclouseau.logger import logger
 
-# A run that died (a SIGKILLed worker, an RQ timeout) is retried once; a run that failed twice
-# is a bug in the tooling, not bad luck, and the row stays `error` for a human.
+# Retry a failed investigation once; leave a second failure in `error`.
 _MAX_ATTEMPTS = 2
-# Slack on top of the job timeout before a `running` row is presumed dead.
+# Extra time before reaping running or pending rows.
 _STALE_BUFFER_S = 300
-# A filing that could not be made for a reason that may clear (a BMO lookup failed, the daily
-# cap was reached) is retried from the sweep without re-running the investigator.
+# At most three filing attempts, at least 15 minutes apart; reuse the investigation.
 _FILING_RETRIES = 3
 _FILING_RETRY_AFTER_S = 900
 _RAW_HEAD, _RAW_TAIL = 2000, 8000
@@ -204,19 +204,17 @@ def _trend(product, channel, signature):
         return {}
 
 
-def _retryable(row, cfg):
-    return row.status == "error" and (row.attempts or 0) < _MAX_ATTEMPTS
-
-
 def _sweep_channel(product, channel, cfg, room):
-    rows = models.Selection.escalation_candidates(product, channel, cfg["lookback_days"])
-    if not rows:
-        return 0
     now = datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    budget = cfg["max_runs_per_day"] - models.SpikeEscalation.count_since(
+    budget = cfg["breaker_runs_per_day"] - models.SpikeEscalation.count_since(
         product, channel, day_start)
-    enqueued = 0
+    enqueued = _restart(product, channel, cfg, min(room, budget))
+    room -= enqueued
+    budget -= enqueued
+    rows = models.Selection.escalation_candidates(product, channel, cfg["lookback_days"])
+    if not rows:
+        return enqueued
     groups = _group_by_family(rows)
     for (family, build_day), members in sorted(
             groups.items(), key=lambda kv: str(kv[0][1] or ""), reverse=True):
@@ -240,15 +238,7 @@ def _sweep_channel(product, channel, cfg, room):
             continue
         siblings = sorted(set(utils.lambda_siblings(signature)) | set(
             s for s in merged.get("signatures") or [] if s))
-        existing = models.SpikeEscalation.for_pair(signature, product, channel, day)
-        if existing is not None:
-            if _retryable(existing, cfg) and budget > 0:
-                logger.info("spike: retrying escalation %s (%s on %s, attempt %d failed)",
-                            existing.id, signature, day, existing.attempts)
-                _enqueue(existing.id, cfg)
-                room -= 1
-                budget -= 1
-                enqueued += 1
+        if models.SpikeEscalation.for_pair(signature, product, channel, day) is not None:
             continue
         since = now - timedelta(days=cfg["once_per_days"])
         prior = models.SpikeEscalation.latest_for_signature(siblings, product, channel, since)
@@ -276,10 +266,6 @@ def _sweep_channel(product, channel, cfg, room):
             logger.info("spike: %s on %s is a real spike and the ordinary triage filed bug %s; "
                         "nothing to escalate", signature, day, bug)
             continue
-        if budget <= 0:
-            logger.info("spike: %s on %s is a real spike but %s-%s has spent today's %d runs",
-                        signature, day, product, channel, cfg["max_runs_per_day"])
-            break
         fixed = _fixed_before_spending(signature, siblings, product, picked)
         if fixed is not None:
             reason = _fixed_decline(fixed, picked)
@@ -333,7 +319,14 @@ def _sweep_channel(product, channel, cfg, room):
         row = models.SpikeEscalation.create(
             signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
             payload=payload)
-        _enqueue(row.id, cfg)
+        if budget <= 0:
+            row.set_status("deferred")
+            logger.error("spike: %s-%s has queued %d investigations today "
+                         "(breaker_runs_per_day); escalation %s (%s on %s) is deferred",
+                         product, channel, cfg["breaker_runs_per_day"], row.id, signature, day)
+            continue
+        if not _start(row, cfg):
+            continue
         room -= 1
         budget -= 1
         enqueued += 1
@@ -341,6 +334,47 @@ def _sweep_channel(product, channel, cfg, room):
                     "filed): escalation %s on %s", signature, product, channel, picked,
                     payload["spike_sentence"], len(runs), row.id, uuid)
     return enqueued
+
+
+def _restart(product, channel, cfg, limit):
+    """Restart up to ``limit`` rows, errors before deferred, without a lookback cutoff.
+
+    Errors are ordered by ``updated``, deferred rows by ``created`` (ascending).
+    Return the number enqueued.
+    """
+    started = 0
+    rows = (models.SpikeEscalation.retryable(product, channel, _MAX_ATTEMPTS)
+            + models.SpikeEscalation.deferred(product, channel))
+    for row in rows:
+        if started >= limit:
+            break
+        previous = row.status
+        row.set_status("pending")
+        if not _start(row, cfg):
+            break
+        started += 1
+        logger.info("spike: restarting %s escalation %s (%s on %s, %d attempt(s) so far)",
+                    previous, row.id, row.signature, row.build_day, row.attempts or 0)
+    return started
+
+
+def _start(row, cfg):
+    """Commit ``queued_at`` before enqueueing so the worker sees the budget timestamp.
+    On enqueue failure, restore the previous timestamp and defer the row. Return success.
+    """
+    previous = (row.payload or {}).get("queued_at")
+    row.merge_payload({"queued_at": datetime.now(timezone.utc).isoformat()})
+    try:
+        _enqueue(row.id, cfg)
+    except Exception:
+        logger.error("spike: could not enqueue escalation %s; deferred", row.id, exc_info=True)
+        payload = {k: v for k, v in (row.payload or {}).items() if k != "queued_at"}
+        if previous is not None:
+            payload["queued_at"] = previous
+        row.payload = payload
+        row.set_status("deferred")
+        return False
+    return True
 
 
 def _enqueue(escalation_id, cfg):
@@ -441,6 +475,11 @@ def _reap_stale(cfg):
         logger.warning("spike: escalation %s (%s) was running for too long; marking it failed",
                        row.id, row.signature)
         row.set_status("error", error="stale: the worker died or the job timed out")
+    # Recover stale pending rows whose jobs may have been lost or delayed.
+    for row in models.SpikeEscalation.stale_pending(cfg["job_timeout"] + _STALE_BUFFER_S):
+        logger.warning("spike: escalation %s (%s) was queued too long without starting; "
+                       "deferring it", row.id, row.signature)
+        row.set_status("deferred")
 
 
 # --------------------------------------------------------------------------- #
@@ -1335,11 +1374,6 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     excluded = bugzilla_apply.skipped_regressor(culprit.bug if culprit is not None else None)
     if excluded:
         return dict(result, skipped=bugzilla_apply._SKIPPED_REGRESSOR.format(excluded))
-    filed_today = models.SpikeEscalation.count_since(
-        product, channel, now - timedelta(days=1), filed_only=True)
-    if filed_today >= cfg["daily_cap"]:
-        return dict(result, retry=True,
-                    skipped="daily cap {} reached on {}".format(cfg["daily_cap"], channel))
     raw = brief.get("raw_crash") or {}
     try:
         signals = sensitive.memory_unsafe_signals(raw) if raw else []
@@ -1538,8 +1572,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
 
 
 def _retry_filings(cfg):
-    """Re-attempt the filings the sweep's earlier ticks could not make for a reason that may have
-    cleared (a failed venue lookup, the daily cap), without paying for the investigator again."""
+    """Retry eligible filings using saved findings, without rerunning the investigator."""
     from crashclouseau.agent.spike_agent import SpikeFindings
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=cfg["lookback_days"] + 2)

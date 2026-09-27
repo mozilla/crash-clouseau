@@ -574,11 +574,10 @@ class TestFiling(_FilerBase):
         self.assertEqual(res["skipped"], "autofile disabled")
         self.assertEqual(self.created, [])
 
-    def test_the_daily_cap_and_a_failed_lookup_are_retried_later(self):
-        with mock.patch.object(models.SpikeEscalation, "count_since", return_value=3):
-            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
-        self.assertTrue(res["retry"])
-        self.assertIn("daily cap", res["skipped"])
+    def test_there_is_no_filing_cap_and_a_failed_lookup_is_retried_later(self):
+        for _ in range(5):
+            self.assertTrue(se.file_spike_bug(_esc(), self.brief, self.findings,
+                                              grounded=True)["filed"])
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=None):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertTrue(res["retry"])
@@ -770,6 +769,9 @@ class _FakeEscalation:
         self.status = status
         self.statuses.append(status)
 
+    def merge_payload(self, values, commit=True):
+        self.payload = dict(self.payload or {}, **(values or {}))
+
 
 class TestTheSweep(unittest.TestCase):
     def setUp(self):
@@ -782,7 +784,7 @@ class TestTheSweep(unittest.TestCase):
             row = _FakeEscalation(id=len(self.created) + 1, signature=signature, product=product,
                                   channel=channel, build_day=build_day, buildid=buildid,
                                   uuid=uuid, kind=kind, payload=payload or {}, status="pending",
-                                  attempts=0)
+                                  attempts=0, created=datetime(2026, 9, 26, tzinfo=timezone.utc))
             self.created.append(row)
             return row
 
@@ -790,6 +792,8 @@ class TestTheSweep(unittest.TestCase):
             mock.patch.object(models.SpikeEscalation, "for_pair", return_value=None),
             mock.patch.object(models.SpikeEscalation, "latest_for_signature", return_value=None),
             mock.patch.object(models.SpikeEscalation, "count_since", return_value=0),
+            mock.patch.object(models.SpikeEscalation, "deferred", return_value=[]),
+            mock.patch.object(models.SpikeEscalation, "retryable", return_value=[]),
             mock.patch.object(models.SpikeEscalation, "create", side_effect=create),
             mock.patch.object(se, "_enqueue", side_effect=lambda i, c: self.enqueued.append(i)),
             mock.patch.object(se, "classic_runs", return_value=[
@@ -936,19 +940,26 @@ class TestTheSweep(unittest.TestCase):
                                return_value=_FakeEscalation(id=3, status="done", attempts=1)):
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
 
-    def test_a_failed_escalation_is_retried_once(self):
-        with mock.patch.object(models.SpikeEscalation, "for_pair",
-                               return_value=_FakeEscalation(id=3, status="error", attempts=1)):
-            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 1)
-        self.assertEqual(self.enqueued, [3])
+    def test_a_failed_escalation_is_retried_outside_the_selection_lookback(self):
+        failed = _FakeEscalation(id=3, signature="S", build_day=date(2026, 8, 20),
+                                 status="error", attempts=1, payload={})
+        with mock.patch.object(models.SpikeEscalation, "retryable",
+                               return_value=[failed]) as retryable:
+            self.assertEqual(self._sweep([]), 1)
+        retryable.assert_called_once_with("Firefox", "nightly", 2)
+        self.assertEqual((self.enqueued, failed.status), ([3], "pending"))
+        # Selection candidates do not enqueue an existing pair again.
         with mock.patch.object(models.SpikeEscalation, "for_pair",
                                return_value=_FakeEscalation(id=3, status="error", attempts=2)):
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
+        self.assertEqual(self.created, [])
 
     def test_declines_before_the_investigator_leave_the_daily_budget_alone(self):
         """Four hardware declines leave room for four investigations across later sweeps."""
-        def spent(product, channel, since, filed_only=False):
-            return sum(1 for r in self.created if r.status != "done" or r.attempts > 0)
+        self.cfg = dict(self.cfg, breaker_runs_per_day=4)
+
+        def spent(product, channel, since):
+            return sum(1 for r in self.created if "queued_at" in r.payload)
 
         hardware = {"reports": 118, "broken_cpu_reports": 114, "broken_cpu_rate": 114 / 118}
         with mock.patch.object(models.SpikeEscalation, "count_since", side_effect=spent), \
@@ -962,28 +973,77 @@ class TestTheSweep(unittest.TestCase):
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature=s)
                                           for s in ("G::g", "H::h")]), 2)
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature="I::i")]), 0,
-                             "four investigations spend the day's budget")
+                             "four investigations reach the breaker")
         self.assertEqual(self.enqueued, [5, 6, 7, 8])
+        self.assertEqual(self.created[-1].status, "deferred")
 
     def test_the_spend_budget_counts_only_rows_sent_to_the_investigator(self):
         from sqlalchemy.dialects import postgresql
 
-        def sql(filed_only):
-            query = models.SpikeEscalation._count_query("Firefox", "nightly", datetime(2026, 9, 27),
-                                                        filed_only=filed_only)
+        def where(query):
             return str(query.statement.compile(dialect=postgresql.dialect())).split("WHERE")[1]
 
-        spend, filed = sql(False), sql(True)
-        self.assertRegex(spend, r"\(spike_escalations\.status != %\(status_1\)s\S* OR "
-                                r"spike_escalations\.attempts > %\(attempts_1\)s\S*\)")
-        self.assertNotIn("attempts", filed)
-        self.assertIn("payload", filed)
+        spend = where(models.SpikeEscalation._count_query("Firefox", "nightly",
+                                                          datetime(2026, 9, 27)))
+        self.assertRegex(spend, r"CAST\(\(spike_escalations\.payload ->> %\(payload_1\)s\S*\) "
+                                r"AS TIMESTAMP WITH TIME ZONE\) >= ")
+        self.assertNotIn("updated", spend)
+        retry = where(models.SpikeEscalation._retryable_query("Firefox", "nightly", 2))
+        self.assertRegex(retry, r"spike_escalations\.status = %\(status_1\)s\S* AND "
+                                r"spike_escalations\.attempts < %\(attempts_1\)s")
 
-    def test_the_daily_run_budget_binds(self):
+    def test_past_the_breaker_a_spike_is_deferred_and_resumed_on_a_later_day(self):
         with mock.patch.object(models.SpikeEscalation, "count_since",
-                               return_value=self.cfg["max_runs_per_day"]):
+                               return_value=self.cfg["breaker_runs_per_day"]):
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
-        self.assertEqual(self.created, [])
+        self.assertEqual(self.enqueued, [])
+        row = self.created[0]
+        self.assertEqual((row.status, row.uuid, row.payload["classic_runs"]), ("deferred", "u-1", 1))
+        # Simulate two available budget slots with no selection candidates.
+        later = [_FakeEscalation(id=n, signature="S", build_day=date(2026, 9, 3),
+                                 status="deferred", attempts=0, payload={}) for n in (2, 3)]
+        with mock.patch.object(models.SpikeEscalation, "deferred", return_value=[row] + later), \
+                mock.patch.object(models.SpikeEscalation, "count_since",
+                                  return_value=self.cfg["breaker_runs_per_day"] - 2):
+            self.assertEqual(self._sweep([]), 2)
+        self.assertEqual(self.enqueued, [1, 2])
+        self.assertEqual([r.status for r in [row] + later], ["pending", "pending", "deferred"])
+
+    def test_a_failed_enqueue_is_deferred_not_stranded(self):
+        self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature="Q::q")]), 1)
+        self.assertIn("queued_at", self.created[0].payload, "the budget's clock")
+        self.created.clear()
+        rows = [_row(32, [1, 0, 2], 21, signature="A::a"), _row(40, [0, 0, 0], 30, signature="B::b")]
+        with mock.patch.object(se, "_enqueue", side_effect=ConnectionError("redis")):
+            self.assertEqual(self._sweep(rows), 0)
+        self.assertEqual([r.status for r in self.created], ["deferred", "deferred"])
+        self.assertFalse(any("queued_at" in r.payload for r in self.created))
+        # Enqueue failure stops the restart loop and leaves rows deferred.
+        again = [_FakeEscalation(id=n, signature="S", build_day=date(2026, 9, 3),
+                                 status="deferred", attempts=0, payload={}) for n in (7, 8)]
+        with mock.patch.object(models.SpikeEscalation, "deferred", return_value=again), \
+                mock.patch.object(se, "_enqueue", side_effect=ConnectionError("redis")) as enq:
+            self.assertEqual(self._sweep([]), 0)
+        self.assertEqual(enq.call_count, 1)
+        self.assertEqual([r.status for r in again], ["deferred", "deferred"])
+        # A failed retry enqueue preserves the previous budget timestamp.
+        ran = "2026-09-27T08:00:00+00:00"
+        failed = _FakeEscalation(id=9, signature="S", build_day=date(2026, 9, 3), status="error",
+                                 attempts=1, payload={"queued_at": ran})
+        with mock.patch.object(models.SpikeEscalation, "retryable", return_value=[failed]), \
+                mock.patch.object(se, "_enqueue", side_effect=ConnectionError("redis")):
+            self.assertEqual(self._sweep([]), 0)
+        self.assertEqual((failed.status, failed.payload["queued_at"]), ("deferred", ran))
+
+    def test_the_reaper_defers_rows_whose_job_never_started(self):
+        """The reaper defers stale pending rows for a later enqueue attempt."""
+        lost = _FakeEscalation(id=1156, signature="S", status="pending", attempts=0, payload={})
+        with mock.patch.object(models.SpikeEscalation, "stale_running", return_value=[]), \
+                mock.patch.object(models.SpikeEscalation, "stale_pending",
+                                  return_value=[lost]) as stale:
+            se._reap_stale(self.cfg)
+        stale.assert_called_once_with(self.cfg["job_timeout"] + se._STALE_BUFFER_S)
+        self.assertEqual(lost.status, "deferred")
 
     def test_the_tick_room_binds(self):
         rows = [_row(32, [1, 0, 2], 21, signature="A::a"), _row(40, [0, 0, 0], 30, signature="B::b")]

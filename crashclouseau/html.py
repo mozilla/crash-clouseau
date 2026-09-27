@@ -415,8 +415,7 @@ def _task_view(rows, stale_after_s, now, spike_filings=None):
     }
 
 
-# How many spike escalations the tasks page lists. At most 4 runs a day per channel
-# (`max_runs_per_day`) plus the rows the sweep records without running, this is weeks.
+# Maximum number of recent spike escalations shown on the tasks page.
 _SPIKE_ROWS = 60
 
 
@@ -476,14 +475,10 @@ def _spike_numbers(spike):
 
 
 def _spike_view(rows, stale_after_s, now, public=True):
-    """``SpikeEscalation.recent`` dicts -> per-row display dicts + a summary for the spike
-    section of tasks.html. Pure, like ``_task_view``.
+    """Build task-page rows and a summary from ``SpikeEscalation.recent`` dicts.
 
-    A row is one of: FILED by the escalation (``filing.filed``); RECORDED by the sweep without a
-    run (``skipped``: the ordinary triage had filed, or no report with a stack was ingested);
-    RUN but not filed (``filing.skipped`` says why, with the bug it is about when it names one);
-    or pending / running / error. ``public`` hides the analysis of a memory-safety filing
-    (``filing.security_groups``), as ``/api/spikes`` does: the page is anonymous."""
+    With ``public=True``, hide findings for filings with ``security_groups``.
+    """
     out = []
     counts = {}
     stalled = filed = triage_filed = 0
@@ -570,6 +565,7 @@ def _spike_view(rows, stale_after_s, now, public=True):
         "done": counts.get("done", 0),
         "running": counts.get("running", 0),
         "pending": counts.get("pending", 0),
+        "deferred": counts.get("deferred", 0),
         "error": counts.get("error", 0),
         "stalled": stalled,
         "filed": filed,

@@ -1326,24 +1326,18 @@ def get_agent_same_defect():
 
 
 def get_agent_spike_escalation():
-    """The spike-escalation knobs: what happens when a selected build-day is a REAL spike
-    (``spikes.judge_selection``) and the ordinary pushlog triage did not file anything.
+    """Settings for investigating spikes the ordinary triage did not file.
 
-    ``enabled`` is a spend switch, like ``AGENT_CHANNELS``: one escalation is a single
-    investigator run, so it has to be
-    stoppable from ``heroku config:set SPIKE_ESCALATION_ENABLED=0`` without a deploy. The
-    FILING half is gated by the global ``AUTOFILE_BUGS`` kill switch and by nothing else: a
-    real spike is filed on every channel, including one whose ordinary filing is held with
-    ``channels.<ch>.enabled: false`` -- that hold was decided on the yield of culprit filings,
-    and a spike bug is a different kind of bug (the volume is the finding).
+    ``SPIKE_ESCALATION_ENABLED`` controls the sweep. Filing honors the global switch
+    (``AUTOFILE_BUGS``) and product declarations/holds, but not per-channel holds.
+    ``grace_s`` delays escalation after selection; ``once_per_days`` limits repeats
+    within a signature family.
 
-    ``grace_s`` is how long after a pair was first selected the sweep waits before it may
-    escalate, so the ~20-minute ordinary runs on that build have settled; ``once_per_days``
-    stops a plateau from being escalated again on every build-day it stays loud;
-    ``max_runs_per_day`` and ``daily_cap`` bound spend and writes per channel the way the
-    ordinary filer's cap does -- a bad predicate at 4 a day is a nuisance, at 400 an incident.
-    ``max_cost_usd`` rides ``ClaudeAgentOptions.max_budget_usd``; whether the bundled CLI honours
-    it under stream-json is unverified, so it is a backstop and not the budget."""
+    ``breaker_runs_per_day`` uses the count of escalation rows last queued today (UTC),
+    per product/channel. Exhausting the budget defers new escalations to later sweeps.
+    There is no spike filing cap. ``max_cost_usd`` is passed to the SDK as
+    ``ClaudeAgentOptions.max_budget_usd`` when nonzero.
+    """
     o = get_agent().get("spike_escalation", {})
     return {
         "enabled": _env_bool("SPIKE_ESCALATION_ENABLED", o.get("enabled", True)),
@@ -1357,9 +1351,8 @@ def get_agent_spike_escalation():
         "lookback_days": int(o.get("lookback_days", 5)),
         "once_per_days": int(o.get("once_per_days", 7)),
         "max_per_tick": int(o.get("max_per_tick", 2)),
-        "max_runs_per_day": int(o.get("max_runs_per_day", 4)),
+        "breaker_runs_per_day": int(o.get("breaker_runs_per_day", 20)),
         "max_stacks": int(o.get("max_stacks", 3)),
-        "daily_cap": int(o.get("daily_cap", 3)),
         "comment_on_existing": comment_mode(o.get("comment_on_existing", "comment")),
     }
 

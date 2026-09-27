@@ -86,6 +86,7 @@
       <span class="task-sub" title="the recent spike escalations: real spikes handed to the investigating agent and filed by volume">{{ spike_summary.total }} recent &middot; {{ spike_summary.filed }} filed
         {%- if spike_summary.triage_filed %} &middot; {{ spike_summary.triage_filed }} filed by the ordinary triage{% endif %}
         {%- if spike_summary.running %} &middot; {{ spike_summary.running }} running{% endif %}
+        {%- if spike_summary.deferred %} &middot; <span class="tc-err-text" title="Waiting for a later scheduling attempt">{{ spike_summary.deferred }} deferred</span>{% endif %}
         {%- if spike_summary.stalled %} &middot; <span class="tc-err-text">{{ spike_summary.stalled }} stalled</span>{% endif %}
         {%- if spike_summary.error %} &middot; <span class="tc-err-text">{{ spike_summary.error }} error</span>{% endif %}
         &middot; ${{ '%.2f' | format(spike_summary.cost_total) }}

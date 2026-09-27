@@ -613,11 +613,12 @@ crash or signature the spike path filed shows that bug in its Bug column marked 
 | `SPIKE_ESCALATION_ENABLED=0` | stops the SPEND (no investigations enqueued), no deploy |
 | `AUTOFILE_BUGS=0` | stops the WRITES, as for every filer |
 | `AGENT_CHANNELS` | which channels are swept, as for triage |
-| `agent.spike_escalation.max_runs_per_day` / `daily_cap` (4 / 3 per channel) | bound a bad predicate at a nuisance, not an incident |
+| `agent.spike_escalation.breaker_runs_per_day` (20 per product/channel) | counts escalation rows last queued today (UTC); exhausted budget defers new escalations and logs an error. No spike filing cap |
 
 The investigator uses `agent.spike_escalation.model`; its prompt is
 `crashclouseau/agent/prompts/spike.md`. `fallback_model` is `opus` (Opus 4.8).
-`max_cost_usd` is a backstop whose CLI enforcement is unverified. The investigator and second
+`max_cost_usd`, when nonzero, is passed as `ClaudeAgentOptions.max_budget_usd`.
+The investigator and second
 opinion pass `tools=[]`; the triage principal passes `tools=["Agent", "Task"]`. All three configure
 MCP servers separately. After deploy, check `payload->'usage'->'tools_used'` for built-in tool
 calls, `▶ spawn` lines for triage roles, and the abstain rate. No saved probe establishes these

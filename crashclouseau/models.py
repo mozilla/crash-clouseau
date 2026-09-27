@@ -4657,7 +4657,7 @@ class SpikeEscalation(db.Model):
     own dedup, and the ordinary filer meets a spike bug the way it meets a human's -- on BMO,
     through ``_open_bugs_for_signature``.
 
-    ``status`` follows the dossier vocabulary (pending / running / done / error) as a plain
+    ``status`` is pending / running / done / error / deferred, stored as a plain
     string, so this table shares no enum type with ``dossiers`` and ``_ensure_tables`` can create
     it on a long-lived database with one plain ``CREATE TABLE``. ``payload`` holds what the sweep
     measured (``spike``), what the agent said (``findings``, the raw handoff), what was filed or
@@ -4805,31 +4805,66 @@ class SpikeEscalation(db.Model):
             return None
 
     @staticmethod
-    def _count_query(product, channel, since, filed_only=False):
-        """Build the spend-budget or filing-cap query."""
-        q = db.session.query(SpikeEscalation).filter(
+    def _count_query(product, channel, since):
+        """Build the spend-budget query."""
+        # Use the last enqueue timestamp; filing retries also change `updated`.
+        queued = SpikeEscalation.payload["queued_at"].astext.cast(db.DateTime(timezone=True))
+        return db.session.query(SpikeEscalation).filter(
             SpikeEscalation.product == product,
             SpikeEscalation.channel == channel,
-            SpikeEscalation.created >= since,
+            queued >= since,
         )
-        if filed_only:
-            return q.filter(SpikeEscalation.payload["filing"]["filed"].astext == "true")
-        # The sweep marks declines done with zero attempts. Pending rows reserve budget;
-        # the worker increments attempts before running, so completed runs still count.
-        return q.filter(db.or_(SpikeEscalation.status != "done", SpikeEscalation.attempts > 0))
 
     @staticmethod
-    def count_since(product, channel, since, filed_only=False):
-        """Count rows created since ``since`` for this product/channel, excluding unrun declines.
-
-        With ``filed_only``, count recorded successful filings instead. Return 10**6 on failure.
-        """
+    def count_since(product, channel, since):
+        """Count rows last queued since ``since``; return 10**6 on query failure."""
         try:
-            return SpikeEscalation._count_query(product, channel, since, filed_only).count()
+            return SpikeEscalation._count_query(product, channel, since).count()
         except Exception:
             logger.error("Cannot count the spike escalations", exc_info=True)
             db.session.rollback()
             return 10 ** 6
+
+    @staticmethod
+    def _deferred_query(product, channel):
+        return (
+            db.session.query(SpikeEscalation)
+            .filter(SpikeEscalation.product == product,
+                    SpikeEscalation.channel == channel,
+                    SpikeEscalation.status == "deferred")
+            .order_by(SpikeEscalation.created)
+        )
+
+    @staticmethod
+    def _retryable_query(product, channel, max_attempts):
+        return (
+            db.session.query(SpikeEscalation)
+            .filter(SpikeEscalation.product == product,
+                    SpikeEscalation.channel == channel,
+                    SpikeEscalation.status == "error",
+                    SpikeEscalation.attempts < max_attempts)
+            .order_by(SpikeEscalation.updated)
+        )
+
+    @staticmethod
+    def deferred(product, channel):
+        """Deferred rows ordered by creation time; ``[]`` on query failure."""
+        return SpikeEscalation._rows(SpikeEscalation._deferred_query(product, channel))
+
+    @staticmethod
+    def retryable(product, channel, max_attempts):
+        """Errors below ``max_attempts``, ordered by update time; ``[]`` on query failure."""
+        return SpikeEscalation._rows(
+            SpikeEscalation._retryable_query(product, channel, max_attempts))
+
+    @staticmethod
+    def _rows(query):
+        try:
+            return query.all()
+        except Exception:
+            logger.error("Cannot list the spike escalations to restart", exc_info=True)
+            db.session.rollback()
+            return []
 
     def set_status(self, status, error=None, commit=True):
         self.status = status
@@ -4867,6 +4902,16 @@ class SpikeEscalation(db.Model):
         db.session.add(self)
         if commit:
             db.session.commit()
+
+    @staticmethod
+    def stale_pending(stale_after_s):
+        """Pending rows last updated more than ``stale_after_s`` seconds ago."""
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_s)
+        return (
+            db.session.query(SpikeEscalation)
+            .filter(SpikeEscalation.status == "pending", SpikeEscalation.updated < cutoff)
+            .all()
+        )
 
     @staticmethod
     def stale_running(stale_after_s):

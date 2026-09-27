@@ -377,9 +377,8 @@
             "lookback_days": 5,
             "once_per_days": 7,
             "max_per_tick": 2,
-            "max_runs_per_day": 4,
+            "breaker_runs_per_day": 20,
             "max_stacks": 3,
-            "daily_cap": 3,
             "comment_on_existing": "comment"
         },
         "signature_family":

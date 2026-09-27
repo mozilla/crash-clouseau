@@ -583,6 +583,8 @@ class TestTheSweepDeclinesARebucketing(unittest.TestCase):
             mock.patch.object(models.SpikeEscalation, "for_pair", return_value=None),
             mock.patch.object(models.SpikeEscalation, "latest_for_signature", return_value=None),
             mock.patch.object(models.SpikeEscalation, "count_since", return_value=0),
+            mock.patch.object(models.SpikeEscalation, "deferred", return_value=[]),
+            mock.patch.object(models.SpikeEscalation, "retryable", return_value=[]),
             mock.patch.object(models.SpikeEscalation, "create", side_effect=create),
             mock.patch.object(se, "_enqueue", side_effect=lambda i, c: self.enqueued.append(i)),
             mock.patch.object(se, "classic_runs", return_value=[
