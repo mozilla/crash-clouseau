@@ -804,6 +804,8 @@ class TestTheSweep(unittest.TestCase):
             # Bugzilla, asked before spending: no open bug, nothing fixed after the build.
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
             mock.patch.object(se, "resolve_venue_below_public", return_value=None),
+            # No hardware decline unless overridden.
+            mock.patch.object(se, "_raptor_lake_before_spending", return_value=None),
         ]
         for p in patches:
             p.start()
@@ -911,6 +913,21 @@ class TestTheSweep(unittest.TestCase):
                 "id": 91, "kind": "own_restricted", "assigned_to": ""}):
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 1)
 
+    def test_a_raptor_lake_signature_is_recorded_and_never_investigated(self):
+        """Record the hardware counts and reason without enqueueing an investigation."""
+        noise = {"reports": 118, "broken_cpu_reports": 114, "broken_cpu_rate": 114 / 118}
+        with mock.patch.object(se, "_raptor_lake_before_spending", return_value=noise) as rl:
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
+        rl.assert_called_once_with("mozilla::Foo::Bar", "Firefox", "nightly")
+        self.assertEqual(self.enqueued, [])
+        row = self.created[0]
+        self.assertEqual((row.status, row.payload["hardware_noise"]), ("done", noise))
+        self.assertEqual(row.payload["skipped"],
+                         "114 of the signature's 118 reports on this channel in the last 364 days "
+                         "use Intel Raptor Lake CPUs (family 6 model 183 "
+                         "stepping 1, meta bug 1975808)")
+        self.assertNotIn("filing", row.payload)
+
     def test_one_escalation_per_episode(self):
         with mock.patch.object(models.SpikeEscalation, "latest_for_signature",
                                return_value=_FakeEscalation(id=3)):
@@ -927,6 +944,40 @@ class TestTheSweep(unittest.TestCase):
         with mock.patch.object(models.SpikeEscalation, "for_pair",
                                return_value=_FakeEscalation(id=3, status="error", attempts=2)):
             self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 0)
+
+    def test_declines_before_the_investigator_leave_the_daily_budget_alone(self):
+        """Four hardware declines leave room for four investigations across later sweeps."""
+        def spent(product, channel, since, filed_only=False):
+            return sum(1 for r in self.created if r.status != "done" or r.attempts > 0)
+
+        hardware = {"reports": 118, "broken_cpu_reports": 114, "broken_cpu_rate": 114 / 118}
+        with mock.patch.object(models.SpikeEscalation, "count_since", side_effect=spent), \
+                mock.patch.object(se, "_raptor_lake_before_spending",
+                                  side_effect=lambda s, p, c: hardware if s < "E" else None):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature=s)
+                                          for s in ("A::a", "B::b", "C::c", "D::d")]), 0)
+            self.assertEqual([r.status for r in self.created], ["done"] * 4)
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature=s)
+                                          for s in ("E::e", "F::f")]), 2)
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature=s)
+                                          for s in ("G::g", "H::h")]), 2)
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature="I::i")]), 0,
+                             "four investigations spend the day's budget")
+        self.assertEqual(self.enqueued, [5, 6, 7, 8])
+
+    def test_the_spend_budget_counts_only_rows_sent_to_the_investigator(self):
+        from sqlalchemy.dialects import postgresql
+
+        def sql(filed_only):
+            query = models.SpikeEscalation._count_query("Firefox", "nightly", datetime(2026, 9, 27),
+                                                        filed_only=filed_only)
+            return str(query.statement.compile(dialect=postgresql.dialect())).split("WHERE")[1]
+
+        spend, filed = sql(False), sql(True)
+        self.assertRegex(spend, r"\(spike_escalations\.status != %\(status_1\)s\S* OR "
+                                r"spike_escalations\.attempts > %\(attempts_1\)s\S*\)")
+        self.assertNotIn("attempts", filed)
+        self.assertIn("payload", filed)
 
     def test_the_daily_run_budget_binds(self):
         with mock.patch.object(models.SpikeEscalation, "count_since",
@@ -961,6 +1012,31 @@ class TestTheSweep(unittest.TestCase):
                 mock.patch.object(models.Selection, "escalation_candidates") as cands:
             self.assertEqual(se.sweep_real_spikes(), 0)
         cands.assert_not_called()
+
+
+class TestRaptorLakeBeforeSpending(unittest.TestCase):
+    def _check(self, **noise):
+        from crashclouseau.agent import orchestrator
+
+        with mock.patch.object(orchestrator, "_hardware_noise", return_value=noise) as hn:
+            got = se._raptor_lake_before_spending("S", "Firefox", "beta")
+        hn.assert_called_once_with({"signature": "S", "product": "Firefox"}, "beta")
+        return got
+
+    def test_the_ordinary_gates_cpu_arm_decides(self):
+        hit = {"reports": 118, "broken_cpu_reports": 114, "broken_cpu_rate": 114 / 118,
+               "bit_flip_rate": 0.43}
+        self.assertEqual(self._check(**hit), hit)
+        self.assertIsNone(self._check(reports=7, broken_cpu_rate=3 / 7, bit_flip_rate=0.0))
+        self.assertIsNone(self._check(reports=4, broken_cpu_rate=1.0), "below the sample floor")
+
+    def test_the_bit_flip_arm_is_not_applied(self):
+        """Even a 100% bit-flip rate alone must not suppress a spike."""
+        self.assertIsNone(self._check(reports=684, broken_cpu_rate=0.0, bit_flip_rate=1.0))
+
+    def test_an_unknown_share_is_not_a_hit(self):
+        self.assertIsNone(self._check(reports=None, broken_cpu_rate=None, bit_flip_rate=None))
+        self.assertIsNone(self._check(reports=40, broken_cpu_rate=None, bit_flip_rate=None))
 
 
 class TestSummarizeRun(unittest.TestCase):

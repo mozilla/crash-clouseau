@@ -4805,20 +4805,27 @@ class SpikeEscalation(db.Model):
             return None
 
     @staticmethod
+    def _count_query(product, channel, since, filed_only=False):
+        """Build the spend-budget or filing-cap query."""
+        q = db.session.query(SpikeEscalation).filter(
+            SpikeEscalation.product == product,
+            SpikeEscalation.channel == channel,
+            SpikeEscalation.created >= since,
+        )
+        if filed_only:
+            return q.filter(SpikeEscalation.payload["filing"]["filed"].astext == "true")
+        # The sweep marks declines done with zero attempts. Pending rows reserve budget;
+        # the worker increments attempts before running, so completed runs still count.
+        return q.filter(db.or_(SpikeEscalation.status != "done", SpikeEscalation.attempts > 0))
+
+    @staticmethod
     def count_since(product, channel, since, filed_only=False):
-        """Escalations created since ``since`` on a channel -- the spend budget -- or, with
-        ``filed_only``, the ones that wrote to Bugzilla -- the filing cap. Fails toward the
-        budget being SPENT, like ``Selection.taken_today``."""
+        """Count rows created since ``since`` for this product/channel, excluding unrun declines.
+
+        With ``filed_only``, count recorded successful filings instead. Return 10**6 on failure.
+        """
         try:
-            q = db.session.query(SpikeEscalation).filter(
-                SpikeEscalation.product == product,
-                SpikeEscalation.channel == channel,
-                SpikeEscalation.created >= since,
-            )
-            if filed_only:
-                # JSONB path on Postgres; a backend without it raises into the except below.
-                q = q.filter(SpikeEscalation.payload["filing"]["filed"].astext == "true")
-            return q.count()
+            return SpikeEscalation._count_query(product, channel, since, filed_only).count()
         except Exception:
             logger.error("Cannot count the spike escalations", exc_info=True)
             db.session.rollback()

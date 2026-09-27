@@ -36,17 +36,13 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    ``Core :: General`` -- a spike is filed into a component that can move it rather than not
    filed. Memory-safety crashes follow the ordinary filer's security branch.
 
-   ONE THING IS NEVER WRITTEN: a spike whose signature has a bug RESOLVED FIXED after the spiking
-   build was produced (``resolve_venue_below_public``, kind ``fixed``). Those crashes are the
-   pre-fix population of a defect somebody has already found, diagnosed and fixed; the fix
-   reaches the channel with its next build, and the bug's people already watch the signature.
-   Comment 10 on bug 2068262 (2026-09-11) was that case written out: "bug 2068262 is RESOLVED
-   FIXED, but it was resolved after build 20260909211052 was produced, so the crashes come from
-   builds that do not carry the fix" -- posted ON bug 2068262, with a needinfo to the fixer, and
-   read by two engineers as "pretty useless". It is decided in the sweep, BEFORE the investigator
-   is paid for (``_fixed_before_spending``), and again at filing time for a fix that landed while
-   the run was in flight. The ordinary filer has held the same rule since 09-05
-   (``bugzilla_apply._fixed_after_build_bug`` suppresses its new bug).
+   ``_fixed_before_spending`` skips investigation when no open same-application non-meta bug
+   takes precedence and ``resolve_venue_below_public`` returns ``fixed``: a matching bug was
+   resolved FIXED after the spiking build. Filing also checks this when no open venue is chosen.
+
+   ``_raptor_lake_before_spending`` skips investigation when the signature's Raptor Lake share
+   meets the ordinary hardware gate's CPU threshold and sample floor, on the same product and
+   channel. It ignores bit-flip rates and records hardware declines without spending run budget.
 
 WHAT IS DELIBERATELY NOT HERE. No skeptic, no second opinion: the investigator's output is
 validated mechanically and published as an offer under the volume facts, which stand on their own.
@@ -295,6 +291,16 @@ def _sweep_channel(product, channel, cfg, room):
             logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
                         day, reason)
             continue
+        noise = _raptor_lake_before_spending(signature, product, channel)
+        if noise is not None:
+            reason = _raptor_lake_decline(noise)
+            row = models.SpikeEscalation.create(
+                signature, product, channel, day, buildid=picked, kind=spike["kind"],
+                payload=dict(payload, skipped=reason, hardware_noise=noise))
+            row.set_status("done")
+            logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
+                        day, reason)
+            continue
         uuid = representative_uuid(siblings, picked, channel, product, runs)
         if uuid is None:
             row = models.SpikeEscalation.create(
@@ -405,6 +411,29 @@ def _fixed_decline(fixed, buildid):
     return ("bug {} was fixed on {}, after build {} was produced: the spike is the pre-fix "
             "population of a crash already diagnosed and fixed, and there is nothing to add"
             .format(fixed.get("id"), when, buildid))
+
+
+def _raptor_lake_before_spending(signature, product, channel):
+    """Return hardware counts when the signature meets the shared CPU threshold and sample floor.
+
+    Uses the signature's product/channel; ignores bit-flip rates. Returns ``None`` when the
+    gate is disabled, the measurement is unknown, or either threshold is not met.
+    """
+    from crashclouseau.agent import orchestrator
+
+    noise = orchestrator._hardware_noise({"signature": signature, "product": product}, channel)
+    if orchestrator._signature_is_mostly_hardware(
+            noise.get("reports"), None, noise.get("broken_cpu_rate"), config.get_agent_bit_flip()):
+        return noise
+    return None
+
+
+def _raptor_lake_decline(noise):
+    """Format the measured CPU share for the skip record."""
+    return ("{} of the signature's {} reports on this channel in the last {} days use "
+            "Intel Raptor Lake CPUs (family 6 model 183 stepping 1, meta bug "
+            "1975808)".format(noise.get("broken_cpu_reports"), noise.get("reports"),
+                              sigage.MAX_WINDOW_DAYS))
 
 
 def _reap_stale(cfg):

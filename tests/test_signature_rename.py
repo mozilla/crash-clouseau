@@ -592,6 +592,8 @@ class TestTheSweepDeclinesARebucketing(unittest.TestCase):
             mock.patch.object(spikes, "build_history", return_value=[]),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
             mock.patch.object(se, "resolve_venue_below_public", return_value=None),
+            # No hardware decline unless overridden.
+            mock.patch.object(se, "_raptor_lake_before_spending", return_value=None),
         ]
         for p in patches:
             p.start()
