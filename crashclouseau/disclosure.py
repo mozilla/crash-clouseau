@@ -148,15 +148,17 @@ def _without_items(par, hidden, bugs_by_node, withdrawn):
     return "\n".join(lead + kept)
 
 
-def screen(text, bugs_by_node=None, also=()):
+def screen(text, bugs_by_node=None, also=(), hidden=None):
     """Return ``{text, withdrawn, left}``, or ``None`` on a failed visibility lookup.
 
     Remove list items naming nonpublic bugs. ``left`` contains nonpublic references
-    in the remaining text or in ``also``, which represents references outside it."""
+    in the remaining text or in ``also``, which represents references outside it.
+    A supplied ``hidden`` set replaces the visibility lookup."""
     also = {int(b) for b in also if b}
-    hidden = nonpublic(refs(text, bugs_by_node) | also)
     if hidden is None:
-        return None
+        hidden = nonpublic(refs(text, bugs_by_node) | also)
+        if hidden is None:
+            return None
     new, withdrawn = withdraw(text, hidden, bugs_by_node)
     left = (refs(new, bugs_by_node) | also) & hidden
     return {"text": new, "withdrawn": sorted(withdrawn), "left": sorted(left)}
@@ -186,11 +188,24 @@ def check_public_write(text, bug_id=None):
 
 
 def withheld_filing(filing):
-    """Return whether security groups, a restriction reason, or removed references
-    require withholding the analysis. Restriction reasons include unchecked visibility."""
+    """Return whether recorded disclosure flags require withholding the analysis.
+
+    Flags cover security groups, restriction reasons (including unchecked visibility),
+    removed references, and nonpublic or unresolved references in stored findings."""
     filing = filing or {}
     return bool(filing.get("security_groups") or filing.get("restricted")
-                or filing.get("withdrawn_refs"))
+                or filing.get("withdrawn_refs") or filing.get("findings_withheld"))
+
+
+def strings(value):
+    """Join all string values in nested dicts, lists and tuples with newlines."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(strings(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return "\n".join(strings(v) for v in value)
+    return ""
 
 
 def public_findings(filing):
@@ -201,7 +216,7 @@ def public_findings(filing):
 # Keep operational fields; omit analysis-derived metadata such as regressor IDs and titles.
 _PUBLIC_FILING_KEYS = ("filed", "bug", "mode", "at", "channel", "buildid", "uuid", "signature",
                        "retry", "attempts", "venue_kind", "screened", "restricted",
-                       "withdrawn_refs", "security_groups")
+                       "withdrawn_refs", "findings_withheld", "security_groups")
 
 
 def public_filing(filing, withheld):

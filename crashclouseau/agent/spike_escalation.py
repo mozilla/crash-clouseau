@@ -1386,6 +1386,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             result["restricted"] = restricted or "memory_safety"
         elif withdrawn:
             result["withdrawn_refs"] = len(withdrawn)
+        if screened["findings_withheld"]:
+            result["findings_withheld"] = True
     if not config.autofile_globally_enabled():
         return dict(result, skipped="autofile disabled")
     # THE PRODUCT HOLD BINDS THE SPIKE FILER TOO, unlike the per-channel hold (see
@@ -1623,33 +1625,43 @@ def file_spike_bug(esc, brief, findings, grounded=True):
 
 
 def _screen(brief, findings, grounded, details, stack, link_regressor):
-    """Screen the rendered comment and grounded culprit's bug.
+    """Screen the rendered comment and stored findings with a shared visibility lookup.
 
-    Return the comment screen plus ``restricted``, ``culprit_bug`` and ``bugs_by_node``.
-    Return ``None`` if visibility or the culprit's bug cannot be resolved."""
+    Return the comment screen plus ``restricted``, ``culprit_bug``, ``bugs_by_node``
+    and ``findings_withheld``. Stored-only references can withhold findings without
+    restricting the comment. An unresolved ungrounded culprit also withholds findings.
+    Return ``None`` if visibility or a grounded culprit's bug cannot be resolved."""
     bugs_by_node = {n: (c or {}).get("bug")
                     for n, c in (brief.get("candidate_nodes") or {}).items()}
-    culprit = findings.culprit if (grounded and findings is not None) else None
-    culprit_bug = None
+    culprit = findings.culprit if findings is not None else None
+    culprit_bug, unresolved = None, False
     if culprit is not None and culprit.node:
         try:
             culprit_bug = _culprit_bug(culprit, brief)
         except LookupError:
             logger.warning("spike: could not read the bug of culprit %s", culprit.node)
-            return None
+            if grounded:
+                return None
+            unresolved = True
         if culprit_bug:
             bugs_by_node[culprit.node] = culprit_bug
+    published = culprit_bug if grounded else None
     draft = spike_report.build_spike_comment(
         brief, findings, details=details, stack=stack, link_regressor=link_regressor,
         grounded=grounded, as_comment=True)
-    screened = disclosure.screen(draft, bugs_by_node, also=[culprit_bug] if culprit_bug else [])
-    if screened is None:
+    stored = disclosure.refs(disclosure.strings(findings.model_dump()) if findings is not None
+                             else "", bugs_by_node) | ({culprit_bug} if culprit_bug else set())
+    hidden = disclosure.nonpublic(stored | disclosure.refs(draft, bugs_by_node))
+    if hidden is None:
         return None
+    screened = disclosure.screen(draft, bugs_by_node, also=[published] if published else [],
+                                 hidden=hidden)
     left = set(screened["left"])
-    screened["restricted"] = ("regressor" if culprit_bug in left
+    screened["restricted"] = ("regressor" if published in left
                               else "analysis" if left else None)
-    screened["culprit_bug"] = culprit_bug
+    screened["culprit_bug"] = published
     screened["bugs_by_node"] = bugs_by_node
+    screened["findings_withheld"] = unresolved or bool(stored & hidden)
     return screened
 
 

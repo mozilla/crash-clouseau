@@ -2133,9 +2133,12 @@ _RESTRICTED_SHORT = {
 }
 
 
-def _with_restricted(res, restricted):
-    """Add a restriction reason so declines and write failures can withhold analysis."""
-    return dict(res, restricted=restricted) if restricted else res
+def _with_restricted(res, restricted, withdrawn=()):
+    """Copy the result with its restriction reason and count of withdrawn bug IDs."""
+    out = dict(res, restricted=restricted) if restricted else dict(res)
+    if withdrawn:
+        out["withdrawn_refs"] = len(withdrawn)
+    return out
 
 
 def _restricted_note(reason, bugs, declined=None):
@@ -3014,12 +3017,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "signature": signature,
                 "title_len": len((preview or {}).get("title") or ""),
                 "mode": "comment" if bug_id is not None else "new_bug",
-                **({"restricted": restricted} if restricted else {}),
+                **_with_restricted({}, restricted, withdrawn),
             })
         except Exception:                                   # pragma: no cover - defensive
             logger.warning("autofile: could not record the filing error for %s", uuid)
         return _with_restricted(
-            {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}, restricted)
+            {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}, restricted,
+            withdrawn)
 
     models.Dossier.record_filed_bug(uuid, result)
     logger.info("autofile: %s -> bug %s (%s, needinfo=%s)",

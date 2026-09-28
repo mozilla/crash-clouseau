@@ -141,6 +141,15 @@ class TestScreen(unittest.TestCase):
         with mock.patch.object(disclosure, "public_bugs", return_value=None):
             self.assertIsNone(disclosure.screen("bug 1234567"))
 
+    def test_a_known_hidden_set_asks_nothing(self):
+        with mock.patch.object(disclosure, "public_bugs", side_effect=AssertionError("asked")):
+            out = disclosure.screen("Checked:\n- bug 2068438\n- other", hidden={2068438})
+        self.assertEqual((out["withdrawn"], out["left"]), ([2068438], []))
+
+    def test_every_string_of_a_structure(self):
+        self.assertEqual(disclosure.strings(
+            {"a": "x", "b": [1, "y", {"c": "z"}], "d": None}).split(), ["x", "y", "z"])
+
 
 class TestTheLastCheckBeforeAPublicWrite(unittest.TestCase):
     def test_a_public_bug_may_not_carry_a_hidden_reference(self):
@@ -282,6 +291,23 @@ class TestTheOrdinaryFiler(_Base):
         self.assertEqual((res["filed"], res["restricted"]), (False, "regressor"))
         self.assertEqual(errors[0]["restricted"], "regressor")
 
+    def test_a_failed_write_keeps_the_withdrawn_count(self):
+        """A failed write must retain the flag that withholds removed references."""
+        text = ("the whole bug opener\n\nWhat the automated skeptic pass checked:\n"
+                "- **pass** window — bug 2059195 touches the compositor only\n"
+                "- **pass** mechanism — confirmed")
+        report_bug.build_bug_preview.side_effect = lambda *a, **k: dict(_PREVIEW, comment=text)
+        self._hide(2059195)
+        errors = []
+        with mock.patch.object(bugzilla_apply, "_create_bug", side_effect=RuntimeError("boom")), \
+                mock.patch.object(bugzilla_apply.models.Dossier, "record_filing_error",
+                                  side_effect=lambda u, i: errors.append(i)):
+            res = self._file(dossier={"candidate": {"node": "n", "bug": 42}})
+        self.assertEqual((res["filed"], res["withdrawn_refs"]), (False, 1))
+        self.assertNotIn("restricted", res)
+        self.assertEqual(errors[0]["withdrawn_refs"], 1)
+        self.assertTrue(disclosure.withheld_filing(errors[0]))
+
     def test_no_security_group_files_nothing(self):
         self._hide(_HIDDEN)
         report_bug.build_bug_preview.side_effect = lambda *a, **k: dict(_PREVIEW)
@@ -393,6 +419,43 @@ class TestTheSpikeFiler(_FilerBase):
         with mock.patch.object(se.config, "autofile_globally_enabled", return_value=False):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual((res["skipped"], res["restricted"]), ("autofile disabled", "regressor"))
+
+    def test_what_the_comment_does_not_render_is_screened_too(self):
+        """Screen stored fields and list entries omitted from the rendered comment."""
+        public_culprit = self.findings.culprit.model_copy(update={"bug": 1855742})
+        cases = {
+            "component_reason": self.findings.model_copy(update={
+                "culprit": public_culprit,
+                "component_reason": "The candidate's bug {} was not readable.".format(_HIDDEN)}),
+            "past the cap": self.findings.model_copy(update={
+                "culprit": public_culprit,
+                "ruled_out": ["bug 1855742: backed out"] * 6 + [
+                    "bug {}: not supported".format(_HIDDEN)]}),
+        }
+        self._hide(_HIDDEN)
+        for name, findings in cases.items():
+            self.created.clear()
+            with self.subTest(name):
+                res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+                self.assertEqual(res["mode"], "spike_new_bug")
+                self.assertNotIn("restricted", res, "the bug text does not name it")
+                self.assertNotIn(str(_HIDDEN), self.created[0]["description"])
+                self.assertTrue(res["findings_withheld"])
+                self.assertFalse(disclosure.public_findings(res))
+
+    def test_an_ungrounded_culprit_is_screened(self):
+        self._hide(_HIDDEN)
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=False)
+        self.assertEqual(res["mode"], "spike_new_bug")
+        self.assertNotIn("restricted", res)
+        self.assertNotIn(str(_HIDDEN), self.created[0]["description"])
+        self.assertTrue(res["findings_withheld"])
+        findings = self.findings.model_copy(update={"culprit": self.findings.culprit.model_copy(
+            update={"bug": None})})
+        with mock.patch("crashclouseau.sigage.json_rev", return_value={}):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=False)
+        self.assertEqual((res["mode"], res["findings_withheld"]), ("spike_new_bug", True),
+                         "an unreadable culprit withholds the findings, not the filing")
 
     def test_a_clean_spike_is_marked_screened(self):
         res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
@@ -553,11 +616,11 @@ class TestTheDeclineRecord(unittest.TestCase):
                                                   "signature": "S", "buildid": None})), \
                 mock.patch.object(bugzilla_apply, "autofile_bug", return_value={
                     "filed": False, "skipped": "product/component unresolved",
-                    "restricted": "regressor"}), \
+                    "restricted": "regressor", "withdrawn_refs": 2}), \
                 mock.patch.object(orchestrator.models.Dossier, "record_filing_decline",
                                   side_effect=lambda u, i: seen.append(i)):
             orchestrator._autofile("u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 70})
-        self.assertEqual(seen[0]["restricted"], "regressor")
+        self.assertEqual((seen[0]["restricted"], seen[0]["withdrawn_refs"]), ("regressor", 2))
 
 
 class TestTheNote(unittest.TestCase):
