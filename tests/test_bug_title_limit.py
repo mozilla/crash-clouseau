@@ -134,6 +134,8 @@ class TestARejectedWriteLeavesARecord(unittest.TestCase):
                 "needinfo": True, "daily_cap": 10, "comment_on_existing": "comment",
                 "comment_max_bug_age_days": 30}), \
              mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
+             mock.patch("crashclouseau.disclosure.public_bugs",
+                        side_effect=lambda ids: {int(b) for b in ids if b}), \
              mock.patch.object(ba.config, "get_bugzilla_token", return_value="tok"), \
              mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
              mock.patch.object(ba.models.Dossier, "already_filed_for_signature", return_value=None), \

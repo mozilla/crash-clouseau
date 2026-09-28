@@ -1749,6 +1749,15 @@ def security_group(product):
     return group
 
 
+def restrict_preview(preview):
+    """Copy the preview with the product's security group and needinfo requestee as CC.
+
+    Leave groups empty if no security group resolves; the filer checks this before creating."""
+    group = security_group(preview.get("product"))
+    account = preview.get("needinfo_email") or ""
+    return dict(preview, groups=[group] if group else [], cc=[account] if account else [])
+
+
 def _first_email(author):
     """Best-effort email from an ``hg`` author display string (``Real Name <email>`` or a
     bare address)."""
@@ -2627,7 +2636,7 @@ def _bug_version(channel):
 
 def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None,
                       landing_unresolved=False, meta_bugs=None, never_comment=False,
-                      incomplete_fix=None):
+                      incomplete_fix=None, restrict=False):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -2725,7 +2734,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # every human who read those bugs left them public, including one whose real fault address is
     # 0xffffffffffffffff (a hardware bit flip). The deterministic address fires on 1 of 57
     # filings, which is exactly the one a human restricted.
-    withhold = sensitive.is_withheld(dossier.get("corroborations"))
+    # The filer may also request restriction for nonpublic bug references.
+    withhold = restrict or sensitive.is_withheld(dossier.get("corroborations"))
     g = security_group(product) if withhold else None
     # A BUCKET BUG (2026-09-18). The signature is held by an open `[meta]` tracker, so it is a
     # catch-all for every cause under one main-thread wait, and the bug filed for THIS cause is

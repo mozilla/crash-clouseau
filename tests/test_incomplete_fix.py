@@ -52,6 +52,12 @@ def _detect(bugs=None, landing=LANDING, first_seen=FIRST_SEEN, build=BUILD, chan
         return ba._incomplete_fix_bug(SIG, build, "Firefox", channel, first_seen=first_seen)
 
 
+
+
+def _all_public(ids):
+    """Mock every requested bug ID as public."""
+    return {int(b) for b in ids if b}
+
 class TestTheDetector(unittest.TestCase):
     def test_the_motivating_case(self):
         got = _detect()
@@ -183,6 +189,7 @@ class TestTheFilingDoor(unittest.TestCase):
         from crashclouseau import report_bug
         with mock.patch.object(ba.config, "get_agent_autofile", return_value=self.CFG), \
              mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
+             mock.patch("crashclouseau.disclosure.public_bugs", side_effect=_all_public), \
              mock.patch.object(ba, "_incomplete_fix_bug", return_value=fix) as det, \
              mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
              mock.patch.object(ba.models.Dossier, "already_filed_for_signature", return_value=None), \
@@ -366,6 +373,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
 
         with mock.patch.object(ba.config, "get_agent_autofile", return_value=self.CFG), \
              mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
+             mock.patch("crashclouseau.disclosure.public_bugs", side_effect=_all_public), \
              mock.patch.object(ba, "_incomplete_fix_bug", return_value=self.FIX), \
              mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
              mock.patch.object(ba.models.Dossier, "already_filed_for_signature", return_value=None), \
@@ -429,6 +437,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
         from crashclouseau import report_bug
         with mock.patch.object(ba.config, "get_agent_autofile", return_value=self.CFG), \
              mock.patch.object(ba.config, "autofile_channel_declared", return_value=True), \
+             mock.patch("crashclouseau.disclosure.public_bugs", side_effect=_all_public), \
              mock.patch.object(ba, "_incomplete_fix_bug", return_value=self.FIX) as det, \
              mock.patch.object(ba.models.Dossier, "already_filed", return_value=None), \
              mock.patch.object(ba.models.Dossier, "already_filed_for_signature", return_value=None), \

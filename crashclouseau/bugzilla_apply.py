@@ -8,7 +8,7 @@ The evidence agent only *records* Bugzilla intents through the vendored ``action
 MCP server (hackbot ``ActionsRecorder`` shape: ``{type, params, reasoning}``) — it
 never touches Bugzilla. hackbot ships **no apply step**; Clouseau builds it here.
 
-This module has two jobs:
+This module has three jobs:
 
 * ``build_evidence(uuid)`` composes the persisted verdict/dossier/actions with the
   UI/apply policy (``can_apply`` gate + which recorded-action indices are
@@ -24,12 +24,10 @@ This module has two jobs:
   Every gate lives in that function and each fails closed; ``AUTOFILE_BUGS`` is its
   kill-switch.
 
-Every Bugzilla write in the product goes through this module's REST helpers
-(``_post_comment``, ``_create_bug_keeping_the_bug``, ``_put_bug`` and their wrappers) -- but
-it is no longer the only FILER: ``agent.spike_escalation.file_spike_bug`` is a second
-unattended one (a real spike is filed culprit or not) and calls the helpers here. The two
-share the global switch (``config.autofile_globally_enabled``) and the per-PRODUCT hold
-(``config.autofile_product_held``); only the per-channel hold is the ordinary filer's alone.
+The REST helpers check recognized bug references in public comment bodies and in
+the summary and description of new bugs created without groups. The spike filer
+(``agent.spike_escalation.file_spike_bug``) uses these helpers too. Both filers honor
+the global switch and product holds; channel holds apply only to the ordinary filer.
 """
 from __future__ import annotations
 
@@ -39,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import net
 
-from crashclouseau import config, corroborations, models, sensitive, utils
+from crashclouseau import config, corroborations, disclosure, models, sensitive, utils
 from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
@@ -177,7 +175,11 @@ def open_venues(signature, product, timeout=_PAGE_HTTP_TIMEOUT):
 # these)
 # --------------------------------------------------------------------------- #
 def _post_comment(bug_id, text, is_private, token):
-    """POST /rest/bug/<id>/comment -> new comment id."""
+    """Post a comment and return its ID.
+
+    Check recognized bug references unless the comment is private."""
+    if not is_private:
+        disclosure.check_public_write(text, bug_id)
     r = net.post(
         "{}/{}/comment".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
@@ -193,6 +195,9 @@ def _put_bug(bug_id, changes, token):
     needinfo flag gets set, from ``changes.flags``) -> the bug id on success."""
     if not changes:
         raise ValueError("update_bug action has no changes to apply")
+    comment = changes.get("comment") or {}
+    if comment.get("body") and not comment.get("is_private"):
+        disclosure.check_public_write(comment["body"], bug_id)
     r = net.put(
         "{}/{}".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
@@ -226,12 +231,13 @@ class BugzillaRejected(RuntimeError):
 
 
 def _create_bug(payload, token):
-    """POST /rest/bug -> the new bug id.
+    """Create a bug through ``_bz_rest()`` and return its ID.
 
-    libmozdata has no bug-creation call (``Bugzilla`` exposes ``put`` for existing bugs
-    only), so this posts directly, but through the same ``_bz_rest()`` base everything else
-    here uses — which is what makes ``BUGZILLA_REST_URL`` able to divert the whole write
-    path to bugzilla.allizom.org."""
+    For payloads without groups, check recognized bug references in the summary and
+    description before posting. ``BUGZILLA_REST_URL`` selects the destination."""
+    if not payload.get("groups"):
+        disclosure.check_public_write("{}\n{}".format(payload.get("summary") or "",
+                                                      payload.get("description") or ""))
     r = net.post(
         _bz_rest(),
         headers={"X-Bugzilla-API-Key": token},
@@ -2119,6 +2125,28 @@ def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
 
 _SKIPPED_REGRESSOR = "regressor bug {} is excluded from filing (agent.autofile.skip_regressor_bugs)"
 
+# Public restriction reasons omit the referenced bug IDs.
+_RESTRICTED_SHORT = {
+    "regressor": "the regressor bug is not public",
+    "analysis": "the analysis names a bug that is not public",
+}
+
+
+def _restricted_note(reason, bugs, declined=None):
+    """Explain the restriction inside the restricted bug, including any declined venue."""
+    ids = sorted({int(b) for b in bugs if b})
+    names = ", ".join("bug {}".format(b) for b in ids)
+    if reason == "regressor":
+        why = "{}, the bug of the changeset named above, is not public".format(names)
+    else:
+        why = "the analysis above names {}, which {} not public".format(
+            names, "is" if len(ids) == 1 else "are")
+    if declined:
+        return ("_Probably a duplicate of bug {}, which is open on this same signature. This bug "
+                "was filed separately, and restricted, because {}, and bug {} is public._".format(
+                    declined, why, declined))
+    return "_Filed restricted because {}._".format(why)
+
 
 def skipped_regressor(bug):
     """*bug* as an int when no filing may name it (``config.autofile_skip_regressor_bugs``)."""
@@ -2168,6 +2196,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       the same signature are analysed independently and all land on the same bug.
     * before a new bug, optionally compare bugs sharing the regressor (``_same_defect_bug``).
       An accepted match follows the channel's comment policy; no match continues normal filing.
+    * eligible filings with a nonpublic regressor or remaining nonpublic text references
+      use a restricted bug. Public filings remove list items naming nonpublic bugs;
+      a failed visibility lookup prevents the write (``disclosure``).
 
     A RELEASE filing is titled ``[new in release] Crash in [@ ...]`` and nominates the crash's
     version for tracking (``cf_tracking_firefox<major>`` = ?, in the create, ``_train_flags``);
@@ -2499,6 +2530,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # 57 filings and 59.2% of beta signatures have an open venue, so ~1% of rung-70 verdicts --
     # small, and the highest-value 1%.
     withheld = sensitive.is_withheld((dossier or {}).get("corroborations"))
+    # Nonpublic regressors use the security filing path. Preserve the reason separately
+    # from memory-safety signals; later gates may still decline the filing.
+    restricted = None
+    regressor = ((dossier or {}).get("candidate") or {}).get("bug")
+    if regressor and not withheld:
+        hidden = disclosure.nonpublic([regressor])
+        if hidden is None:
+            return {"filed": False, "skipped": "could not check whether the regressor bug is "
+                                               "public; not risking a disclosure"}
+        if hidden:
+            restricted, withheld = "regressor", True
     if existing and mode == "skip" and not withheld:
         # `bug` on a `filed: False` result is the bug the decision was ABOUT -- the open venue
         # this crash was not written into -- as on every other decline shape below that names
@@ -2691,6 +2733,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             meta_bugs=meta_bugs if bug_id is None else None,
             never_comment=never_comment,
             incomplete_fix=incomplete_fix,
+            restrict=restricted is not None,
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
@@ -2714,6 +2757,27 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "skipped": "product/component unresolved — refusing to file into the wrong "
                            "component"}
 
+    # Remove list items containing nonpublic references; remaining references require
+    # a restricted filing.
+    withdrawn = []
+    restricted_bugs = [regressor] if restricted else []
+    if not withheld:
+        screened = disclosure.screen(preview["comment"],
+                                     also=disclosure.bug_refs(preview.get("title")))
+        if screened is None:
+            return {"filed": False, "skipped": "could not check whether the bugs the analysis "
+                                               "names are public; not risking a disclosure"}
+        preview = dict(preview, comment=screened["text"])
+        withdrawn = screened["withdrawn"]
+        if screened["left"]:
+            restricted, withheld, restricted_bugs = "analysis", True, screened["left"]
+            preview = report_bug.restrict_preview(preview)
+            logger.warning("autofile: the analysis of %s names bug(s) %s that are not public; "
+                           "filing restricted", uuid, restricted_bugs)
+        elif withdrawn:
+            logger.info("autofile: removed the list items of %s that name bug(s) %s, which are "
+                        "not public", uuid, withdrawn)
+
     # THE SECURITY VENUE, and both branches refuse rather than degrade. `withheld` is resolved
     # far above now (it has to outrank the `skip` mode); this is the same value.
     public_venue_declined = None
@@ -2724,13 +2788,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # -- the next crash on this signature files again -- and a public use-after-free is not.
         # Treeherder makes the same call, answering HTTP 400 "Cannot file security bug for
         # product without default security group" rather than falling through.
-        logger.warning("autofile: %s is a memory-safety crash (%s) and no security group "
+        logger.warning("autofile: %s must be restricted (%s) and no security group "
                        "resolved for product %r -- NOT filing", uuid,
-                       "; ".join(((dossier or {}).get("corroborations") or {})
-                                 .get("memory_unsafe_signals") or []),
+                       restricted or "; ".join(((dossier or {}).get("corroborations") or {})
+                                               .get("memory_unsafe_signals") or []),
                        preview.get("product"))
         return {"filed": False,
-                "skipped": "memory-safety crash and no security group for product {!r}".format(
+                "skipped": "{} and no security group for product {!r}".format(
+                    _RESTRICTED_SHORT.get(restricted, "memory-safety crash"),
                     preview.get("product"))}
     if withhold and bug_id is not None:
         # The venue we picked is an EXISTING bug, and `_open_bugs_for_signature` is
@@ -2745,8 +2810,9 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # alternative costs a disclosure. The third option, a private comment, needs insider-group
         # membership this account has not been verified to have, and a private comment never
         # enters sec triage or the bounty process at all.
-        logger.warning("autofile: %s is a memory-safety crash; declining the PUBLIC venue "
-                       "bug %s and filing restricted instead", uuid, bug_id)
+        logger.warning("autofile: %s must be restricted (%s); declining the PUBLIC venue "
+                       "bug %s and filing restricted instead", uuid,
+                       restricted or "memory safety", bug_id)
         preview = dict(preview)
         # NOT `see_also`, and this cost a reading of BMO's source to get right. `add_see_also`
         # MIRRORS a local reference onto the referenced bug (Bugzilla/Bug.pm:3480-3487:
@@ -2756,11 +2822,18 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # EXISTENCE we did not intend and cannot take back, on the one path built to avoid a
         # disclosure. The bug id goes in the restricted bug's own comment instead, where it is
         # just as useful to a triager and mirrors nowhere.
-        preview["comment"] = "{}\n\n_Probably a duplicate of bug {}, which is open on this same "\
-                             "signature. This bug was filed separately, and restricted, because "\
-                             "the crash report shows a memory-safety fault and that bug is "\
-                             "public._".format(preview["comment"], bug_id)
+        if restricted:
+            preview["comment"] = "{}\n\n{}".format(
+                preview["comment"], _restricted_note(restricted, restricted_bugs, declined=bug_id))
+        else:
+            preview["comment"] = "{}\n\n_Probably a duplicate of bug {}, which is open on this "\
+                                 "same signature. This bug was filed separately, and restricted, "\
+                                 "because the crash report shows a memory-safety fault and that "\
+                                 "bug is public._".format(preview["comment"], bug_id)
         public_venue_declined, bug_id = bug_id, None
+    elif restricted:
+        preview = dict(preview, comment="{}\n\n{}".format(
+            preview["comment"], _restricted_note(restricted, restricted_bugs)))
 
     email = preview.get("needinfo_email") if cfg["needinfo"] else ""
     # THE CHANNEL, THE PRODUCT AND THE BUILD, on every result. Without them nothing downstream
@@ -2783,8 +2856,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # security venue fire, and does anyone unrestrict it?" is answerable later from prod
         # rather than from a re-derivation. Same reason `predating_bugs` is recorded below.
         result["security_groups"] = preview.get("groups") or []
-        result["memory_unsafe_signals"] = (((dossier or {}).get("corroborations") or {})
-                                           .get("memory_unsafe_signals") or [])
+        if restricted:
+            # Record the category here without adding the referenced bug IDs.
+            result["restricted"] = restricted
+        else:
+            result["memory_unsafe_signals"] = (((dossier or {}).get("corroborations") or {})
+                                               .get("memory_unsafe_signals") or [])
+    if withdrawn:
+        result["withdrawn_refs"] = len(withdrawn)
     if public_venue_declined is not None:
         result["public_venue_declined"] = public_venue_declined
     if incomplete_fix:

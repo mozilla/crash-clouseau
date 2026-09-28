@@ -140,6 +140,9 @@ class _Base(unittest.TestCase):
                               side_effect=lambda b, t, pv, tok: self.comments.append((b, t)) or 7),
             mock.patch.object(bugzilla_apply, "_put_bug",
                               side_effect=lambda b, c, t: self.puts.append((b, c)) or b),
+            # Mock every referenced bug as public unless a test overrides it.
+            mock.patch("crashclouseau.disclosure.public_bugs",
+                       side_effect=lambda ids: {int(i) for i in ids if i}),
         ]
         for x in p:
             x.start()
