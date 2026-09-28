@@ -444,6 +444,13 @@ class _FilerBase(unittest.TestCase):
             mock.patch.object(se, "_needinfo_person_for",
                               return_value={"nick": "dev", "account": "dev@moz.example",
                                             "name": "Dev", "email": "dev@moz.example"}),
+            # Every bug the text names is public unless a test says otherwise.
+            mock.patch("crashclouseau.disclosure.public_bugs",
+                       side_effect=lambda ids: {int(i) for i in ids if i}),
+            # Fixture landing: 2026-09-02 12:00 UTC. No later reopen or signature attachment.
+            mock.patch("crashclouseau.sigage.pushdate_for_node", return_value=[1788350400, 0]),
+            mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None),
+            mock.patch.object(bugzilla_apply, "_signature_attached", return_value=None),
         ]
         for p in patches:
             p.start()
@@ -507,13 +514,53 @@ class TestFiling(_FilerBase):
 
     def test_an_open_bug_on_the_signature_gets_a_comment(self):
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
-                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                {"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
                  "keywords": [], "regressed_by": [1]}]):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
         self.assertFalse(res["venue_for_spike"])
         self.assertEqual(self.created, [])
         self.assertIn("crash volume spiked", self.comments[0][1])
+
+    def test_without_a_culprit_the_oldest_open_bug_gets_the_comment(self):
+        findings = self.findings.model_copy(update={"culprit": None})
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
+
+    def test_a_low_confidence_culprit_keeps_the_oldest_open_bug(self):
+        findings = self.findings.model_copy(update={"culprit": dict(
+            self.findings.culprit.model_dump(), confidence="low")})
+        findings = SpikeFindings.model_validate(findings.model_dump())
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["bug"], res["mode"]), (55, "spike_comment"))
+
+    def test_an_open_bug_filed_before_the_culprit_landed_gets_a_new_bug(self):
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["predating_bugs"]), ("spike_new_bug", [55]))
+        self.assertNotIn("venue_landing_unresolved", res)
+        self.assertEqual(self.comments, [])
+        self.assertIn("Filed as a new bug rather than a comment on bug 55", self.created[0]["description"])
+        self.assertIn("filed before the changeset above landed", self.created[0]["description"])
+
+    def test_an_unknown_landing_date_files_a_new_bug_that_says_so(self):
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]), \
+                mock.patch("crashclouseau.sigage.pushdate_for_node", return_value=None):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["predating_bugs"]), ("spike_new_bug", [55]))
+        self.assertTrue(res["venue_landing_unresolved"])
+        self.assertIn("could not resolve when changeset 2222222bbbbcccc landed",
+                      self.created[0]["description"])
 
     def test_a_bug_filed_for_this_spike_that_names_its_regressor_gets_nothing(self):
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
@@ -596,7 +643,7 @@ class TestFiling(_FilerBase):
     def test_a_memory_safety_crash_declines_a_public_venue(self):
         self.brief["raw_crash"] = {"json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
-                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                {"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
                  "keywords": [], "regressed_by": []}]):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 55))

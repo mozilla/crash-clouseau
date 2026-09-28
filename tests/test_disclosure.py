@@ -16,7 +16,10 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 from crashclouseau import bugzilla_apply, disclosure, report_bug  # noqa: E402
+from crashclouseau.agent import spike_escalation as se  # noqa: E402
+from crashclouseau.agent.spike_agent import SpikeFindings  # noqa: E402
 from tests.test_autofile import _PREVIEW, _Base, _bug  # noqa: E402
+from tests.test_spike_escalation import _FilerBase, _esc  # noqa: E402
 
 _HIDDEN = 2072467
 
@@ -279,6 +282,116 @@ class TestTheOrdinaryFiler(_Base):
         self.assertNotIn("restricted", res)
         self.assertNotIn("groups", self.created[0])
         self.assertEqual(self.created[0]["description"], _PREVIEW["comment"])
+
+
+class TestTheSpikeFiler(_FilerBase):
+    """Exercise restricted regressors and other nonpublic references in spike filings."""
+
+    def setUp(self):
+        super().setUp()
+        self.findings = SpikeFindings(
+            summary="The rise starts with 157.0b4, the first beta with `0a49d5b304b4`.",
+            product="Core", component="Graphics: Canvas2D",
+            culprit={"node": "0a49d5b304b4", "bug": _HIDDEN, "confidence": "medium",
+                     "why": "The diff adds a call on the failure path."},
+            evidence=[{"claim": "facets by version", "source": "socorro"}],
+            ruled_out=["Bug 1855742 (`2028c7018977`): backed out in 2023"])
+
+    def _hide(self, *bugs):
+        disclosure.public_bugs.side_effect = _public_except(*bugs)
+
+    def _old_bug(self, bid=1620171, created="2020-03-05T00:00:00Z"):
+        return {"id": bid, "creation_time": created, "product": "Core", "keywords": [],
+                "regressed_by": []}
+
+    def test_a_restricted_culprit_files_a_restricted_bug_past_an_old_public_one(self):
+        self._hide(_HIDDEN)
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[self._old_bug()]):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["restricted"]), ("spike_new_bug", "regressor"))
+        self.assertEqual(res["predating_bugs"], [1620171])
+        self.assertEqual(self.comments, [], "nothing is written on the public bug")
+        self.assertNotIn(str(_HIDDEN), repr(res), "the record is served publicly")
+        payload = self.created[0]
+        self.assertEqual(payload["groups"], ["core-security"])
+        self.assertEqual(payload["cc"], ["dev@moz.example"])
+        body = payload["description"]
+        self.assertIn("Filed as a new bug rather than a comment on bug 1620171", body)
+        self.assertIn("_Filed restricted because bug {}, the bug of the changeset named above, "
+                      "is not public._".format(_HIDDEN), body)
+
+    def test_a_restricted_culprit_declines_a_venue_about_the_regression(self):
+        self._hide(_HIDDEN)
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[self._old_bug(55, "2026-08-25T00:00:00Z")]):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 55))
+        self.assertEqual(self.comments, [])
+        self.assertIn("_Probably a duplicate of bug 55", self.created[0]["description"])
+
+    def test_a_hidden_bug_in_a_list_item_is_removed_from_a_public_comment(self):
+        findings = self.findings.model_copy(update={"culprit": None, "ruled_out": [
+            "Bug 1855742 (`2028c7018977`): backed out in 2023",
+            "`a61331c8205c` (bug 2064287, drag hardening): not supported"]})
+        self._hide(2064287)
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[self._old_bug()]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["mode"], res["bug"], res["withdrawn_refs"]),
+                         ("spike_comment", 1620171, 1))
+        text = self.comments[0][1]
+        self.assertNotIn("2064287", text)
+        self.assertNotIn("a61331c8205c", text)
+        self.assertIn("Bug 1855742", text)
+
+    def test_a_hidden_bug_in_the_summary_restricts_the_filing(self):
+        findings = self.findings.model_copy(update={
+            "culprit": None,
+            "summary": "The abort exists on beta because bug 2046734 made it a release assert."})
+        self._hide(2046734)
+        res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["mode"], res["restricted"]), ("spike_new_bug", "analysis"))
+        self.assertEqual(self.created[0]["groups"], ["core-security"])
+
+    def test_an_unanswered_read_is_retried_and_writes_nothing(self):
+        disclosure.public_bugs.side_effect = None
+        disclosure.public_bugs.return_value = None
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertTrue(res["retry"])
+        self.assertIn("not risking a disclosure", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_a_culprit_without_a_bug_is_read_off_its_commit_message(self):
+        findings = self.findings.model_copy(update={"culprit": self.findings.culprit.model_copy(
+            update={"bug": None})})
+        self._hide(_HIDDEN)
+        with mock.patch("crashclouseau.sigage.json_rev", return_value={
+                "desc": "Bug {} - Update the display on failure. r=someone".format(_HIDDEN)}):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual(res["restricted"], "regressor")
+        with mock.patch("crashclouseau.sigage.json_rev", return_value={}):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertTrue(res["retry"])
+
+    def test_a_restricted_spike_held_by_a_meta_with_no_bucket_is_not_posted(self):
+        self._hide(_HIDDEN)
+        meta = dict(self._old_bug(1866944), keywords=["meta"])
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[meta]), \
+                mock.patch.object(se.spike_report, "spike_bucket_title", return_value=""):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertFalse(res["filed"])
+        self.assertIn("held by [meta] bug 1866944", res["skipped"])
+        self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_a_memory_safety_spike_declines_our_public_bucket_bug(self):
+        self.brief["raw_crash"] = {"json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
+        with mock.patch.object(se, "resolve_venue_below_public", return_value={
+                "id": 2071528, "kind": "own_bucket", "assigned_to": ""}):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 2071528))
+        self.assertEqual(self.comments, [])
+        self.assertEqual(res["restricted"], "memory_safety")
 
 
 class TestTheNote(unittest.TestCase):

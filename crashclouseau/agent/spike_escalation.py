@@ -36,7 +36,10 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    gets nothing); otherwise a new bug is created, with the investigator's product::component
    validated against Bugzilla and falling back to the signature's existing bugs' component, then
    ``Core :: General`` -- a spike is filed into a component that can move it rather than not
-   filed. Memory-safety crashes follow the ordinary filer's security branch.
+   filed. Grounded culprits at medium confidence or higher use the ordinary filer's
+   regression venue rules, including age and history exceptions. New bugs note rejected
+   venues. Memory-safety signals and nonpublic references remaining after list-item removal
+   require a restricted venue; unresolved security groups prevent a new filing.
 
    ``_fixed_before_spending`` skips investigation when no open same-application non-meta bug
    takes precedence and ``resolve_venue_below_public`` returns ``fixed``: a matching bug was
@@ -60,8 +63,8 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 from crashclouseau import (
-    app, bugzilla_apply, config, db, models, net, report_bug, sensitive, sigage, sigtrend,
-    spike_report, spikes, utils, worker,
+    app, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug, sensitive,
+    sigage, sigtrend, spike_report, spikes, utils, worker,
 )
 from crashclouseau.logger import logger
 
@@ -1379,7 +1382,24 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         signals = sensitive.memory_unsafe_signals(raw) if raw else []
     except Exception:
         signals = []
-    withheld = bool(signals)
+    try:
+        details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
+    except Exception:
+        details = {}
+    stack = brief.get("stack_frames") or {}
+    link_regressor = bool(brief.get("culprit_in_window")) and grounded
+    # Remove list items with nonpublic references; remaining references require
+    # a restricted venue.
+    screened = _screen(brief, findings, grounded, details, stack, link_regressor)
+    if screened is None:
+        return dict(result, retry=True, skipped=(
+            "could not check whether the bugs the analysis names are public; not risking a "
+            "disclosure"))
+    restricted = screened["restricted"]
+    restricted_bugs = ([screened["culprit_bug"]] if restricted == "regressor"
+                       else screened["left"])
+    withheld = bool(signals) or bool(restricted)
+    withdrawn = set(screened["withdrawn"]) if not withheld else set()
     # The crash's other names ride along (`sigfamily`, on the brief): a bug open on the name
     # this crash had before the rename is its venue, and gets this name attached.
     family = brief.get("signature_family") or {}
@@ -1401,14 +1421,21 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     mode = cfg["comment_on_existing"]
     venue = for_spike = None
     related = []
-    if existing:
-        venue, for_spike = _pick_venue(existing, esc.build_day)
-    if venue is not None and mode == "skip" and not withheld:
+    predating = []
+    landing_unresolved = False
+    if existing and mode == "skip" and not withheld:
+        named = _pick_venue(existing, esc.build_day)[0]
         return dict(result, skipped="open bug {}{} exists".format(
-            venue["id"], bugzilla_apply._via_clause(venue)), **bugzilla_apply._via_fields(venue))
-    if venue is not None and mode == "file_new":
+            named["id"], bugzilla_apply._via_clause(named)), **bugzilla_apply._via_fields(named))
+    if existing and mode == "file_new":
         related = sorted(b["id"] for b in existing)
-        venue = None
+    elif existing and _names_a_regression(findings, grounded):
+        # Use the ordinary filer's age and history rules for grounded candidates at
+        # medium confidence or higher, matching the `regression` keyword threshold.
+        venue, for_spike, predating, landing_unresolved = _regression_venue(
+            existing, findings.culprit, esc, signature)
+    elif existing:
+        venue, for_spike = _pick_venue(existing, esc.build_day)
     public_venue_declined = None
     if venue is not None and withheld:
         public_venue_declined, venue = venue["id"], None
@@ -1438,6 +1465,11 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         if below is not None and mode == "skip":
             return dict(result, bug=below["id"],
                         skipped="open bug {} exists".format(below["id"]))
+        if below is not None and withheld and below["kind"] == "own_bucket":
+            # Restricted analysis cannot be posted to our public bucket bug.
+            if public_venue_declined is None:
+                public_venue_declined = below["id"]
+            below = None
         if below is not None:
             venue = {"id": below["id"], "assigned_to": below.get("assigned_to") or ""}
             venue_kind = below["kind"]
@@ -1452,11 +1484,13 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     if venue is None and meta_bugs:
         if not bucket_title:
             if withheld:
-                # The tracker is public (it came from the anonymous signature lookup). Never
-                # route a memory-safety crash there merely because the analysis could not name a
-                # bucket: that bypasses the restricted-filing carve-out and discloses the crash
-                # link and analysis. With no cause title we cannot safely create either the
-                # required bucket bug or a public comment, so fail closed.
+                # The tracker is public. Without a bucket title, neither a restricted
+                # bucket filing nor a public comment is allowed here.
+                if restricted:
+                    return dict(result, restricted=restricted, skipped=(
+                        "{}; the spike is held by [meta] bug {} and the analysis names no "
+                        "bucket, so it was not posted publicly".format(
+                            bugzilla_apply._RESTRICTED_SHORT[restricted], meta_bugs[0]["id"])))
                 return dict(
                     result,
                     memory_unsafe_signals=signals,
@@ -1476,16 +1510,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             person = report_bug._person_for_account(venue["assigned_to"]) or {}
         except Exception:  # pragma: no cover - a BMO read inside the ladder
             person = {}
-    link_regressor = bool(brief.get("culprit_in_window")) and grounded
     if venue is None:
         bz_product, component, how = resolve_component(findings, signature, product)
     else:
         bz_product, component, how = None, None, "existing bug"
-    try:
-        details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
-    except Exception:
-        details = {}
-    stack = brief.get("stack_frames") or {}
     email = ""
     try:
         if venue is not None:
@@ -1493,6 +1521,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 brief, findings, details=details, stack=stack, person=person,
                 author_display=report_bug._person_display(person) if person else None,
                 link_regressor=link_regressor, grounded=grounded, as_comment=True)
+            text = _without_withdrawn(text, withdrawn, screened)
             # A venue reached through the crash's OTHER name says so, and gets this name
             # attached in its own PUT after the comment (`bugzilla_apply._attach_signature`).
             via_note = bugzilla_apply._venue_via_signature_note(signature, venue, family)
@@ -1509,16 +1538,26 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             result.update({"filed": True, "bug": venue["id"], "mode": "spike_comment",
                            "venue_kind": venue_kind, "venue_for_spike": bool(for_spike),
                            "needinfo": None if isinstance(outcome, Exception) else (email or None)})
+            if withheld:
+                # Persist the restriction for the public views.
+                result["restricted"] = restricted or "memory_safety"
         else:
             preview = spike_report.build_spike_preview(
                 brief, findings, product=bz_product, component=component, person=person,
                 details=details, stack=stack, link_regressor=link_regressor, grounded=grounded,
                 related_bugs=related or None, other_app_bugs=other_app or None,
-                meta_bugs=meta_bugs or None, withhold=withheld, bucket_title=bucket_title)
+                meta_bugs=meta_bugs or None, withhold=withheld, bucket_title=bucket_title,
+                predating_bugs=predating or None, landing_unresolved=landing_unresolved)
+            preview["comment"] = _without_withdrawn(preview["comment"], withdrawn, screened)
             if withheld and not preview.get("groups"):
-                return dict(result, skipped=(
-                    "memory-safety crash and no security group for product {!r}".format(bz_product)))
-            if public_venue_declined is not None:
+                return dict(result, skipped="{} and no security group for product {!r}".format(
+                    bugzilla_apply._RESTRICTED_SHORT.get(restricted, "memory-safety crash"),
+                    bz_product))
+            if restricted:
+                preview["comment"] = "{}\n\n{}".format(
+                    preview["comment"], bugzilla_apply._restricted_note(
+                        restricted, restricted_bugs, declined=public_venue_declined))
+            elif public_venue_declined is not None:
                 preview["comment"] = (
                     "{}\n\n_Probably a duplicate of bug {}, which is on this same signature. "
                     "This bug was filed separately, and restricted, because the crash report shows "
@@ -1560,15 +1599,108 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 result["public_venue_declined"] = public_venue_declined
             if related:
                 result["related_bugs"] = related
+            if predating:
+                result["predating_bugs"] = predating
+                if landing_unresolved:
+                    result["venue_landing_unresolved"] = True
             if withheld:
                 result["security_groups"] = preview.get("groups") or []
-                result["memory_unsafe_signals"] = signals
+                if signals:
+                    result["memory_unsafe_signals"] = signals
+                # Record the category without adding the referenced bug IDs.
+                result["restricted"] = restricted or "memory_safety"
+        if withdrawn:
+            result["withdrawn_refs"] = len(withdrawn)
     except Exception as exc:
         logger.error("spike: Bugzilla write failed for escalation %s: %s", esc.id, exc)
         return dict(result, skipped="bugzilla write failed: {}".format(exc), error=str(exc)[:500])
     logger.info("spike: escalation %s -> bug %s (%s, needinfo=%s)", esc.id, result.get("bug"),
                 result.get("mode"), result.get("needinfo"))
     return result
+
+
+def _screen(brief, findings, grounded, details, stack, link_regressor):
+    """Screen the rendered comment and grounded culprit's bug.
+
+    Return the comment screen plus ``restricted``, ``culprit_bug`` and ``bugs_by_node``.
+    Return ``None`` if visibility or the culprit's bug cannot be resolved."""
+    bugs_by_node = {n: (c or {}).get("bug")
+                    for n, c in (brief.get("candidate_nodes") or {}).items()}
+    culprit = findings.culprit if (grounded and findings is not None) else None
+    culprit_bug = None
+    if culprit is not None and culprit.node:
+        try:
+            culprit_bug = _culprit_bug(culprit, brief)
+        except LookupError:
+            logger.warning("spike: could not read the bug of culprit %s", culprit.node)
+            return None
+        if culprit_bug:
+            bugs_by_node[culprit.node] = culprit_bug
+    draft = spike_report.build_spike_comment(
+        brief, findings, details=details, stack=stack, link_regressor=link_regressor,
+        grounded=grounded, as_comment=True)
+    screened = disclosure.screen(draft, bugs_by_node, also=[culprit_bug] if culprit_bug else [])
+    if screened is None:
+        return None
+    left = set(screened["left"])
+    screened["restricted"] = ("regressor" if culprit_bug in left
+                              else "analysis" if left else None)
+    screened["culprit_bug"] = culprit_bug
+    screened["bugs_by_node"] = bugs_by_node
+    return screened
+
+
+def _culprit_bug(culprit, brief):
+    """Resolve the bug from the culprit, a known candidate, or the hg commit message.
+
+    Return ``None`` if the message names no bug; raise ``LookupError`` if hg returns no revision."""
+    if culprit.bug:
+        return int(culprit.bug)
+    cand = _known_candidate(culprit.node, brief.get("candidate_nodes"))
+    if cand is not None and cand.get("bug"):
+        return int(cand["bug"])
+    info = sigage.json_rev(culprit.node, brief.get("channel") or "nightly")
+    if not info:
+        raise LookupError(culprit.node)
+    bug = pushlog.get_bug(info.get("desc") or "")
+    return bug if bug > 0 else None
+
+
+def _without_withdrawn(text, withdrawn, screened):
+    """Remove list items naming the previously screened ``withdrawn`` bug IDs."""
+    if not withdrawn:
+        return text
+    return disclosure.withdraw(text, withdrawn, screened.get("bugs_by_node"))[0]
+
+
+def _names_a_regression(findings, grounded):
+    """Return whether a grounded culprit has a node and at least medium confidence."""
+    culprit = findings.culprit if (grounded and findings is not None) else None
+    return bool(culprit is not None and culprit.node and culprit.confidence != "low")
+
+
+def _regression_venue(existing, culprit, esc, signature):
+    """Return ``(venue, for_spike, predating, landing_unresolved)``.
+
+    Delegate venue selection to ``_bug_for_this_regression``, including its age slack,
+    candidate-bug and history exceptions. ``predating`` contains rejected venues;
+    when the landing date is unknown, they are unverified rather than proven older."""
+    try:
+        landed = sigage.to_datetime(sigage.pushdate_for_node(culprit.node, esc.channel))
+    except Exception:  # pragma: no cover - network
+        logger.warning("spike: landing date for %s unresolved", culprit.node, exc_info=True)
+        landed = None
+    age = config.get_agent_autofile(esc.channel)["comment_max_bug_age_days"]
+    bug_id, predating = bugzilla_apply._bug_for_this_regression(
+        existing, landed, age, candidate_bug=culprit.bug, signature=signature)
+    venue = next((b for b in existing if b["id"] == bug_id), None) if bug_id else None
+    for_spike = False
+    if venue is not None and esc.build_day:
+        start = datetime.combine(esc.build_day, datetime.min.time(),
+                                 tzinfo=timezone.utc) - timedelta(days=1)
+        created = _parse_ts(venue.get("creation_time"))
+        for_spike = created is not None and created >= start
+    return venue, for_spike, list(predating or []), landed is None and venue is None
 
 
 def _retry_filings(cfg):

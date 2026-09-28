@@ -267,12 +267,18 @@ def spike_bucket_key(brief):
     return str(_spike_awaited_work(brief).get("bucket") or "")
 
 
-def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None):
-    """Why this is a new bug and not a comment, when open bugs exist on the signature. A
-    ``[meta]`` on the signature is not a reason any more: a bug filed beside one is a BUCKET bug
-    that opens with ``report_bug.build_bucket_opener`` (``meta_bugs`` is accepted and ignored
-    so the callers need not change shape)."""
+def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None, predating_bugs=None,
+               landing_unresolved=False, node=None):
+    """Explain why a new bug is filed despite existing venues.
+
+    ``predating_bugs`` contains venues rejected by the regression selector. When
+    ``landing_unresolved`` is true, their age relative to ``node`` is unknown.
+    ``meta_bugs`` is unused here; bucket previews supply a separate opener."""
     notes = []
+    predating = report_bug.build_related_bugs_note(
+        predating_bugs, landing_unresolved=landing_unresolved, node=node)
+    if predating:
+        notes.append(predating)
     if related_bugs:
         notes.append(
             "Open bug{} {} reference{} this signature; this was filed as a new bug because the "
@@ -290,7 +296,8 @@ def venue_note(related_bugs=None, other_app_bugs=None, meta_bugs=None):
 def build_spike_comment(brief, findings, *, details=None, stack=None, person=None,
                         author_display=None, link_regressor=False, grounded=True,
                         related_bugs=None, other_app_bugs=None, meta_bugs=None,
-                        as_comment=False, bucket_opener=None):
+                        as_comment=False, bucket_opener=None, predating_bugs=None,
+                        landing_unresolved=False):
     """The whole opener (or the comment on an existing bug) as one markdown text. On a hang the
     awaited thread's stack follows the main thread's (``report_bug.build_awaited_work_block``,
     from the same minidump): the main thread's frames are the signature, the awaited thread is
@@ -307,7 +314,10 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
         spike_paragraph(brief),
         analysis_section(findings, brief, author_display=author_display,
                          link_regressor=link_regressor, grounded=grounded),
-        None if as_comment else venue_note(related_bugs, other_app_bugs, meta_bugs),
+        None if as_comment else venue_note(
+            related_bugs, other_app_bugs, meta_bugs, predating_bugs=predating_bugs,
+            landing_unresolved=landing_unresolved,
+            node=getattr(getattr(findings, "culprit", None), "node", None)),
         report_bug._needinfo_line(person) if person else None,
         report_bug._provenance(channel),
     ]
@@ -331,7 +341,8 @@ def _awaited_block(brief):
 def build_spike_preview(brief, findings, *, product, component, person=None,
                         details=None, stack=None, link_regressor=False, grounded=True,
                         related_bugs=None, other_app_bugs=None, meta_bugs=None,
-                        withhold=False, bucket_title=None):
+                        withhold=False, bucket_title=None, predating_bugs=None,
+                        landing_unresolved=False):
     """The bug the spike filer posts: ``build_bug_preview``'s shape, for the spike.
 
     ``bucket_title`` makes it a BUCKET BUG on a signature an open ``[meta]`` holds
@@ -365,7 +376,8 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
             brief, findings, details=details, stack=stack, person=person,
             author_display=author_display, link_regressor=link_regressor, grounded=grounded,
             related_bugs=related_bugs, other_app_bugs=other_app_bugs, meta_bugs=meta_bugs,
-            bucket_opener=opener),
+            bucket_opener=opener, predating_bugs=predating_bugs,
+            landing_unresolved=landing_unresolved),
         "product": product,
         "component": component,
         "version": report_bug._bug_version(channel),
