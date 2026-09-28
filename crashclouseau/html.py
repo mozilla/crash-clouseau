@@ -8,7 +8,7 @@ import json
 import re
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, population, report_bug, bugzilla_apply, config
-from . import api, sensitive
+from . import api, disclosure, sensitive
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
@@ -475,10 +475,9 @@ def _spike_numbers(spike):
 
 
 def _spike_view(rows, stale_after_s, now, public=True):
-    """Build task-page rows and a summary from ``SpikeEscalation.recent`` dicts.
+    """Build task rows and a summary from ``SpikeEscalation.recent`` records.
 
-    With ``public=True``, hide findings for filings with ``security_groups``.
-    """
+    For public viewers, hide findings with recorded disclosure flags."""
     out = []
     counts = {}
     stalled = filed = triage_filed = 0
@@ -503,7 +502,7 @@ def _spike_view(rows, stale_after_s, now, public=True):
 
         filing = r.get("filing") or {}
         skipped = r.get("skipped")
-        withheld = public and bool(filing.get("security_groups"))
+        withheld = public and disclosure.withheld_filing(filing)
         findings = None if withheld else (r.get("findings") or {})
         culprit = (findings or {}).get("culprit") or None
         bug = bug_mode = not_filed_reason = not_filed_bug = None
@@ -880,8 +879,9 @@ def _draft_evidence(uuid, changeset):
     # would FILE, which for a memory-safety crash includes `build_exposer_note`'s "so this is a
     # use-after-free or an uninitialised read". It does not come through `build_evidence`, so it
     # needs its own check -- see `sensitive.py`.
-    if not api.viewer_authorized() and sensitive.is_withheld(
-            (ev.get("dossier") or {}).get("corroborations")):
+    if not api.viewer_authorized() and (
+            sensitive.is_withheld((ev.get("dossier") or {}).get("corroborations"))
+            or disclosure.withheld_filing(ev.get("filed_bug"))):
         return None, None, None
 
     dossier = ev.get("dossier") or {}

@@ -108,18 +108,18 @@ def build_evidence(uuid, public=True):
     ev = models.Verdict.get_evidence(uuid)
     if ev is None:
         return None
-    if public and sensitive.is_withheld((ev.get("dossier") or {}).get("corroborations")):
-        # Everything the analysis produced goes, not selected fields. The mechanism sentence IS
-        # the disclosure -- "releases a stale, already-freed RefPtr" names the defect outright --
-        # and `diff.html` would still highlight exactly the lines the analysis flagged. `status`
-        # stays so the tasks view can still say the run finished.
+    unsafe = sensitive.is_withheld((ev.get("dossier") or {}).get("corroborations"))
+    if public and (unsafe or disclosure.withheld_filing(ev.get("filed_bug"))):
+        # Hide the entire analysis, including mechanism text and diff annotations.
+        # Keep completion status, but omit restriction details that could name a hidden bug.
         return {"uuid": ev.get("uuid") or uuid,
                 "status": ev.get("status"),
                 "verdict": None,
                 "withheld": True,
+                "withheld_kind": "memory_safety" if unsafe else "restricted_bug",
                 "withheld_reasons": ((ev.get("dossier") or {})
                                      .get("corroborations") or {}).get(
-                                         "memory_unsafe_signals") or []}
+                                         "memory_unsafe_signals") or [] if unsafe else []}
     # `rationale` is rendered verbatim on crashstack.html, and for a validation-failure
     # abstain it used to be a raw pydantic dump — input_value reprs, errors.pydantic.dev
     # links, the lot. Rewriting it HERE rather than only at the point it is produced also

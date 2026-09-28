@@ -183,3 +183,10 @@ def check_public_write(text, bug_id=None):
         logger.warning("disclosure: refusing a public write%s naming bug(s) %s",
                        " on bug {}".format(target) if target else "", hidden)
         raise DisclosureRefused("the text names a bug that is not public")
+
+
+def withheld_filing(filing):
+    """Withhold analysis for recorded security groups, restrictions, or removed references."""
+    filing = filing or {}
+    return bool(filing.get("security_groups") or filing.get("restricted")
+                or filing.get("withdrawn_refs"))

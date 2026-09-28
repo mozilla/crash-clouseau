@@ -6,7 +6,7 @@ import hmac
 import os
 
 from flask import request, jsonify, abort
-from crashclouseau import models
+from crashclouseau import disclosure, models
 from . import buginfo
 
 
@@ -192,8 +192,7 @@ def spikes():
     # withheld (memory-safety) analysis must not be readable here anonymously either.
     if not viewer_authorized():
         for r in rows:
-            filing = r.get("filing") or {}
-            if filing.get("security_groups"):
+            if disclosure.withheld_filing(r.get("filing")):
                 r["findings"] = None
     return jsonify({"rows": rows})
 

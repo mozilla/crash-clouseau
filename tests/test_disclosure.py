@@ -10,12 +10,13 @@ The tests set default SQLite and Redis URLs.
 Visibility is mocked unless the test explicitly checks the anonymous HTTP request."""
 import os
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
-from crashclouseau import bugzilla_apply, disclosure, report_bug  # noqa: E402
+from crashclouseau import bugzilla_apply, disclosure, html, report_bug  # noqa: E402
 from crashclouseau.agent import spike_escalation as se  # noqa: E402
 from crashclouseau.agent.spike_agent import SpikeFindings  # noqa: E402
 from tests.test_autofile import _PREVIEW, _Base, _bug  # noqa: E402
@@ -392,6 +393,45 @@ class TestTheSpikeFiler(_FilerBase):
         self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 2071528))
         self.assertEqual(self.comments, [])
         self.assertEqual(res["restricted"], "memory_safety")
+
+
+class TestThePublicPages(unittest.TestCase):
+    EV = {"uuid": "u-1", "status": "done", "verdict": "lead", "confidence": 70,
+          "dossier": {"corroborations": {},
+                      "verdict": {"mechanism": {"statement": "the diff adds a call"}},
+                      "candidate": {"node": "0a49d5b304b4", "bug": _HIDDEN}},
+          "actions": []}
+
+    def _evidence(self, filed_bug, public=True):
+        with mock.patch.object(bugzilla_apply.models.Verdict, "get_evidence",
+                               return_value=dict(self.EV, filed_bug=filed_bug)):
+            return bugzilla_apply.build_evidence("u-1", public=public)
+
+    def test_a_restricted_filing_withholds_the_analysis(self):
+        for filed in ({"filed": True, "bug": 2099999, "security_groups": ["core-security"],
+                       "restricted": "regressor"},
+                      {"filed": True, "bug": 2099998, "withdrawn_refs": 1}):
+            ev = self._evidence(filed)
+            self.assertEqual((ev["withheld"], ev["withheld_kind"], ev["withheld_reasons"]),
+                             (True, "restricted_bug", []))
+            self.assertNotIn(str(_HIDDEN), repr(ev))
+            self.assertNotIn("0a49d5b304b4", repr(ev))
+        self.assertEqual(self._evidence({"filed": True, "restricted": "regressor"},
+                                        public=False)["verdict"], "lead")
+        self.assertNotIn("withheld", self._evidence({"filed": True, "bug": 2099997}))
+
+    def test_the_spike_table_withholds_the_same_findings(self):
+        now = datetime(2026, 9, 28, tzinfo=timezone.utc)
+        row = {"id": 1, "status": "done", "created": now.isoformat(), "updated": now.isoformat(),
+               "findings": {"assessment": "regression",
+                            "culprit": {"node": "0a49d5b304b4", "bug": _HIDDEN}}}
+        for filing in ({"filed": True, "bug": 2099999, "restricted": "regressor"},
+                       {"filed": True, "bug": 1620171, "withdrawn_refs": 2}):
+            rows, _ = html._spike_view([dict(row, filing=filing)], 3900, now)
+            self.assertTrue(rows[0]["withheld"])
+            self.assertIsNone(rows[0]["culprit_bug"])
+        rows, _ = html._spike_view([dict(row, filing={"filed": True, "bug": 5})], 3900, now)
+        self.assertEqual(rows[0]["culprit_bug"], _HIDDEN)
 
 
 class TestTheNote(unittest.TestCase):
