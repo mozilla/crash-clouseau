@@ -109,7 +109,8 @@ def build_evidence(uuid, public=True):
     if ev is None:
         return None
     unsafe = sensitive.is_withheld((ev.get("dossier") or {}).get("corroborations"))
-    if public and (unsafe or disclosure.withheld_filing(ev.get("filed_bug"))):
+    if public and (unsafe or any(disclosure.withheld_filing(ev.get(k))
+                                 for k in ("filed_bug", "filing_declined", "filing_error"))):
         # Hide the entire analysis, including mechanism text and diff annotations.
         # Keep completion status, but omit restriction details that could name a hidden bug.
         return {"uuid": ev.get("uuid") or uuid,
@@ -2132,6 +2133,11 @@ _RESTRICTED_SHORT = {
 }
 
 
+def _with_restricted(res, restricted):
+    """Add a restriction reason so declines and write failures can withhold analysis."""
+    return dict(res, restricted=restricted) if restricted else res
+
+
 def _restricted_note(reason, bugs, declined=None):
     """Explain the restriction inside the restricted bug, including any declined venue."""
     ids = sorted({int(b) for b in bugs if b})
@@ -2617,9 +2623,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             bid = utils.get_buildid(uuid_info.get("buildid"))
             logger.info("autofile: bug %s was FIXED after build %s, so %s is a pre-fix report "
                         "of an already-fixed defect — not filing", fixed_by, bid, uuid)
-            return {"filed": False, "bug": fixed_by,
-                    "skipped": "already fixed by bug {} (the fix postdates build {})".format(
-                        fixed_by, bid)}
+            return _with_restricted({
+                "filed": False, "bug": fixed_by,
+                "skipped": "already fixed by bug {} (the fix postdates build {})".format(
+                    fixed_by, bid)}, restricted)
         # KNOWN ON THIS TRAIN, AND NOT FIXED HERE. A RESOLVED bug on the exact signature whose
         # status flag for the crash's own train reads affected/wontfix/disabled/fix-optional
         # already IS this crash (bug 2016440 for our 2070489: FIXED in 156/157, wontfix for 155,
@@ -2632,10 +2639,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             logger.info("autofile: bug %s already tracks %r on this train (%s = %s), so %s is "
                         "that bug and not a new one — not filing", known["id"], signature,
                         known["field"], known["flag"], uuid)
-            return {"filed": False, "bug": known["id"], "known_on_train": known,
-                    "skipped": "bug {} already tracks this signature on this train ({} = {}); "
-                               "the fix is not here and this crash is that bug".format(
-                                   known["id"], known["field"], known["flag"])}
+            return _with_restricted({
+                "filed": False, "bug": known["id"], "known_on_train": known,
+                "skipped": "bug {} already tracks this signature on this train ({} = {}); "
+                           "the fix is not here and this crash is that bug".format(
+                               known["id"], known["field"], known["flag"])}, restricted)
 
     # ALREADY HAS A REGRESSOR, so there is nothing for us to say. Our comment makes ONE claim
     # -- this changeset caused it -- and a venue whose `regressed_by` is already set has
@@ -2701,7 +2709,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         out = {"filed": False, "bug": bug_id, "skipped": skipped, "prior_comment": prior_comment}
         if via_duplicate:
             out["via_duplicate"] = via_duplicate
-        return out
+        return _with_restricted(out, restricted)
 
     # A NEW bug on a bucket-holder signature is a BUCKET BUG or nothing (`report_bug.
     # build_bug_preview`'s bucket mode: named for its cause, no `cf_crash_signature`, blocks the
@@ -2711,10 +2719,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         tracker = meta_bugs[0]["id"]
         logger.info("autofile: %r is held by [meta] bug %s and the verdict names no bucket to "
                     "file -- not filing a signature-titled bug for %s", signature, tracker, uuid)
-        return {"filed": False, "bug": tracker, "meta_bugs": [b["id"] for b in meta_bugs],
-                "skipped": "signature is held by [meta] bug {}; the verdict names no bucket to "
-                           "file, and a bug titled by the signature would be a second "
-                           "catch-all".format(tracker)}
+        return _with_restricted({
+            "filed": False, "bug": tracker, "meta_bugs": [b["id"] for b in meta_bugs],
+            "skipped": "signature is held by [meta] bug {}; the verdict names no bucket to "
+                       "file, and a bug titled by the signature would be a second "
+                       "catch-all".format(tracker)}, restricted)
     # Compare before creating a bug, except on withheld, incomplete-fix or meta-bucket paths.
     same_defect_check = None
     sd_cfg = config.get_agent_same_defect()
@@ -2737,9 +2746,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
-        return {"filed": False, "skipped": "preview failed: {}".format(exc)}
+        return _with_restricted(
+            {"filed": False, "skipped": "preview failed: {}".format(exc)}, restricted)
     if not preview:
-        return {"filed": False, "skipped": "no candidate regressor to file against"}
+        return _with_restricted(
+            {"filed": False, "skipped": "no candidate regressor to file against"}, restricted)
     if incomplete_fix:
         # This bug exists because a shipped fix did not hold, so it must not also assert a
         # regression: no `regression` keyword and no `regressed_by`. `build_bug_preview`
@@ -2753,9 +2764,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # here is that a HALF-resolved pair would file the bug into the wrong component, which
     # is worse than not filing: it lands on a team that has no idea why they got it.
     if not (preview.get("product") and preview.get("component")):
-        return {"filed": False,
-                "skipped": "product/component unresolved — refusing to file into the wrong "
-                           "component"}
+        return _with_restricted({
+            "filed": False,
+            "skipped": "product/component unresolved — refusing to file into the wrong "
+                       "component"}, restricted)
 
     # Remove list items containing nonpublic references; remaining references require
     # a restricted filing.
@@ -2793,10 +2805,11 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                        restricted or "; ".join(((dossier or {}).get("corroborations") or {})
                                                .get("memory_unsafe_signals") or []),
                        preview.get("product"))
-        return {"filed": False,
-                "skipped": "{} and no security group for product {!r}".format(
-                    _RESTRICTED_SHORT.get(restricted, "memory-safety crash"),
-                    preview.get("product"))}
+        return _with_restricted({
+            "filed": False,
+            "skipped": "{} and no security group for product {!r}".format(
+                _RESTRICTED_SHORT.get(restricted, "memory-safety crash"),
+                preview.get("product"))}, restricted)
     if withhold and bug_id is not None:
         # The venue we picked is an EXISTING bug, and `_open_bugs_for_signature` is
         # unauthenticated by design, so that bug is public by construction -- posting the
@@ -3001,10 +3014,12 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
                 "signature": signature,
                 "title_len": len((preview or {}).get("title") or ""),
                 "mode": "comment" if bug_id is not None else "new_bug",
+                **({"restricted": restricted} if restricted else {}),
             })
         except Exception:                                   # pragma: no cover - defensive
             logger.warning("autofile: could not record the filing error for %s", uuid)
-        return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}
+        return _with_restricted(
+            {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}, restricted)
 
     models.Dossier.record_filed_bug(uuid, result)
     logger.info("autofile: %s -> bug %s (%s, needinfo=%s)",

@@ -4650,6 +4650,9 @@ def _autofile(uuid, payload, row):
                 decline["bug"] = res["bug"]
             if res.get("same_defect"):
                 decline["same_defect"] = res["same_defect"]
+            # Preserve disclosure flags when recording a decline.
+            if res.get("restricted"):
+                decline["restricted"] = res["restricted"]
             models.Dossier.record_filing_decline(uuid, decline)
     except Exception:                                    # pragma: no cover - defensive
         logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)

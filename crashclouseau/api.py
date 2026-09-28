@@ -188,12 +188,13 @@ def spikes():
     sgn = request.args.get("signature", "").strip()
     if sgn:
         rows = [r for r in rows if r.get("signature") == sgn]
-    # The raw model handoff and the persisted brief are for the database, not the feed: a
-    # withheld (memory-safety) analysis must not be readable here anonymously either.
+    # Withheld findings and their filing metadata need separate redaction.
     if not viewer_authorized():
         for r in rows:
-            if disclosure.withheld_filing(r.get("filing")):
+            withheld = bool(r.get("findings")) and not disclosure.public_findings(r.get("filing"))
+            if withheld:
                 r["findings"] = None
+            r["filing"] = disclosure.public_filing(r.get("filing"), withheld)
     return jsonify({"rows": rows})
 
 

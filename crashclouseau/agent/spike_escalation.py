@@ -1357,6 +1357,35 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     # into (`html.py` renders it as the component column); the crash's product is the row's.
     result = {"filed": False, "at": now.isoformat(), "signature": signature, "channel": channel,
               "buildid": esc.buildid, "uuid": esc.uuid}
+    raw = brief.get("raw_crash") or {}
+    try:
+        signals = sensitive.memory_unsafe_signals(raw) if raw else []
+    except Exception:
+        signals = []
+    try:
+        details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
+    except Exception:
+        details = {}
+    stack = brief.get("stack_frames") or {}
+    link_regressor = bool(brief.get("culprit_in_window")) and grounded
+    # Record the disclosure decision before filing gates so declines and write failures
+    # retain the flags used by the public views.
+    screened = _screen(brief, findings, grounded, details, stack, link_regressor)
+    restricted = restricted_bugs = None
+    withheld, withdrawn = bool(signals), set()
+    if screened is None:
+        result["restricted"] = "unchecked"
+    else:
+        restricted = screened["restricted"]
+        restricted_bugs = ([screened["culprit_bug"]] if restricted == "regressor"
+                           else screened["left"])
+        withheld = withheld or bool(restricted)
+        withdrawn = set(screened["withdrawn"]) if not withheld else set()
+        result["screened"] = True
+        if withheld:
+            result["restricted"] = restricted or "memory_safety"
+        elif withdrawn:
+            result["withdrawn_refs"] = len(withdrawn)
     if not config.autofile_globally_enabled():
         return dict(result, skipped="autofile disabled")
     # THE PRODUCT HOLD BINDS THE SPIKE FILER TOO, unlike the per-channel hold (see
@@ -1377,29 +1406,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     excluded = bugzilla_apply.skipped_regressor(culprit.bug if culprit is not None else None)
     if excluded:
         return dict(result, skipped=bugzilla_apply._SKIPPED_REGRESSOR.format(excluded))
-    raw = brief.get("raw_crash") or {}
-    try:
-        signals = sensitive.memory_unsafe_signals(raw) if raw else []
-    except Exception:
-        signals = []
-    try:
-        details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
-    except Exception:
-        details = {}
-    stack = brief.get("stack_frames") or {}
-    link_regressor = bool(brief.get("culprit_in_window")) and grounded
-    # Remove list items with nonpublic references; remaining references require
-    # a restricted venue.
-    screened = _screen(brief, findings, grounded, details, stack, link_regressor)
     if screened is None:
         return dict(result, retry=True, skipped=(
             "could not check whether the bugs the analysis names are public; not risking a "
             "disclosure"))
-    restricted = screened["restricted"]
-    restricted_bugs = ([screened["culprit_bug"]] if restricted == "regressor"
-                       else screened["left"])
-    withheld = bool(signals) or bool(restricted)
-    withdrawn = set(screened["withdrawn"]) if not withheld else set()
     # The crash's other names ride along (`sigfamily`, on the brief): a bug open on the name
     # this crash had before the rename is its venue, and gets this name attached.
     family = brief.get("signature_family") or {}
@@ -1487,7 +1497,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 # The tracker is public. Without a bucket title, neither a restricted
                 # bucket filing nor a public comment is allowed here.
                 if restricted:
-                    return dict(result, restricted=restricted, skipped=(
+                    return dict(result, skipped=(
                         "{}; the spike is held by [meta] bug {} and the analysis names no "
                         "bucket, so it was not posted publicly".format(
                             bugzilla_apply._RESTRICTED_SHORT[restricted], meta_bugs[0]["id"])))
@@ -1538,9 +1548,6 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             result.update({"filed": True, "bug": venue["id"], "mode": "spike_comment",
                            "venue_kind": venue_kind, "venue_for_spike": bool(for_spike),
                            "needinfo": None if isinstance(outcome, Exception) else (email or None)})
-            if withheld:
-                # Persist the restriction for the public views.
-                result["restricted"] = restricted or "memory_safety"
         else:
             preview = spike_report.build_spike_preview(
                 brief, findings, product=bz_product, component=component, person=person,
@@ -1607,10 +1614,6 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 result["security_groups"] = preview.get("groups") or []
                 if signals:
                     result["memory_unsafe_signals"] = signals
-                # Record the category without adding the referenced bug IDs.
-                result["restricted"] = restricted or "memory_safety"
-        if withdrawn:
-            result["withdrawn_refs"] = len(withdrawn)
     except Exception as exc:
         logger.error("spike: Bugzilla write failed for escalation %s: %s", esc.id, exc)
         return dict(result, skipped="bugzilla write failed: {}".format(exc), error=str(exc)[:500])

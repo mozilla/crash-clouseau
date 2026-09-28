@@ -186,7 +186,34 @@ def check_public_write(text, bug_id=None):
 
 
 def withheld_filing(filing):
-    """Withhold analysis for recorded security groups, restrictions, or removed references."""
+    """Return whether security groups, a restriction reason, or removed references
+    require withholding the analysis. Restriction reasons include unchecked visibility."""
     filing = filing or {}
     return bool(filing.get("security_groups") or filing.get("restricted")
                 or filing.get("withdrawn_refs"))
+
+
+def public_findings(filing):
+    """Allow spike findings only with a recorded screen and no withholding flags."""
+    return bool((filing or {}).get("screened")) and not withheld_filing(filing)
+
+
+# Keep operational fields; omit analysis-derived metadata such as regressor IDs and titles.
+_PUBLIC_FILING_KEYS = ("filed", "bug", "mode", "at", "channel", "buildid", "uuid", "signature",
+                       "retry", "attempts", "venue_kind", "screened", "restricted",
+                       "withdrawn_refs", "security_groups")
+
+
+def public_filing(filing, withheld):
+    """Filter a withheld filing to ``_PUBLIC_FILING_KEYS``.
+
+    Keep the skip reason unless it contains recognized bug IDs other than ``filing.bug``.
+    Return the original record when withholding is not requested."""
+    if not withheld or not filing:
+        return filing
+    out = {k: filing[k] for k in _PUBLIC_FILING_KEYS if k in filing}
+    skipped = filing.get("skipped")
+    if skipped:
+        own = {int(filing["bug"])} if str(filing.get("bug") or "").isdigit() else set()
+        out["skipped"] = skipped if bug_refs(skipped) <= own else "not filed (reason withheld)"
+    return out

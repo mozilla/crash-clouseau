@@ -262,8 +262,10 @@ def _filing_status(uuid, uuid_info, evidence):
     }
 
 
-def _task_view(rows, stale_after_s, now, spike_filings=None):
+def _task_view(rows, stale_after_s, now, spike_filings=None, public=True):
     """Turn raw Dossier.list_tasks rows into per-task display dicts + a fleet summary.
+
+    With ``public=True``, hide needinfo when the row carries ``filed_restricted``.
 
     Pure (takes `now`) so it's testable without patching the clock. A "running" task
     whose last update is older than stale_after_s is flagged stalled: its worker very
@@ -336,6 +338,7 @@ def _task_view(rows, stale_after_s, now, spike_filings=None):
                 key = (r.signature, channel, product) if product else (r.signature, channel)
                 spike = spike_filings.get(key)
 
+        hidden_ask = public and bool(getattr(r, "filed_restricted", None))
         tasks.append(
             {
                 "uuid": r.uuid,
@@ -374,8 +377,9 @@ def _task_view(rows, stale_after_s, now, spike_filings=None):
                 # `_task_view` is also fed hand-built rows by the tests.
                 "filed_bug": getattr(r, "filed_bug", None),
                 "filed_mode": getattr(r, "filed_mode", None),
-                "filed_needinfo": getattr(r, "filed_needinfo", None),
-                "filed_needinfo_missed": getattr(r, "filed_needinfo_missed", None),
+                "filed_needinfo": None if hidden_ask else getattr(r, "filed_needinfo", None),
+                "filed_needinfo_missed": (None if hidden_ask
+                                          else getattr(r, "filed_needinfo_missed", None)),
                 # ...and what it DECLINED, with the bug the decline is about when it names one
                 # (`Dossier.list_tasks`, `_declined_bug`): "not filed (bug N)" on the page.
                 "declined_reason": getattr(r, "declined_reason", None),
@@ -477,7 +481,8 @@ def _spike_numbers(spike):
 def _spike_view(rows, stale_after_s, now, public=True):
     """Build task rows and a summary from ``SpikeEscalation.recent`` records.
 
-    For public viewers, hide findings with recorded disclosure flags."""
+    For public viewers, withhold findings without a clean screen and redact their
+    filing metadata."""
     out = []
     counts = {}
     stalled = filed = triage_filed = 0
@@ -502,7 +507,8 @@ def _spike_view(rows, stale_after_s, now, public=True):
 
         filing = r.get("filing") or {}
         skipped = r.get("skipped")
-        withheld = public and disclosure.withheld_filing(filing)
+        withheld = public and bool(r.get("findings")) and not disclosure.public_findings(filing)
+        filing = disclosure.public_filing(filing, withheld)
         findings = None if withheld else (r.get("findings") or {})
         culprit = (findings or {}).get("culprit") or None
         bug = bug_mode = not_filed_reason = not_filed_bug = None
@@ -590,7 +596,8 @@ def tasks():
             spike_rows, config.get_agent_spike_escalation()["job_timeout"] + 300, now,
             public=not api.viewer_authorized())
         tasks_, summary = _task_view(rows, stale_after, now,
-                                     spike_filings=_spike_filings(spike_rows))
+                                     spike_filings=_spike_filings(spike_rows),
+                                     public=not api.viewer_authorized())
         return render_template("tasks.html", tasks=tasks_, summary=summary,
                                spikes=spikes_, spike_summary=spike_summary)
     except Exception:
@@ -881,7 +888,8 @@ def _draft_evidence(uuid, changeset):
     # needs its own check -- see `sensitive.py`.
     if not api.viewer_authorized() and (
             sensitive.is_withheld((ev.get("dossier") or {}).get("corroborations"))
-            or disclosure.withheld_filing(ev.get("filed_bug"))):
+            or any(disclosure.withheld_filing(ev.get(k))
+                   for k in ("filed_bug", "filing_declined", "filing_error"))):
         return None, None, None
 
     dossier = ev.get("dossier") or {}

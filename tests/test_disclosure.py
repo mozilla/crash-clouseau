@@ -269,6 +269,19 @@ class TestTheOrdinaryFiler(_Base):
         self.assertIn("because the analysis above names bug 2068336, which is not public, and "
                       "bug 55 is public._", self.created[0]["description"])
 
+    def test_a_decline_or_a_failed_write_carries_the_reason(self):
+        self._hide(_HIDDEN)
+        report_bug.build_bug_preview.side_effect = lambda *a, **k: dict(_PREVIEW)
+        self.assertEqual(self._file(dossier=self.DOSSIER)["restricted"], "regressor")
+        report_bug.build_bug_preview.side_effect = _Restricting.preview
+        errors = []
+        with mock.patch.object(bugzilla_apply, "_create_bug", side_effect=RuntimeError("boom")), \
+                mock.patch.object(bugzilla_apply.models.Dossier, "record_filing_error",
+                                  side_effect=lambda u, i: errors.append(i)):
+            res = self._file(dossier=self.DOSSIER)
+        self.assertEqual((res["filed"], res["restricted"]), (False, "regressor"))
+        self.assertEqual(errors[0]["restricted"], "regressor")
+
     def test_no_security_group_files_nothing(self):
         self._hide(_HIDDEN)
         report_bug.build_bug_preview.side_effect = lambda *a, **k: dict(_PREVIEW)
@@ -361,7 +374,31 @@ class TestTheSpikeFiler(_FilerBase):
         res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertTrue(res["retry"])
         self.assertIn("not risking a disclosure", res["skipped"])
+        self.assertEqual(res["restricted"], "unchecked")
+        self.assertNotIn("screened", res)
         self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_every_exit_after_the_decision_carries_it(self):
+        """Restriction flags survive missing groups, failed writes and disabled filing."""
+        self._hide(_HIDDEN)
+        with mock.patch.object(report_bug, "security_group", return_value=None):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["restricted"], res["screened"]), ("regressor", True))
+        with mock.patch.object(bugzilla_apply, "_create_bug_keeping_the_bug",
+                               side_effect=RuntimeError("boom")):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertIn("bugzilla write failed", res["skipped"])
+        self.assertEqual(res["restricted"], "regressor")
+        with mock.patch.object(se.config, "autofile_globally_enabled", return_value=False):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["skipped"], res["restricted"]), ("autofile disabled", "regressor"))
+
+    def test_a_clean_spike_is_marked_screened(self):
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertTrue(res["screened"])
+        self.assertNotIn("restricted", res)
+        self.assertTrue(disclosure.public_findings(res))
 
     def test_a_culprit_without_a_bug_is_read_off_its_commit_message(self):
         findings = self.findings.model_copy(update={"culprit": self.findings.culprit.model_copy(
@@ -430,8 +467,97 @@ class TestThePublicPages(unittest.TestCase):
             rows, _ = html._spike_view([dict(row, filing=filing)], 3900, now)
             self.assertTrue(rows[0]["withheld"])
             self.assertIsNone(rows[0]["culprit_bug"])
-        rows, _ = html._spike_view([dict(row, filing={"filed": True, "bug": 5})], 3900, now)
+        rows, _ = html._spike_view([dict(row, filing={"filed": True, "bug": 5, "screened": True})],
+                                   3900, now)
         self.assertEqual(rows[0]["culprit_bug"], _HIDDEN)
+
+
+class TestWhatAnonymousViewersSee(unittest.TestCase):
+    """Anonymous responses must redact both findings and sensitive filing metadata."""
+
+    FILING = {"filed": True, "bug": 2099999, "mode": "spike_new_bug", "screened": True,
+              "restricted": "regressor", "security_groups": ["core-security"],
+              "regressed_by": [_HIDDEN], "needinfo": "dev@moz.example", "product": "Core",
+              "component": "Graphics: Canvas2D", "keywords": ["crash", "regression"],
+              "bucket_title": "OffscreenCanvas::GetContext clears the worker ref"}
+
+    def test_a_withheld_filing_record_keeps_only_safe_fields(self):
+        out = disclosure.public_filing(self.FILING, True)
+        self.assertEqual(out, {"filed": True, "bug": 2099999, "mode": "spike_new_bug",
+                               "screened": True, "restricted": "regressor",
+                               "security_groups": ["core-security"]})
+        self.assertEqual(disclosure.public_filing({"bug": 72, "skipped": "bug 72 was fixed"},
+                                                  True)["skipped"], "bug 72 was fixed")
+        self.assertEqual(disclosure.public_filing({"skipped": "regressor bug {} is excluded".format(
+            _HIDDEN)}, True)["skipped"], "not filed (reason withheld)")
+        self.assertIs(disclosure.public_filing(self.FILING, False), self.FILING)
+
+    def test_the_spike_feed(self):
+        from crashclouseau import app
+        row = {"id": 1, "signature": "S", "status": "done", "filing": dict(self.FILING),
+               "findings": {"culprit": {"node": "0a49d5b304b4", "bug": _HIDDEN}}}
+        client = app.test_client()
+        with mock.patch.object(bugzilla_apply.models.SpikeEscalation, "recent",
+                               side_effect=lambda **kw: [dict(row, filing=dict(self.FILING))]), \
+                mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}, clear=False):
+            anonymous = client.get("/api/spikes").get_json()["rows"][0]
+            authorized = client.get("/api/spikes",
+                                    headers={"X-Clouseau-Token": "s3cret"}).get_json()["rows"][0]
+        self.assertIsNone(anonymous["findings"])
+        self.assertNotIn(str(_HIDDEN), repr(anonymous))
+        self.assertNotIn("dev@moz.example", repr(anonymous))
+        self.assertEqual(authorized["filing"]["regressed_by"], [_HIDDEN])
+
+    def test_rows_without_a_screen_are_withheld(self):
+        now = datetime(2026, 9, 28, tzinfo=timezone.utc)
+        row = {"id": 1, "status": "done", "created": now.isoformat(), "updated": now.isoformat(),
+               "findings": {"assessment": "regression", "culprit": {"node": "0a49d5b304b4"}}}
+        for filing in (None, {"filed": True, "bug": 5, "needinfo": "dev@moz.example",
+                              "component": "Graphics"}):
+            rows, _ = html._spike_view([dict(row, filing=filing)], 3900, now)
+            self.assertTrue(rows[0]["withheld"])
+            self.assertIsNone(rows[0]["culprit_node"])
+            self.assertIsNone(rows[0]["needinfo"])
+            self.assertIsNone(rows[0]["component"])
+        rows, _ = html._spike_view([dict(row, filing=None)], 3900, now, public=False)
+        self.assertEqual(rows[0]["culprit_node"], "0a49d5b304b4")
+        rows, _ = html._spike_view([dict(row, findings=None, filing=None)], 3900, now)
+        self.assertFalse(rows[0]["withheld"], "nothing to withhold")
+
+    def test_an_ordinary_decline_or_error_withholds_the_analysis(self):
+        ev = dict(TestThePublicPages.EV, filed_bug=None)
+        for key in ("filing_declined", "filing_error"):
+            with mock.patch.object(bugzilla_apply.models.Verdict, "get_evidence",
+                                   return_value=dict(ev, **{key: {"restricted": "regressor"}})):
+                out = bugzilla_apply.build_evidence("u-1")
+            self.assertTrue(out["withheld"], key)
+            self.assertNotIn(str(_HIDDEN), repr(out))
+
+    def test_the_tasks_table_hides_who_was_asked_on_a_restricted_filing(self):
+        from tests.test_tasks_view import NOW, _row
+        row = _row(filed_bug="2099999", filed_mode="new_bug", filed_needinfo="dev@moz.example",
+                   filed_restricted="regressor")
+        tasks, _ = html._task_view([row], 3900, NOW)
+        self.assertIsNone(tasks[0]["filed_needinfo"])
+        self.assertEqual(tasks[0]["filed_bug"], "2099999")
+        tasks, _ = html._task_view([row], 3900, NOW, public=False)
+        self.assertEqual(tasks[0]["filed_needinfo"], "dev@moz.example")
+
+
+class TestTheDeclineRecord(unittest.TestCase):
+    def test_it_keeps_the_reason(self):
+        from crashclouseau.agent import orchestrator
+        seen = []
+        with mock.patch.object(orchestrator.models.CrashStack, "get_by_uuid",
+                               return_value=({}, {"channel": "nightly", "product": "Firefox",
+                                                  "signature": "S", "buildid": None})), \
+                mock.patch.object(bugzilla_apply, "autofile_bug", return_value={
+                    "filed": False, "skipped": "product/component unresolved",
+                    "restricted": "regressor"}), \
+                mock.patch.object(orchestrator.models.Dossier, "record_filing_decline",
+                                  side_effect=lambda u, i: seen.append(i)):
+            orchestrator._autofile("u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 70})
+        self.assertEqual(seen[0]["restricted"], "regressor")
 
 
 class TestTheNote(unittest.TestCase):

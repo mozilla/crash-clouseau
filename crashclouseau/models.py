@@ -3008,6 +3008,11 @@ class Dossier(db.Model):
                     Dossier.payload["filed_bug"]["needinfo_dropped"].astext,
                     Dossier.payload["filed_bug"]["needinfo_failed"].astext,
                 ).label("filed_needinfo_missed"),
+                # The tasks view hides needinfo when a restriction or security group is recorded.
+                func.coalesce(
+                    Dossier.payload["filed_bug"]["restricted"].astext,
+                    Dossier.payload["filed_bug"]["security_groups"].astext,
+                ).label("filed_restricted"),
                 # What the autofiler DECLINED to do (``record_filing_decline``): the gate's
                 # reason, and the bug that reason is about when it names one -- an open venue
                 # in `skip` mode, a bug that already names its regressor, a fix that postdates

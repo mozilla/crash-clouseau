@@ -425,8 +425,9 @@ def _spike(**kw):
         skipped=None,
         findings={"assessment": "unknown", "culprit": None, "product": "Core",
                   "component": "DOM: Workers"},
+        # Fixture findings have passed disclosure screening.
         filing={"filed": True, "bug": 2070033, "mode": "spike_new_bug", "product": "Core",
-                "component": "DOM: Workers", "needinfo": None},
+                "component": "DOM: Workers", "needinfo": None, "screened": True},
         error=None, cost_usd=0.93, input_tokens=11863, output_tokens=19663,
         cache_read_tokens=265735,
         created=(NOW - timedelta(minutes=6)).isoformat(),
@@ -532,11 +533,13 @@ class TestTheSpikeSection(unittest.TestCase):
         self.assertIn("0 filed", body)
 
     def test_a_run_that_filed_nothing_says_why(self):
-        body = self._render([], [_spike(filing={"filed": False, "skipped": "open bug 12345 exists"})])
+        body = self._render([], [_spike(filing={"filed": False, "skipped": "open bug 12345 exists",
+                                                "screened": True})])
         self.assertIn("not&nbsp;filed (", body)
         self.assertIn("show_bug.cgi?id=12345", body)
         self.assertIn("Not filed: open bug 12345 exists", body)
-        body = self._render([], [_spike(filing={"filed": False, "skipped": "autofile disabled"})])
+        body = self._render([], [_spike(filing={"filed": False, "skipped": "autofile disabled",
+                                                "screened": True})])
         self.assertIn("Not filed: autofile disabled", body)
         self.assertNotIn("show_bug.cgi", body)
 
