@@ -4543,6 +4543,28 @@ def _resolve_candidate_git_commit(dossier, seed):
         dossier.candidate = cand.model_copy(update=update)
 
 
+def _record_file_components(dossier, seed):
+    """Record ``file_components`` for the filing fallback during online runs.
+
+    Uses the candidate's hg files and seed stack; lookup failures leave the dossier unchanged.
+    """
+    cand = dossier.candidate if dossier is not None else None
+    if cand is None or not cand.node:
+        return
+    try:
+        from crashclouseau import bugcomponents, sigage
+
+        rev = sigage.json_rev(cand.node, (seed or {}).get("channel")) or {}
+        files = [f.get("file") if isinstance(f, dict) else f for f in rev.get("files") or []]
+        stack = [f.get("filename") for f in (seed or {}).get("frames") or []]
+        found = bugcomponents.file_components(files, stack)
+    except Exception:
+        logger.warning("agent: file components failed for %s", cand.node, exc_info=True)
+        return
+    if found:
+        dossier.corroborations = {**(dossier.corroborations or {}), "file_components": found}
+
+
 _HG_USER_EMAIL = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")
 
 
@@ -4855,6 +4877,7 @@ def run_evidence_agent(uuid, force=False):
             # an hg json-rev call (8-13s) per corpus crash would wreck an eval run's runtime and
             # its determinism. Online only, once per run, usually a cache hit from the gate above.
             _resolve_candidate_git_commit(result.dossier, seed)
+            _record_file_components(result.dossier, seed)
 
             # ``result.actions`` is the single source of truth (build_result folds the
             # recorder's actions + the synthesized needinfo into it); model_dump already

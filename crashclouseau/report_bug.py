@@ -1770,23 +1770,15 @@ def _first_email(author):
     return author if ("@" in author and " " not in author) else ""
 
 
-def resolve_product_component(candidate, channel, product=None):
-    """``(product, component)`` for the bug we would file, best-effort + never raises:
+def resolve_product_component(candidate, channel, product=None, file_components=None):
+    """Resolve a filing component, excluding other applications' products at both steps.
 
-    1. the REGRESSOR bug's own product::component;
-    2. if that bug is unreadable (e.g. a security regressor bug), the MOST FREQUENT
-       product::component across the regressor author's recent patches' bugs;
-    3. ``(None, None)`` when neither resolves.
+    Prefer the regressor bug's pair. Otherwise, use the most frequent allowed pair from
+    the author's recent patches' bugs only if it matches a ``file_components`` value
+    (changeset, stack or overlap). Return ``(None, None)`` if neither resolves.
 
-    A pair belonging to another application built on Gecko is never returned, at either rung:
-    a mozilla-central changeset is regularly written FOR a Thunderbird bug — that is what
-    ``MailNews Core`` mostly is — and inheriting its component would drop a Firefox crash on
-    Thunderbird's triage queue. ``product`` is the crash's own Socorro product; leaving it
-    unset exempts nobody (``config.get_other_app_products``).
-
-    Resolving to nothing is an acceptable outcome of that, not a failure to paper over:
-    ``bugzilla_apply.autofile_bug`` refuses to file without a pair, which is this module's
-    standing preference over filing into a component that has no idea why it got the bug."""
+    ``product`` is the crash's Socorro product, used by ``config.get_other_app_products``.
+    """
     if not candidate:
         return None, None
     foreign = config.get_other_app_products(product)
@@ -1802,7 +1794,9 @@ def resolve_product_component(candidate, channel, product=None):
                 return pc
         node = candidate.get("node")
         info = models.Node.authors_for([node], channel).get(node, {}) if node else {}
+        # Use the stored hg email if the local author record and display name yield none.
         email = info.get("email") or _first_email(candidate.get("author"))
+        email = email or (candidate.get("author_email") or "").strip()
         if email:
             bugs = models.Node.recent_bugs_by_author(email, channel)
             pcs = {b: pc for b, pc in _bugs_product_component(bugs).items()
@@ -1813,7 +1807,11 @@ def resolve_product_component(candidate, channel, product=None):
                 # first-seen, so this deterministically favours the author's most RECENT
                 # patch, independent of unrelated prior cache state.
                 ordered = [pcs[b] for b in bugs if b in pcs]
-                return Counter(ordered).most_common(1)[0][0]
+                pc = Counter(ordered).most_common(1)[0][0]
+                if pc in {tuple(v) for v in (file_components or {}).values() if v}:
+                    return pc
+                logger.info("bug preview: author's component %s matches no moz.build "
+                            "component of the changeset or stack (%s)", pc, file_components)
     except Exception:
         logger.warning("bug preview: could not resolve product/component", exc_info=True)
     return None, None
@@ -2690,7 +2688,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     uuid = uuid_info.get("uuid", "")
     if candidate and candidate.get("node"):
         product, component = resolve_product_component(
-            candidate, channel, uuid_info.get("product"))
+            candidate, channel, uuid_info.get("product"),
+            file_components=(dossier.get("corroborations") or {}).get("file_components"))
         person = _needinfo_person(candidate, channel)
     else:
         # No changeset: the FIXED bug is the authority on both. Its component is where this

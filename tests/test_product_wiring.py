@@ -1917,7 +1917,8 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
                            return_value=[1, 2, 3]):
             pc = report_bug.resolve_product_component(
-                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly")
+                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly",
+                file_components={"stack": ["Core", "X"]})
         self.assertEqual(pc, ("Core", "X"))     # most frequent
 
     def test_resolve_pc_fallback_tie_prefers_newest(self):
@@ -1935,7 +1936,8 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
                            return_value=[150, 100]):        # newest-first
             pc = report_bug.resolve_product_component(
-                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly")
+                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly",
+                file_components={"changeset": ["Toolkit", "Y"], "stack": ["Core", "DOM"]})
         self.assertEqual(pc, ("Toolkit", "Y"))             # newest wins the tie
 
     def test_resolve_pc_refuses_another_applications_component(self):
@@ -1965,8 +1967,39 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
                            return_value=[1, 2, 3]):
             pc = report_bug.resolve_product_component(
-                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly", "Firefox")
+                {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}, "nightly", "Firefox",
+                file_components={"overlap": ["Core", "DOM: Navigation"]})
         self.assertEqual(pc, ("Core", "DOM: Navigation"))
+
+    def _author_fallback(self, candidate, file_components, recent=(1, 2, 3)):
+        def fake_pc(bugids):
+            bugids = list(bugids)
+            if bugids == [123]:
+                return {}                                  # regressor unreadable
+            return {1: ("Core", "X"), 2: ("Core", "X"), 3: ("Toolkit", "Y")}
+        with mock.patch.object(report_bug, "_bugs_product_component", side_effect=fake_pc), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
+                           return_value=list(recent)) as recent_bugs:
+            pc = report_bug.resolve_product_component(
+                candidate, "nightly", file_components=file_components)
+        return pc, recent_bugs
+
+    def test_resolve_pc_author_fallback_needs_a_matching_file_component(self):
+        cand = {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}
+        for fc in (None, {}, {"changeset": ["Toolkit", "Y"], "stack": ["Core", "Z"]}):
+            with self.subTest(file_components=fc):
+                self.assertEqual(self._author_fallback(cand, fc)[0], (None, None))
+        self.assertEqual(self._author_fallback(cand, {"overlap": ["Core", "X"]})[0],
+                         ("Core", "X"))
+
+    def test_resolve_pc_author_fallback_reads_the_stored_author_email(self):
+        # The local author lookup is empty and `author` contains no email.
+        cand = {"bug": 123, "node": "n", "author": "James Teh",
+                "author_email": "jteh@mozilla.com"}
+        pc, recent_bugs = self._author_fallback(cand, {"stack": ["Core", "X"]})
+        self.assertEqual(pc, ("Core", "X"))
+        recent_bugs.assert_called_once_with("jteh@mozilla.com", "nightly")
 
     def test_resolve_pc_with_no_crash_product_exempts_nobody(self):
         # The gate must not be switchable off by an absent product (page previews and old
@@ -2030,6 +2063,22 @@ class TestBugPreview(unittest.TestCase):
         self.assertIsNone(report_bug.build_bug_preview(ui, self._stack3(), {"candidate": None}))
         self.assertIsNone(
             report_bug.build_bug_preview(ui, self._stack3(), {"candidate": {"bug": 1}}))
+
+    def test_build_bug_preview_passes_the_recorded_file_components(self):
+        ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",
+              "buildid": "20260727081724", "product": "Fenix"}
+        fc = {"stack": ["Core", "Disability Access APIs"]}
+        dossier = {"candidate": {"node": "n", "bug": 1}, "corroborations": {"file_components": fc},
+                   "verdict": {}}
+        with mock.patch.object(report_bug, "resolve_product_component",
+                               return_value=("Core", "Disability Access APIs")) as resolve, \
+                mock.patch.object(report_bug, "fetch_crash_reason", return_value={}), \
+                mock.patch.object(report_bug, "fetch_signature_stats", return_value=(True, {})), \
+                mock.patch("crashclouseau.models.UUID.get_info", return_value={}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+            report_bug.build_bug_preview(ui, self._stack3(), dossier)
+        resolve.assert_called_once_with(dossier["candidate"], "nightly", "Fenix",
+                                        file_components=fc)
 
     def test_build_bug_preview_shape(self):
         ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",

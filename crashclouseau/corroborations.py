@@ -529,6 +529,10 @@ REGISTRY = {
         "abstaining it. The count of how often the blind reviewer's mechanism read disagrees "
         "with the version-step evidence; when `Feedback` later says which was right, this is "
         "the flag to join on."),
+    "file_components": (
+        "evidence", ("report_bug.py",),
+        "Component estimates for the changeset, stack and overlap (`bugcomponents.file_components`). "
+        "The author-based filing fallback requires a match with one of these pairs."),
 }
 
 

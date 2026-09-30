@@ -450,6 +450,29 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
             orch._resolve_candidate_git_commit(d, _SEED)   # must not raise
         self.assertEqual((d.candidate.git_commit, d.candidate.author_email), ("", ""))
 
+    def test_records_the_file_components_of_the_changeset_and_stack(self):
+        d = _lead()
+        rev = {"files": [{"file": "dom/ipc/BrowserBridgeParent.cpp"}, "accessible/x.cpp"]}
+        seed = dict(_SEED, frames=[{"filename": "accessible/a.cpp"}, {"filename": None}])
+        found = {"changeset": ["Core", "DOM: Content Processes"]}
+        with mock.patch.object(sigage, "json_rev", return_value=rev), \
+                mock.patch("crashclouseau.bugcomponents.file_components",
+                           return_value=found) as fc:
+            orch._record_file_components(d, seed)
+        fc.assert_called_once_with(["dom/ipc/BrowserBridgeParent.cpp", "accessible/x.cpp"],
+                                   ["accessible/a.cpp", None])
+        self.assertEqual(d.corroborations["file_components"], found)
+
+    def test_file_components_absent_or_failing_leave_the_dossier_alone(self):
+        d = _lead()
+        with mock.patch.object(sigage, "json_rev", return_value={}), \
+                mock.patch("crashclouseau.bugcomponents.file_components", return_value={}):
+            orch._record_file_components(d, _SEED)
+        with mock.patch.object(sigage, "json_rev", side_effect=RuntimeError("hg down")):
+            orch._record_file_components(d, _SEED)       # must not raise
+            orch._record_file_components(None, _SEED)
+        self.assertNotIn("file_components", d.corroborations)
+
     def test_only_a_bracketed_address_is_accepted_as_an_email(self):
         # A bare name or a bare address must not become a needinfo target: anything merely
         # containing an "@" would eventually ping a string that is not a person.
