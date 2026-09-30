@@ -44,9 +44,9 @@ def _allowed(claims) -> bool:
 
 
 def current_user():
-    """Return the user's email/name, or None when sign-in is disabled or expired.
+    """Return the session user if sign-in is enabled and the login is unexpired.
 
-    ``signed_in_at`` limits access even when Flask refreshes the session cookie.
+    Expiry is measured from ``signed_in_at``.
     """
     if not enabled():
         return None
@@ -100,7 +100,12 @@ def callback():
                     (claims.get("email") or "").rpartition("@")[2])
         abort(403, "only {} Google accounts can sign in".format(ALLOWED_DOMAIN))
     session.permanent = True
-    session["user"] = {"email": claims["email"].lower(), "name": claims.get("name") or ""}
+    picture = claims.get("picture")
+    session["user"] = {
+        "email": claims["email"].lower(),
+        "name": claims.get("name") or "",
+        "picture": picture if isinstance(picture, str) and picture.startswith("https://") else "",
+    }
     session["signed_in_at"] = int(time.time())
     return redirect(next_)
 

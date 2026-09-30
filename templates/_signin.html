@@ -4,7 +4,10 @@
   {%- if viewer %}
   <form method="post" action="/logout" class="nav-signin">
     <input type="hidden" name="next" value="{{ here }}">
-    <span title="{{ viewer.name }}">{{ viewer.email }}</span>
+    {%- if viewer.picture %}
+    <img class="avatar" src="{{ viewer.picture }}" alt="" width="24" height="24" referrerpolicy="no-referrer">
+    {%- endif %}
+    <span class="account-name" title="{{ viewer.email }}">{{ viewer.name or viewer.email }}</span>
     <button type="submit">Sign out</button>
   </form>
   {%- elif sign_in_enabled %}

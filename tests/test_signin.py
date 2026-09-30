@@ -37,8 +37,9 @@ _METADATA = {
     "jwks": {"keys": [_KEY.as_dict(private=False)]},
     "id_token_signing_alg_values_supported": ["RS256"],
 }
+_PICTURE = "https://lh3.googleusercontent.com/a/abc=s96-c"
 _MOZ = {"email": "dev@mozilla.com", "email_verified": True, "hd": "mozilla.com",
-        "name": "A Developer"}
+        "name": "A Developer", "picture": _PICTURE}
 # No recorded disclosure screen, so anonymous viewers cannot see these findings.
 _WITHHELD_SPIKE = _spike(filing=None, findings={"assessment": "regression",
                                                 "culprit": {"node": "0a49d5b304b4"}})
@@ -78,9 +79,9 @@ class _Base(unittest.TestCase):
             return self.client.get("/login/callback",
                                    query_string={"code": "c", "state": state or query["state"][0]})
 
-    def _sign_in(self, email="dev@mozilla.com", at=None):
+    def _sign_in(self, email="dev@mozilla.com", at=None, name="", picture=""):
         with self.client.session_transaction() as s:
-            s["user"] = {"email": email, "name": ""}
+            s["user"] = {"email": email, "name": name, "picture": picture}
             s["signed_in_at"] = int(time.time()) if at is None else at
 
     def _signed_in(self):
@@ -118,7 +119,14 @@ class TestTheCallback(_Base):
         rv = self._callback(_MOZ)
         self.assertEqual(rv.status_code, 302)
         self.assertEqual(rv.location, "/tasks.html")
-        self.assertEqual(self._signed_in(), {"email": "dev@mozilla.com", "name": "A Developer"})
+        self.assertEqual(self._signed_in(), {"email": "dev@mozilla.com", "name": "A Developer",
+                                             "picture": _PICTURE})
+
+    def test_only_an_https_picture_is_kept(self):
+        for picture in ("http://example.com/a.png", "javascript:alert(1)", ["x"]):
+            with self.subTest(picture=picture):
+                self._callback(dict(_MOZ, picture=picture))
+                self.assertEqual(self._signed_in()["picture"], "")
 
     def test_other_accounts_are_refused(self):
         cases = {
@@ -265,12 +273,20 @@ class TestThePages(_Base):
         self.assertNotIn("0a49d5b304b4", body)
 
     def test_signed_in(self):
-        self._sign_in()
+        self._sign_in(name="A Developer", picture=_PICTURE)
         body = self._tasks()
-        self.assertIn("dev@mozilla.com", body)
+        self.assertIn('<img class="avatar" src="{}"'.format(_PICTURE), body)
+        self.assertIn('referrerpolicy="no-referrer"', body)
+        self.assertIn('title="dev@mozilla.com">A Developer</span>', body)
         self.assertIn('action="/logout"', body)
         self.assertNotIn("assess-withheld", body)
         self.assertIn("0a49d5b304b4", body)
+
+    def test_signed_in_without_a_name_or_picture(self):
+        self._sign_in()
+        body = self._tasks()
+        self.assertNotIn('class="avatar"', body)
+        self.assertIn('title="dev@mozilla.com">dev@mozilla.com</span>', body)
 
     def test_no_sign_in_link_when_unconfigured(self):
         with mock.patch.dict(app.config, {"GOOGLE_CLIENT_ID": ""}):
