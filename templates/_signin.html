@@ -1,0 +1,13 @@
+{#- viewer and sign_in_enabled come from _signin_context(). -#}
+{%- set here = request.full_path[:-1] if request.full_path.endswith('?') else request.full_path -%}
+<li style="float:right;">
+  {%- if viewer %}
+  <form method="post" action="/logout" class="nav-signin">
+    <input type="hidden" name="next" value="{{ here }}">
+    <span title="{{ viewer.name }}">{{ viewer.email }}</span>
+    <button type="submit">Sign out</button>
+  </form>
+  {%- elif sign_in_enabled %}
+  <a href="/login?next={{ here|urlencode }}" class="navlink" title="mozilla.com Google accounts only">Sign in</a>
+  {%- endif %}
+</li>

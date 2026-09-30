@@ -6,7 +6,7 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=12">
+    <link rel="stylesheet" href="/clouseau.css?v=13">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Crash Stack &mdash; {{ uuid_info['uuid'] }}</title>
     <script src="/clouseau.js"></script>
@@ -27,6 +27,7 @@
           <li style="float:right;">
             <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
           </li>
+          {% include "_signin.html" %}
         </ul>
       </nav>
     </header>
@@ -151,7 +152,11 @@
       analysis is treated as a security issue and is not served on an unauthenticated request.
       {% if evidence.get('withheld_reasons') %}({{ evidence['withheld_reasons']|join('; ')|e }}){% endif %}</p>
       {%- endif %}
-      <p class="muted">Sign in (append <code>?token=&hellip;</code> once) to read it. The crash
+      <p class="muted">{% if sign_in_enabled -%}
+      <a href="/login?next={{ request.full_path|urlencode }}">Sign in with a mozilla.com Google account</a> to read it.
+      {%- else -%}
+      Append <code>?token=&hellip;</code> to read it.
+      {%- endif %} The crash
       report itself remains public on crash-stats &mdash; what is withheld is the mechanism, the
       suspected regressor and the flagged lines.</p>
     </div>

@@ -116,6 +116,28 @@ Several things are automated by the repo now; the rest are one-time app setup.
    immediate kick, run once: `heroku run python bin/init.py` (creates schema if needed +
    runs one ingestion pass).
 
+## Mozilla sign-in (2026-09-30)
+
+Mozilla Google sign-in unlocks withheld analyses in crashstack, codeview, bug.html, tasks.html,
+`/api/evidence` and `/api/spikes`. Validated ID tokens must have `hd=mozilla.com` and a verified
+`@mozilla.com` email. Access expires 7 days after sign-in, regardless of cookie refreshes.
+Retrigger, trigger and apply still require `API_WRITE_TOKEN`.
+
+1. In a Google Cloud project, create an OAuth client ID of type "Web application" with the
+   authorized redirect URI `https://<app host>/login/callback` (add
+   `http://localhost:5000/login/callback` for local runs). An
+   [Internal audience](https://developers.google.com/workspace/guides/configure-oauth-consent)
+   restricts Google's authorization to the project's organization; the app also checks `hd`.
+2. Set all three variables to enable sign-in:
+   ```
+   heroku config:set SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))') \
+       GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=…
+   ```
+   Changing `SECRET_KEY` invalidates existing sign-in cookies. Unsetting either Google
+   credential disables sign-in and session access; restoring it can re-enable unexpired sessions.
+
+Google documents the [ID-token claims and validation rules](https://developers.google.com/identity/openid-connect/openid-connect#validatinganidtoken).
+
 ## Turning the beta channel on (plan #18)
 
 Beta support is in the code and wired in `config/global.json` (`agent.channels` includes

@@ -31,27 +31,21 @@ def _require_write_token():
         abort(403, "invalid or missing X-Clouseau-Token")
 
 
-# Name of the cookie that remembers a valid ``?token=``, so the secret appears in a URL at most
-# once per browser instead of on every navigation (where it would land in Heroku's router log and
-# in any Referer we emit).
+# Cookie accepted by the token gate. remember_viewer() currently has no route callers.
 VIEW_COOKIE = "clouseau_view"
 
 
 def viewer_authorized() -> bool:
-    """May this request see an analysis that `sensitive.py` withheld?
+    """May this request read withheld analyses via a token or Mozilla sign-in?"""
+    from crashclouseau import auth
 
-    Reuses ``API_WRITE_TOKEN`` rather than adding a second secret. That is deliberately not
-    least-privilege -- a read token and a write token should differ -- but this deployment has
-    exactly one reader, and a second config var nobody sets is a gate nobody can pass. Splitting
-    it later is one line here.
+    return _token_authorized() or auth.current_user() is not None
 
-    Accepts the token from a header (for ``/api/evidence``), a ``?token=`` query arg (browsers
-    cannot send a custom header from the address bar) or ``VIEW_COOKIE`` (set once, from a valid
-    query arg, by ``remember_viewer``).
 
-    With ``API_WRITE_TOKEN`` unset this returns False, matching ``_require_write_token``: an
-    unset secret must never read as "no authentication required". Here that means the withheld
-    analyses are unreachable rather than public, which is the correct direction."""
+def _token_authorized() -> bool:
+    """Check API_WRITE_TOKEN in the header, query string or viewer cookie.
+
+    An unset API_WRITE_TOKEN denies access."""
     expected = os.getenv("API_WRITE_TOKEN", "")
     if not expected:
         return False
@@ -64,40 +58,18 @@ def viewer_authorized() -> bool:
 
 
 def _require_viewer():
-    """Gate a route that SPENDS MONEY or mutates state behind the viewer token.
+    """Require the token for retriggering; Google sign-in grants no write access.
 
-    ``/api/tasks/retrigger`` was ``@cross_origin()`` POST with no authorization of any kind.
-    Measured on the deployed app: one anonymous ``GET /tasks.html`` returns 500 real uuids with
-    ``retriggerTask('<uuid>')`` already wired, and 3,188 of the 3,488 rows in ``uuids`` have the
-    ``crashstack`` rows ``build_seed`` needs — so each was one unauthenticated POST away from a
-    full agent run, measured in production at a mean $1.70 and a maximum $8.49. There is no global
-    spend cap (``max_cost_usd_per_crash`` warns, it does not abort) and no rate limit, and per the
-    route's own docstring the re-run reaches ``_maybe_autofile`` like any other.
-
-    WHY THE VIEWER TOKEN AND NOT ``_require_write_token``. That one reads ONLY the
-    ``X-Clouseau-Token`` header, and ``static/clouseau.js``'s ``fetch`` sends no such header; the
-    operator cannot add one from a browser, and ``VIEW_COOKIE`` is ``httponly`` so script cannot
-    read the token to attach it. Gating on the write token would therefore have closed the hole and
-    silently broken the tasks-view button — the "fails by doing less, with no log line" shape this
-    repo keeps getting bitten by. ``viewer_authorized`` accepts the header OR ``?token=`` OR the
-    cookie, so one ``?token=`` visit keeps the UI working.
-
-    NOT the channel gate. ``bugzilla_apply.autofile_bug`` already fails closed on a channel with no
-    autofile configuration, and ``enqueue_agent``'s ``force=True`` bypass is the feature the
-    operator is asking for — neither is the thing to narrow here. The missing control was
-    authentication, and it belongs on the route."""
-    if not viewer_authorized():
+    Accept the cookie because the tasks button sends no X-Clouseau-Token header."""
+    if not _token_authorized():
         abort(403, "invalid or missing token")
 
 
 def remember_viewer(response):
-    """Persist a valid ``?token=`` as a cookie so it need not ride the URL again.
+    """Set a viewer cookie when a token query argument accompanies token authorization.
 
-    Only ever called once the token has already been checked, and only when it arrived as a
-    query arg -- a request authorised by the header or by the cookie has nothing to store.
-    ``httponly`` because no script needs it; ``samesite="Lax"`` so it is not sent on
-    cross-site requests."""
-    if request.args.get("token") and viewer_authorized():
+    No routes currently call this helper."""
+    if request.args.get("token") and _token_authorized():
         response.set_cookie(VIEW_COOKIE, request.args["token"],
                             httponly=True, samesite="Lax", secure=True, max_age=90 * 86400)
     return response

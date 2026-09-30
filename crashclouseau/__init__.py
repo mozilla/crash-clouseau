@@ -7,6 +7,8 @@ from flask_cors import CORS, cross_origin
 from flask_sqlalchemy import SQLAlchemy
 from libmozdata.socorro import Socorro
 from markupsafe import Markup, escape
+from werkzeug.middleware.proxy_fix import ProxyFix
+from datetime import timedelta
 import logging
 import os
 import re
@@ -19,6 +21,18 @@ from . import net  # noqa: F401
 
 
 app = Flask(__name__, template_folder="../templates")
+# Use the last X-Forwarded-Proto value for the OAuth callback URL's scheme on Heroku.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=0, x_proto=1)
+# Sign-in and its OAuth state require a signed session cookie.
+app.secret_key = os.getenv("SECRET_KEY") or None
+app.config.update(
+    SESSION_COOKIE_NAME="clouseau_session",
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    GOOGLE_CLIENT_ID=os.getenv("GOOGLE_CLIENT_ID", ""),
+    GOOGLE_CLIENT_SECRET=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+)
 
 Socorro.TOKEN = os.getenv("SOCORRO_TOKEN", config.get_socorro())
 
@@ -38,23 +52,10 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 # process, and one skipped fifteen-minute reaper cycle.
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 db = SQLAlchemy(app)
-# EMPTY, because the only cross-origin consumer is gone. It used to be scoped to
-# `/api/javast`, the single endpoint the webextension called; that endpoint could not execute
-# its query (it looked up product `FennecAndroid`, dropped from `config/global.json` in 2022 by
-# `a1888ce`, with a JSON-string buildid against a `timestamptz` column) and both it and
-# `webextension/` are now retired. Every remaining route is our own same-origin page.
-#
-# CAUTION, and this is NOT what the old comment here claimed: the app-level `resources` set is
-# not the only thing granting CORS. A bare `@cross_origin()` on a view grants it independently,
-# and six routes carry one. Measured with `Origin: https://evil.example` against the test
-# client: `/api/bugs` and `/api/selection` echo the attacker origin back in
-# `Access-Control-Allow-Origin` on their 200s. That is pre-existing and is left alone here so
-# retiring an endpoint does not quietly become a CORS change; it wants its own look.
-#
-# `Access-Control-Allow-Credentials` is NOT enabled and must not be: it is what stops a browser
-# from attaching `VIEW_COOKIE` to a cross-site request, and it is half of why the retrigger route
-# is not CSRF-able (the other half is that the uuid must arrive in a JSON body, which forces a
-# preflight).
+# CORS is enabled only by route-level @cross_origin() decorators.
+# Keep credentials disabled so cross-origin scripts cannot read cookie-authenticated
+# responses. This does not prevent cookies from being sent. Retrigger separately
+# requires JSON and grants no CORS preflight permission.
 cors = CORS(app, resources={})
 app.config["CORS_HEADERS"] = "Content-Type"
 log = logging.getLogger(__name__)
@@ -133,6 +134,13 @@ def human_gap(seconds):
     return "{:.1f}d".format(s / 86400)
 
 
+@app.context_processor
+def _signin_context():
+    from crashclouseau import auth
+
+    return {"viewer": auth.current_user(), "sign_in_enabled": auth.enabled()}
+
+
 @app.teardown_request
 def _remove_db_session(exc=None):
     # The module-level app.app_context().push() above gives the worker/clock a
@@ -208,6 +216,27 @@ def pushlog_html():
     from crashclouseau import html
 
     return html.pushlog()
+
+
+@app.route("/login")
+def login():
+    from crashclouseau import auth
+
+    return auth.login()
+
+
+@app.route("/login/callback")
+def auth_callback():
+    from crashclouseau import auth
+
+    return auth.callback()
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    from crashclouseau import auth
+
+    return auth.logout()
 
 
 @app.route("/favicon.ico")
