@@ -402,6 +402,9 @@ REGISTRY = {
         "diagnostic", (),
         "A skeptic `fail` that rested on a compile-flag claim and was NOT allowed to bind. Its "
         "failure mode is a false abstain, which reaches no scoreboard, so this is the count."),
+    "skeptic_alternatives_unbound": (
+        "diagnostic", (),
+        "Claim refs of skeptic failures excluded by `schema.is_alternative_check`."),
     "skeptic_presence_unbound": (
         "diagnostic", (),
         "A skeptic `fail` whose stated ground was that the candidate is ALREADY PRESENT in the "

@@ -376,9 +376,10 @@ _ROLES: dict[str, dict] = {
         "or about another thread's state; `fail` what the dump contradicts. "
         "End with one fenced "
         "```json block holding a LIST with ONE object per claim you checked, shaped "
-        "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\","
+        "like: [{\"claim_ref\":\"edge0|mechanism|hunk0|...\",\"node\":\"\","
         "\"status\":\"pass|fail|unverifiable\",\"note\":\"...\",\"citations\":[...]}]"
-        "." + _GROUND,
+        ". Set `node` to the changeset an entry is about when it is not the candidate (a "
+        "ruled-out alternative); leave it empty for the verdict's own claims." + _GROUND,
         "tools": [*_BUILTIN_READ, *_SEARCHFOX, "mcp__patch__diff", *_HISTORY, *_SOURCE,
                   *_THREADS],
     },

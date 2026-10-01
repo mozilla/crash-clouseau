@@ -546,17 +546,19 @@ class DataFlowHypothesis(Cited):
 
 
 class SkepticResult(BaseModel):
-    # Only ``status`` is strict — ``claim_ref``/``citations`` are intentionally lax
-    # (str default, untyped list; same rationale as DiffHunk.lines / CallEdge.via).
-    # The binding skeptic veto (Dossier._skeptic_veto) keys on ``status``, so a
-    # malformed supporting citation or a missing claim_ref must NOT make a ``fail``
-    # result fail validation: parse_and_validate's per-item salvage would drop it
-    # and silently bypass the veto, letting a refuted strong-evidence verdict reach
-    # the apply UI.
+    # Preserve failures with missing claim refs or malformed citation entries:
+    # per-item salvage would otherwise drop them before the veto runs.
     status: SkepticStatus
     claim_ref: str = ""
     note: str = ""
     citations: list = Field(default_factory=list)
+    # Prompts reserve this for ruled-out alternatives; empty for the verdict's own claims.
+    node: str = ""
+
+    @field_validator("node", mode="before")
+    @classmethod
+    def _node_str(cls, v):
+        return "" if v is None else str(v)
 
 
 class Claim(Cited):
@@ -810,6 +812,9 @@ class Dossier(BaseModel):
         deterministically. The clause earns its keep on a RE-VALIDATED stored payload,
         where the flag IS present and must not be undone.
 
+        (1e) Fails classified by ``is_alternative_check`` bypass (1)-(1d). Their claim refs
+        are recorded in ``skeptic_alternatives_unbound``.
+
         (2) ANY surviving lead must carry a cited anchor; an anchorless lead is demoted to
         abstain (nothing to hand a human)."""
         # Local: this module's contract is stdlib + pydantic + config/logger, and
@@ -823,9 +828,13 @@ class Dossier(BaseModel):
         # because the skeptic emits one per claim: a genuine contradiction sitting in its
         # own entry must keep its teeth even when another entry cites a configure switch.
         gate_agrees = bool((self.corroborations or {}).get("compiled_out_suppressed"))
-        failed, binding, unbound, presence = [], [], [], []
+        failed, binding, unbound, presence, alternatives = [], [], [], [], []
         for s in self.skeptic:
             if s.status != SkepticStatus.failed:
+                continue
+            if is_alternative_check(s, self.candidate):
+                # (1e) Exclude alternatives from both downgrade and abstain rules.
+                alternatives.append(s.claim_ref)
                 continue
             failed.append(s.claim_ref)
             if not gate_agrees and compiled_out.is_build_flag_ground(s.note, s.citations):
@@ -836,6 +845,11 @@ class Dossier(BaseModel):
                 presence.append(s.claim_ref)
             else:
                 binding.append(s.claim_ref)
+        if alternatives:
+            self.corroborations = {
+                **(self.corroborations or {}),
+                "skeptic_alternatives_unbound": alternatives,
+            }
         # (1) Skeptic ladder on a strong-evidence verdict.
         if v.decision == Decision.strong_evidence and failed:
             detail = "skeptic refuted the mechanism (failed: {})".format(
@@ -979,6 +993,62 @@ def is_presence_ground(note) -> bool:
     if not text or _ABSENCE_RE.search(text):
         return False
     return bool(_PRESENCE_RE.search(text))
+
+
+# Free-text hash heuristic: 12 or 40 hex digits, including a letter.
+# Strip 0x addresses and hyphenated UUIDs first; numeric build IDs cannot match.
+_CHANGESET_HASH_RE = re.compile(
+    r"(?<![0-9a-f])(?=[0-9]*[a-f])(?:[0-9a-f]{40}|[0-9a-f]{12})(?![0-9a-f])")
+_NOT_A_CHANGESET_RE = re.compile(
+    r"0x[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# Explicit-node heuristic: 7-40 hex digits, including a letter.
+_NODE_RE = re.compile(r"(?=[0-9]*[a-f])[0-9a-f]{7,40}")
+_ALTERNATIVE_REF_RE = re.compile(r"seed|window[ _-]?candidates?|alternative|\balt[_-]")
+
+
+def _changesets(text):
+    return _CHANGESET_HASH_RE.findall(_NOT_A_CHANGESET_RE.sub(" ", text))
+
+
+def _same_changeset(a, b):
+    n = min(len(a), len(b))
+    return n >= 7 and a[:n] == b[:n]
+
+
+def is_alternative_check(result, candidate) -> bool:
+    """Heuristically identify a check of another changeset.
+
+    ``candidate`` is a Candidate or node string. Candidate hash prefixes or bug numbers
+    in claim_ref/note prevent exemption. Otherwise compare hashes from node, claim_ref,
+    or a note under a seed/window-candidate/alternative label, in that order, against
+    the candidate's known hg/git hashes. False without a candidate node."""
+    if isinstance(candidate, str) or candidate is None:
+        ids, bug = [str(candidate or "").strip().lower()], ""
+    else:
+        ids = [str(candidate.node or "").strip().lower(),
+               str(candidate.git_commit or "").strip().lower()]
+        bug = str(candidate.bug or "")
+    if not ids[0]:
+        return False
+    ids = [i for i in ids if i]
+    ref = str(result.claim_ref or "").lower()
+    note = str(result.note or "").lower()
+    text = ref + " " + note
+    if any(i[:7] in text for i in ids) or (bug and re.search(r"(?<!\d){}(?!\d)".format(bug), text)):
+        return False
+
+    def others(hashes):
+        return bool(hashes) and not any(_same_changeset(h, i) for h in hashes for i in ids)
+
+    node = str(getattr(result, "node", "") or "").strip().lower()
+    if _NODE_RE.fullmatch(node):
+        return others([node])
+    ref_hashes = _changesets(ref)
+    if ref_hashes:
+        return others(ref_hashes)
+    if _ALTERNATIVE_REF_RE.search(ref):
+        return others(_changesets(note))
+    return False
 
 
 def handoff_parse_failure(text: str | None) -> str | None:

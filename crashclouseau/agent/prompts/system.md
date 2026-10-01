@@ -174,7 +174,7 @@ Rust panic mechanics; identify the violated invariant and how execution reaches 
   "call_path": {"edges": [{"caller_symbol": "js::gc::GCMarker::markCurrentColorInParallel", "callee_symbol": "js::gc::MarkingTracerT::processMarkStackTop", "via": "calls-from", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::gc::MarkingTracerT::processMarkStackTop", "repo": "mozilla-central"}]}]},
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
-  "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
+  "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "node": "", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
   "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
@@ -237,7 +237,8 @@ good ones. So make TWO decisions, in order:
    volume are rendered there from deterministic data. Never write what the crash is not (not a
    regression, not a spike, not new), and do not argue that nothing in the window explains it —
    "and is unrelated to any code in this window" at the end of a mechanism goes into the bug
-   verbatim; what you ruled out belongs in your reasoning and in `skeptic`, not in either claim.
+   verbatim; what you ruled out belongs in your reasoning and in `skeptic` (with `node` set to
+   the ruled-out changeset), not in either claim.
    Without a cited mechanism or an origin it is `abstain`
    with `pre_existing` /
    `no_candidate_explains_it`, as before.

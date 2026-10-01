@@ -335,6 +335,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # argument would have been RIGHT about is the number that decides whether a surface
         # should say so.
         "stale_signature_waived",
+        # Diagnostic only: claim refs of excluded alternative checks.
+        "skeptic_alternatives_unbound",
         # A skeptic `fail` that rested on "the candidate is already present in this build" and
         # was not allowed to bind (`schema.is_presence_ground`). Write-only for the same reason
         # as `skeptic_build_flag_unbound`: its failure mode is a false abstain nothing else

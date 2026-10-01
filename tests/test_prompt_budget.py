@@ -195,7 +195,8 @@ _MEASURED = {
     # +171 on 2026-09-23 (also beta/java): distinguish the NS_ABORT_OOM argument from
     # the allocation size and describe the caller gate (bug 2074622).
     # 2026-09-23: require a thread read before claiming its stack is missing.
-    "system.md": (23829, 400),
+    # +60 on 2026-10-01 (also beta/java): request `node` for ruled-out alternatives.
+    "system.md": (23889, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (970, 120),
     # 2026-09-23: add up to six census rows on watchdog crashes.
@@ -213,7 +214,7 @@ _MEASURED = {
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (24369, 400),
+    "system.md, beta": (24429, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
@@ -232,7 +233,7 @@ _MEASURED = {
     # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
     # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
     # long Java signature / paths; it carries no line numbers on its frames.
-    "system.md, java": (24992, 400),
+    "system.md, java": (25052, 400),
     "crash facts, fenix java": (325, 60),
     "user prompt, fenix java": (3240, 300),
 }
