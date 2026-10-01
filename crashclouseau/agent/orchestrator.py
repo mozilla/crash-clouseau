@@ -2232,6 +2232,7 @@ def _is_watchdog_seed(seed):
         seed.get("signature") or raw.get("signature"),
         raw.get("report_type"),
         raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+        raw.get("ipc_channel_error"),
     )
 
 
@@ -2784,7 +2785,8 @@ def _record_hang_awaited_work(dossier, seed):
 
     dump = raw.get("json_dump") or {}
     if not utils.is_watchdog_crash(seed.get("signature"), raw.get("report_type"),
-                                   raw.get("moz_crash_reason") or dump.get("moz_crash_reason")):
+                                   raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+                                   raw.get("ipc_channel_error")):
         return
     try:
         summary = hang.awaited_summary(raw)
@@ -2807,7 +2809,8 @@ def _hang_awaited_origin(raw_crash, channel, signature=None):
 
     dump = raw.get("json_dump") or {}
     if not utils.is_watchdog_crash(signature or raw.get("signature"), raw.get("report_type"),
-                                   raw.get("moz_crash_reason") or dump.get("moz_crash_reason")):
+                                   raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+                                   raw.get("ipc_channel_error")):
         return None
     try:
         return hang.awaited_origin(raw, channel)

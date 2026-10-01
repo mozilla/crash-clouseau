@@ -55,6 +55,21 @@ class TestWatchdogCrash(unittest.TestCase):
                                                  "MOZ_RELEASE_ASSERT(isSome())"))
         self.assertFalse(utils.is_watchdog_crash(None, None, None))
 
+    def test_an_ipc_protocol_kill_is_not_one(self):
+        # The IPC-error annotation alone makes Socorro label this report a hang.
+        sig = "IPCError-browser | RecvSetEmbedderAccessible Embedder's PDocAccessible doesn't exist"
+        err = "RecvSetEmbedderAccessible Embedder's PDocAccessible doesn't exist"
+        self.assertFalse(utils.is_watchdog_crash(sig, "hang", None, err))
+        self.assertFalse(utils.is_hang_report("hang", "This path is not allowed."))
+
+    def test_a_timeout_kill_still_is_one(self):
+        for reason in ("ShutDownKill", "ShutdownTimeout", "GPUProcessKill", None, ""):
+            with self.subTest(reason=reason):
+                self.assertTrue(utils.is_watchdog_crash(
+                    "IPCError-browser | {}".format(reason), "hang", None, reason))
+        self.assertFalse(utils.is_hang_report("crash", None))
+        self.assertTrue(utils.is_watchdog_crash(HANG, "hang", None, "RecvFoo bad message"))
+
 
 _FIRST_SEEN = "20251115092723"
 

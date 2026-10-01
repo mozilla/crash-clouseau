@@ -121,31 +121,36 @@ def merge_day_series(series):
     return merged
 
 
-# A crash where NOTHING FAULTED at the crashing frame: a watchdog killed the process because
-# work elsewhere exceeded a time budget. The three spellings Socorro gives them, plus the
-# report type it sets for a hang, plus the reason strings the watchdogs write.
+# Hang/timeout indicators used by analysis gates and prompts.
 _WATCHDOG_SIGNATURE_PREFIXES = ("shutdownhang |", "AsyncShutdownTimeout |", "hang |")
 _WATCHDOG_REASON = re.compile(r"timed out|timeout|hang|watchdog", re.IGNORECASE)
 
 
-def is_watchdog_crash(signature=None, report_type=None, moz_crash_reason=None):
-    """Is this a hang / timeout crash rather than a fault?
+# Socorro's ReportTypeRule labels any report with ipc_channel_error as "hang".
+# Keep content/utility shutdown timeout reasons and the GPU forced-kill reason;
+# other IPC errors alone do not establish a hang.
+_TIMEOUT_KILL_REASONS = frozenset({"ShutDownKill", "ShutdownTimeout", "GPUProcessKill"})
 
-    THE QUESTION THESE CRASHES ASK IS DIFFERENT, and two of the pipeline's tools get it wrong
-    when they do not know it. A watchdog signature fires whenever the awaited work exceeds the
-    budget, so it is typically YEARS old, and a change that makes the work slower -- more I/O,
-    more items, an extra fsync, a rescan, a lock held longer -- regresses it without
-    "introducing" it. On 2026-08-15 the principal named exactly such a change for a
-    ``shutdownhang | ... QuotaManager::Observer::Observe`` crash, and the blind second opinion
-    refuted it with "first seen 273 days before the change, so the change cannot have
-    introduced it" and "touches no shutdown code and cannot itself hang". The module owner
-    confirmed the same change as the regressor the next day (bug 2063892). Both arguments are
-    correct for a fault and inverted for a watchdog, and this predicate is how the gates and the
-    prompts tell the two apart."""
+
+def is_hang_report(report_type=None, ipc_channel_error=None):
+    """Classify a Socorro hang report, excluding unrecognized IPC error reasons."""
+    if (report_type or "") != "hang":
+        return False
+    error = (ipc_channel_error or "").strip()
+    return not error or error in _TIMEOUT_KILL_REASONS
+
+
+def is_watchdog_crash(signature=None, report_type=None, moz_crash_reason=None,
+                      ipc_channel_error=None):
+    """Identify likely hangs from the signature, report type, or crash reason.
+
+    A watchdog signature or reason can identify a hang even when the report-type
+    check rejects an IPC error.
+    """
     sig = (signature or "").strip()
     if any(sig.startswith(p) for p in _WATCHDOG_SIGNATURE_PREFIXES):
         return True
-    if (report_type or "") == "hang":
+    if is_hang_report(report_type, ipc_channel_error):
         return True
     return bool(moz_crash_reason and _WATCHDOG_REASON.search(str(moz_crash_reason)))
 

@@ -258,7 +258,8 @@ def build_frames_block(stack, max_frames=_MAX_PREVIEW_FRAMES, details=None):
         lines.append("{}  {}".format(f.get("stackpos"), desc).rstrip())
     what = ("frames of the hung main thread (nothing crashed here — a watchdog killed the "
             "process; these are what the main thread is waiting on)"
-            if (details or {}).get("report_type") == "hang" else "frames")
+            if utils.is_hang_report((details or {}).get("report_type"),
+                                    (details or {}).get("ipc_channel_error")) else "frames")
     return "Top {} {}:\n{}".format(len(top), what, _fenced("\n".join(lines)))
 
 
@@ -414,10 +415,10 @@ def build_code_references(verdict, channel, max_refs=_MAX_CODE_REFS):
     return "Code references:\n{}".format("\n".join(refs)) if refs else None
 
 
-# `report_type` so the frames block can say WHICH thread it is showing: on a hang the frames
-# are the hung main thread, not a crashing one, and a reader who assumes otherwise reads the
-# stack backwards. Bug 2064436 — see `inspector.thread_for_analysis`.
-_REASON_COLUMNS = ["moz_crash_reason", "reason", "address", "report_type", "ipc_fatal_error_msg"]
+# Include report_type and ipc_channel_error to distinguish hangs from IPC errors
+# in the frames heading.
+_REASON_COLUMNS = ["moz_crash_reason", "reason", "address", "report_type", "ipc_fatal_error_msg",
+                   "ipc_channel_error"]
 # Process caches: the comment is rendered on every page view of a culprit/lead crash, and
 # neither of these moves in a way that matters for a preview (a crash's reason is
 # immutable; the counts only creep up). uuid -> value; keeps the render to one fetch per

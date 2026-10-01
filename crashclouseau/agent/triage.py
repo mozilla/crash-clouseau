@@ -704,6 +704,7 @@ def _watchdog_lines(crash: dict) -> list[str]:
         crash.get("signature") or raw.get("signature"),
         raw.get("report_type"),
         raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+        raw.get("ipc_channel_error"),
     ):
         return []
     return [
@@ -1647,7 +1648,8 @@ def _thread_inventory(raw: dict) -> list[str]:
                     unnamed, len(threads)))
             dump = raw.get("json_dump") or {}
             if utils.is_watchdog_crash(raw.get("signature"), raw.get("report_type"),
-                                       raw.get("moz_crash_reason") or dump.get("moz_crash_reason")):
+                                       raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
+                                       raw.get("ipc_channel_error")):
                 parts.append(
                     "On a hang, an unnamed thread can be waiting on a call, lock or I/O; "
                     "inspect its stack before ruling it out.")

@@ -413,4 +413,5 @@ def is_hang(signature, raw_crash=None):
     raw = raw_crash or {}
     return utils.is_watchdog_crash(
         signature=signature, report_type=raw.get("report_type"),
-        moz_crash_reason=raw.get("moz_crash_reason"))
+        moz_crash_reason=raw.get("moz_crash_reason"),
+        ipc_channel_error=raw.get("ipc_channel_error"))

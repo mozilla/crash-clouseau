@@ -765,6 +765,22 @@ class TestHangCommentLabelsTheThread(unittest.TestCase):
         from crashclouseau import report_bug
 
         self.assertIn("report_type", report_bug._REASON_COLUMNS)
+        self.assertIn("ipc_channel_error", report_bug._REASON_COLUMNS)
+
+    def test_an_ipc_protocol_kill_is_not_labelled_a_hang(self):
+        # The IPC-error annotation alone makes Socorro label this report a hang.
+        from crashclouseau import report_bug
+
+        details = {"report_type": "hang",
+                   "ipc_channel_error": "RecvSetEmbedderAccessible Embedder's PDocAccessible "
+                                        "doesn't exist"}
+        block = report_bug.build_frames_block(self._STACK, details=details)
+        self.assertIn("Top 2 frames:", block)
+        self.assertNotIn("hung main thread", block)
+        for reason in ("ShutDownKill", "GPUProcessKill"):
+            block = report_bug.build_frames_block(
+                self._STACK, details={"report_type": "hang", "ipc_channel_error": reason})
+            self.assertIn("hung main thread", block, reason)
 
 
 # The two crash facts the 300-char cap actually damages, and the panel that says so:
