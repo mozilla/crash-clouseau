@@ -4680,6 +4680,11 @@ def _autofile(uuid, payload, row):
                 if res.get(key):
                     decline[key] = res[key]
             models.Dossier.record_filing_decline(uuid, decline)
+        # Record links locally after the filing decision.
+        from crashclouseau import samesite
+        samesite.record_for_dossier(
+            uuid, uuid_info.get("signature"),
+            ((payload.get("dossier") or {}).get("candidate") or {}).get("node"))
     except Exception:                                    # pragma: no cover - defensive
         logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)
 

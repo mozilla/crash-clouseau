@@ -2396,6 +2396,20 @@ class CrashStack(db.Model):
         UUID.set_max_score(uuidid, max_score)
 
     @staticmethod
+    def native_frames(uuid):
+        """Return native stackpos/function/filename/line dicts ordered by stack position."""
+        rows = (
+            db.session.query(CrashStack.stackpos, CrashStack.function, CrashStack.filename,
+                             CrashStack.line)
+            .join(UUID, CrashStack.uuidid == UUID.id)
+            .filter(UUID.uuid == uuid, CrashStack.java.is_(False))
+            .order_by(CrashStack.stackpos)
+            .all()
+        )
+        return [{"stackpos": p, "function": f, "filename": fn, "line": ln}
+                for p, f, fn, ln in rows]
+
+    @staticmethod
     def get_by_uuid(uuid):
         uuid_info = UUID.get_bid_chan_by_uuid(uuid)
         if not uuid_info:
@@ -2469,6 +2483,14 @@ class CrashStack(db.Model):
             }
 
         return res, uuid_info
+
+
+def _candidate_run(uuid, signature, filed, bug, mode, source):
+    """Build a run dict, adding bug/mode for a successful filing with a numeric bug ID."""
+    row = {"uuid": uuid, "signature": signature or "", "source": source}
+    if filed == "true" and str(bug or "").isdigit():
+        row.update(bug=int(bug), mode=mode or "")
+    return row
 
 
 class Dossier(db.Model):
@@ -3448,6 +3470,29 @@ class Dossier(db.Model):
             return None
         return [{"uuid": u, "bug": int(b), "signature": s or "", "mode": m or ""}
                 for u, b, s, m in rows if str(b or "").isdigit()]
+
+    @staticmethod
+    def runs_for_candidate(node):
+        """Done candidate-prefix matches as run dicts in dossier ID order;
+        ``None`` on query failure."""
+        fb = Dossier.payload["filed_bug"]
+        cand = Dossier.payload["dossier"]["candidate"]["node"].astext
+        try:
+            rows = (
+                db.session.query(UUID.uuid, Signature.signature, fb["filed"].astext,
+                                 fb["bug"].astext, fb["mode"].astext)
+                .select_from(Dossier)
+                .join(UUID, Dossier.uuidid == UUID.id)
+                .join(Signature, Signature.id == UUID.signatureid)
+                .filter(Dossier.status == "done", cand.like(node + "%"))
+                .order_by(Dossier.id)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read the runs for candidate %s", node, exc_info=True)
+            db.session.rollback()
+            return None
+        return [_candidate_run(*r, source="dossier") for r in rows]
 
     @staticmethod
     def filed_bugs_since(when, channel=None, product=None):
@@ -4764,6 +4809,27 @@ class SpikeEscalation(db.Model):
             .order_by(SpikeEscalation.created.desc())
             .first()
         )
+
+    @staticmethod
+    def runs_for_culprit(node):
+        """Done culprit-prefix matches as run dicts in escalation ID order;
+        ``None`` on query failure."""
+        filing = SpikeEscalation.payload["filing"]
+        culprit = SpikeEscalation.payload["findings"]["culprit"]["node"].astext
+        try:
+            rows = (
+                db.session.query(SpikeEscalation.uuid, SpikeEscalation.signature,
+                                 filing["filed"].astext, filing["bug"].astext,
+                                 filing["mode"].astext)
+                .filter(SpikeEscalation.status == "done", culprit.like(node + "%"))
+                .order_by(SpikeEscalation.id)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read the escalations for culprit %s", node, exc_info=True)
+            db.session.rollback()
+            return None
+        return [_candidate_run(*r, source="spike") for r in rows]
 
     @staticmethod
     def prior_bug_for(signatures, bucket=None, bucket_title=None):

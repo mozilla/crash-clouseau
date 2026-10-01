@@ -63,8 +63,8 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 from crashclouseau import (
-    app, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug, sensitive,
-    sigage, sigtrend, spike_report, spikes, utils, worker,
+    app, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug, samesite,
+    sensitive, sigage, sigtrend, spike_report, spikes, utils, worker,
 )
 from crashclouseau.logger import logger
 
@@ -960,6 +960,9 @@ def run_spike_escalation(escalation_id):
                         filing.get("mode"))
         else:
             logger.info("spike: escalation %s not filed -- %s", esc.id, filing.get("skipped"))
+        # Record links locally after the filing decision.
+        samesite.record_for_spike(
+            esc, findings.culprit.node if findings is not None and findings.culprit else None)
     except Exception as exc:
         logger.error("spike: escalation %s failed", escalation_id, exc_info=True)
         try:

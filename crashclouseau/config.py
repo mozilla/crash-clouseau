@@ -1325,6 +1325,12 @@ def get_agent_same_defect():
     }
 
 
+def get_agent_same_site():
+    """Same-site recording settings; ``SAME_SITE_ENABLED`` overrides ``enabled``."""
+    o = get_agent().get("same_site", {})
+    return {"enabled": _env_bool("SAME_SITE_ENABLED", o.get("enabled", False))}
+
+
 def get_agent_spike_escalation():
     """Settings for investigating spikes the ordinary triage did not file.
 

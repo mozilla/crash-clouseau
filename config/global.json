@@ -364,6 +364,10 @@
             "min_confidence": "medium",
             "max_bugs": 5
         },
+        "same_site":
+        {
+            "enabled": true
+        },
         "spike_escalation":
         {
             "enabled": true,
