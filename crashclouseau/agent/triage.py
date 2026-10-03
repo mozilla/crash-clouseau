@@ -1732,6 +1732,7 @@ def _crash_facts(crash: dict) -> list[str]:
             " ".join(v for v in (raw.get("os_name"), raw.get("os_version")) if v).strip(),
             sysinfo.get("os"),
         )),
+        ("System DLLs (what actually ran)", utils.system_dll_picture(raw)),
         ("CPU", _cpu_summary(raw, sysinfo)),
         # ANDROID ONLY -- every one of these is absent on a desktop report, so the desktop
         # output is byte-identical. The device is what `cpu_info` ("unknown" on 40% of Fenix

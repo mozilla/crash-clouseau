@@ -662,3 +662,58 @@ def memory_picture(raw):
     if pct is not None:
         out.append("{:.0f}% of system memory in use".format(pct))
     return ", ".join(out)
+
+
+_WINDOWS_BUILD = re.compile(r"\s*\d+\.\d+\.(\d+)")
+# Servicing releases can retain an older ntdll build; this tolerance is heuristic.
+_NTDLL_BUILD_GAP = 1000
+_SYSTEM_DLLS = ("ntdll.dll", "kernel32.dll", "user32.dll")
+
+
+def _windows_build(version):
+    m = _WINDOWS_BUILD.match(str(version or ""))
+    return int(m.group(1)) if m else None
+
+
+def system_dll_picture(raw):
+    """Summarize possible Wine/VxKex or an ntdll/OS build discrepancy.
+
+    A versioned ntdll with an all-zero debug ID is a Wine heuristic, not proof.
+    Return ``""`` when no heuristic matches.
+    """
+    raw = raw or {}
+    dump = raw.get("json_dump") or {}
+    sysinfo = dump.get("system_info") or {}
+    if (raw.get("os_name") or sysinfo.get("os")) != "Windows NT":
+        return ""
+    modules = {}
+    for m in dump.get("modules") or []:
+        if isinstance(m, dict) and m.get("filename"):
+            modules.setdefault(m["filename"].lower(), m)
+    ntdll = modules.get("ntdll.dll") or {}
+    no_debug_id = bool(ntdll.get("version")) and set(ntdll.get("debug_id") or "x") == {"0"}
+    drivers = sorted(n for n in modules if n.startswith("wine") and n.endswith(".drv"))
+    kex = modules.get("kexdll.dll")
+    reported = _windows_build(raw.get("os_version") or sysinfo.get("os_ver"))
+    loaded = _windows_build(ntdll.get("version"))
+    mismatch = None not in (reported, loaded) and not 0 <= reported - loaded <= _NTDLL_BUILD_GAP
+    if not (no_debug_id or drivers or kex or mismatch):
+        return ""
+    versions = []
+    for name in _SYSTEM_DLLS:
+        m = modules.get(name) or {}
+        if m.get("version"):
+            versions.append("{} {}{}".format(m["filename"], m["version"],
+                                             " with no debug ID" if m is ntdll and no_debug_id else ""))
+    out = [", ".join(versions)] if versions else []
+    if drivers or no_debug_id:
+        out.append("{}: Wine, which reports the Windows version it is configured to imitate".format(
+            "{} is loaded".format(modules[drivers[0]]["filename"]) if drivers
+            else "ntdll.dll has no debug ID"))
+    if kex:
+        out.append("{} is loaded: VxKex, an API-extension layer for Windows 7 that can report a "
+                   "newer Windows version".format(kex["filename"]))
+    if mismatch:
+        out.append("ntdll.dll build {} does not match the reported OS build {}".format(
+            loaded, reported))
+    return "; ".join(out)

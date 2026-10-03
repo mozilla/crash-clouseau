@@ -1347,6 +1347,16 @@ class TestCrashStatsTools(unittest.TestCase):
         self.assertIn("  cfi  [xul.dll]  [inlined: Inner]", out)
         self.assertIn("thread 1 (Shutdown Hang Terminator) stack", other)
         self.assertIn("RunWatchdog", other)
+        self.assertNotIn("system DLLs", out)
+
+    def test_report_prints_system_dlls_that_contradict_the_os(self):
+        raw = {"os_name": "Windows NT", "os_version": "10.0.19045",
+               "json_dump": {"modules": [
+                   {"filename": "ntdll.dll", "version": "6.1.7601.23539", "debug_id": "6B74B4B2"},
+                   {"filename": "KexDll.dll", "version": "1.1.2.1439"}]}}
+        with mock.patch.object(crashstats.inspector, "get_crash_data", return_value=raw):
+            out = asyncio.run(crashstats.report(crashstats.CrashStatsCtx(), "u-1"))
+        self.assertIn("system DLLs: ntdll.dll 6.1.7601.23539; KexDll.dll is loaded", out)
 
 
 class TestTheHistoryInTheBugText(unittest.TestCase):

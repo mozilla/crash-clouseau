@@ -364,6 +364,9 @@ async def report(
         if value in (None, "", [], {}):
             continue
         lines.append("{}: {}".format(key, _short(value)))
+    system_dlls = utils.system_dll_picture(raw)
+    if system_dlls:
+        lines.append("system DLLs: {}".format(system_dlls))
     dump = raw.get("json_dump") or {}
     info = dump.get("crash_info") or {}
     if info:

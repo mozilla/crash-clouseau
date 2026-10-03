@@ -24,6 +24,7 @@ from unittest import mock  # noqa: E402
 
 import claude_agent_sdk  # noqa: E402
 
+from crashclouseau import utils  # noqa: E402
 from crashclouseau.agent import triage  # noqa: E402
 from crashclouseau.agent.errors import MissingHandoffError  # noqa: E402
 from crashclouseau.agent.result import CrashTriageResult  # noqa: E402
@@ -264,6 +265,60 @@ class TestBuildOptions(unittest.TestCase):
         self.assertNotIn("GPU", labels)
         self.assertEqual(triage._gpu_summary({}), "")
         self.assertEqual(triage._gpu_summary({"adapter_vendor_id": "0xABCD"}), "0xABCD")  # unknown passes through
+
+
+def _windows(os_version, *modules):
+    return {"os_name": "Windows NT", "os_version": os_version,
+            "json_dump": {"modules": [dict(zip(("filename", "version", "debug_id"), m))
+                                      for m in modules]}}
+
+
+_ZERO_ID = "0" * 33
+
+
+class TestSystemDllPicture(unittest.TestCase):
+    def test_vxkex_with_a_newer_reported_build(self):
+        raw = _windows("10.0.19045", ("ntdll.dll", "6.1.7601.23539", "6B74B4B2"),
+                       ("user32.dll", "6.1.7600.16384", "35AE3D87"),
+                       ("KexDll.dll", "1.1.2.1439", "F25496D8"))
+        self.assertEqual(
+            utils.system_dll_picture(raw),
+            "ntdll.dll 6.1.7601.23539, user32.dll 6.1.7600.16384; KexDll.dll is loaded: VxKex, an "
+            "API-extension layer for Windows 7 that can report a newer Windows version; ntdll.dll "
+            "build 7601 does not match the reported OS build 19045")
+        facts = triage._crash_facts(dict(_CRASH, raw_crash=raw))
+        line = next(f for f in facts if f.startswith("System DLLs (what actually ran): "))
+        self.assertEqual(facts.index(line), facts.index("OS: Windows NT 10.0.19045") + 1)
+
+    def test_wine_reporting_the_build_of_its_own_ntdll(self):
+        raw = _windows("6.1.7601 Service Pack 1", ("ntdll.dll", "6.1.7601.24059", _ZERO_ID),
+                       ("winex11.drv", "10.0.0.0", _ZERO_ID))
+        self.assertEqual(
+            utils.system_dll_picture(raw),
+            "ntdll.dll 6.1.7601.24059 with no debug ID; winex11.drv is loaded: Wine, which reports "
+            "the Windows version it is configured to imitate")
+
+    def test_wine_without_a_driver_module(self):
+        raw = _windows("10.0.19043", ("ntdll.dll", "6.1.7601.24059", _ZERO_ID))
+        self.assertIn("ntdll.dll has no debug ID: Wine", utils.system_dll_picture(raw))
+
+    def test_genuine_windows_is_not_described(self):
+        for raw in (
+            _windows("10.0.19045", ("ntdll.dll", "6.2.19041.6456", "AB12")),
+            _windows("10.0.26340", ("ntdll.dll", "6.2.26100.9502", "AB12")),
+            _windows("6.1.7601 Service Pack 1", ("ntdll.dll", "6.1.7601.28116", "AB12")),
+            # A zero debug ID alone must not trigger the Wine heuristic.
+            _windows("10.0.17763", ("ntdll.dll", None, _ZERO_ID)),
+            _windows("10.0.19045"),
+        ):
+            self.assertEqual(utils.system_dll_picture(raw), "", raw)
+        self.assertEqual(utils.system_dll_picture(None), "")
+        linux = dict(_windows("6.1.7601", ("ntdll.dll", "6.1.7601.24059", _ZERO_ID)),
+                     os_name="Linux")
+        self.assertEqual(utils.system_dll_picture(linux), "")
+        facts = triage._crash_facts(dict(_CRASH, raw_crash=_windows(
+            "10.0.19045", ("ntdll.dll", "6.2.19041.6456", "AB12"))))
+        self.assertFalse([f for f in facts if f.startswith("System DLLs")])
 
 
 class TestBuildResult(unittest.TestCase):
