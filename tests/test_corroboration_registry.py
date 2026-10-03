@@ -364,6 +364,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # off-stack window too. Write-only until read off prod: how often it fires, and whether
         # the named candidate then comes out of the window (the 2066149 case) or the noise seeds.
         "offstack_noise_only",
+        # Retain the brief's sibling data for later comparison with the verdict.
+        "signature_sibling_reports",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

@@ -515,6 +515,10 @@ REGISTRY = {
     "signature_family_first_seen_ever": (
         "evidence", ("report_bug.py", "sigfamily.py"),
         "The oldest `SignatureFirstDate` over this name and its handoff predecessors."),
+    "signature_sibling_reports": (
+        "diagnostic", (),
+        "Stores all sibling facts used by the brief, which displays at most five rows, for "
+        "later comparison with the verdict. No gate or filer reads this diagnostic."),
     "stale_signature_family_clock": (
         "evidence", ("report_bug.py",),
         "The age gate measured the candidate's lateness from the PREDECESSOR's first build, not "

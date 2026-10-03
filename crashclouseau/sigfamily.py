@@ -799,6 +799,67 @@ def _lookup(sig, proto, product, channel, cfg, until):
     }
 
 
+def _nested_counts(row, field):
+    return {t.get("term"): int(t.get("count") or 0)
+            for t in (row.get("facets") or {}).get(field) or []}
+
+
+def sibling_reports(signatures, reason, product="Firefox", until=None):
+    """Count sibling reports by platform and matching-reason reports by channel.
+
+    Counts span the family window across all channels. Returns ``{since, reason_counted,
+    rows}``, with rows keyed by signature. ``first_day`` is the earliest returned matching-reason
+    day within that window. Ignore ``same_reason`` unless ``reason_counted`` is true.
+    Returns ``None`` for empty input, a batch failure, or missing all-report facets."""
+    sigs = [s for s in signatures or () if s]
+    if not sigs:
+        return None
+    until = until or datetime.now(timezone.utc)
+    since = until - timedelta(days=int(config.get_agent_signature_family()["days"]))
+    common = {
+        "signature": ["=" + s for s in sigs],
+        "product": product or "Firefox",
+        "date": _date_range(since, until),
+        "_results_number": 0,
+        "_facets": "signature",
+        "_facets_size": _DISCOVERY_FACETS,
+    }
+    got = {}
+    queries = [_query({**common, "_aggs.signature": "platform"}, got, "all")]
+    if reason:
+        queries.append(_query({**common, "reason": "=" + reason,
+                               "_aggs.signature": "release_channel",
+                               "_histogram.date": "signature", "_histogram.interval": "1d"},
+                              got, "reason"))
+    try:
+        _run(queries)
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("sigfamily: sibling report counts failed: %s", exc)
+        return None
+    if not _usable(got.get("all")):
+        return None
+    rows = {}
+    for row in got["all"]["facets"].get("signature") or []:
+        sig, n = row.get("term"), int(row.get("count") or 0)
+        if sig in sigs and n > 0:
+            rows[sig] = {"reports": n, "platforms": _nested_counts(row, "platform"),
+                         "same_reason": 0, "channels": {}, "first_day": None}
+    counted = bool(reason) and _usable(got.get("reason"))
+    if counted:
+        facets = got["reason"]["facets"]
+        first = {}
+        for day in sorted(facets.get("histogram_date") or [], key=lambda r: str(r.get("term"))):
+            for sig, n in _nested_counts(day, "signature").items():
+                if n > 0:
+                    first.setdefault(sig, str(day.get("term"))[:10])
+        for row in facets.get("signature") or []:
+            sig, n = row.get("term"), int(row.get("count") or 0)
+            if sig in rows and n > 0:
+                rows[sig].update(same_reason=n, channels=_nested_counts(row, "release_channel"),
+                                 first_day=first.get(sig))
+    return {"since": _day(since), "reason_counted": counted, "rows": rows}
+
+
 def handoff_for_spike(signature, proto, product, channel, buildid, until=None):
     """The predecessor this SPIKE is the re-bucketing of, or ``None``: S first appears on the
     channel on the spiking build's own day and a handoff predecessor lost what S gained. The

@@ -1237,6 +1237,53 @@ _DATE_RENAMED_SIGNATURE_GUIDANCE = (
     " over both names behind any 'more frequent' claim -- or abstain as pre-existing."
 )
 
+_SIBLING_RELATIONS = {
+    "frame-variant": "shares a frame, at most two frames differ",
+    "pushed-down": "its frames are deeper in this crash's stack",
+    "spelling": "another spelling of this signature",
+}
+_MAX_SIBLING_LINES = 5
+
+
+def _sibling_lines(crash: dict) -> list[str]:
+    """Format up to five sibling rows with report counts, or ``[]`` if absent."""
+    facts = crash.get("signature_sibling_reports") or {}
+    rows = facts.get("rows") or []
+    if not rows:
+        return []
+
+    def counts(d):
+        return ", ".join("{} {}".format(k, n) for k, n in sorted(
+            (d or {}).items(), key=lambda kv: (-kv[1], kv[0])))
+
+    reason = facts.get("reason")
+    head = ("SIBLING SIGNATURES: signatures that share frames with this one and are still "
+            "reported; counts are all channels over the last {} days{}".format(
+                facts.get("days"), " (from {})".format(facts["since"]) if facts.get("since") else ""))
+    if reason:
+        head += ", and 'same reason' counts reports with this crash's reason, `{}`{}".format(
+            reason, " (this crash is on {})".format(facts["platform"])
+            if facts.get("platform") else "")
+    else:
+        head += "; same-reason counts are unavailable"
+    out = ["", head + ". Shared frames and a shared reason do not show that it is the same crash."]
+    for r in rows[:_MAX_SIBLING_LINES]:
+        n = r.get("reports")
+        line = "  `{}` ({}): {} report{}{}".format(
+            r.get("signature"),
+            _SIBLING_RELATIONS.get(r.get("relation"), r.get("relation") or "related"),
+            n if n is not None else "?", "" if n == 1 else "s",
+            " ({})".format(counts(r.get("platforms"))) if r.get("platforms") else "")
+        if reason and r.get("same_reason"):
+            line += "; {} with the same reason ({}), first on {}".format(
+                r["same_reason"], counts(r.get("channels")), r.get("first_day") or "?")
+        elif reason:
+            line += "; none with the same reason"
+        out.append(line)
+    if len(rows) > _MAX_SIBLING_LINES:
+        out.append("  ... {} more".format(len(rows) - _MAX_SIBLING_LINES))
+    return out
+
 
 def _novelty_reliability_lines(crash: dict) -> tuple[list[str], str | None]:
     """``(lines, guidance)`` withdrawing a novelty claim the facts do not support, or
@@ -1827,6 +1874,7 @@ def _crash_facts(crash: dict) -> list[str]:
     # Signature-level, and therefore last: everything above describes THIS report, and the point
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)
+    lines += _sibling_lines(crash)
     lines += _hardware_noise_lines(crash)
     # Last of the signature-level block: how old the signature is says whether the crash is new,
     # and this says whether it got WORSE -- the two answers are independent and a rise on an old

@@ -864,6 +864,12 @@ def build_seed(uuid):
         except Exception as exc:  # pragma: no cover - defensive; never break a seed
             logger.warning("agent: signature family lookup failed for %s: %s", uuid, exc)
             family_facts = {"signature_family_lookup": "failed"}
+    try:
+        sibling_reports = _sibling_report_facts(
+            family_facts, raw_crash, info.get("product") or uuid_info.get("product", "") or "Firefox")
+    except Exception as exc:  # pragma: no cover - defensive; never break a seed
+        logger.warning("agent: sibling report counts failed for %s: %s", uuid, exc)
+        sibling_reports = None
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
     # runs — so hand it the map for every seeded candidate. Both candidate builders already
     # carry `pushdate` (DB datetime on-stack, hg [epoch, tz] off-stack), so this costs nothing.
@@ -944,6 +950,8 @@ def build_seed(uuid):
         # `signature_fan_in`, `signature_family_lookup`. Read by the crash brief
         # (`triage._signature_age_lines`), the age gate's clock, the recorder and the filer.
         **family_facts,
+        # Counts for `triage._sibling_lines`; None if no live siblings or an unexpected error.
+        "signature_sibling_reports": sibling_reports,
         "candidate_pushdates": candidate_pushdates,
         # Learned crash archetypes that match this crash (`models.Archetype`): a recurring
         # shape plus what a reviewer told us to check when we see it. Handed to the agent as a
@@ -3412,9 +3420,45 @@ def _signature_family_facts(seed):
         facts["signature_fan_in"] = int(s.get("signature_fan_in") or len(predecessors))
     if siblings:
         facts["signature_siblings_live"] = [x["signature"] for x in siblings]
+    if s.get("signature_sibling_reports"):
+        facts["signature_sibling_reports"] = s["signature_sibling_reports"]
     if s.get("signature_family_first_seen_ever"):
         facts["signature_family_first_seen_ever"] = s["signature_family_first_seen_ever"]
     return facts
+
+
+def _sibling_report_facts(family_facts, raw_crash, product):
+    """Build facts for the sibling brief, or ``None`` if there are no live siblings.
+
+    Use discovery totals if the report lookup returns no result; set ``same_reason`` to
+    ``None`` when reason counts are unavailable."""
+    from crashclouseau import sigfamily
+
+    rows = [x for x in (family_facts or {}).get("signature_siblings") or []
+            if x.get("signature") and x.get("status") in _LIVE_SIBLING_STATUSES]
+    if not rows:
+        return None
+    raw = raw_crash or {}
+    reason = str(raw.get("reason") or "").strip()
+    got = sigfamily.sibling_reports([x["signature"] for x in rows], reason, product) or {}
+    counted = bool(got.get("reason_counted"))
+    out = []
+    for x in rows:
+        c = (got.get("rows") or {}).get(x["signature"])
+        out.append({
+            "signature": x["signature"],
+            "relation": x.get("relation"),
+            "reports": c["reports"] if c else (0 if got else x.get("total_all_channels")),
+            "platforms": (c or {}).get("platforms") or {},
+            "same_reason": (c or {}).get("same_reason", 0) if counted else None,
+            "channels": (c or {}).get("channels") or {},
+            "first_day": (c or {}).get("first_day"),
+        })
+    out.sort(key=lambda r: (-(r["same_reason"] or 0), -(r["reports"] or 0), r["signature"]))
+    platform = raw.get("os_name") or ((raw.get("json_dump") or {}).get("system_info") or {}).get("os")
+    return {"reason": reason if counted else None, "platform": platform or None,
+            "since": got.get("since"), "days": config.get_agent_signature_family()["days"],
+            "rows": out}
 
 
 def _record_offstack_seed_facts(dossier, seed):
