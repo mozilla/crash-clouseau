@@ -1264,7 +1264,7 @@ def build_bucket_opener(meta_bugs, signature):
 def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
                              version=None, needinfo=None, author_display=None,
                              max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None,
-                             fresh_limit=None):
+                             fresh_limit=None, stale_since=None):
     """Build the opening comment for an ``actionable`` bug, with no regressor claim.
 
     1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
@@ -1272,6 +1272,9 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
     3. the cited mechanism and origin used for routing, with timing when the origin qualifies
        for the waiver (``fresh_limit`` = ``autofile.fresh_origin_days``);
     4. the mechanism's code references, the ask, the provenance footer.
+
+    With ``stale_since`` (a date) the text is a comment on an existing bug: it opens with the
+    date of the bug's last human comment and ends with the comment footer.
 
     The mechanism is copied whole. Consistency stays in the dossier because age and volume are
     rendered from deterministic data and free-form prose cannot be filtered safely. Skeptic,
@@ -1309,7 +1312,11 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
                 link, " by {}".format(who) if who else "",
                 _fresh_origin_clause((dossier or {}).get("corroborations"), fresh_limit)))
     because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
+    stale = ("This bug has had no comment from a person since {}. Clouseau analysed a recent "
+             "crash report on its signature; the analysis is below.".format(stale_since)
+             if stale_since else None)
     sections = [
+        stale,
         bucket_opener,
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         build_reason_block(details),
@@ -1321,7 +1328,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         # Only publish references for the claim printed above.
         build_code_references({"mechanism": verdict.get("mechanism")}, channel),
         needinfo,
-        _provenance(channel),
+        _comment_provenance(channel) if stale_since else _provenance(channel),
     ]
     return _unbacktick_bug_refs("\n\n".join(s for s in sections if s))
 
@@ -1486,11 +1493,23 @@ _PROVENANCE_SCOPE = {
 def _provenance(channel=None):
     """The last line of every filed bug, with the crash's own channel named in it. An ESR line
     label (``esr140``) is named by its family: the reader wants to know it was an ESR crash."""
+    return _PROVENANCE_TEMPLATE.format(scope=_provenance_scope(channel))
+
+
+def _provenance_scope(channel):
     ch = (channel or "").lower()
     scope = _PROVENANCE_SCOPE.get(ch)
     if scope is None:
         scope = _PROVENANCE_SCOPE.get(config.channel_family(ch), "Firefox crashes")
-    return _PROVENANCE_TEMPLATE.format(scope=scope)
+    return scope
+
+
+def _comment_provenance(channel=None):
+    """The last line of a comment on somebody else's bug: who wrote it, without the requests
+    about resolving the bug that ``_provenance`` makes of a bug we filed."""
+    return ("_Posted automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), "
+            "which analyses {} with an LLM. Nothing above was written or checked by a "
+            "human._".format(_provenance_scope(channel)))
 
 
 _PROVENANCE_TEMPLATE = (
@@ -2613,15 +2632,17 @@ def _person_display(person):
     return ""
 
 
-def _needinfo_line(person):
+def _needinfo_line(person, role=""):
     """The needinfo we'd request -- ``:nick, can you have a look please?`` -- for ``person``
     (a ``{nick, name, email, account, account_name}`` dict). ``None`` when no usable identity
-    is available.
+    is available. A ``role`` follows the name: ``:nick, as triage owner, can you ...``.
 
     Deliberately still written when no ACCOUNT resolved and no flag will be set: naming the
     human in the prose is most of the value, and a triager who reads "Andreas Farre, can you
     have a look please?" can set the flag in one click. Silence would throw that away too."""
     who = _person_display(person)
+    if who and role:
+        who = "{}, as {}".format(who, role)
     return "{}, can you have a look please?".format(who) if who else None
 
 
@@ -2637,7 +2658,7 @@ def _bug_version(channel):
 
 def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None,
                       landing_unresolved=False, meta_bugs=None, never_comment=False,
-                      incomplete_fix=None, restrict=False):
+                      incomplete_fix=None, restrict=False, stale=None):
     """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
     filer posts: ``{title, comment, product, component, version, type, keywords,
     cf_crash_signature, blocked, needinfo, needinfo_email}``.
@@ -2676,7 +2697,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     and backout gates. The filings answer it directly now: of the 39 bugs filed at rung 70 up to
     2026-08-17, 12 have a ``regressed_by`` a human set, and 11 of those name the bug we named. The
     one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
-    excludes."""
+    excludes.
+
+    ``stale`` (``{"since", "person"}``) makes an ``actionable`` comment for an existing bug whose
+    last human comment is dated ``since``; the needinfo goes to ``person``, the component's
+    triage owner, and the origin's author is only named."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
@@ -2752,6 +2777,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     bucket = bool(meta_ids and bucket_name)
     opener = build_bucket_opener(meta_bugs, uuid_info.get("signature")) if bucket else None
     own_train = _status_flag(version, channel)
+    stale = stale if actionable else None
+    asked = (stale.get("person") or {}) if stale else person
+    ask = _needinfo_line(asked, role="triage owner" if stale else "")
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -2764,9 +2792,10 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             prefix="" if actionable else (policy.get("summary_prefix") or "")),
         "comment": build_actionable_comment(
             uuid_info, stack, dossier, details=fetch_crash_reason(uuid), stats=stats,
-            first=first, version=version, needinfo=_needinfo_line(person),
+            first=first, version=version, needinfo=ask,
             author_display=_person_display(person), bucket_opener=opener,
             fresh_limit=policy.get("fresh_origin_days"),
+            stale_since=(stale or {}).get("since"),
         ) if actionable else build_bug_comment(
             uuid_info,
             stack,
@@ -2821,7 +2850,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # on a regression bug. Gated on `link_regressor`, and a list because the field is one --
         # the pipeline only ever names a single changeset.
         "regressed_by": [candidate["bug"]] if link_regressor else [],  # noqa: E501 (candidate is set whenever link_regressor is)
-        "needinfo": _needinfo_line(person),
+        "needinfo": ask,
         # Optional tracking nomination for the crash's own train.
         "tracking_flag": (_tracking_flag(version, channel)
                           if policy.get("nominate_tracking") and not actionable else None),
@@ -2831,7 +2860,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # The VERIFIED Bugzilla login, not the hg commit address -- BMO rejects a whole
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).
-        "needinfo_email": (person or {}).get("account") or "",
+        "needinfo_email": (asked or {}).get("account") or "",
         # SECURITY VENUE. :mccr8 on bug 2065051: "Bugs on poison crashes like that should always
         # be filed initially a security issue." `[]` on an ordinary crash, so nothing changes for
         # the 98% -- and a group NAME rather than a boolean because BMO has no

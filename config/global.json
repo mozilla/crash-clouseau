@@ -312,6 +312,8 @@
             "needinfo": true,
             "daily_cap": null,
             "comment_on_existing": "comment",
+            "wake_stale": "comment",
+            "wake_stale_days": 180,
             "skip_regressor_bugs": [2067007],
             "default_channel": "nightly",
             "default_product": "Firefox",

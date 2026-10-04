@@ -210,7 +210,8 @@ def _filing_status(uuid, uuid_info, evidence):
     * ``filed`` -- ``filed_bug`` when it says ``filed: true``: our bug, or the bug we commented
       on (``mode``).
     * ``declined`` -- ``filing_declined``: the gate that said no, with the bug it was about when
-      it named one (``_declined_bug``, the tasks page's reading).
+      it named one (``_declined_bug``, the tasks page's reading), and the stale-bug check's
+      outcome (``wake_stale``; the comment it would post in shadow mode).
     * ``error`` -- ``filing_error``: a write BMO rejected.
     * ``own_prior`` -- ``Dossier.already_filed_for_signature``: a bug Clouseau filed for this
       signature from ANOTHER crash. Survives that bug being closed or restricted, which the BMO
@@ -237,6 +238,8 @@ def _filing_status(uuid, uuid_info, evidence):
     if fd.get("skipped"):
         declined = {"reason": fd["skipped"], "at": fd.get("at"),
                     "bug": _declined_bug(fd.get("bug"), fd["skipped"])}
+        if fd.get("wake_stale"):
+            declined["wake_stale"] = fd["wake_stale"]
     fe = evidence.get("filing_error") or {}
     error = {"error": fe["error"], "at": fe.get("at")} if fe.get("error") else None
     own_prior = None

@@ -388,7 +388,8 @@ known-on-train, security venue):
   on release;
 - NO open same-application, non-meta bug on the signature, whatever `comment_on_existing` says:
   an open bug means someone can already act. Decline reads `open bug N exists; an actionable
-  crash is filed only where no bug is`.
+  crash is filed only where no bug is`. A stale open bug may get a comment instead (see
+  "Stale open bugs and the actionable decline").
 Upstream, the age gate flips sign for it: an origin that landed AFTER the signature was first
 seen is not the origin -> `pre_existing` abstain (`actionable_origin_postdates_signature`). The
 blind second opinion is not bought for it (`skipped_actionable`); no calibrated probability is
@@ -503,6 +504,34 @@ its supporting chip alone does not establish waiver eligibility.
 
 After deployment, inspect `actionable_origin_age` and the `actionable floor ... waived` log
 entries. The behavior is covered in `tests/test_actionable_verdict.py`.
+
+## Stale open bugs and the actionable decline (2026-10-04)
+
+An `actionable` crash with an open bug on its signature is still declined, but
+`bugzilla_apply._wake_stale_bug` can post the analysis on that bug instead.
+`agent.autofile.wake_stale` is `off` (the code default), `shadow` (record only) or `comment`
+(shipped). It applies on every channel and product, including `skip` ones.
+
+It comments on the first open same-application, non-meta bug when all of these hold:
+- every open bug on the signature has had no comment from a person for
+  `wake_stale_days` (180). Accounts that `_is_automation` matches do not count. A bug with no
+  human comment is dated by comment 0;
+- no comment on those bugs comes from a Clouseau account or links the Clouseau repository;
+- the crash has no memory-safety signal, the origin bug is public, and `disclosure.screen`
+  leaves no nonpublic reference in the comment;
+- the bug's component has a triage owner who can be asked (`report_bug._person_for_account`).
+
+The comment opens with the date of the last human comment, keeps the actionable analysis,
+asks the triage owner (`:nick, as triage owner, can you have a look please?`) and ends with a
+footer that has no INVALID or duplicate request. It is recorded as `filed_bug` with
+`mode: comment_on_existing` and `wake_stale`, so later crashes on the signature stop at
+`already_filed_for_signature`. Failed lookups decline.
+
+When it does not comment, the decline record carries the reason in
+`filing_declined.wake_stale`; in shadow mode it carries the comment and needinfo it would have
+posted. crashstack.html shows both. Of the 11 open bugs behind actionable declines from
+2026-09-17 to 10-04, 4 had no human comment for 180 days. To stop it, set `wake_stale` to
+`off` or `shadow`.
 
 ## OOM aborts and the `actionable` verdict (2026-09-21)
 

@@ -317,6 +317,32 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("<strong>Not filed:</strong> open bug 2072627 exists &mdash; "
                       '<a href="https://bugzilla.mozilla.org/show_bug.cgi?id=2072627"', html)
 
+    def test_a_shadow_stale_bug_comment_is_shown(self):
+        ev = _evidence()
+        ev["filing_declined"] = {
+            "skipped": "open bug 2072627 exists; an actionable crash is filed only where no "
+                       "bug is", "bug": 2072627,
+            "wake_stale": {"mode": "shadow", "bug": 2072627, "since": "2025-04-22",
+                           "triage_owner": "owner@moz.example", "needinfo": "owner@moz.example",
+                           "comment": "This bug has had no comment <b>from a person</b>"}}
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG]).get_data(as_text=True)
+        self.assertIn("Stale bug, shadow mode: bug 2072627 has had no comment from a person "
+                      "since 2025-04-22.", html)
+        self.assertIn("needinfo the triage owner, owner@moz.example.", html)
+        self.assertIn("This bug has had no comment &lt;b&gt;from a person&lt;/b&gt;", html)
+
+    def test_a_stale_bug_check_that_declined_says_why(self):
+        ev = _evidence()
+        ev["filing_declined"] = {
+            "skipped": "open bug 2072627 exists; an actionable crash is filed only where no "
+                       "bug is", "bug": 2072627,
+            "wake_stale": {"mode": "shadow", "bug": 2072627,
+                           "skipped": "bug 2072627 has a human comment from 2026-09-30"}}
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG]).get_data(as_text=True)
+        self.assertIn("Stale-bug check: no comment on bug 2072627 &mdash; bug 2072627 has a "
+                      "human comment from 2026-09-30.", html)
+        self.assertNotIn("Stale bug, shadow mode", html)
+
     def test_a_filed_bug_is_shown_as_filed_and_not_listed_twice(self):
         ev = _evidence()
         ev["filed_bug"] = {"filed": True, "bug": 2072700, "mode": "new_bug",

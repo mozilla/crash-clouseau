@@ -969,6 +969,18 @@ def comment_mode(value):
     return text if text in COMMENT_ON_EXISTING else "comment"
 
 
+# Values of ``agent.autofile.wake_stale``: whether an actionable crash declined for an open bug
+# comments on that bug when it is stale (``bugzilla_apply._wake_stale_bug``). ``shadow`` records
+# the comment without posting it.
+WAKE_STALE = ("off", "shadow", "comment")
+
+
+def wake_mode(value):
+    """Coerce ``wake_stale`` to one of :data:`WAKE_STALE`; anything else is ``off``."""
+    text = str(value or "").strip().lower()
+    return text if text in WAKE_STALE else "off"
+
+
 def autofile_globally_enabled():
     """The GLOBAL half of the filing switch alone: ``AUTOFILE_BUGS`` over the top-level
     ``agent.autofile.enabled``, with no per-channel veto applied.
@@ -1162,6 +1174,10 @@ def get_agent_autofile(channel=None, product=None):
         # `report_bug.fresh_origin_days` also checks first-seen ordering and novelty flags.
         # 14 days is a policy default, not a measured cutoff. `0` or `null` disables the waiver.
         "fresh_origin_days": a.get("fresh_origin_days", 14),
+        # An actionable crash declined for an open bug: comment there when every open bug on
+        # the signature has had no human comment for `wake_stale_days` (`wake_mode`).
+        "wake_stale": wake_mode(a.get("wake_stale")),
+        "wake_stale_days": a.get("wake_stale_days") or 180,
         # Channel overlays enable the release/ESR title prefix and tracking nomination. New bugs
         # also carry `affected` fields for the crash's own train and the live trains on which
         # Socorro reports its signature. See `report_bug._train_flag` and

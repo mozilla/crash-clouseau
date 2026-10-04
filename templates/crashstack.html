@@ -387,7 +387,7 @@
         {%- if filed -%}
           {%- if filed.get('mode') == 'comment_on_existing' -%}
         <h3>Bug we commented on</h3>
-        <p class="filing-status filed">The analysis was posted as a comment on <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>, which already tracked this signature.{% if filed.get('needinfo') %} Needinfo: {{ filed['needinfo']|e }}.{% endif %}</p>
+        <p class="filing-status filed">The analysis was posted as a comment on <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>, which already tracked this signature.{% if (filed.get('wake_stale') or {}).get('since') %} It had had no comment from a person since {{ filed['wake_stale']['since']|e }}.{% endif %}{% if filed.get('needinfo') %} Needinfo: {{ filed['needinfo']|e }}.{% endif %}</p>
           {%- elif filed.get('mode') == 'same_defect' -%}
         <h3>Bug we added this signature to</h3>
         <p class="filing-status filed">The signature was added to <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ filed['bug']|e }}" target="_blank" rel="noopener">bug {{ filed['bug']|e }}</a>, which has the same regressor{% if (filed.get('same_defect') or {}).get('regressor') %} (bug {{ filed['same_defect']['regressor']|e }}){% endif %} and which the same-defect check found to be the same defect.{% if (filed.get('same_defect') or {}).get('reason') %} {{ filed['same_defect']['reason']|e }}{% endif %}</p>
@@ -401,6 +401,15 @@
         {%- elif fl.get('declined') -%}
         <h3>Bug we would have filed <span class="muted">(preview &mdash; not filed)</span></h3>
         <p class="filing-status declined"><strong>Not filed:</strong> {{ fl['declined']['reason']|e }}{% if fl['declined'].get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ fl['declined']['bug']|e }}" target="_blank" rel="noopener">bug {{ fl['declined']['bug']|e }}</a>{% endif %}</p>
+          {#- The stale-bug check (`bugzilla_apply._wake_stale_bug`): in shadow mode, the
+              comment it would have posted on the open bug. -#}
+          {%- set wk = fl['declined'].get('wake_stale') or {} -%}
+          {%- if wk.get('comment') %}
+        <p class="filing-status">Stale bug, shadow mode: bug {{ wk['bug']|e }} has had no comment from a person since {{ wk['since']|e }}. With <code>wake_stale: comment</code>, Clouseau would post the comment below there{% if wk.get('needinfo') %} and needinfo the triage owner, {{ wk['needinfo']|e }}{% endif %}.</p>
+        <details><summary>Comment for bug {{ wk['bug']|e }}</summary><pre class="action-body">{{ wk['comment']|e }}</pre></details>
+          {%- elif wk.get('skipped') %}
+        <p class="muted">Stale-bug check: no comment on bug {{ wk['bug']|e }} &mdash; {{ wk['skipped']|e }}.</p>
+          {%- endif %}
         {%- elif fl.get('undecided') -%}
         <h3>Bug we&rsquo;ll file <span class="muted">(preview)</span></h3>
         <p class="filing-status">{% if pol.get('enabled') %}No filing decision is recorded for this run.{% else %}Filing is off for {{ channel|e }}; nothing was filed.{% endif %}</p>

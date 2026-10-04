@@ -2124,6 +2124,156 @@ def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
     return result
 
 
+_CLOUSEAU_LINK = "github.com/mozilla/crash-clouseau"
+
+
+def _is_ours(comment):
+    """Whether a BMO comment comes from a Clouseau account or links the Clouseau repository."""
+    if "clouseau" in (comment.get("creator") or "").lower():
+        return True
+    return _CLOUSEAU_LINK in (comment.get("text") or "")
+
+
+def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
+    """``{"last_human", "ours"}`` from the comments on *bug_id*; ``None`` on a failed read.
+
+    ``last_human`` is the time of the newest comment by an account ``_is_automation`` does not
+    match, else of comment 0. ``ours`` is ``_is_ours`` for any comment."""
+    from crashclouseau import sigage
+
+    try:
+        r = net.get("{}/{}/comment".format(_bz_rest(), bug_id), timeout=timeout)
+        r.raise_for_status()
+        comments = (((r.json() or {}).get("bugs") or {}).get(str(bug_id)) or {}).get("comments")
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: comment read failed for bug %s: %s", bug_id, exc)
+        return None
+    if not comments:
+        return None
+    human = [c for c in comments if not _is_automation(c.get("creator"))] or comments[:1]
+    ours = any(_is_ours(c) for c in comments)
+    return {"last_human": sigage.to_datetime(human[-1].get("creation_time")), "ours": ours}
+
+
+def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
+    """The triage owner login of *bug_id*'s component, ``""`` when unset; ``None`` on a failed
+    read."""
+    try:
+        r = net.get(_bz_rest(), params={"id": str(bug_id), "include_fields": "id,triage_owner"},
+                    timeout=timeout)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: triage owner read failed for bug %s: %s", bug_id, exc)
+        return None
+    row = next((b for b in bugs if str(b.get("id")) == str(bug_id)), None)
+    return ((row or {}).get("triage_owner") or "").strip()
+
+
+def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, declined, family):
+    """Comment on a stale open bug instead of declining an actionable crash for it.
+
+    *existing* holds the open same-application, non-meta bugs on the signature and *declined*
+    the decline returned otherwise. With ``wake_stale`` at ``shadow`` or ``comment``, the first
+    bug gets the actionable analysis and a needinfo for its component's triage owner when:
+    every open bug has had no human comment for ``wake_stale_days``; none has a Clouseau
+    comment; the crash has no memory-safety signal; the origin bug and the bugs the comment
+    names are public; and the triage owner can be asked. ``shadow`` returns *declined* with
+    the comment under ``wake_stale``. A failed lookup declines."""
+    mode = config.wake_mode(cfg.get("wake_stale"))
+    if mode == "off":
+        return declined
+    venue = existing[0]
+
+    def no(reason):
+        return dict(declined, wake_stale={"mode": mode, "bug": venue["id"], "skipped": reason})
+
+    if sensitive.is_withheld((dossier or {}).get("corroborations")):
+        return no("the crash report shows a memory-safety signal")
+    days = cfg.get("wake_stale_days") or 180
+    now = datetime.now(timezone.utc)
+    since = None
+    for bug in existing:
+        activity = _bug_activity(bug["id"])
+        if activity is None or activity["last_human"] is None:
+            return no("could not read the comments on bug {}".format(bug["id"]))
+        if activity["ours"]:
+            return no("bug {} already has a Clouseau comment".format(bug["id"]))
+        if now - activity["last_human"] < timedelta(days=days):
+            return no("bug {} has a human comment from {}".format(
+                bug["id"], activity["last_human"].date().isoformat()))
+        if bug is venue:
+            since = activity["last_human"].date().isoformat()
+    origin = ((dossier or {}).get("candidate") or {}).get("bug")
+    if origin:
+        hidden = disclosure.nonpublic([origin])
+        if hidden is None:
+            return no("could not check whether the origin bug is public")
+        if hidden:
+            return no("the origin bug is not public")
+    from crashclouseau import report_bug
+
+    owner = _triage_owner(venue["id"])
+    if owner is None:
+        return no("could not read the triage owner of bug {}".format(venue["id"]))
+    person = report_bug._person_for_account(owner)
+    if not person.get("account"):
+        return no("bug {} has no triage owner who can be asked".format(venue["id"]))
+    try:
+        preview = report_bug.build_bug_preview(uuid_info, stack, dossier,
+                                               stale={"since": since, "person": person})
+    except Exception as exc:
+        logger.error("autofile: stale-bug comment failed for %s", uuid, exc_info=True)
+        return no("comment build failed: {}".format(exc))
+    if not preview:
+        return no("no origin changeset to describe")
+    screened = disclosure.screen(preview["comment"])
+    if screened is None:
+        return no("could not check whether the bugs the analysis names are public")
+    if screened["left"]:
+        return no("the analysis names a bug that is not public")
+    signature = (uuid_info.get("signature") or "").strip()
+    via_note = _venue_via_signature_note(signature, venue, family)
+    text = screened["text"] + ("\n\n" + via_note if via_note else "")
+    email = person["account"] if cfg["needinfo"] else ""
+    wake = {"mode": mode, "bug": venue["id"], "since": since, "triage_owner": person["account"]}
+    if mode == "shadow":
+        return dict(declined, wake_stale=dict(wake, comment=text, needinfo=email or None))
+    try:
+        _post_comment(venue["id"], text, False, token)
+    except Exception as exc:
+        logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
+        try:
+            models.Dossier.record_filing_error(uuid, {
+                "at": datetime.now(timezone.utc).isoformat(), "error": str(exc)[:500],
+                "signature": signature, "mode": "wake_stale"})
+        except Exception:                                   # pragma: no cover - defensive
+            logger.warning("autofile: could not record the filing error for %s", uuid)
+        return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}
+    result = {"filed": True, "bug": venue["id"], "mode": "comment_on_existing", "uuid": uuid,
+              "signature": signature, "channel": uuid_info.get("channel"),
+              "product": uuid_info.get("product"),
+              "buildid": utils.get_buildid(uuid_info.get("buildid")),
+              "at": datetime.now(timezone.utc).isoformat(), "wake_stale": wake}
+    if via_note:
+        result["venue_via_signature"] = venue.get("via_signature")
+        result["signature_attached"] = _attach_signature(venue["id"], signature, token)
+    if screened["withdrawn"]:
+        result["withdrawn_refs"] = len(screened["withdrawn"])
+    # The comment is posted: a failed needinfo is recorded, never raised.
+    outcome = _set_needinfo(venue["id"], email, token) if email else None
+    failed = isinstance(outcome, Exception)
+    result["needinfo"] = None if failed else (email or None)
+    if failed:
+        result["needinfo_failed"] = email
+    elif outcome == _NEEDINFO_ALREADY:
+        result["needinfo_already_set"] = email
+    models.Dossier.record_filed_bug(uuid, result)
+    logger.info("autofile: %s -> bug %s (stale since %s, needinfo=%s)",
+                uuid, venue["id"], since, result["needinfo"])
+    return result
+
+
 _SKIPPED_REGRESSOR = "regressor bug {} is excluded from filing (agent.autofile.skip_regressor_bugs)"
 
 # Public restriction reasons omit the referenced bug IDs.
@@ -2205,6 +2355,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       the same signature are analysed independently and all land on the same bug.
     * before a new bug, optionally compare bugs sharing the regressor (``_same_defect_bug``).
       An accepted match follows the channel's comment policy; no match continues normal filing.
+    * an ``actionable`` crash with an open bug is declined, whatever the channel's comment
+      policy, unless ``_wake_stale_bug`` comments on a stale one.
     * eligible filings with a nonpublic regressor or remaining nonpublic text references
       use a restricted bug. Public filings remove list items naming nonpublic bugs;
       a failed visibility lookup prevents the write (``disclosure``).
@@ -2513,12 +2665,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     # means someone can already act, and this filing exists only to put a crash in front of
     # someone. Decided whatever the channel's `comment_on_existing` says, with metas and other
     # applications excluded as everywhere else; `bug` names the venue, as on every decline that
-    # is about one.
+    # is about one. When every open bug is stale, `_wake_stale_bug` may comment on it instead.
     if actionable and existing:
-        return {"filed": False, "bug": existing[0]["id"],
-                "skipped": "open bug {}{} exists; an actionable crash is filed only where no bug "
-                           "is".format(existing[0]["id"], _via_clause(existing[0])),
-                **_via_fields(existing[0])}
+        return _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, {
+            "filed": False, "bug": existing[0]["id"],
+            "skipped": "open bug {}{} exists; an actionable crash is filed only where no bug "
+                       "is".format(existing[0]["id"], _via_clause(existing[0])),
+            **_via_fields(existing[0])}, family)
     # (mode/comment_allowed/withheld are resolved above, right after `cfg`.)
     # THREE MODES, not a boolean (``config.COMMENT_ON_EXISTING``). ``skip`` is what ``False``
     # always DID -- no comment AND no new bug, decided before anything asks whether that bug
