@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import net
 
-from crashclouseau import config, corroborations, disclosure, models, sensitive, utils
+from crashclouseau import config, corroborations, disclosure, links, models, sensitive, utils
 from crashclouseau.agent import schema
 from crashclouseau.logger import logger
 
@@ -175,12 +175,43 @@ def open_venues(signature, product, timeout=_PAGE_HTTP_TIMEOUT):
 # Bugzilla REST writes (every write in the product, the spike filer's included, is one of
 # these)
 # --------------------------------------------------------------------------- #
+def _render_comment(text, timeout=_HTTP_TIMEOUT):
+    """Request comment HTML from the configured Bugzilla without an API key."""
+    r = net.post("{}/comment/render".format(_bz_rest()), json={"text": text}, timeout=timeout)
+    r.raise_for_status()
+    return (r.json() or {}).get("html")
+
+
+def _check_rendered_links(text, where):
+    """Check rendered links; refuse request failures, missing HTML, or disallowed links.
+
+    BMO decodes entities and Markdown escapes that ``links.screen`` leaves intact.
+    """
+    if not text:
+        return
+    try:
+        rendered = _render_comment(text)
+    except Exception as exc:
+        raise links.LinkRefused("could not render {} to check its links: {}".format(
+            where, exc)) from exc
+    if rendered is None:
+        raise links.LinkRefused("BMO returned no rendering of {}".format(where))
+    bad = links.offsite(rendered)
+    if bad:
+        logger.warning("links: refusing %s, which BMO renders with %d link(s) outside the "
+                       "allowlist", where, len(bad))
+        raise links.LinkRefused("{} renders with a link outside the allowlist".format(where))
+
+
 def _post_comment(bug_id, text, is_private, token):
     """Post a comment and return its ID.
 
-    Check recognized bug references unless the comment is private."""
+    Screen links, check bug references for public comments, then check rendered links."""
+    where = "a comment on bug {}".format(bug_id)
+    text = links.screen_write(text, where)
     if not is_private:
         disclosure.check_public_write(text, bug_id)
+    _check_rendered_links(text, where)
     r = net.post(
         "{}/{}/comment".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
@@ -192,13 +223,19 @@ def _post_comment(bug_id, text, is_private, token):
 
 
 def _put_bug(bug_id, changes, token):
-    """PUT /rest/bug/<id> with the recorded ``changes`` (this is how the recorded
-    needinfo flag gets set, from ``changes.flags``) -> the bug id on success."""
+    """Screen and apply field changes; return the bug ID.
+
+    Check public comment bodies for nonpublic bug references, and all comment bodies
+    for disallowed rendered links.
+    """
     if not changes:
         raise ValueError("update_bug action has no changes to apply")
+    changes = links.screen_fields(changes, "an update of bug {}".format(bug_id))
     comment = changes.get("comment") or {}
-    if comment.get("body") and not comment.get("is_private"):
-        disclosure.check_public_write(comment["body"], bug_id)
+    if comment.get("body"):
+        if not comment.get("is_private"):
+            disclosure.check_public_write(comment["body"], bug_id)
+        _check_rendered_links(comment["body"], "a comment on bug {}".format(bug_id))
     r = net.put(
         "{}/{}".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
@@ -234,11 +271,14 @@ class BugzillaRejected(RuntimeError):
 def _create_bug(payload, token):
     """Create a bug through ``_bz_rest()`` and return its ID.
 
-    For payloads without groups, check recognized bug references in the summary and
-    description before posting. ``BUGZILLA_REST_URL`` selects the destination."""
+    Screen fields and check rendered description links. Without groups, also check
+    summary and description bug references. ``BUGZILLA_REST_URL`` selects the destination.
+    """
+    payload = links.screen_fields(payload, "a new bug")
     if not payload.get("groups"):
         disclosure.check_public_write("{}\n{}".format(payload.get("summary") or "",
                                                       payload.get("description") or ""))
+    _check_rendered_links(payload.get("description"), "a new bug's description")
     r = net.post(
         _bz_rest(),
         headers={"X-Bugzilla-API-Key": token},

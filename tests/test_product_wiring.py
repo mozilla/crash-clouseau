@@ -839,6 +839,12 @@ class TestCrashstackPanel(unittest.TestCase):
 class TestApplyRecordedActions(unittest.TestCase):
     """The apply/replay step: bounded by enabled_types, idempotent, mocked REST."""
 
+    def setUp(self):
+        # Render checks are covered in test_links.py.
+        p = mock.patch.object(bugzilla_apply, "_render_comment", return_value="<p>ok</p>")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _run(self, indices, actions=None, token="TESTTOKEN",
              verdict="culprit", confidence=90):
         actions = _actions() if actions is None else actions

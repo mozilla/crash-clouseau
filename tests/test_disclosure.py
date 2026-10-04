@@ -191,7 +191,9 @@ class TestTheLastCheckBeforeAPublicWrite(unittest.TestCase):
                 disclosure.check_public_write("see bug 1855742", 55)
 
     def test_the_write_helpers_refuse_before_posting(self):
+        # Render checks are covered in test_links.py.
         with mock.patch.object(disclosure, "public_bugs", side_effect=_public_except(_HIDDEN)), \
+                mock.patch.object(bugzilla_apply, "_render_comment", return_value="<p>ok</p>"), \
                 mock.patch.object(bugzilla_apply.net, "post") as post, \
                 mock.patch.object(bugzilla_apply.net, "put") as put:
             with self.assertRaises(disclosure.DisclosureRefused):

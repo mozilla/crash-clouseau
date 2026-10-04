@@ -636,6 +636,24 @@ restriction on forced tool use. Classifier declines can return
 CLI handling remains unverified here. After deploy, check errors, abstains, and per-run cost;
 `max_cost_usd_per_crash` only logs a warning.
 
+## Links in Bugzilla writes (2026-10-04)
+
+`bugzilla_apply._post_comment`, `_put_bug` and `_create_bug` screen links against
+`links.ALLOWED_HOSTS` and `links.ALLOWED_GITHUB`. Matched disallowed bare URLs become
+`(link removed)`; inline links keep their labels and reference definitions are dropped.
+Screening includes code spans and blocks, but excludes bare email and mailto addresses.
+
+For creates and updates, `links.screen_fields` screens strings in nested dictionaries and
+lists, preserving `cf_crash_signature`. Nonempty `url` and `see_also` values must pass the
+allowlist check; `remove` entries are exempt.
+
+After any applicable disclosure check, comments and descriptions are checked using
+`/rest/bug/comment/render`. BMO decodes entities and Markdown escapes that the text screen
+leaves intact (confirmed with live render requests on 2026-10-04). Request failures, missing
+HTML and disallowed rendered links refuse the write. The rendered-link check ignores mailto
+links and targets without a scheme, `//` or `www.` prefix after backslash normalization.
+Previews do not apply this screening.
+
 ## Spike escalation (a real spike files a bug, culprit or not; plan #22)
 
 Since 2026-09-07 a REAL spike — not `0 → 1`: the channel's crash floor, several distinct
