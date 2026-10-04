@@ -3378,6 +3378,30 @@ def _record_signature_age_facts(dossier, seed):
         dossier.corroborations = {**(dossier.corroborations or {}), **facts, **novelty, **family}
 
 
+def _bug_comment_facts(seed):
+    """Read bug-comment facts when enabled; catch reader errors so triage can continue."""
+    cfg = config.get_agent_bug_comments()
+    signature = (seed or {}).get("signature")
+    if not cfg["enabled"] or not signature:
+        return None
+    try:
+        from crashclouseau.agent import comment_reader
+
+        return comment_reader.facts_for_signature(signature, seed.get("product") or "Firefox",
+                                                  cfg)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("agent: bug comment reader failed for %s: %s", seed.get("uuid"), exc)
+        return None
+
+
+def _record_bug_comment_facts(dossier, seed):
+    """Store reader output in corroborations without changing the verdict."""
+    data = (seed or {}).get("bug_comment_facts")
+    if dossier is None or not data:
+        return
+    dossier.corroborations = {**(dossier.corroborations or {}), "bug_comment_facts": data}
+
+
 # Statuses included in the sibling brief. Filing names also pass `sigfamily.is_filing_sibling`.
 _LIVE_SIBLING_STATUSES = frozenset({"coexisting", "older", "younger", "undecided", "other_channel"})
 
@@ -4513,6 +4537,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # how wrong that was. Recorded for every verdict so the gap is measurable before any rung
         # depends on it.
         _record_signature_age_facts(result.dossier, seed)
+        _record_bug_comment_facts(result.dossier, seed)
         # Nor a gate: whether this signature's install-normalised rate had already changed. The
         # statistic the selector structurally cannot compute, and the one a human triager used to
         # file bug 2063336 off a signature we had selected twenty times.
@@ -4846,6 +4871,8 @@ def run_evidence_agent(uuid, force=False):
         # is minutes long, and a live run that stops beating is exactly what would let the reaper
         # duplicate work in flight.
         with _heartbeat(uuid):
+            # Read comments only after this worker has claimed the run.
+            seed["bug_comment_facts"] = _bug_comment_facts(seed)
             llm_cfg = config.get_llm()
             tools_cfg = config.get_agent()
             principal = llm_cfg.get("principal", {})

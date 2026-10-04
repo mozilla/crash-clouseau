@@ -636,6 +636,24 @@ restriction on forced tool use. Classifier declines can return
 CLI handling remains unverified here. After deploy, check errors, abstains, and per-run cost;
 `max_cost_usd_per_crash` only logs a warning.
 
+## Bug-comment facts in the triage brief (2026-10-04)
+
+`agent.bug_comments.enabled` is off by default; `BUG_COMMENTS_ENABLED` overrides it.
+After claiming a run, the reader downloads comments for at most `max_bugs + 2` of the
+signature's open same-application, non-meta bugs, by most recent change. The existing
+`_is_ours` and `_is_automation` heuristics filter comments; pulsebot is exempt from the latter.
+Up to `max_bugs` bugs with a kept comment after comment 0 are selected by newest kept timestamp.
+
+The reader is configured without built-in tools or explicit MCP servers. `included` prioritizes
+comment 0 if kept, then the newest comments, within each bug's share of a 40,000-character
+comment-block budget. The parser accepts only citations to included comments, retains at most
+`max_facts` facts per bug, screens links with `links.screen` and caps fact text at 240 characters.
+The triage brief labels these summaries as unverified. The second-opinion and spike prompts
+do not include this section.
+
+The dossier stores reader output and cost in `bug_comment_facts`; that cost is excluded from
+the run's `cost_usd`. Reader errors are caught before triage.
+
 ## Links in Bugzilla writes (2026-10-04)
 
 `bugzilla_apply._post_comment`, `_put_bug` and `_create_bug` screen links against

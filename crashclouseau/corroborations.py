@@ -514,6 +514,10 @@ REGISTRY = {
     "signature_family_first_seen_ever": (
         "evidence", ("report_bug.py", "sigfamily.py"),
         "The oldest `SignatureFirstDate` over this name and its handoff predecessors."),
+    "bug_comment_facts": (
+        "diagnostic", (),
+        "Bug-comment summaries supplied to triage, with bug metadata and reader cost. "
+        "No gate or filer reads this diagnostic."),
     "signature_sibling_reports": (
         "diagnostic", (),
         "Stores all sibling facts used by the brief, which displays at most five rows, for "

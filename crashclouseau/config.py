@@ -1338,6 +1338,20 @@ def get_agent_same_defect():
     }
 
 
+def get_agent_bug_comments():
+    """Read agent.bug_comments; BUG_COMMENTS_ENABLED overrides enabled.
+
+    max_bugs caps bugs sent to the model; max_facts caps retained facts per bug."""
+    o = get_agent().get("bug_comments", {})
+    return {
+        "enabled": _env_bool("BUG_COMMENTS_ENABLED", o.get("enabled", False)),
+        "model": o.get("model", "opus"),
+        "effort": o.get("effort", "medium"),
+        "max_bugs": o.get("max_bugs", 2),
+        "max_facts": o.get("max_facts", 8),
+    }
+
+
 def get_agent_same_site():
     """Same-site recording settings; ``SAME_SITE_ENABLED`` overrides ``enabled``."""
     o = get_agent().get("same_site", {})

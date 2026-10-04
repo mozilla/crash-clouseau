@@ -366,6 +366,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "offstack_noise_only",
         # Retain the brief's sibling data for later comparison with the verdict.
         "signature_sibling_reports",
+        # Retain reader output as diagnostic data.
+        "bug_comment_facts",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

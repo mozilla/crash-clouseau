@@ -366,6 +366,14 @@
             "min_confidence": "medium",
             "max_bugs": 5
         },
+        "bug_comments":
+        {
+            "enabled": false,
+            "model": "claude-opus-5-5",
+            "effort": "medium",
+            "max_bugs": 2,
+            "max_facts": 8
+        },
         "same_site":
         {
             "enabled": true
