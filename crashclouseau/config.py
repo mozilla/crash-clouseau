@@ -969,9 +969,7 @@ def comment_mode(value):
     return text if text in COMMENT_ON_EXISTING else "comment"
 
 
-# Values of ``agent.autofile.wake_stale``: whether an actionable crash declined for an open bug
-# comments on that bug when it is stale (``bugzilla_apply._wake_stale_bug``). ``shadow`` records
-# the comment without posting it.
+# Stale-bug comments for actionable crashes; ``shadow`` records a preview without posting.
 WAKE_STALE = ("off", "shadow", "comment")
 
 
@@ -1174,8 +1172,7 @@ def get_agent_autofile(channel=None, product=None):
         # `report_bug.fresh_origin_days` also checks first-seen ordering and novelty flags.
         # 14 days is a policy default, not a measured cutoff. `0` or `null` disables the waiver.
         "fresh_origin_days": a.get("fresh_origin_days", 14),
-        # An actionable crash declined for an open bug: comment there when every open bug on
-        # the signature has had no human comment for `wake_stale_days` (`wake_mode`).
+        # Stale-bug eligibility is checked by `bugzilla_apply._wake_stale_bug`.
         "wake_stale": wake_mode(a.get("wake_stale")),
         "wake_stale_days": a.get("wake_stale_days") or 180,
         # Channel overlays enable the release/ESR title prefix and tracking nomination. New bugs

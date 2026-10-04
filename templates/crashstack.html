@@ -401,8 +401,7 @@
         {%- elif fl.get('declined') -%}
         <h3>Bug we would have filed <span class="muted">(preview &mdash; not filed)</span></h3>
         <p class="filing-status declined"><strong>Not filed:</strong> {{ fl['declined']['reason']|e }}{% if fl['declined'].get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ fl['declined']['bug']|e }}" target="_blank" rel="noopener">bug {{ fl['declined']['bug']|e }}</a>{% endif %}</p>
-          {#- The stale-bug check (`bugzilla_apply._wake_stale_bug`): in shadow mode, the
-              comment it would have posted on the open bug. -#}
+          {#- Stale-bug preview or eligibility failure. -#}
           {%- set wk = fl['declined'].get('wake_stale') or {} -%}
           {%- if wk.get('comment') %}
         <p class="filing-status">Stale bug, shadow mode: bug {{ wk['bug']|e }} has had no comment from a person since {{ wk['since']|e }}. With <code>wake_stale: comment</code>, Clouseau would post the comment below there{% if wk.get('needinfo') %} and needinfo the triage owner, {{ wk['needinfo']|e }}{% endif %}.</p>

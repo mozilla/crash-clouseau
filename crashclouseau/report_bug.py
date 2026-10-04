@@ -1273,8 +1273,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
        for the waiver (``fresh_limit`` = ``autofile.fresh_origin_days``);
     4. the mechanism's code references, the ask, the provenance footer.
 
-    With ``stale_since`` (a date) the text is a comment on an existing bug: it opens with the
-    date of the bug's last human comment and ends with the comment footer.
+    ``stale_since`` adds the activity date from ``_bug_activity`` and uses the comment footer.
 
     The mechanism is copied whole. Consistency stays in the dossier because age and volume are
     rendered from deterministic data and free-form prose cannot be filtered safely. Skeptic,
@@ -1505,8 +1504,7 @@ def _provenance_scope(channel):
 
 
 def _comment_provenance(channel=None):
-    """The last line of a comment on somebody else's bug: who wrote it, without the requests
-    about resolving the bug that ``_provenance`` makes of a bug we filed."""
+    """Attribute an automated comment without asking the reader to resolve the existing bug."""
     return ("_Posted automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), "
             "which analyses {} with an LLM. Nothing above was written or checked by a "
             "human._".format(_provenance_scope(channel)))
@@ -2633,13 +2631,10 @@ def _person_display(person):
 
 
 def _needinfo_line(person, role=""):
-    """The needinfo we'd request -- ``:nick, can you have a look please?`` -- for ``person``
-    (a ``{nick, name, email, account, account_name}`` dict). ``None`` when no usable identity
-    is available. A ``role`` follows the name: ``:nick, as triage owner, can you ...``.
+    """Format ``:nick[, as role], can you have a look please?``; ``None`` without a name.
 
-    Deliberately still written when no ACCOUNT resolved and no flag will be set: naming the
-    human in the prose is most of the value, and a triager who reads "Andreas Farre, can you
-    have a look please?" can set the flag in one click. Silence would throw that away too."""
+    ``_person_display`` can use a display name or email even without a verified account.
+    This formats prose; it does not set a needinfo flag."""
     who = _person_display(person)
     if who and role:
         who = "{}, as {}".format(who, role)
@@ -2699,9 +2694,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
     excludes.
 
-    ``stale`` (``{"since", "person"}``) makes an ``actionable`` comment for an existing bug whose
-    last human comment is dated ``since``; the needinfo goes to ``person``, the component's
-    triage owner, and the origin's author is only named."""
+    For actionable verdicts, ``stale={"since", "person"}`` adds the activity date and directs
+    the ask to the supplied triage owner, retaining the origin's author attribution."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``

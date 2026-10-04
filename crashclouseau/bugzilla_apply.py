@@ -2128,17 +2128,18 @@ _CLOUSEAU_LINK = "github.com/mozilla/crash-clouseau"
 
 
 def _is_ours(comment):
-    """Whether a BMO comment comes from a Clouseau account or links the Clouseau repository."""
+    """Match ``clouseau`` in the creator login or our repository URL in the text."""
     if "clouseau" in (comment.get("creator") or "").lower():
         return True
     return _CLOUSEAU_LINK in (comment.get("text") or "")
 
 
 def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
-    """``{"last_human", "ours"}`` from the comments on *bug_id*; ``None`` on a failed read.
+    """Return ``{last_human, ours}``; ``None`` if comments are unreadable or empty.
 
-    ``last_human`` is the time of the newest comment by an account ``_is_automation`` does not
-    match, else of comment 0. ``ours`` is ``_is_ours`` for any comment."""
+    ``last_human`` uses the last comment not matched by ``_is_automation``, falling back to
+    comment 0; an unparseable date is ``None``. ``ours`` means any comment matches ``_is_ours``.
+    Only anonymously visible comments are read."""
     from crashclouseau import sigage
 
     try:
@@ -2156,8 +2157,7 @@ def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
 
 
 def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
-    """The triage owner login of *bug_id*'s component, ``""`` when unset; ``None`` on a failed
-    read."""
+    """Return the component's triage owner login, ``""`` if absent, or ``None`` on read error."""
     try:
         r = net.get(_bz_rest(), params={"id": str(bug_id), "include_fields": "id,triage_owner"},
                     timeout=timeout)
@@ -2171,15 +2171,15 @@ def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
 
 
 def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, declined, family):
-    """Comment on a stale open bug instead of declining an actionable crash for it.
+    """Comment on the first open bug if eligible, or return the actionable filing decline.
 
-    *existing* holds the open same-application, non-meta bugs on the signature and *declined*
-    the decline returned otherwise. With ``wake_stale`` at ``shadow`` or ``comment``, the first
-    bug gets the actionable analysis and a needinfo for its component's triage owner when:
-    every open bug has had no human comment for ``wake_stale_days``; none has a Clouseau
-    comment; the crash has no memory-safety signal; the origin bug and the bugs the comment
-    names are public; and the triage owner can be asked. ``shadow`` returns *declined* with
-    the comment under ``wake_stale``. A failed lookup declines."""
+    All *existing* bugs (same application, non-meta) must pass the activity and prior-comment
+    checks. Require no memory-safety signal, a public origin bug if known, a screened comment,
+    and a verified, askable triage owner. Failed eligibility reads decline.
+
+    ``shadow`` records the preview under ``wake_stale`` without writing to Bugzilla.
+    ``comment`` sends one update, adding needinfo only when enabled and not already pending.
+    """
     mode = config.wake_mode(cfg.get("wake_stale"))
     if mode == "off":
         return declined
@@ -2216,7 +2216,7 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
     owner = _triage_owner(venue["id"])
     if owner is None:
         return no("could not read the triage owner of bug {}".format(venue["id"]))
-    # `_bugzilla_user` reports a failed lookup as askable and `unverified`.
+    # Reject the helper's askable-but-unverified fallback on lookup failure.
     if owner and report_bug._bugzilla_user(owner).get("unverified"):
         return no("could not check whether the triage owner of bug {} can be asked".format(
             venue["id"]))
@@ -2241,10 +2241,18 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
     text = screened["text"] + ("\n\n" + via_note if via_note else "")
     email = person["account"] if cfg["needinfo"] else ""
     wake = {"mode": mode, "bug": venue["id"], "since": since, "triage_owner": person["account"]}
+    # One update prevents a rejected needinfo from leaving the comment behind.
+    pending = _existing_needinfos(venue["id"], token) if email else set()
+    if pending is None:
+        return no("could not read the flags on bug {}".format(venue["id"]))
+    ask = bool(email) and email.lower() not in pending
     if mode == "shadow":
         return dict(declined, wake_stale=dict(wake, comment=text, needinfo=email or None))
+    changes = {"comment": {"body": text}}
+    if ask:
+        changes.update(_needinfo_changes(email))
     try:
-        _post_comment(venue["id"], text, False, token)
+        _put_bug(venue["id"], changes, token)
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
         try:
@@ -2258,20 +2266,15 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
               "signature": signature, "channel": uuid_info.get("channel"),
               "product": uuid_info.get("product"),
               "buildid": utils.get_buildid(uuid_info.get("buildid")),
-              "at": datetime.now(timezone.utc).isoformat(), "wake_stale": wake}
+              "at": datetime.now(timezone.utc).isoformat(), "wake_stale": wake,
+              "needinfo": email or None}
+    if email and not ask:
+        result["needinfo_already_set"] = email
     if via_note:
         result["venue_via_signature"] = venue.get("via_signature")
         result["signature_attached"] = _attach_signature(venue["id"], signature, token)
     if screened["withdrawn"]:
         result["withdrawn_refs"] = len(screened["withdrawn"])
-    # The comment is posted: a failed needinfo is recorded, never raised.
-    outcome = _set_needinfo(venue["id"], email, token) if email else None
-    failed = isinstance(outcome, Exception)
-    result["needinfo"] = None if failed else (email or None)
-    if failed:
-        result["needinfo_failed"] = email
-    elif outcome == _NEEDINFO_ALREADY:
-        result["needinfo_already_set"] = email
     models.Dossier.record_filed_bug(uuid, result)
     logger.info("autofile: %s -> bug %s (stale since %s, needinfo=%s)",
                 uuid, venue["id"], since, result["needinfo"])
@@ -2359,8 +2362,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
       the same signature are analysed independently and all land on the same bug.
     * before a new bug, optionally compare bugs sharing the regressor (``_same_defect_bug``).
       An accepted match follows the channel's comment policy; no match continues normal filing.
-    * an ``actionable`` crash with an open bug is declined, whatever the channel's comment
-      policy, unless ``_wake_stale_bug`` comments on a stale one.
+    * an ``actionable`` crash with an open venue follows ``wake_stale``, independently of
+      ``comment_on_existing``; otherwise decline.
     * eligible filings with a nonpublic regressor or remaining nonpublic text references
       use a restricted bug. Public filings remove list items naming nonpublic bugs;
       a failed visibility lookup prevents the write (``disclosure``).
@@ -2665,11 +2668,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     if meta_bugs:
         logger.info("autofile: open bug(s) %s reference this signature but are [meta] trackers "
                     "— not a venue for a crash report", [b["id"] for b in meta_bugs])
-    # NO OPEN BUG on the signature in this application, for an `actionable` filing: an open bug
-    # means someone can already act, and this filing exists only to put a crash in front of
-    # someone. Decided whatever the channel's `comment_on_existing` says, with metas and other
-    # applications excluded as everywhere else; `bug` names the venue, as on every decline that
-    # is about one. When every open bug is stale, `_wake_stale_bug` may comment on it instead.
+    # Actionable crashes with an open venue use `wake_stale` or decline, regardless of
+    # `comment_on_existing`. Other applications and meta bugs have already been excluded.
     if actionable and existing:
         return _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, {
             "filed": False, "bug": existing[0]["id"],

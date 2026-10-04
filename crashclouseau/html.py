@@ -209,9 +209,8 @@ def _filing_status(uuid, uuid_info, evidence):
 
     * ``filed`` -- ``filed_bug`` when it says ``filed: true``: our bug, or the bug we commented
       on (``mode``).
-    * ``declined`` -- ``filing_declined``: the gate that said no, with the bug it was about when
-      it named one (``_declined_bug``, the tasks page's reading), and the stale-bug check's
-      outcome (``wake_stale``; the comment it would post in shadow mode).
+    * ``declined`` -- ``filing_declined``: reason, bug if known, and optional ``wake_stale``
+      details (including the comment preview in shadow mode).
     * ``error`` -- ``filing_error``: a write BMO rejected.
     * ``own_prior`` -- ``Dossier.already_filed_for_signature``: a bug Clouseau filed for this
       signature from ANOTHER crash. Survives that bug being closed or restricted, which the BMO

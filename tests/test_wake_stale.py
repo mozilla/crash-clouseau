@@ -2,8 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""An actionable crash declined for an open bug comments on that bug when it is stale
-(`bugzilla_apply._wake_stale_bug`, `agent.autofile.wake_stale`)."""
+"""Stale-bug eligibility, preview, writes, and recording for actionable crashes."""
 
 import os
 
@@ -82,31 +81,38 @@ class TestTheModes(_WakeBase):
         stale = report_bug.build_bug_preview.call_args.kwargs["stale"]
         self.assertEqual(stale, {"since": wake["since"], "person": _OWNER})
 
-    def test_comment_posts_and_needinfos_the_triage_owner(self):
+    def test_comment_and_needinfo_are_one_update(self):
         res = self._wake(mode="comment")
         self.assertEqual((res["filed"], res["bug"], res["mode"], res["needinfo"]),
                          (True, 1961865, "comment_on_existing", "owner@moz.example"))
         self.assertEqual(res["wake_stale"]["since"], _ago(529).date().isoformat())
-        self.assertEqual(self.comments, [(1961865, "the stale-bug comment")])
-        self.assertEqual(self.puts, [(1961865, bugzilla_apply._needinfo_changes(
-            "owner@moz.example"))])
-        self.assertEqual(self.created, [])
+        self.assertEqual(self.puts, [(1961865, dict(
+            {"comment": {"body": "the stale-bug comment"}},
+            **bugzilla_apply._needinfo_changes("owner@moz.example")))])
+        self.assertEqual((self.comments, self.created), ([], []))
         self.assertEqual([u for u, _ in self.filed], ["u-1"])
 
     def test_a_triage_owner_already_asked_is_not_asked_twice(self):
         bugzilla_apply._existing_needinfos.return_value = {"owner@moz.example"}
         res = self._wake(mode="comment")
         self.assertEqual(res["needinfo_already_set"], "owner@moz.example")
-        self.assertEqual(self.puts, [])
+        self.assertEqual(self.puts, [(1961865, {"comment": {"body": "the stale-bug comment"}})])
 
-    def test_a_failed_comment_is_recorded_and_not_filed(self):
-        bugzilla_apply._post_comment.side_effect = RuntimeError("503")
+    def test_unreadable_flags_write_nothing(self):
+        bugzilla_apply._existing_needinfos.return_value = None
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["wake_stale"]["skipped"]),
+                         (False, "could not read the flags on bug 1961865"))
+        self.assertEqual((self.puts, self.comments, self.filed), ([], [], []))
+
+    def test_a_refused_update_is_recorded_and_not_filed(self):
+        bugzilla_apply._put_bug.side_effect = RuntimeError("400 needinfo refused")
         with mock.patch.object(bugzilla_apply.models.Dossier, "record_filing_error") as err:
             res = self._wake(mode="comment")
         self.assertFalse(res["filed"])
         self.assertIn("bugzilla write failed", res["skipped"])
         self.assertEqual(err.call_args.args[1]["mode"], "wake_stale")
-        self.assertEqual(self.filed, [])
+        self.assertEqual((self.comments, self.filed), ([], []))
 
     def test_lead_verdicts_do_not_reach_it(self):
         res = self._file(verdict="lead", confidence=70, comment_on_existing="skip",
@@ -172,7 +178,7 @@ class TestTheConditions(_WakeBase):
 
 
 class TestTheTriageOwnerLookup(_WakeBase):
-    """The real `_person_for_account` and `_bugzilla_user`; only the HTTP read is mocked."""
+    """Exercise both account helpers with mocked HTTP responses."""
 
     def setUp(self):
         super().setUp()
@@ -212,7 +218,7 @@ class TestTheTriageOwnerLookup(_WakeBase):
                 res = self._wake(mode="comment")
             self.assertEqual(res["wake_stale"]["skipped"],
                              "bug 1961865 has no triage owner who can be asked")
-        self.assertEqual(self.comments, [])
+        self.assertEqual((self.puts, self.comments), ([], []))
 
 
 class TestTheReads(unittest.TestCase):
