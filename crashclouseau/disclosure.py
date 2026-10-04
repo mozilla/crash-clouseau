@@ -29,6 +29,7 @@ _HEX = re.compile(r"\b[0-9a-f]{7,40}\b", re.I)
 _FENCE = re.compile(r"(```.*?```)", re.S)
 _BLANK = re.compile(r"(\n[ \t]*\n)")
 _ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
+_EMPTY_DETAILS = re.compile(r"\n*<details>\n<summary>[^\n]*</summary>\s*</details>")
 _BATCH = 100
 _TIMEOUT = 30
 
@@ -100,7 +101,8 @@ def nonpublic(ids):
 def withdraw(text, hidden, bugs_by_node=None):
     """Return ``(text, withdrawn_ids)`` after removing list items naming hidden bugs.
 
-    Remove an emptied list's lead-in too; preserve triple-backtick fenced blocks."""
+    Remove emptied list lead-ins and generated ``<details>`` wrappers; preserve
+    triple-backtick fences."""
     if not text or not hidden:
         return text, set()
     withdrawn = set()
@@ -118,7 +120,7 @@ def withdraw(text, hidden, bugs_by_node=None):
             if kept:
                 kept.append(parts[i - 1])
             kept.append(par)
-        chunks.append("".join(kept))
+        chunks.append(_EMPTY_DETAILS.sub("", "".join(kept)))
     if not withdrawn:
         return text, withdrawn
     return "".join(chunks).strip("\n"), withdrawn

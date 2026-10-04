@@ -2469,6 +2469,10 @@ class TestBugPreview(unittest.TestCase):
         # must never drop one in favour of a confirmation.
         self.assertLess(block.find("restyle_invalidation_gap"), block.find("field_offset_match"))
         self.assertIn("a `pass` means the check succeeded", block)
+        # No open attribute; blank lines delimit the Markdown body.
+        self.assertTrue(block.startswith(
+            "<details>\n<summary>What the automated skeptic pass checked</summary>\n\n"))
+        self.assertTrue(block.endswith("\n\n</details>"))
 
     def test_the_skeptic_block_is_capped_without_losing_open_questions(self):
         items = [{"status": "pass", "claim_ref": "p{}".format(i)} for i in range(20)]

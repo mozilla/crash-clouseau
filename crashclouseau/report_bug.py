@@ -1936,8 +1936,10 @@ def build_skeptic_block(dossier, max_items=_MAX_SKEPTIC_ITEMS):
         ref = (item.get("claim_ref") or "").strip() or "(unnamed check)"
         lines.append("- **{}** {}{}".format(
             item.get("status") or "?", ref, " — " + note if note else ""))
-    return ("What the automated skeptic pass checked (its own words — a `pass` means the check "
-            "succeeded, which is not always support for the conclusion):\n" + "\n".join(lines))
+    # Separate </details> from the list so disclosure filtering preserves the closing tag.
+    return ("<details>\n<summary>What the automated skeptic pass checked</summary>\n\n"
+            "In its own words (a `pass` means the check succeeded, which is not always support "
+            "for the conclusion):\n" + "\n".join(lines) + "\n\n</details>")
 
 
 def _explanation_comment(verdict, candidate, channel=None, corroborations=None,

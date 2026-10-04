@@ -122,6 +122,25 @@ class TestWithdraw(unittest.TestCase):
                                              {2064287}, {"a61331c8205c": 2064287})
         self.assertEqual((out, withdrawn), ("Checked:\n- other", {2064287}))
 
+    def test_the_collapsed_skeptic_block_keeps_its_tags(self):
+        block = report_bug.build_skeptic_block({"skeptic": [
+            {"status": "fail", "claim_ref": "seeds", "note": "bug 2059195 is unrelated"},
+            {"status": "pass", "claim_ref": "mechanism", "note": "confirmed"}]})
+        text = "Opener.\n\n" + block + "\n\nPlease have a look."
+        out, _ = disclosure.withdraw(text, {2059195})
+        self.assertNotIn("2059195", out)
+        self.assertIn("- **pass** mechanism — confirmed\n\n</details>\n\nPlease", out)
+        self.assertTrue(out.startswith("Opener.\n\n<details>\n<summary>"))
+        only = text.replace("mechanism — confirmed", "mechanism — bug 2059195 too")
+        out, _ = disclosure.withdraw(only, {2059195})
+        self.assertEqual(out, "Opener.\n\nPlease have a look.", "an emptied block goes entirely")
+
+    def test_an_empty_details_block_in_a_fence_is_kept(self):
+        fence = "```\n<details>\n<summary>s</summary>\n</details>\n```"
+        out, _ = disclosure.withdraw("Checked:\n- bug 2059195 x\n- other\n\n" + fence,
+                                     {2059195})
+        self.assertEqual(out, "Checked:\n- other\n\n" + fence)
+
 
 class TestScreen(unittest.TestCase):
     def test_prose_is_left_and_items_are_withdrawn(self):
