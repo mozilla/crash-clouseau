@@ -20,6 +20,8 @@ from tests.test_autofile import _INFO, _PREVIEW, _Base, _bug  # noqa: E402
 _DECLINE = "open bug 1961865 exists; an actionable crash is filed only where no bug is"
 _OWNER = {"nick": "segun", "name": "", "email": "owner@moz.example",
           "account": "owner@moz.example", "account_name": "Segun"}
+_REAL_PERSON_FOR_ACCOUNT = report_bug._person_for_account
+_REAL_BUGZILLA_USER = report_bug._bugzilla_user
 _STALE_PREVIEW = dict(_PREVIEW, comment="the stale-bug comment",
                       needinfo=":segun, as triage owner, can you have a look please?",
                       needinfo_email="owner@moz.example")
@@ -40,6 +42,8 @@ class _WakeBase(_Base):
             mock.patch.object(bugzilla_apply, "_bug_activity",
                               side_effect=lambda b: self.activity.get(b)),
             mock.patch.object(bugzilla_apply, "_triage_owner", return_value="owner@moz.example"),
+            mock.patch.object(report_bug, "_bugzilla_user", return_value={
+                "exists": True, "nick": "segun", "real": "Segun", "askable": True}),
             mock.patch.object(report_bug, "_person_for_account", return_value=dict(_OWNER)),
         ):
             p.start()
@@ -165,6 +169,50 @@ class TestTheConditions(_WakeBase):
                         return_value={"text": "x", "withdrawn": [], "left": [7]}):
             self.assertEqual(self._reason(self._wake()),
                              "the analysis names a bug that is not public")
+
+
+class TestTheTriageOwnerLookup(_WakeBase):
+    """The real `_person_for_account` and `_bugzilla_user`; only the HTTP read is mocked."""
+
+    def setUp(self):
+        super().setUp()
+        for p in (mock.patch.object(report_bug, "_person_for_account", _REAL_PERSON_FOR_ACCOUNT),
+                  mock.patch.object(report_bug, "_bugzilla_user", _REAL_BUGZILLA_USER),
+                  mock.patch.dict(report_bug._USER_CACHE, clear=True)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _user(self, **fields):
+        resp = mock.Mock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"users": [dict(
+            {"name": "owner@moz.example", "nick": "segun", "real_name": "Segun",
+             "can_login": True, "requests": {"needinfo": {"blocked": False}}}, **fields)]}
+        return mock.patch.object(report_bug.net, "get", return_value=resp)
+
+    def test_a_failed_lookup_declines(self):
+        with mock.patch.object(report_bug.net, "get", side_effect=TimeoutError("timed out")):
+            res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["skipped"]), (False, _DECLINE))
+        self.assertEqual(res["wake_stale"]["skipped"], "could not check whether the triage "
+                         "owner of bug 1961865 can be asked")
+        self.assertEqual((self.comments, self.puts, self.filed), ([], [], []))
+
+    def test_a_verified_owner_is_asked(self):
+        with self._user():
+            res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["needinfo"]), (True, "owner@moz.example"))
+        stale = report_bug.build_bug_preview.call_args.kwargs["stale"]
+        self.assertEqual(stale["person"]["nick"], "segun")
+
+    def test_a_disabled_or_blocked_owner_declines(self):
+        for fields in ({"can_login": False}, {"requests": {"needinfo": {"blocked": True}}}):
+            report_bug._USER_CACHE.clear()
+            with self._user(**fields):
+                res = self._wake(mode="comment")
+            self.assertEqual(res["wake_stale"]["skipped"],
+                             "bug 1961865 has no triage owner who can be asked")
+        self.assertEqual(self.comments, [])
 
 
 class TestTheReads(unittest.TestCase):

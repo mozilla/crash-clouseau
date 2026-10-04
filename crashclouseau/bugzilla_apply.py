@@ -2216,6 +2216,10 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
     owner = _triage_owner(venue["id"])
     if owner is None:
         return no("could not read the triage owner of bug {}".format(venue["id"]))
+    # `_bugzilla_user` reports a failed lookup as askable and `unverified`.
+    if owner and report_bug._bugzilla_user(owner).get("unverified"):
+        return no("could not check whether the triage owner of bug {} can be asked".format(
+            venue["id"]))
     person = report_bug._person_for_account(owner)
     if not person.get("account"):
         return no("bug {} has no triage owner who can be asked".format(venue["id"]))
