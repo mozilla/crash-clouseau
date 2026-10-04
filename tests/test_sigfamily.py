@@ -345,8 +345,10 @@ class TestCheckLogMessage(_Base):
         self.assertEqual(fam["changed_frames"], {"added": [CHECK], "removed": [PATCH]})
         statuses = {s["signature"]: s["status"] for s in fam["siblings"]}
         self.assertEqual(statuses, {self.NORETURN: "younger", self.OOM_CHECK: "other_channel"})
-        # Predecessors first, then the siblings loudest first.
-        self.assertEqual(sf.spellings(fam), [PATCH, self.OOM_CHECK, self.NORETURN])
+        # NORETURN remains a sibling but is excluded from filing names.
+        relations = {s["signature"]: s["relation"] for s in fam["siblings"]}
+        self.assertEqual(relations[self.NORETURN], "pushed-down")
+        self.assertEqual(sf.spellings(fam), [PATCH, self.OOM_CHECK])
 
     def test_the_anchors_skip_what_socorro_skips(self):
         fake = self.fake()

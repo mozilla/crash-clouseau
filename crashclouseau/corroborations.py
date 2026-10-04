@@ -509,9 +509,8 @@ REGISTRY = {
         "a generic frame (CheckLogMessage took every sandbox CHECK), and the bug says so."),
     "signature_siblings_live": (
         "evidence", ("report_bug.py", "sigfamily.py"),
-        "The other spellings of this crash still live beside it (coexisting, older, younger, on "
-        "another channel, or too quiet to call): venues for the filer and the second sentence of "
-        "the volume count (`fetch_signature_stats(..., siblings=)`)."),
+        "Live sibling names for venue searches and volume counts. New recordings exclude "
+        "`pushed-down` siblings via `sigfamily.is_filing_sibling`; older records may include them."),
     "signature_family_first_seen_ever": (
         "evidence", ("report_bug.py", "sigfamily.py"),
         "The oldest `SignatureFirstDate` over this name and its handoff predecessors."),

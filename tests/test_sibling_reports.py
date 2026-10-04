@@ -155,6 +155,27 @@ class TestTheSeedFact(unittest.TestCase):
         self.assertEqual(d.corroborations["signature_sibling_reports"], facts)
 
 
+class TestPushedDownSiblingsAreNotFilingNames(unittest.TestCase):
+    def test_the_brief_keeps_them_and_the_filer_does_not(self):
+        with mock.patch.object(sigfamily, "sibling_reports", return_value=None):
+            brief = orch._sibling_report_facts({"signature_siblings": SIBLINGS}, RAW, "Firefox")
+        self.assertIn(B, [r["signature"] for r in brief["rows"]])
+        d = Dossier(crash={"uuid": "u", "signature": "S", "frames": []})
+        orch._record_signature_age_facts(d, {"signature": "S", "signature_family_lookup": "ok",
+                                             "signature_siblings": SIBLINGS})
+        self.assertEqual(d.corroborations["signature_siblings_live"], [A])
+        family = {"predecessors": [{"signature": "P", "relation": "pushed-down",
+                                    "status": "handoff"}],
+                  "siblings": SIBLINGS[:2]}
+        self.assertEqual(sigfamily.spellings(family), ["P", A],
+                         "a pushed-down predecessor is still a name")
+
+    def test_name_only_rows_pass(self):
+        self.assertTrue(sigfamily.is_filing_sibling(A))
+        self.assertTrue(sigfamily.is_filing_sibling({"signature": A}))
+        self.assertFalse(sigfamily.is_filing_sibling(SIBLINGS[0]))
+
+
 BLOCK = {"reason": REASON, "platform": "Windows NT", "since": "2026-04-03", "days": 182,
          "rows": [
              {"signature": A, "relation": "frame-variant", "reports": 66,

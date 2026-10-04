@@ -3378,24 +3378,17 @@ def _record_signature_age_facts(dossier, seed):
         dossier.corroborations = {**(dossier.corroborations or {}), **facts, **novelty, **family}
 
 
-# The sibling statuses that make a spelling LIVE beside this one -- a venue and a volume to count
-# (`bugzilla_apply`, `report_bug.fetch_signature_stats`). `undecided` (a quiet old name too soon
-# after the build to call) and `other_channel` are carried too: a bug on either is still a bug on
-# this crash. `unclassified` (S itself had no history on the channel) is not.
+# Statuses included in the sibling brief. Filing names also pass `sigfamily.is_filing_sibling`.
 _LIVE_SIBLING_STATUSES = frozenset({"coexisting", "older", "younger", "undecided", "other_channel"})
 
 
 def _signature_family_facts(seed):
-    """The signature-family facts of a seed as corroborations, LITERAL keys (the registry scanner
-    reads literal subscripts only). ``{}`` when the seed carries no lookup at all.
+    """Record lookup status, predecessors, eligible live sibling names and family age.
 
-    What is recorded and why: `signature_family_lookup` so a failed or disabled lookup is
-    distinguishable from "no predecessor" in the persisted data; the loudest predecessor and its
-    numbers so the filed bug can say what this name used to be called
-    (`report_bug.build_signature_age_note`); every predecessor and every live sibling so the
-    filer can search Bugzilla for the crash under all its names (`sigfamily.
-    family_from_corroborations`); the family's first-seen so the crash's age is on the record
-    beside the name's."""
+    Keep sibling report diagnostics unfiltered. Return ``{}`` if no lookup was recorded.
+    Use literal keys for the corroboration registry scanner."""
+    from crashclouseau import sigfamily
+
     s = seed or {}
     status = s.get("signature_family_lookup")
     if not status:
@@ -3403,7 +3396,8 @@ def _signature_family_facts(seed):
     facts = {"signature_family_lookup": status}
     predecessors = [p for p in (s.get("signature_predecessors") or []) if p.get("signature")]
     siblings = [x for x in (s.get("signature_siblings") or [])
-                if x.get("signature") and x.get("status") in _LIVE_SIBLING_STATUSES]
+                if x.get("signature") and x.get("status") in _LIVE_SIBLING_STATUSES
+                if sigfamily.is_filing_sibling(x)]
     if predecessors:
         top = predecessors[0]
         facts["signature_predecessor"] = top["signature"]

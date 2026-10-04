@@ -875,9 +875,15 @@ def handoff_for_spike(signature, proto, product, channel, buildid, until=None):
                 alignment=fam.get("alignment"), fan_in=fam.get("fan_in"))
 
 
+def is_filing_sibling(row):
+    """Exclude ``pushed-down`` siblings from filing names: they share no specific frame and
+    have no detected handoff. Rows without a relation pass, including older saved names."""
+    return not isinstance(row, dict) or row.get("relation") != "pushed-down"
+
+
 def spellings(family):
-    """Every other name of the crash a *family* (``lookup``'s dict, or the seed/corroboration
-    facts) knows: handoff predecessors first, then live siblings. Empty for no family."""
+    """Return unique filing names: predecessors first, then siblings passing ``is_filing_sibling``.
+    Preserve input order within each group; return an empty list for no family."""
     out = []
     fam = family or {}
     for row in fam.get("predecessors") or []:
@@ -886,7 +892,7 @@ def spellings(family):
             out.append(s)
     for row in fam.get("siblings") or []:
         s = row.get("signature") if isinstance(row, dict) else row
-        if s and s not in out:
+        if s and s not in out and is_filing_sibling(row):
             out.append(s)
     return out
 

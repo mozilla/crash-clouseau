@@ -86,14 +86,19 @@ class TestTheRecorder(unittest.TestCase):
         self.assertEqual(c["signature_handoff_build"], HANDOFF_BUILD)
         self.assertEqual(c["signature_handoff_alignment"], "build")
         self.assertEqual(c["signature_fan_in"], 1)
-        self.assertEqual(c["signature_siblings_live"], [NORETURN])
+        # The only sibling is pushed-down, so no sibling filing names are recorded.
+        self.assertNotIn("signature_siblings_live", c)
         self.assertEqual(c["signature_family_first_seen_ever"], "20250310180126")
-        # `novelty_facts` withdraws "new" for the rename, beside its two older reasons.
+        # The handoff makes novelty unreliable.
         self.assertIn("predecessor_handoff", c["signature_novelty_unreliable"].split(","))
-        # ...and the persisted facts rebuild the family the filer searches under.
+        # Persisted facts reconstruct the filer's family.
         fam = sigfamily.family_from_corroborations(c)
-        self.assertEqual(sigfamily.spellings(fam), [PATCH, NORETURN])
+        self.assertEqual(sigfamily.spellings(fam), [PATCH])
         self.assertEqual(fam["s_first_build"], HANDOFF_BUILD)
+        variant = dict(SIB, relation="frame-variant")
+        d2 = Dossier(crash={"uuid": "u", "signature": CHECK, "frames": []})
+        orch._record_signature_age_facts(d2, _seed(signature_siblings=[variant]))
+        self.assertEqual(d2.corroborations["signature_siblings_live"], [NORETURN])
 
     def test_a_failed_or_empty_lookup_records_only_its_status(self):
         d = Dossier(crash={"uuid": "u", "signature": CHECK, "frames": []})
@@ -375,8 +380,7 @@ class TestTheVenueSearch(unittest.TestCase):
                                   return_value=[]) as dups:
             rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=FAMILY)
         values = {seen[k] for k in seen if k.startswith("v")}
-        self.assertEqual(values, {CHECK, "[@ " + CHECK, PATCH, "[@ " + PATCH,
-                                  NORETURN, "[@ " + NORETURN})
+        self.assertEqual(values, {CHECK, "[@ " + CHECK, PATCH, "[@ " + PATCH})
         self.assertEqual([r["id"] for r in rows], [1737467, 2073210])
         old, new = rows
         self.assertEqual((old["via_signature"], old["via_relation"]), (PATCH, "handoff"))
@@ -387,7 +391,8 @@ class TestTheVenueSearch(unittest.TestCase):
         self.assertIn(PATCH, dups.call_args.kwargs["spellings"])
 
     def test_a_sibling_venue_keeps_its_own_clock(self):
-        fam = {"predecessors": [], "siblings": [SIB], "s_first_build": HANDOFF_BUILD}
+        fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
+               "s_first_build": HANDOFF_BUILD}
         sib_bug = dict(self.OLD_BUG, id=77, cf_crash_signature="[@ {}]".format(NORETURN))
         with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp({"bugs": [sib_bug]})), \
                 mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature", return_value=[]):
@@ -409,15 +414,17 @@ class TestTheVenueSearch(unittest.TestCase):
 
     def test_the_spelling_map_excludes_the_signatures_own_and_is_bounded(self):
         m = bugzilla_apply._family_spelling_map(CHECK, FAMILY)
-        self.assertEqual(set(m), {PATCH, NORETURN})
+        self.assertEqual(set(m), {PATCH}, "a pushed-down sibling is not a venue name")
         self.assertEqual(m[PATCH]["relation"], "handoff")
+        variant = dict(FAMILY, siblings=[dict(SIB, relation="frame-variant")])
+        m = bugzilla_apply._family_spelling_map(CHECK, variant)
         self.assertEqual(m[NORETURN], {"via": NORETURN, "relation": "sibling", "since": None})
         many = {"predecessors": [dict(PRED, signature="P{}::f".format(i)) for i in range(20)],
                 "s_first_build": HANDOFF_BUILD}
         self.assertEqual(len(bugzilla_apply._family_spelling_map(CHECK, many)),
                          bugzilla_apply._MAX_FAMILY_SPELLINGS)
         self.assertEqual(bugzilla_apply._family_spelling_map(CHECK, None), {})
-        self.assertEqual(bugzilla_apply._family_spellings(CHECK, FAMILY), [CHECK, PATCH, NORETURN])
+        self.assertEqual(bugzilla_apply._family_spellings(CHECK, FAMILY), [CHECK, PATCH])
 
     def test_unsymbolicated_covers_module_only_names(self):
         for sig in ("libxul.so (deleted) | libxul.so (deleted) | libnspr4.so (deleted)",
@@ -546,9 +553,9 @@ class TestTheFilerOnARenamedCrash(_AutofileBase):
         bugzilla_apply._open_bugs_for_signature.return_value = []
         self._file(mode="skip")
         self.assertEqual(bugzilla_apply._fixed_after_build_bug.call_args.kwargs["spellings"],
-                         [CHECK, PATCH, NORETURN])
+                         [CHECK, PATCH])
         self.assertEqual(bugzilla_apply._known_on_train_bug.call_args.kwargs["spellings"],
-                         [CHECK, PATCH, NORETURN])
+                         [CHECK, PATCH])
 
     def test_our_own_bug_under_the_other_spelling_stops_a_skip_channel(self):
         # 2072875: the Linux spelling of the Windows name we had filed (restricted) two days
