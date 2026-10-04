@@ -6,9 +6,10 @@
 
 THE RULE (Calixte, 2026-09-07). Whatever the channel, a real spike of crashes -- not 0 -> 1, but
 a volume a human would call a spike (``spikes``) -- is a fact by itself and MUST reach Bugzilla,
-with a culprit when we have one and without when we do not. The ordinary pipeline files only
-what it can defend at rung 70, so on a spike where it abstained, was refuted, or never ran, this
-module takes over: it gives the spike brief to ``spike_agent`` (model and effort from
+with a culprit when we have one and without when we do not. After recorded spike analysis on a bug,
+repeat comments require a new grounded culprit at medium confidence or higher. The ordinary
+pipeline files only what it can defend at rung 70, so on a spike where it abstained, was refuted,
+or never ran, this module takes over: it gives the spike brief to ``spike_agent`` (model and effort from
 ``agent.spike_escalation``) and files the volume with any grounded findings. The spike
 predicate runs before the investigator.
 
@@ -30,16 +31,18 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    claim with no source is dropped; a run that consulted no tool grounded nothing), then files
    (``file_spike_bug``).
 3. Filing requires the global filing switch and a declared product without a filing hold.
-   Per-channel holds do not apply, and there is no spike filing cap.
-   An open same-application non-meta bug on the signature gets the spike as a COMMENT (the volume
-   is news to whoever owns that bug; a bug filed FOR this spike that already names a regressor
-   gets nothing); otherwise a new bug is created, with the investigator's product::component
-   validated against Bugzilla and falling back to the signature's existing bugs' component, then
-   ``Core :: General`` -- a spike is filed into a component that can move it rather than not
-   filed. Grounded culprits at medium confidence or higher use the ordinary filer's
-   regression venue rules, including age and history exceptions. New bugs note rejected
-   venues. Memory-safety signals and nonpublic references remaining after list-item removal
-   require a restricted venue; unresolved security groups prevent a new filing.
+   Per-channel holds do not apply, and there is no spike filing cap. In comment mode, open
+   same-application non-meta bugs are considered as venues. Grounded culprits at medium
+   confidence or higher use the ordinary filer's regression venue rules, including age and
+   history exceptions. A venue created on or after the day before the spike's build-day
+   gets no comment if it already names a regressor. ``_repeat_decline`` checks filings across
+   signatures and channels: after an analysis, another comment requires a new grounded
+   medium-or-higher culprit; after volume-only filings, it requires the first analysis.
+   Unreadable filing history requests a retry. For new bugs, ``resolve_component`` tries the
+   investigator's product::component, the signature's existing bugs, then ``Core :: General``.
+   New bugs note rejected venues. Memory-safety signals and nonpublic references remaining
+   after list-item removal require a restricted venue; a missing security group prevents
+   a new restricted filing.
 
    ``_fixed_before_spending`` skips investigation when no open same-application non-meta bug
    takes precedence and ``resolve_venue_below_public`` returns ``fixed``: a matching bug was
@@ -1385,6 +1388,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         withheld = withheld or bool(restricted)
         withdrawn = set(screened["withdrawn"]) if not withheld else set()
         result["screened"] = True
+        if screened["culprit_bug"] and restricted != "regressor":
+            # Keep public culprit IDs for later deduplication.
+            result["culprit_bug"] = screened["culprit_bug"]
         if withheld:
             result["restricted"] = restricted or "memory_safety"
         elif withdrawn:
@@ -1518,6 +1524,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             for_spike = False
             logger.info("spike: %r is held by [meta] bug %s and the analysis names no bucket "
                         "-- the spike goes to the tracker as a comment", signature, venue["id"])
+    if venue is not None:
+        repeat = _repeat_decline(venue, findings, grounded, esc.id, screened["culprit_bug"])
+        if repeat is not None:
+            return dict(result, bug=venue["id"], venue_kind=venue_kind, **repeat)
     person = _needinfo_person_for(findings, brief) if grounded and venue_kind != "meta" else {}
     if not person and venue is not None and venue.get("assigned_to"):
         # Nobody to ask about a culprit: the bug's own assignee is the human who knows the fix.
@@ -1695,6 +1705,54 @@ def _names_a_regression(findings, grounded):
     """Return whether a grounded culprit has a node and at least medium confidence."""
     culprit = findings.culprit if (grounded and findings is not None) else None
     return bool(culprit is not None and culprit.node and culprit.confidence != "low")
+
+
+def _repeat_decline(venue, findings, grounded, escalation_id, culprit_bug=None):
+    """Return skip/retry fields for repeat comments, or ``None`` to pass this gate.
+
+    After recorded spike analysis, require a new grounded medium-or-higher culprit,
+    comparing nodes, culprit bugs and the venue's ``regressed_by``. After volume-only
+    filings, require analysis. Read failures request a retry; *culprit_bug* comes from ``_screen``."""
+    bug_id = venue["id"]
+    prior = models.SpikeEscalation.filings_on_bug(bug_id, exclude_id=escalation_id)
+    if prior is None:
+        return {"retry": True, "skipped": "could not read our earlier filings on bug {}; not "
+                                          "risking a repeated comment".format(bug_id)}
+    if not prior:
+        return None
+    published = [_published(p) for p in prior]
+    analysed = any(analysis for analysis, _node, _bug in published)
+    if not analysed:
+        if spike_report.has_analysis(findings, grounded):
+            return None
+    elif _names_a_regression(findings, grounded):
+        culprit = findings.culprit
+        bug = culprit_bug or culprit.bug
+        nodes = [node for _analysis, node, _bug in published if node]
+        bugs = {b for _analysis, _node, b in published if b} | set(venue.get("regressed_by") or [])
+        known = any(n.startswith(culprit.node) or culprit.node.startswith(n) for n in nodes)
+        if not known and (bug is None or bug not in bugs):
+            return None
+    last = prior[-1]
+    return {"earlier_filings": [p["id"] for p in prior],
+            "skipped": "bug {} already has {} spike filing(s) of ours, the latest on {} "
+                       "(escalation {}); this one adds no {}".format(
+                           bug_id, len(prior), last["at"] or "?", last["id"],
+                           "new culprit" if analysed else "analysis")}
+
+
+def _published(prior):
+    """Infer ``(analysis, culprit node, culprit bug)`` from stored findings and filing metadata."""
+    from crashclouseau.agent.spike_agent import SpikeFindings
+
+    try:
+        findings = SpikeFindings.model_validate(prior["findings"]) if prior["findings"] else None
+    except ValueError:
+        findings = None
+    culprit = findings.culprit if (prior["grounded"] and findings is not None) else None
+    node = culprit.node if culprit is not None else ""
+    bug = prior.get("culprit_bug") or (culprit.bug if culprit is not None else None)
+    return spike_report.has_analysis(findings, prior["grounded"]), node, bug
 
 
 def _regression_venue(existing, culprit, esc, signature):

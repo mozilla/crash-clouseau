@@ -22,6 +22,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 from crashclouseau import config, models, spikes, utils  # noqa: E402
+from tests.test_autofile import _is_postgres  # noqa: E402
 
 NIGHTLY = dict(floor=3, ratio=3, min_installs=3, z_min=spikes.z_threshold(0.00015))
 
@@ -264,6 +265,44 @@ class TestTheTable(unittest.TestCase):
         self.assertEqual(d["skipped"], "the ordinary triage filed bug 7 for this spike")
         self.assertIsNone(models.SpikeEscalation("s", "Firefox", "nightly", date(2026, 9, 3))
                           .to_dict()["skipped"])
+
+
+@unittest.skipUnless(_is_postgres(), "the JSONB queries need a disposable Postgres")
+class TestFilingsOnBug(unittest.TestCase):
+    def setUp(self):
+        models.create()
+        self.escs = []
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        models.db.session.rollback()
+        for esc in self.escs:
+            models.db.session.delete(esc)
+        models.db.session.commit()
+
+    def _esc(self, signature, channel, day, payload):
+        esc = models.SpikeEscalation.create(signature, "Firefox", channel, day, payload=payload)
+        self.escs.append(esc)
+        return esc
+
+    def test_filed_rows_on_the_bug_oldest_first(self):
+        a = self._esc("Sig::A", "nightly", date(2026, 9, 7), {
+            "grounded": True, "filing": {"filed": True, "bug": 1716849, "at": "2026-09-09T00:50",
+                                         "culprit_bug": 7},
+            "findings": {"summary": "s", "culprit": {"node": "ABC123", "bug": 5}}})
+        b = self._esc("Sig::B", "beta", date(2026, 9, 18), {
+            "grounded": False, "filing": {"filed": True, "bug": 1716849, "at": "2026-09-22T00:25"},
+            "findings": None})
+        self._esc("Sig::C", "beta", date(2026, 9, 19), {
+            "filing": {"filed": False, "bug": 1716849, "skipped": "x"}})
+        self._esc("Sig::D", "beta", date(2026, 9, 20), {"filing": {"filed": True, "bug": 2}})
+        self.assertEqual(models.SpikeEscalation.filings_on_bug(1716849), [
+            {"id": a.id, "at": "2026-09-09", "grounded": True, "culprit_bug": 7,
+             "findings": {"summary": "s", "culprit": {"node": "ABC123", "bug": 5}}},
+            {"id": b.id, "at": "2026-09-22", "grounded": False, "culprit_bug": None,
+             "findings": None}])
+        self.assertEqual([r["id"] for r in models.SpikeEscalation.filings_on_bug(
+            1716849, exclude_id=a.id)], [b.id])
 
 
 if __name__ == "__main__":

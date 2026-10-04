@@ -435,6 +435,8 @@ class _FilerBase(unittest.TestCase):
             # ours, no bug fixed after the build.
             mock.patch.object(models.Dossier, "already_filed_for_signature", return_value=None),
             mock.patch.object(models.SpikeEscalation, "prior_bug_for", return_value=None),
+            # No prior filings unless overridden.
+            mock.patch.object(models.SpikeEscalation, "filings_on_bug", return_value=[]),
             mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[]),
             mock.patch.object(se, "_bug_state", return_value=None),
             # Anonymous BMO sees none of our prior bugs unless a test says so: an open bug of
@@ -804,6 +806,107 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
                 res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
             self.assertEqual((res["filed"], res["bug"], res["skipped"]),
                              (False, 71, "open bug 71 exists"))
+        self.assertEqual(self.comments, [])
+
+
+class TestRepeatComments(_FilerBase):
+    """Repeat comments require new analysis or a new culprit, depending on prior filings."""
+
+    _OPEN = [{"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
+              "keywords": [], "regressed_by": []}]
+
+    def _file(self, findings, prior, grounded=True, open_bugs=None):
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=open_bugs or self._OPEN), \
+                mock.patch.object(models.SpikeEscalation, "filings_on_bug",
+                                  return_value=prior) as lookup:
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=grounded)
+        return res, lookup
+
+    @staticmethod
+    def _prior(analysis=True, node="", bug=None, culprit_bug=None, findings=None):
+        if findings is None and analysis:
+            findings = {"summary": "s", "culprit": {"node": node, "bug": bug} if node else None}
+        return [{"id": 3, "at": "2026-09-09", "grounded": True, "findings": findings,
+                 "culprit_bug": culprit_bug}]
+
+    def _no_culprit(self):
+        return self.findings.model_copy(update={"culprit": None})
+
+    def test_an_earlier_analysis_and_no_culprit_writes_nothing(self):
+        res, lookup = self._file(self._no_culprit(), self._prior())
+        lookup.assert_called_once_with(55, exclude_id=7)
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["venue_kind"], res["earlier_filings"]), (55, "open", [3]))
+        self.assertEqual(res["skipped"], "bug 55 already has 1 spike filing(s) of ours, the latest "
+                                         "on 2026-09-09 (escalation 3); this one adds no new culprit")
+        self.assertNotIn("retry", res)
+        self.assertEqual((self.comments, self.created), ([], []))
+
+    def test_a_new_culprit_is_posted_and_its_bug_recorded(self):
+        res, _ = self._file(self.findings, self._prior(node="1111111aaaa", bug=11))
+        self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
+        self.assertEqual(res["culprit_bug"], 22)
+
+    def test_a_culprit_already_named_there_writes_nothing(self):
+        for node, bug in (("2222222bbbb", None), ("", 22)):
+            prior = self._prior(findings={"summary": "s", "culprit": {"node": node or "3" * 12,
+                                                                      "bug": bug}})
+            res, _ = self._file(self.findings, prior)
+            self.assertFalse(res["filed"], (node, bug))
+        open_bugs = [dict(self._OPEN[0], regressed_by=[22])]
+        res, _ = self._file(self.findings, self._prior(), open_bugs=open_bugs)
+        self.assertFalse(res["filed"])
+        self.assertEqual(self.comments, [])
+
+    def test_another_changeset_of_a_bug_already_named_writes_nothing(self):
+        """Match the current bug resolved from hg and a prior bug stored by the filer."""
+        no_bug = SpikeFindings.model_validate(dict(
+            self.findings.model_dump(), culprit=dict(self.findings.culprit.model_dump(), bug=None)))
+        with mock.patch("crashclouseau.sigage.json_rev", return_value={"desc": "Bug 22 - part 2"}):
+            res, _ = self._file(no_bug, self._prior(node="1111111aaaa", bug=22))
+        self.assertFalse(res["filed"])
+        res, _ = self._file(self.findings, self._prior(node="1111111aaaa", culprit_bug=22))
+        self.assertFalse(res["filed"])
+        self.assertEqual(self.comments, [])
+
+    def test_a_low_confidence_or_ungrounded_culprit_is_not_news(self):
+        low = SpikeFindings.model_validate(dict(
+            self.findings.model_dump(), culprit=dict(self.findings.culprit.model_dump(),
+                                                     confidence="low")))
+        res, _ = self._file(low, self._prior())
+        self.assertFalse(res["filed"])
+        res, _ = self._file(self.findings, self._prior(), grounded=False)
+        self.assertFalse(res["filed"])
+        self.assertEqual(self.comments, [])
+
+    def test_after_volume_only_filings_the_first_analysis_is_posted(self):
+        res, _ = self._file(self._no_culprit(), self._prior(analysis=False))
+        self.assertEqual((res["filed"], res["mode"]), (True, "spike_comment"))
+        res, _ = self._file(None, self._prior(analysis=False), grounded=False)
+        self.assertFalse(res["filed"])
+        self.assertTrue(res["skipped"].endswith("this one adds no analysis"))
+
+    def test_an_analysis_without_a_summary_is_still_an_analysis(self):
+        unsummarised = self.findings.model_copy(update={"summary": ""})
+        res, _ = self._file(unsummarised, self._prior(analysis=False))
+        self.assertTrue(res["filed"])
+        prior = self._prior(findings={"summary": "", "evidence": [{"claim": "c", "source": "s"}]})
+        res, _ = self._file(self._no_culprit(), prior)
+        self.assertFalse(res["filed"])
+        self.assertTrue(res["skipped"].endswith("this one adds no new culprit"))
+
+    def test_an_unreadable_history_is_retried(self):
+        res, _ = self._file(self._no_culprit(), None)
+        self.assertFalse(res["filed"])
+        self.assertTrue(res["retry"])
+        self.assertEqual(self.comments, [])
+
+    def test_a_meta_tracker_is_gated_too(self):
+        meta = [dict(self._OPEN[0], id=60, keywords=["meta"])]
+        res, lookup = self._file(None, self._prior(), grounded=False, open_bugs=meta)
+        lookup.assert_called_once_with(60, exclude_id=7)
+        self.assertEqual((res["filed"], res["venue_kind"]), (False, "meta"))
         self.assertEqual(self.comments, [])
 
 

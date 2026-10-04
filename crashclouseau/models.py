@@ -4876,6 +4876,35 @@ class SpikeEscalation(db.Model):
             return None
 
     @staticmethod
+    def filings_on_bug(bug_id, exclude_id=None):
+        """Successful spike filings on *bug_id*, across signatures and channels, ordered by
+        creation time then ID; ``None`` on query failure. Each row contains ``id``, ``at``,
+        ``grounded``, stored ``findings`` and the optional resolved public ``culprit_bug``."""
+        filing = SpikeEscalation.payload["filing"]
+        try:
+            q = db.session.query(SpikeEscalation).filter(
+                filing["filed"].astext == "true", filing["bug"].astext == str(int(bug_id)))
+            if exclude_id is not None:
+                q = q.filter(SpikeEscalation.id != exclude_id)
+            rows = q.order_by(SpikeEscalation.created, SpikeEscalation.id).all()
+        except Exception:
+            logger.error("Cannot read the spike filings on bug %s", bug_id, exc_info=True)
+            db.session.rollback()
+            return None
+        out = []
+        for r in rows:
+            p = r.payload or {}
+            filed = p.get("filing") or {}
+            out.append({
+                "id": r.id,
+                "at": str(filed.get("at") or "")[:10],
+                "grounded": bool(p.get("grounded")),
+                "findings": p.get("findings") or None,
+                "culprit_bug": filed.get("culprit_bug"),
+            })
+        return out
+
+    @staticmethod
     def _count_query(product, channel, since):
         """Build the spend-budget query."""
         # Use the last enqueue timestamp; filing retries also change `updated`.

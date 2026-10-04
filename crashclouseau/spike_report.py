@@ -212,6 +212,16 @@ def analysis_section(findings, brief, author_display=None, link_regressor=False,
     return "\n\n".join(lines)
 
 
+def has_analysis(findings, grounded=True):
+    """Whether ``analysis_section`` publishes more than its heading."""
+    if findings is None or not grounded:
+        return False
+    culprit = findings.culprit is not None and findings.culprit.node
+    evidence = any(e.claim for e in findings.evidence)
+    return any((findings.summary, culprit, findings.trigger_path, evidence, findings.ruled_out,
+                findings.open_questions))
+
+
 def _evidence_line(e):
     """``- claim [inferred, medium confidence] (source)``. The kind is shown only when it is not
     a plain observation, so a list of observed facts reads as it always did."""
