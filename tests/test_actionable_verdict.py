@@ -82,8 +82,7 @@ class TestWhatTheSchemaRequires(unittest.TestCase):
         self.assertIn("CHECK(thunk_base)", d.verdict.mechanism.statement)
 
     def test_high_is_clamped_to_probable_like_a_lead(self):
-        # No deterministic corroborator applies to this verdict, so `high` is not a rung it can
-        # self-assert; `probable` is the filing floor and "the skeptic could not contradict it".
+        # Actionable verdicts cannot self-assert confidence above `probable`.
         v = parse_and_validate(_handoff(verdict={**_handoff()["verdict"], "confidence": "high"}))
         self.assertEqual(v.verdict.decision, Decision.actionable)
         self.assertEqual(v.verdict.confidence, Confidence.probable)

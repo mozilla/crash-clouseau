@@ -192,7 +192,7 @@ Shape:
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
   "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "node": "", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
-  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
+  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|probable|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
 
@@ -246,8 +246,12 @@ good ones. So make TWO decisions, in order:
    a shutdown hang, prefer the WORK's line (the awaited thread's, or sampled main-thread work
    above shutdown control flow); generic spin, thread-shutdown or IPC teardown frames are not
    evidence merely because the work runs through them.
-   `confidence` is how sure you are the mechanism is right and worth the owner's time:
-   `probable` when the skeptic could not contradict it. Write `mechanism.statement` as the
+   `confidence` is how sure you are the mechanism is right and worth the owner's time. Score
+   what the dossier cites, not who checked it: your own checks count as much as a skeptic's.
+   `probable` when the failing line and the condition that fires it are cited and nothing you
+   checked contradicts the chain; a step you could not read, or not knowing which of two cited
+   branches ran, does not lower it. `medium` when the line is cited but the condition that fires
+   it is only conjectured. `low` when neither is established. Write `mechanism.statement` as the
    AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which
    condition and what the owner should look at first. `consistency.statement` remains cited
    analysis in the dossier for audit and is never copied into an `actionable` bug; age and
@@ -279,8 +283,9 @@ good ones. So make TWO decisions, in order:
   array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to
   demand proof. Mark `fail` only when a claim is CONTRADICTED by its cited evidence or the
   candidate is demonstrably unrelated (noise); a plausible mechanism you cannot fully verify
-  is `unverifiable` (which only lowers confidence), NOT `fail`. A `fail` on the chain
-  downgrades `strong-evidence` to `lead` if a cited anchor stands, otherwise to `abstain`.
+  is `unverifiable` (it lowers a lead's confidence; an `actionable` rung follows its own rule
+  above), NOT `fail`. A `fail` on the chain downgrades `strong-evidence` to `lead` if a cited
+  anchor stands, otherwise to `abstain`.
 - `abstain` (with an `abstain_reason`, NO `needinfo_draft`) covers everything you cannot
   hand a human as a candidate — which is NOT only noise. Most abstains carry a real
   conclusion, so also set `abstain_kind` to the one word for which it is:
