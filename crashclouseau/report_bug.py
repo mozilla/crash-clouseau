@@ -6,6 +6,7 @@ import asyncio
 import functools
 import re
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from jinja2 import Environment, FileSystemLoader
 from libmozdata import socorro
 from libmozdata.bugzilla import Bugzilla
@@ -576,6 +577,103 @@ def _sibling_counts(siblings, buildid, info):
         if row.get("term") in siblings and int(row.get("count") or 0) > 0:
             out[row["term"]] = int(row["count"])
     return out
+
+
+_RECENT_CACHE: dict = {}
+# Channel mapping after `config.channel_family`; unlisted values are ignored.
+_RECENT_CHANNELS = {"nightly": "nightly", "beta": "beta", "aurora": "beta",
+                    "release": "release", "esr": "esr"}
+
+
+def fetch_recent_channel_stats(info, days):
+    """Return per-channel ``{count, installs}`` for this signature/product, all builds,
+    since UTC midnight ``days`` days ago. Sum counts and ``install_time`` cardinalities
+    within beta/aurora and ESR families; installations are not deduplicated across labels.
+
+    Return ``None`` if disabled, missing signature/product, or the request fails or returns
+    no facets. Cache results per signature, product, window and UTC day."""
+    signature = ((info or {}).get("signature") or "").strip()
+    product = (info or {}).get("product")
+    if not days or not signature or not product:
+        return None
+    today = datetime.now(timezone.utc).date()
+    key = (signature, product, int(days), today)
+    if key in _RECENT_CACHE:
+        return _RECENT_CACHE[key]
+    got: dict = {}
+
+    def handler(json, data):
+        data.update(json)
+
+    try:
+        socorro.SuperSearch(
+            params={
+                "signature": "=" + signature,
+                "product": product,
+                "date": ">=" + (today - timedelta(days=int(days))).isoformat(),
+                "_results_number": 0,
+                "_facets": "release_channel",
+                "_facets_size": 50,
+                "_aggs.release_channel": "_cardinality.install_time",
+            },
+            handler=handler,
+            handlerdata=got,
+        ).wait()
+    except Exception:
+        logger.warning("bug preview: recent channel stats lookup failed", exc_info=True)
+        return None
+    if "facets" not in got:
+        return None
+    out: dict = {}
+    for row in got["facets"].get("release_channel") or []:
+        channel = _RECENT_CHANNELS.get(config.channel_family(row.get("term")))
+        if not channel:
+            continue
+        agg = (row.get("facets") or {}).get("cardinality_install_time") or {}
+        entry = out.setdefault(channel, {"count": 0, "installs": 0})
+        entry["count"] += int(row.get("count") or 0)
+        entry["installs"] += int(agg.get("value") or 0)
+    _RECENT_CACHE[key] = out
+    return out
+
+
+def channels_over_floor(recent, product):
+    """Return sorted channels meeting their product/channel ``spike.real_installs`` floor."""
+    return sorted(ch for ch, row in (recent or {}).items()
+                  if (row.get("installs") or 0) >= config.get_spike("real_installs", product, ch))
+
+
+def _recent_adds(recent, stats, channel):
+    """Whether the recent counts cover another channel, or more reports or installations
+    than ``stats``."""
+    own = config.channel_family(channel)
+    stats = stats or {}
+    for ch, row in (recent or {}).items():
+        if not row.get("count"):
+            continue
+        more_reports = row["count"] > (stats.get("count") or 0)
+        more_installs = (row.get("installs") or 0) > (stats.get("installs") or 0)
+        if ch != own or more_reports or more_installs:
+            return True
+    return False
+
+
+def build_recent_channels_sentence(recent, product, days):
+    """Summarize recent counts, most reports first; return ``None`` without reports."""
+    rows = sorted(((ch, row) for ch, row in (recent or {}).items() if row.get("count")),
+                  key=lambda kv: (-kv[1]["count"], kv[0]))
+    if not rows:
+        return None
+    parts = []
+    for ch, row in rows:
+        count, installs = row["count"], row.get("installs") or 0
+        what = "1 crash" if count == 1 else "{} crashes".format(count)
+        if count > 1:
+            what += " (from {} installation{})".format(installs, "" if installs == 1 else "s")
+        label = "beta/DevEdition" if ch == "beta" and product == "Firefox" else ch
+        parts.append("{} on {}".format(what, label))
+    listed = parts[0] if len(parts) == 1 else "{} and {}".format(", ".join(parts[:-1]), parts[-1])
+    return "In the last {} days, {} has {} with this signature.".format(days, product, listed)
 
 
 # How far above the crash-population rate a signature's hardware-error share has to be before
@@ -1270,11 +1368,11 @@ def build_bucket_opener(meta_bugs, signature):
 def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
                              version=None, needinfo=None, author_display=None,
                              max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None,
-                             fresh_limit=None, stale_since=None):
+                             fresh_limit=None, stale_since=None, recent_note=None):
     """Build the opening comment for an ``actionable`` bug, with no regressor claim.
 
     1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
-    2. how much this signature is crashing, and since which build;
+    2. crash counts, optional per-channel ``recent_note``, and first-seen build;
     3. the cited mechanism and origin used for routing, with timing when the origin qualifies
        for the waiver (``fresh_limit`` = ``autofile.fresh_origin_days``);
     4. the mechanism's code references, the ask, the provenance footer.
@@ -1328,6 +1426,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         build_frames_block(stack, max_frames=max_frames, details=details),
         build_awaited_work_block((dossier or {}).get("corroborations")),
         build_stats_sentence(first, stats, info),
+        recent_note,
         build_signature_since_note((dossier or {}).get("corroborations"), info.get("buildid")),
         because,
         # Only publish references for the claim printed above.
@@ -2610,6 +2709,90 @@ def _person_for_account(email):
             "account": email, "account_name": user.get("real", "")}
 
 
+_ACTIVITY_CACHE: dict = {}
+_COMPONENT_OWNER_CACHE: dict = {}
+
+
+def _component_activity(account, product, component, days):
+    """Check for a public comment by ``account`` within ``days`` on a bug currently in
+    ``product``/``component``. Return ``None`` on read failure; cache answers per UTC day.
+
+    The request is anonymous, so restricted bugs and private comments do not count."""
+    key = (account.casefold(), product, component, int(days),
+           datetime.now(timezone.utc).date())
+    if key in _ACTIVITY_CACHE:
+        return _ACTIVITY_CACHE[key]
+    from crashclouseau.bugzilla_apply import _bz_rest
+
+    try:
+        # AND_G shares the comment join (BMO Search::ClauseGroup::update_search_args).
+        r = net.get(_bz_rest(), params={
+            "product": product, "component": component, "j_top": "AND_G",
+            "f1": "longdesc", "o1": "changedby", "v1": account,
+            "f2": "longdesc", "o2": "changedafter", "v2": "-{}d".format(int(days)),
+            "include_fields": "id", "limit": 1,
+        }, timeout=net.SERVICE_TIMEOUT)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs")
+    except Exception as exc:
+        logger.info("bug preview: component activity lookup failed for %s: %s", account, exc)
+        return None
+    if bugs is None:
+        return None
+    _ACTIVITY_CACHE[key] = bool(bugs)
+    return _ACTIVITY_CACHE[key]
+
+
+def _component_triage_owner(product, component):
+    """Return the component's triage owner login, ``""`` if absent, or ``None`` on read failure."""
+    key = (product, component)
+    if key in _COMPONENT_OWNER_CACHE:
+        return _COMPONENT_OWNER_CACHE[key]
+    from crashclouseau.bugzilla_apply import _bz_rest
+
+    try:
+        r = net.get("{}/component".format(re.sub(r"/bug/?$", "", _bz_rest())),
+                    params={"product": product, "component": component},
+                    timeout=net.SERVICE_TIMEOUT)
+        r.raise_for_status()
+        row = r.json() or {}
+    except Exception as exc:
+        logger.info("bug preview: triage owner lookup failed for %s :: %s: %s",
+                    product, component, exc)
+        return None
+    if row.get("error"):
+        return None
+    _COMPONENT_OWNER_CACHE[key] = (row.get("triage_owner") or "").strip()
+    return _COMPONENT_OWNER_CACHE[key]
+
+
+def _owner_for_old_origin(person, dossier, product, component, days):
+    """Return a triage owner to ask, or ``None`` to keep the current requestee.
+
+    With ``days`` enabled, require an origin age at build time above ``days`` or unknown,
+    and no author account or no recent public component comment. Activity/owner read failures
+    and an absent, unverified, unaskable or same-account owner leave the requestee unchanged."""
+    if not days or not product or not component:
+        return None
+    corro = (dossier or {}).get("corroborations") or {}
+    age = (corro.get("actionable_origin_age") or {}).get("days_before_build")
+    try:
+        if age is not None and float(age) <= float(days):
+            return None
+    except (TypeError, ValueError):
+        pass
+    account = ((person or {}).get("account") or "").strip()
+    if account and _component_activity(account, product, component, days) is not False:
+        return None
+    owner = _component_triage_owner(product, component)
+    if not owner or owner.casefold() == account.casefold():
+        return None
+    if _bugzilla_user(owner).get("unverified"):
+        return None
+    found = _person_for_account(owner)
+    return found if found.get("account") else None
+
+
 def _person_display(person):
     """How to NAME a human in the bug comment: their ``:nick``, else the Bugzilla account's
     display name, else the Mercurial name, else the address. ``""`` when we have nothing.
@@ -2700,8 +2883,10 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
     excludes.
 
-    For actionable verdicts, ``stale={"since", "person"}`` adds the activity date and directs
-    the ask to the supplied triage owner, retaining the origin's author attribution."""
+    For actionable verdicts, ``stale={"since", "person"}`` adds the activity date and supplies
+    the requestee; otherwise ``_owner_for_old_origin`` may select a triage owner. Author
+    attribution is retained. Recent counts are added when ``_recent_adds`` finds another
+    channel or higher counts than ``fetch_signature_stats``."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
@@ -2779,7 +2964,19 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     own_train = _status_flag(version, channel)
     stale = stale if actionable else None
     asked = (stale.get("person") or {}) if stale else person
-    ask = _needinfo_line(asked, role="triage owner" if stale else "")
+    owner = None
+    if actionable and not stale and candidate and candidate.get("node"):
+        owner = _owner_for_old_origin(person, dossier, product, component,
+                                      policy.get("author_active_days"))
+        if owner:
+            asked = owner
+    ask = _needinfo_line(asked, role="triage owner" if (stale or owner) else "")
+    recent_note = None
+    if actionable:
+        days = policy.get("population_days")
+        recent = fetch_recent_channel_stats(uuid_info, days)
+        if _recent_adds(recent, stats, channel):
+            recent_note = build_recent_channels_sentence(recent, uuid_info.get("product"), days)
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -2795,7 +2992,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             first=first, version=version, needinfo=ask,
             author_display=_person_display(person), bucket_opener=opener,
             fresh_limit=policy.get("fresh_origin_days"),
-            stale_since=(stale or {}).get("since"),
+            stale_since=(stale or {}).get("since"), recent_note=recent_note,
         ) if actionable else build_bug_comment(
             uuid_info,
             stack,
@@ -2873,11 +3070,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # and `autofile_bug` treats that as "do not file" -- see the check there. The distinction
         # cannot be drawn here, because a preview has no business refusing.
         "groups": [g] if (withhold and g) else [],
-        # A requestee who cannot see a restricted bug makes Bugzilla reject the whole create
-        # (Flag.pm's requestee-visibility rule), and our retry strips `flags` -- so the bug would
-        # then be filed restricted with NO needinfo, i.e. the ask silently disappears. `cc` IS
-        # honoured on create (unlike `blocks`), and `cclist_accessible` defaults true, so cc'ing
-        # the requestee is what keeps the ask reachable. Only when we are actually restricting.
-        "cc": ([(person or {}).get("account")]
-               if withhold and (person or {}).get("account") else []),
+        # CC grants the requestee access to a restricted bug (cclist_accessible defaults true),
+        # satisfying BMO Flag::_check_requestee even without security-group membership.
+        "cc": ([(asked or {}).get("account")]
+               if withhold and (asked or {}).get("account") else []),
     }

@@ -531,6 +531,25 @@ Eligibility failures and shadow previews appear in `filing_declined.wake_stale` 
 crashstack.html; write failures record `filing_error`. Set `wake_stale` to `off` or `shadow`
 to stop posting.
 
+## Recent counts on every channel and the triage-owner ask (2026-10-05)
+
+An `actionable` crash below the installation floor, without a fresh-origin waiver, can pass
+on recent counts: any channel of its product must meet its own `spike.real_installs`.
+`agent.autofile.population_days` defaults to 30; the window starts at UTC midnight that many
+days ago. Beta/aurora and ESR labels are merged by summing counts and installation estimates.
+A failed read declines. Other filing gates, including `wake_stale` eligibility, still apply.
+Comments include these counts when they add another channel or exceed the existing counts
+(which cover builds at or after the crash build on its channel).
+
+For an origin older than `agent.autofile.author_active_days` (365) at build time, or of unknown
+age, an absent author account or no recent public component comment permits routing to the
+triage owner. Failed activity/owner reads or no verified, askable, different owner keep the
+current requestee. The comment retains author attribution; restricted bugs CC the requestee.
+
+Both windows are policy defaults; `0` or `null` disables the respective rule.
+Tests: `tests/test_actionable_population.py`. After deploy, check `passed on ...` logs and
+the resulting filings.
+
 ## OOM aborts and the `actionable` verdict (2026-09-21)
 
 Bug 2073760 filed a `Zone::New` OOM-unsafe abort as actionable. :iain closed it WONTFIX and noted

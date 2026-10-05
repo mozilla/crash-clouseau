@@ -314,6 +314,8 @@
             "comment_on_existing": "comment",
             "wake_stale": "comment",
             "wake_stale_days": 180,
+            "population_days": 30,
+            "author_active_days": 365,
             "skip_regressor_bugs": [2067007],
             "default_channel": "nightly",
             "default_product": "Firefox",

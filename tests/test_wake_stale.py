@@ -309,6 +309,7 @@ class TestTheComment(unittest.TestCase):
                                   return_value=("Firefox for Android", "Accounts and Sync")), \
                 mock.patch.object(report_bug, "fetch_signature_stats", return_value=(True, None)), \
                 mock.patch.object(report_bug, "fetch_crash_reason", return_value={}), \
+                mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=None), \
                 mock.patch.object(report_bug, "changeset_links", return_value="c065adeeac27"):
             preview = report_bug.build_bug_preview(
                 dict(_INFO, uuid="u-1", version="159.0a1"), {}, self._DOSSIER,

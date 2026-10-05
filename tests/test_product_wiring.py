@@ -262,6 +262,9 @@ class TestCrashstackPanel(unittest.TestCase):
                 mock.patch.object(report_bug, "fetch_signature_stats",
                                   return_value=(True, {"count": 3, "installs": 2})), \
                 mock.patch.object(report_bug, "resolve_product_component", return_value=pc), \
+                mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=None), \
+                mock.patch.object(report_bug, "_component_activity", return_value=True), \
+                mock.patch.object(report_bug, "_component_triage_owner", return_value=None), \
                 mock.patch.object(population, "for_crash", return_value=pop):
             # population.for_crash is mocked for the same reason as everything else here: it is
             # two live SuperSearches, and the panel tests must not touch the network.

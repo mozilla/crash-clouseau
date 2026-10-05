@@ -1172,6 +1172,10 @@ def get_agent_autofile(channel=None, product=None):
         # `report_bug.fresh_origin_days` also checks first-seen ordering and novelty flags.
         # 14 days is a policy default, not a measured cutoff. `0` or `null` disables the waiver.
         "fresh_origin_days": a.get("fresh_origin_days", 14),
+        # Recent-report window for the alternative population check. 0/null disables it.
+        "population_days": a.get("population_days", 30),
+        # Origin-age and author-activity limit for `_owner_for_old_origin`. 0/null disables it.
+        "author_active_days": a.get("author_active_days", 365),
         # Stale-bug eligibility is checked by `bugzilla_apply._wake_stale_bug`.
         "wake_stale": wake_mode(a.get("wake_stale")),
         "wake_stale_days": a.get("wake_stale_days") or 180,

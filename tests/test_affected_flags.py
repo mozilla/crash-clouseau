@@ -149,7 +149,9 @@ class TestThePreviewStatesTheCrashsOwnTrain(unittest.TestCase):
                 mock.patch.object(report_bug, "resolve_product_component",
                                   return_value=("Core", "Networking: Cookies")), \
                 mock.patch.object(report_bug, "_needinfo_person", return_value={}), \
-                mock.patch.object(report_bug.models.UUID, "get_info", return_value={}):
+                mock.patch.object(report_bug.models.UUID, "get_info", return_value={}), \
+                mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=None), \
+                mock.patch.object(report_bug, "_component_triage_owner", return_value=None):
             return report_bug.build_bug_preview(uuid_info, {"frames": []}, dossier)
 
     def test_every_channel_states_its_own_train(self):

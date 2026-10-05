@@ -248,7 +248,8 @@ def _preview_dossier(**corro):
     }
 
 
-def _build_preview(dossier, ui=_UI):
+def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None):
+    """Render with stubbed recent counts, author activity and component owner."""
     with mock.patch.object(report_bug, "resolve_product_component",
                            return_value=("Core", "Security: Process Sandboxing")), \
             mock.patch.object(report_bug, "fetch_crash_reason",
@@ -258,7 +259,10 @@ def _build_preview(dossier, ui=_UI):
                               return_value=(False, {"count": 85, "installs": 77})), \
             mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
             mock.patch.object(report_bug, "_bugzilla_user",
-                              return_value={"exists": True, "nick": "bobowen"}):
+                              return_value={"exists": True, "nick": "bobowen"}), \
+            mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=recent), \
+            mock.patch.object(report_bug, "_component_activity", return_value=active), \
+            mock.patch.object(report_bug, "_component_triage_owner", return_value=owner):
         return report_bug.build_bug_preview(ui, {"frames": [
             {"stackpos": 0, "function": "logging::LogMessage::~LogMessage()",
              "filename": "security/sandbox/chromium-shim/base/logging.cpp", "line": 101,

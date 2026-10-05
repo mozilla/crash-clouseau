@@ -2570,15 +2570,28 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
             # comment; the remaining filing gates still apply.
             fresh = report_bug.fresh_origin_days(
                 (dossier or {}).get("corroborations"), cfg.get("fresh_origin_days"))
-            if fresh is None:
-                return {"filed": False,
-                        "skipped": "{} installation{} on this signature, below the actionable "
-                                   "floor of {}".format(installs, "" if installs == 1 else "s",
-                                                        floor)}
-            logger.info("autofile: %s -- %s installation%s on this signature, below the "
-                        "actionable floor of %s, waived: the failing code landed %.1f days "
-                        "before the build and no available first-seen build predates it",
-                        uuid, installs, "" if installs == 1 else "s", floor, fresh)
+            below = "{} installation{} on this signature, below the actionable floor of {}".format(
+                installs, "" if installs == 1 else "s", floor)
+            if fresh is not None:
+                logger.info("autofile: %s -- %s, waived: the failing code landed %.1f days "
+                            "before the build and no available first-seen build predates it",
+                            uuid, below, fresh)
+            else:
+                # Any channel of this product may meet its own installation floor.
+                days = cfg.get("population_days")
+                if not days:
+                    return {"filed": False, "skipped": below}
+                recent = report_bug.fetch_recent_channel_stats(uuid_info, days)
+                if recent is None:
+                    return {"filed": False, "skipped": "{}; the last {} days of reports could "
+                                                       "not be read".format(below, days)}
+                over = report_bug.channels_over_floor(recent, product)
+                if not over:
+                    return {"filed": False, "skipped": "{}, and no channel reached its floor in "
+                                                       "the last {} days".format(below, days)}
+                logger.info("autofile: %s -- %s, passed on %s over the last %s days (%s)",
+                            uuid, below, ", ".join(over), days,
+                            ", ".join("{} {}".format(ch, recent[ch]["installs"]) for ch in over))
 
     # THE SECOND REASON TO FILE. A verdict we cannot file on is the ordinary case (90% of runs
     # abstain), so this is the last gate rather than an early one: everything above it is local
