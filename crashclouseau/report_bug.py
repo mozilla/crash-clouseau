@@ -2711,6 +2711,7 @@ def _person_for_account(email):
 
 _ACTIVITY_CACHE: dict = {}
 _COMPONENT_OWNER_CACHE: dict = {}
+_FIXED_CACHE: dict = {}
 
 
 def _component_activity(account, product, component, days):
@@ -2766,6 +2767,55 @@ def _component_triage_owner(product, component):
     return _COMPONENT_OWNER_CACHE[key]
 
 
+def _recent_fixes(account, days):
+    """Anonymously count FIXED bugs currently assigned to ``account`` with
+    ``cf_last_resolved`` within ``days``. Cache counts per UTC day; return ``None``
+    on a failed request or invalid count."""
+    key = (account.casefold(), int(days), datetime.now(timezone.utc).date())
+    if key in _FIXED_CACHE:
+        return _FIXED_CACHE[key]
+    from crashclouseau.bugzilla_apply import _bz_rest
+
+    try:
+        r = net.get(_bz_rest(), params={
+            "assigned_to": account, "resolution": "FIXED", "count_only": 1,
+            "f1": "cf_last_resolved", "o1": "greaterthaneq", "v1": "-{}d".format(int(days)),
+        }, timeout=net.SERVICE_TIMEOUT)
+        r.raise_for_status()
+        count = (r.json() or {}).get("bug_count")
+    except Exception as exc:
+        logger.info("bug preview: fixed-bug count failed for %s: %s", account, exc)
+        return None
+    if not isinstance(count, int):
+        return None
+    _FIXED_CACHE[key] = count
+    return count
+
+
+def _inactive_author(person, days, minimum):
+    """Whether the account's recent FIXED-bug count is below ``minimum``.
+
+    Return ``False`` if either setting is off, the account is missing, or the count is unknown."""
+    account = ((person or {}).get("account") or "").strip()
+    if not days or not minimum or not account:
+        return False
+    count = _recent_fixes(account, days)
+    return count is not None and count < minimum
+
+
+def _triage_owner_person(product, component, account=""):
+    """Return a verified, askable component triage owner other than ``account``.
+
+    Return ``None`` if either lookup fails or no suitable owner is found."""
+    owner = _component_triage_owner(product, component)
+    if not owner or owner.casefold() == (account or "").casefold():
+        return None
+    if _bugzilla_user(owner).get("unverified"):
+        return None
+    found = _person_for_account(owner)
+    return found if found.get("account") else None
+
+
 def _owner_for_old_origin(person, dossier, product, component, days):
     """Return a triage owner to ask, or ``None`` to keep the current requestee.
 
@@ -2784,13 +2834,7 @@ def _owner_for_old_origin(person, dossier, product, component, days):
     account = ((person or {}).get("account") or "").strip()
     if account and _component_activity(account, product, component, days) is not False:
         return None
-    owner = _component_triage_owner(product, component)
-    if not owner or owner.casefold() == account.casefold():
-        return None
-    if _bugzilla_user(owner).get("unverified"):
-        return None
-    found = _person_for_account(owner)
-    return found if found.get("account") else None
+    return _triage_owner_person(product, component, account)
 
 
 def _person_display(person):
@@ -2883,10 +2927,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
     excludes.
 
-    For actionable verdicts, ``stale={"since", "person"}`` adds the activity date and supplies
-    the requestee; otherwise ``_owner_for_old_origin`` may select a triage owner. Author
-    attribution is retained. Recent counts are added when ``_recent_adds`` finds another
-    channel or higher counts than ``fetch_signature_stats``."""
+    For actionable verdicts, ``stale={"since", "person"}`` supplies the activity date and
+    requestee; otherwise ``_owner_for_old_origin`` may select a triage owner. Except for stale
+    wakeups, a low recent FIXED-bug count may redirect the author/fixer's ask to a verified,
+    askable triage owner. Attribution is retained. Actionable previews add recent counts when
+    ``_recent_adds`` finds another channel or higher counts than ``fetch_signature_stats``."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
@@ -2968,8 +3013,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     if actionable and not stale and candidate and candidate.get("node"):
         owner = _owner_for_old_origin(person, dossier, product, component,
                                       policy.get("author_active_days"))
-        if owner:
-            asked = owner
+    if not stale and not owner and _inactive_author(person, policy.get("author_fixed_days"),
+                                                    policy.get("author_fixed_min")):
+        owner = _triage_owner_person(product, component, person.get("account"))
+    if owner:
+        asked = owner
     ask = _needinfo_line(asked, role="triage owner" if (stale or owner) else "")
     recent_note = None
     if actionable:
@@ -3001,9 +3049,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             stats=stats,
             first=first,
             version=version,
-            needinfo=_needinfo_line(person),
-            # Same resolved identity as the needinfo ask, so the "by X" attribution and the
-            # "X, can you have a look please?" line can never name two different people.
+            needinfo=ask,
+            # Retain author attribution when the ask goes to the triage owner.
             author_display=_person_display(person),
             incomplete_fix=incomplete_fix,
             related_bugs=related_bugs,

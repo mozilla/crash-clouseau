@@ -1176,6 +1176,9 @@ def get_agent_autofile(channel=None, product=None):
         "population_days": a.get("population_days", 30),
         # Origin-age and author-activity limit for `_owner_for_old_origin`. 0/null disables it.
         "author_active_days": a.get("author_active_days", 365),
+        # Recent FIXED-bug window and minimum for triage-owner routing; 0/null disables it.
+        "author_fixed_days": a.get("author_fixed_days", 182),
+        "author_fixed_min": a.get("author_fixed_min", 7),
         # Stale-bug eligibility is checked by `bugzilla_apply._wake_stale_bug`.
         "wake_stale": wake_mode(a.get("wake_stale")),
         "wake_stale_days": a.get("wake_stale_days") or 180,

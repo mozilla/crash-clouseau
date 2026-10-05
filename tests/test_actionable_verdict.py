@@ -247,8 +247,8 @@ def _preview_dossier(**corro):
     }
 
 
-def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None):
-    """Render with stubbed recent counts, author activity and component owner."""
+def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=50):
+    """Render with stubbed crash counts and recipient lookups."""
     with mock.patch.object(report_bug, "resolve_product_component",
                            return_value=("Core", "Security: Process Sandboxing")), \
             mock.patch.object(report_bug, "fetch_crash_reason",
@@ -261,6 +261,7 @@ def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None):
                               return_value={"exists": True, "nick": "bobowen"}), \
             mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=recent), \
             mock.patch.object(report_bug, "_component_activity", return_value=active), \
+            mock.patch.object(report_bug, "_recent_fixes", return_value=fixes), \
             mock.patch.object(report_bug, "_component_triage_owner", return_value=owner):
         return report_bug.build_bug_preview(ui, {"frames": [
             {"stackpos": 0, "function": "logging::LogMessage::~LogMessage()",

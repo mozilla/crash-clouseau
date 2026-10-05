@@ -749,6 +749,7 @@ def _preview(dossier, meta_bugs=None, ui=_UI):
                               return_value={"exists": True, "nick": "nika"}), \
             mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=None), \
             mock.patch.object(report_bug, "_component_activity", return_value=True), \
+            mock.patch.object(report_bug, "_recent_fixes", return_value=50), \
             mock.patch.object(report_bug, "_component_triage_owner", return_value=None):
         return report_bug.build_bug_preview(ui, {"frames": [
             {"stackpos": 0, "function": "__psynch_cvwait", "filename": "", "line": 0,

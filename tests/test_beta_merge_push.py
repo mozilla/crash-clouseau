@@ -555,7 +555,8 @@ def _preview(node, corroborations, channel="beta"):
                        return_value={node: {"nick": "hgnick", "real": "Dev",
                                             "email": "dev@x.com"}}), \
             mock.patch.object(report_bug, "_bugzilla_user",
-                              return_value={"exists": True, "nick": "bznick"}):
+                              return_value={"exists": True, "nick": "bznick"}), \
+            mock.patch.object(report_bug, "_recent_fixes", return_value=50):
         return report_bug.build_bug_preview(ui, _STACK, dossier)
 
 

@@ -264,6 +264,7 @@ class TestCrashstackPanel(unittest.TestCase):
                 mock.patch.object(report_bug, "resolve_product_component", return_value=pc), \
                 mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=None), \
                 mock.patch.object(report_bug, "_component_activity", return_value=True), \
+                mock.patch.object(report_bug, "_recent_fixes", return_value=50), \
                 mock.patch.object(report_bug, "_component_triage_owner", return_value=None), \
                 mock.patch.object(population, "for_crash", return_value=pop):
             # population.for_crash is mocked for the same reason as everything else here: it is
@@ -1643,6 +1644,11 @@ class TestBugPreview(unittest.TestCase):
     """report_bug.build_bug_preview & helpers: recreate the Socorro crash comment locally
     and resolve the target product::component from the regressor (fallback = the author's
     recent patches' most frequent P::C)."""
+
+    def setUp(self):
+        fixes = mock.patch.object(report_bug, "_recent_fixes", return_value=50)
+        fixes.start()
+        self.addCleanup(fixes.stop)
 
     def _stack3(self):
         return {"frames": [

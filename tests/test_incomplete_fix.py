@@ -256,6 +256,7 @@ class TestTheBugItWouldFile(unittest.TestCase):
              mock.patch.object(rb, "_bugzilla_user", return_value={
                  "exists": True, "nick": "tboiko", "real": "Tymur Boiko [:tboiko]",
                  "askable": True}), \
+             mock.patch.object(rb, "_recent_fixes", return_value=50), \
              mock.patch.object(rb.models.UUID, "get_info", return_value={"version": "156.0a1"}):
             return rb.build_bug_preview(self.UUID_INFO, self.STACK, dossier, incomplete_fix=fix)
 
@@ -355,6 +356,7 @@ class TestTheCandidateTheVerdictRejected(unittest.TestCase):
              mock.patch.object(rb, "resolve_product_component",
                                return_value=("Core", "Networking: HTTP")), \
              mock.patch.object(rb, "_needinfo_person", return_value=dict(self.CAND_PERSON)), \
+             mock.patch.object(rb, "_recent_fixes", return_value=50), \
              mock.patch.object(rb.models.UUID, "get_info", return_value={"version": "156.0a1"}):
             return rb.build_bug_preview(self.UUID_INFO, self.STACK, self._dossier(in_window),
                                         incomplete_fix=self.FIX)
