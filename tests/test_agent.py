@@ -586,6 +586,13 @@ class TestHandoffParseFailure(unittest.TestCase):
         self.assertIn("line 1 column", f)
         self.assertIn("escaped", f)                              # the context window shows the spot
 
+    def test_a_raw_newline_inside_a_string_parses(self):
+        from crashclouseau.agent.schema import _extract_last_json_block
+        text = '```json\n{"mechanism": {"statement": "`A` fails.\n\n1. `B`."}}\n```'
+        self.assertIsNone(triage.handoff_parse_failure(text))
+        self.assertEqual(_extract_last_json_block(text)["mechanism"]["statement"],
+                         "`A` fails.\n\n1. `B`.")
+
     def test_tells_a_missing_fence_from_an_unclosed_one(self):
         self.assertIn("no fenced", triage.handoff_parse_failure("just prose"))
         self.assertIn("opened but", triage.handoff_parse_failure("```json\n{\"a\": 1}"))

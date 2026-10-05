@@ -936,15 +936,15 @@ _JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def _extract_last_json_block(text: str | None):
-    """Return the LAST ```json {...} ``` object in *text*, or None on no
-    match / invalid JSON (never raises)."""
+    """Parse the last fenced JSON object, allowing raw control characters in strings.
+    Return None for a missing block or JSON syntax error."""
     if not text:
         return None
     matches = _JSON_BLOCK.findall(text)
     if not matches:
         return None
     try:
-        data = json.loads(matches[-1])
+        data = json.loads(matches[-1], strict=False)
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
@@ -1072,7 +1072,7 @@ def handoff_parse_failure(text: str | None) -> str | None:
     # A matched block is `{...}` by construction, so valid JSON here is always an object.
     block = matches[-1]
     try:
-        json.loads(block)
+        json.loads(block, strict=False)
     except json.JSONDecodeError as exc:
         lo, hi = max(0, exc.pos - 80), min(len(block), exc.pos + 40)
         return "JSON syntax error in the handoff block: {} (line {} column {}); near: {!r}".format(

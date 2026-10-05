@@ -795,6 +795,12 @@ class TestTheBucketBug(unittest.TestCase):
         cut = report_bug._first_sentence(long)
         self.assertTrue(cut.endswith("...") and len(cut) <= 154)
 
+    def test_the_title_reads_only_the_first_paragraph(self):
+        self.assertEqual(report_bug._first_sentence(
+            "`Foo::Bar` reads a null `mThing` when called after `Reset()`\n\n"
+            "1. `Reset()` clears `mThing`.\n2. `Bar()` reads it."),
+            "Foo::Bar reads a null mThing when called after Reset()")
+
     def test_the_opener_names_the_tracker_and_the_signature(self):
         text = report_bug.build_bucket_opener([_META], _SIG)
         self.assertTrue(text.startswith("Bucket of bug 1866944, filed without the signature"))

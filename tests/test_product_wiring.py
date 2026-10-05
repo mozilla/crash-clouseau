@@ -705,6 +705,17 @@ class TestCrashstackPanel(unittest.TestCase):
         self.assertIn("Consistency with the crash", html)
         self.assertNotIn("Changeset examined", html)
 
+    def test_a_mechanism_with_a_list_renders_as_paragraphs_and_a_list(self):
+        ev = _evidence()
+        ev["dossier"]["verdict"]["mechanism"]["statement"] = (
+            "`Foo` reads a freed `mPtr`.\n\n1. `Reset()` frees it.\n2. `Bar()` reads it.\n\n"
+            "Fits the fault address.")
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("<p><code>Foo</code> reads a freed <code>mPtr</code>.</p>"
+                      '<ol class="statement"><li><code>Reset()</code> frees it.</li>'
+                      "<li><code>Bar()</code> reads it.</li></ol><p>Fits the fault address.</p>",
+                      html)
+
     def test_worth_investigating_shown_for_culprit(self):
         # Phase-2: a calibrated p_worth_investigating on the dossier verdict is surfaced as
         # the person-level "worth investigating" %, REPLACING the raw (miscalibrated) rung %.
@@ -1509,6 +1520,63 @@ class TestLinkify(unittest.TestCase):
         out = str(linkify("HidePopover dereferences data->SetInvoker(nullptr)", ""))
         self.assertIn("data-&gt;SetInvoker", out)   # C++ arrow escaped, not converted
         self.assertNotIn("→", out)
+
+    def test_blocks_render_paragraphs_and_lists(self):
+        from crashclouseau import linkify_blocks
+        out = str(linkify_blocks(
+            "`Foo` fails.\n\n1. `a->b` is null <x>.\n2. bug 42\n   continues here.\n\n"
+            "- one\n- two\n\nFits `0x0`.", ""))
+        self.assertEqual(out.count("<p>"), 2)
+        self.assertIn('<ol class="statement"><li><code>a-&gt;b</code> is null &lt;x&gt;.</li>'
+                      '<li><a href="https://bugzilla.mozilla.org/42" target="_blank" '
+                      'rel="noopener">bug 42</a><br>continues here.</li></ol>', out)
+        self.assertIn('<ul class="statement"><li>one</li><li>two</li></ul>', out)
+        self.assertTrue(out.endswith("<p>Fits <code>0x0</code>.</p>"))
+
+    def test_a_single_paragraph_renders_as_before(self):
+        from crashclouseau import linkify, linkify_blocks
+        text = "`x` from bug 42 in fdb65c5972a9 -> y"
+        url = "https://hg.mozilla.org/mozilla-central"
+        self.assertEqual(str(linkify_blocks(text, url)), "<p>{}</p>".format(linkify(text, url)))
+        self.assertEqual(linkify_blocks(None), "")
+
+    def test_blocks_match_bmo_markdown(self):
+        """BMO /rest/bug/comment/render fixtures, with newlines removed and our list class."""
+        from crashclouseau import linkify_blocks
+        ol, ul = '<ol class="statement"', '<ul class="statement"'
+        cases = {
+            # Blank lines between items keep one (loose) list.
+            "1. First\n\n2. Second\n\n3. Third":
+                ol + "><li><p>First</p></li><li><p>Second</p></li><li><p>Third</p></li></ol>",
+            "1. a\n\n   more a\n\n2. b":
+                ol + "><li><p>a</p><p>more a</p></li><li><p>b</p></li></ol>",
+            # A paragraph splits the list; the next marker sets the new start number.
+            "1. a\n\nmiddle\n\n2. b":
+                ol + "><li>a</li></ol><p>middle</p>" + ol + ' start="2"><li>b</li></ol>',
+            "1) a\n2. b": ol + "><li>a</li></ol>" + ol + ' start="2"><li>b</li></ol>',
+            # Only a bullet or an ordered list starting at 1 interrupts a paragraph.
+            "Summary:\n1. a\n2. b": '<p>Summary:</p>' + ol + "><li>a</li><li>b</li></ol>",
+            "Landed in\n2026. Later text": "<p>Landed in<br>2026. Later text</p>",
+            "- Landed in\n  2026. Later text": ul + "><li>Landed in<br>2026. Later text</li></ul>",
+            # An unindented marker of another type starts a new list (CommonMark 302).
+            "- Landed in\n2026. Later text":
+                ul + "><li>Landed in</li></ul>" + ol + ' start="2026"><li>Later text</li></ol>',
+            "1. a\ncontinued\n2. b": ol + "><li>a<br>continued</li><li>b</li></ol>",
+            "1. a\n   - sub1\n   - sub2\n2. b":
+                ol + "><li>a" + ul + "><li>sub1</li><li>sub2</li></ul></li><li>b</li></ol>",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(str(linkify_blocks(text, "")), expected)
+
+    def test_bug_links_keep_their_text(self):
+        from crashclouseau import linkify
+        self.assertIn('rel="noopener">Bug 42</a> added', str(linkify("Bug 42 added", "")))
+
+    def test_a_list_can_follow_a_line_without_a_blank_line(self):
+        from crashclouseau import linkify_blocks
+        out = str(linkify_blocks("Summary:\n1. a\n2. b", ""))
+        self.assertEqual(out, '<p>Summary:</p><ol class="statement"><li>a</li><li>b</li></ol>')
 
     def test_expert_reason_links_hash_and_bug(self):
         from crashclouseau import linkify

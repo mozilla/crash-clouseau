@@ -1203,10 +1203,16 @@ def _main_subject_block(work, max_frames):
     return None
 
 
+def _list_item(text):
+    """Prefix a bullet and indent nonblank continuation lines by two spaces."""
+    first, *rest = text.split("\n")
+    return "\n".join(["- " + first] + ["  " + ln if ln.strip() else "" for ln in rest])
+
+
 def _first_sentence(text, limit=150):
-    """The first sentence of a free-text claim, as a title: code spans un-backticked,
-    markdown links reduced to their text, cut at a word boundary under *limit*."""
-    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(text or ""))
+    """Build a title from the first paragraph, stripping backticks and link destinations."""
+    text = re.split(r"\n\s*\n", str(text or "").strip(), maxsplit=1)[0]
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
     text = " ".join(text.replace("`", "").split())
     if not text:
         return ""
@@ -1287,7 +1293,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
     verdict = (dossier or {}).get("verdict") or {}
     candidate = (dossier or {}).get("candidate") or {}
     mechanism = ((verdict.get("mechanism") or {}).get("statement") or "").strip()
-    facts = ["- " + mechanism] if mechanism else []
+    facts = [_list_item(mechanism)] if mechanism else []
     if candidate.get("node"):
         link = changeset_links(candidate["node"], channel, candidate.get("git_commit") or "")
         if candidate.get("bug"):

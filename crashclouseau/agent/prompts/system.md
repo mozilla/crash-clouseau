@@ -165,7 +165,24 @@ Emit only fields you can fill and cite; omit the rest. In the free-text fields
 CONSISTENTLY — identifiers, function/method/type names, expressions, and file paths —
 so it renders as code (e.g. `ASSERT(textureUnit != -1)`, `ProgramD3D::getSamplerMapping`);
 don't backtick some code and leave the rest bare. Do not explain `MOZ_CRASH`, assertion, or
-Rust panic mechanics; identify the violated invariant and how execution reaches it. Shape:
+Rust panic mechanics; identify the violated invariant and how execution reaches it.
+
+Lay out `mechanism.statement` for the code's owner:
+1. One opening sentence, at most 30 words: what fails and where in this crash, and under which
+   condition. Name the failing operation, not a changeset.
+2. A numbered list (`1.`, `2.`, ...) of the cause-and-effect chain, in order, ending at the
+   failure: one step per item, one sentence each (two at most). A changeset is a step only for
+   the change it made; when it landed or last touched a line is evidence, not a step.
+3. A closing paragraph: what in this report fits the chain (fault address, crash reason,
+   frames), the claim's limits, and last, what to look at first if you name it.
+Separate the parts with blank lines (`\n\n` in the JSON string). A chain of one or two steps,
+or an observation and a hypothesis with no observed chain between them, is a short paragraph
+instead of a list. Each claim keeps its strength, neither stronger nor weaker: a hedge ("can",
+"probably", "fits") or a condition ("when", "only if") stays on every claim it covers, also when
+a sentence becomes several steps, and if any step is hedged, so is the opening sentence. State
+each fact once. No headings, bold or capitals for emphasis. This sets the layout, not the facts.
+
+Shape:
 
 ```json
 {

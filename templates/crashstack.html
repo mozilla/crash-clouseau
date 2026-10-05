@@ -497,14 +497,14 @@
       {% if vd and vd.get('mechanism') and vd['mechanism'].get('statement') -%}
       <div class="evidence-section">
         <h3>{% if is_culprit %}Mechanism{% elif is_actionable %}What fails and where{% else %}Working hypothesis (unverified){% endif %}</h3>
-        <p>{{ vd['mechanism']['statement']|linkify(repo_url) }}</p>
+        {{ vd['mechanism']['statement']|linkify_blocks(repo_url) }}
         <ul class="cites">{% for c in vd['mechanism'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
       {% if vd and vd.get('consistency') and vd['consistency'].get('statement') -%}
       <div class="evidence-section">
         <h3>{% if is_culprit %}Consistency with the crash{% elif is_actionable %}The facts behind it{% else %}Why it may be related{% endif %}</h3>
-        <p>{{ vd['consistency']['statement']|linkify(repo_url) }}</p>
+        {{ vd['consistency']['statement']|linkify_blocks(repo_url) }}
         <ul class="cites">{% for c in vd['consistency'].get('citations') or [] %}<li>{{ cite(c, node, channel, uuid_info['uuid']) }}</li>{% endfor %}</ul>
       </div>
       {% endif -%}
@@ -527,7 +527,7 @@
           <p class="muted">An independent mechanism for this crash <span class="muted">(its own confidence: {{ so.get('confidence', 'low')|e }})</span>:</p>
         {% endif -%}
         {% if so.get('mechanism') -%}
-        <p>{{ so['mechanism']|linkify(repo_url) }}</p>
+        {{ so['mechanism']|linkify_blocks(repo_url) }}
         {% endif -%}
         {% if so.get('refutation') -%}
         <p class="muted">Why it may not be the cause: {{ so['refutation']|linkify(repo_url) }}</p>

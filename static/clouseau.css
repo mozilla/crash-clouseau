@@ -226,8 +226,13 @@ ul.experts li { margin: 0.15em 0; }
 
 .evidence-panel > p,
 .evidence-section > p,
+.evidence-section > .statement,
 .reasoning {
     max-width: 78ch;
+}
+
+ol.statement, ul.statement {
+    padding-left: 1.4em;
 }
 
 .flag {

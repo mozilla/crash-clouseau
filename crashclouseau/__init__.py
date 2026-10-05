@@ -83,8 +83,8 @@ def _linkify_prose(text, repo_url):
     s = _ARROW_RE.sub(lambda m: _ARROWS[m.group(1)], text)
     s = str(escape(s))
     s = _BUG_RE.sub(
-        r'<a href="https://bugzilla.mozilla.org/\1" target="_blank" '
-        r'rel="noopener">bug \1</a>',
+        lambda m: '<a href="https://bugzilla.mozilla.org/{}" target="_blank" '
+                  'rel="noopener">{}</a>'.format(m.group(1), m.group(0)),
         s,
     )
     if repo_url:
@@ -114,6 +114,85 @@ def linkify(text, repo_url=""):
         last = m.end()
     parts.append(_linkify_prose(s[last:], repo_url))
     return Markup("".join(parts))
+
+
+# Nonempty list items with at most three leading spaces.
+_ITEM_RE = re.compile(r" {0,3}(?:(\d{1,9})([.)])|([-+*]))( +)(?=\S)")
+
+
+def _markdown_blocks(lines):
+    """Parse paragraph and list blocks, removing each item's content indentation."""
+    blocks, para, i = [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        m = _ITEM_RE.match(line)
+        # Only a bullet or an ordered list starting at 1 can interrupt a paragraph.
+        if m and (not para or m.group(3) or int(m.group(1)) == 1):
+            if para:
+                blocks.append(("p", para))
+                para = []
+            key = m.group(2) or m.group(3)
+            start = int(m.group(1)) if m.group(1) else None
+            items, loose = [], False
+            while m and (m.group(2) or m.group(3)) == key:
+                # After the marker, 1-4 spaces set the indent; with more, only one does.
+                offset = m.end() if len(m.group(4)) <= 4 else m.start(4) + 1
+                item, i, text_before = [line[offset:]], i + 1, True
+                while i < len(lines):
+                    line = lines[i]
+                    if not line.strip():
+                        item.append("")
+                        text_before = False
+                    elif len(line) - len(line.lstrip(" ")) >= offset:
+                        item.append(line[offset:])
+                        text_before = True
+                    elif text_before and not _ITEM_RE.match(line):
+                        item.append(line.strip())  # lazy paragraph continuation
+                    else:
+                        break
+                    i += 1
+                ended_blank = not item[-1].strip()
+                while not item[-1].strip():
+                    item.pop()
+                items.append(item)
+                m = _ITEM_RE.match(line) if i < len(lines) else None
+                if "" in item or (ended_blank and m and (m.group(2) or m.group(3)) == key):
+                    loose = True
+            blocks.append(("ol" if start is not None else "ul", start, items, loose))
+            continue
+        if line.strip():
+            para.append(line.strip())
+        elif para:
+            blocks.append(("p", para))
+            para = []
+        i += 1
+    if para:
+        blocks.append(("p", para))
+    return blocks
+
+
+def _render_blocks(blocks, repo_url, tight=False):
+    html = []
+    for block in blocks:
+        if block[0] == "p":
+            text = str(linkify("\n".join(block[1]), repo_url)).replace("\n", "<br>")
+            html.append(text if tight else "<p>{}</p>".format(text))
+            continue
+        tag, start, items, loose = block
+        start_attr = ' start="{}"'.format(start) if tag == "ol" and start != 1 else ""
+        html.append('<{0} class="statement"{1}>{2}</{0}>'.format(tag, start_attr, "".join(
+            "<li>{}</li>".format(_render_blocks(_markdown_blocks(item), repo_url, not loose))
+            for item in items)))
+    return "".join(html)
+
+
+@app.template_filter("linkify_blocks")
+def linkify_blocks(text, repo_url=""):
+    """Render paragraphs, line breaks and lists, applying ``linkify`` to their text."""
+    if not text:
+        return ""
+    lines = str(text).replace("\r\n", "\n").expandtabs(4).strip("\n").split("\n")
+    return Markup(_render_blocks(_markdown_blocks(lines), repo_url))
 
 
 @app.template_filter("human_gap")

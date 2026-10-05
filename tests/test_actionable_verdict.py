@@ -292,6 +292,14 @@ class TestTheBugItFiles(unittest.TestCase):
         for phrase in _FORBIDDEN:
             self.assertNotIn(phrase, c, phrase)
 
+    def test_a_mechanism_with_a_list_stays_inside_its_bullet(self):
+        d = _preview_dossier()
+        d["verdict"]["mechanism"]["statement"] = (
+            "`A` fails.\n\n1. `B` sets it.\n2. `C` reads it.\n\nFits the fault.")
+        c = _build_preview(d)["comment"]
+        self.assertIn("- `A` fails.\n\n  1. `B` sets it.\n  2. `C` reads it.\n\n"
+                      "  Fits the fault.\n- The failing code comes from [507a4c21a8eb](", c)
+
     def test_the_sections_come_in_the_reading_order(self):
         c = _build_preview(_preview_dossier())["comment"]
         order = ["Crash report:", "Crash Reason:", "Top 1 frames:", "There are 85 crashes",
