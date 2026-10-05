@@ -1347,6 +1347,22 @@ class TestTheBugText(unittest.TestCase):
         self.assertEqual(line.count("u-2"), 1)
         self.assertNotIn("u-1", line)
 
+    def test_labelled_trigger_path_sections_start_paragraphs(self):
+        tp = ("Mechanism (Observed): A at `f.cpp:1`. Path (observed in the pinned source): B "
+              "calls C. Trigger of the population change (inferred, low): D. Derived: E.")
+        text = spike_report.analysis_section(SpikeFindings(summary="S", trigger_path=tp),
+                                             self._BRIEF)
+        self.assertIn("Possible path to the crash:\n\nMechanism (Observed): A at `f.cpp:1`.\n\n"
+                      "Path (observed in the pinned source): B calls C.\n\n"
+                      "Trigger of the population change (inferred, low): D.\n\nDerived: E.", text)
+
+    def test_unlabelled_trigger_path_stays_one_paragraph(self):
+        for tp in ("A, then B.", "We saw the Path (observed): mid-sentence.",
+                   "A. The callers differ: B and C."):
+            text = spike_report.analysis_section(SpikeFindings(summary="S", trigger_path=tp),
+                                                 self._BRIEF)
+            self.assertIn("Possible path to the crash: " + tp, text)
+
     def test_the_analysis_lists_are_bounded(self):
         f = SpikeFindings(summary="S", evidence=[{"claim": str(i), "source": "s"} for i in range(20)],
                           ruled_out=[str(i) for i in range(20)])

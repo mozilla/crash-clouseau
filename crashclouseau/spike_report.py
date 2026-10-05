@@ -15,8 +15,16 @@ Every number in the spike paragraph is the one ``spikes.judge_selection`` decide
 the same ``spikes.describe`` the investigator's brief used, so a human and the model were shown
 the same spike.
 """
+import re
+
 from crashclouseau import config, report_bug, sigage, sigtrend, spikes, utils
 
+# Split whitespace after . ! ? ) or ` before a recognized label.
+# Labels use a status parenthetical or one of the section names below.
+_SECTION = re.compile(
+    r"(?<=[.!?)`])\s+(?=(?:[A-Z][a-z]+(?: [A-Za-z-]+){0,5} \([^()]*\b(?i:observed|derived|"
+    r"inferred|unknown)\b[^()]*\)|(?:Mechanism|Path|Trigger|Culprit|Population|Derived|"
+    r"Inferred|Observed)):\s)")
 _MAX_EVIDENCE = 8
 _MAX_LIST = 6
 _MAX_OTHER_REPORTS = 3
@@ -196,7 +204,11 @@ def analysis_section(findings, brief, author_display=None, link_regressor=False,
     if culprit:
         lines.append(culprit)
     if findings.trigger_path:
-        lines.append("Possible path to the crash: " + findings.trigger_path)
+        sections = _SECTION.split(findings.trigger_path)
+        if len(sections) > 1:
+            lines.append("Possible path to the crash:\n\n" + "\n\n".join(sections))
+        else:
+            lines.append("Possible path to the crash: " + findings.trigger_path)
     evidence = [e for e in findings.evidence if e.claim][:_MAX_EVIDENCE]
     if evidence:
         lines.append("Checked:\n" + "\n".join(_evidence_line(e) for e in evidence))
