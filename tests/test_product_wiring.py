@@ -1569,6 +1569,17 @@ class TestLinkify(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(str(linkify_blocks(text, "")), expected)
 
+    def test_only_changeset_hashes_link_to_revisions(self):
+        from crashclouseau import linkify
+        url = "https://hg.mozilla.org/mozilla-central"
+        out = str(linkify("since build 20260807200652, crash edf4f57a-7820-4f0d-8c9e-e56600261004, "
+                          "fault at 0x7ff6fb034c43, run abcdef0123456", url))
+        self.assertNotIn("/rev?node=", out)
+        full = "85ddbfbd3a62" + "0" * 28
+        out = str(linkify("85ddbfbd3a62 relands {}.".format(full), url))
+        self.assertIn('/rev?node=85ddbfbd3a62"', out)
+        self.assertIn('/rev?node={}"'.format(full), out)
+
     def test_bug_links_keep_their_text(self):
         from crashclouseau import linkify
         self.assertIn('rel="noopener">Bug 42</a> added', str(linkify("Bug 42 added", "")))

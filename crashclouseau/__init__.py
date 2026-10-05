@@ -63,7 +63,9 @@ app.app_context().push()
 
 
 _BUG_RE = re.compile(r"\bbug\s+(\d+)", re.I)
-_HASH_RE = re.compile(r"\b[0-9a-f]{12,40}\b")
+# Hash heuristic: 12 or 40 lowercase hex digits, including a letter.
+# Word/hyphen boundaries exclude 0x addresses and UUID segments; letters exclude numeric IDs.
+_HASH_RE = re.compile(r"(?<![\w-])(?=[0-9]*[a-f])(?:[0-9a-f]{40}|[0-9a-f]{12})(?![\w-])")
 # Pretty-print ASCII flow arrows in agent prose (e.g. call chains "A -> B -> C"),
 # but ONLY when whitespace-delimited — never touch C++ member access like
 # `data->SetInvoker`, which has no surrounding spaces. Applied to the raw text
@@ -77,9 +79,8 @@ _CODE_RE = re.compile(r"`([^`\n]+)`")
 
 
 def _linkify_prose(text, repo_url):
-    """Prose pipeline: prettify whitespace-delimited arrows, HTML-escape, then hyperlink
-    ``bug NNN`` and bare 12-40 hex changeset hashes. Code spans are handled separately in
-    ``linkify`` (this never sees them)."""
+    """Prettify spaced arrows, HTML-escape, then link bug/hash references in prose.
+    Inline code is handled by ``linkify``."""
     s = _ARROW_RE.sub(lambda m: _ARROWS[m.group(1)], text)
     s = str(escape(s))
     s = _BUG_RE.sub(
