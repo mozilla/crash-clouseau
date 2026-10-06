@@ -285,7 +285,8 @@ good ones. So make TWO decisions, in order:
   candidate is demonstrably unrelated (noise); a plausible mechanism you cannot fully verify
   is `unverifiable` (it lowers a lead's confidence; an `actionable` rung follows its own rule
   above), NOT `fail`. A `fail` on the chain downgrades `strong-evidence` to `lead` if a cited
-  anchor stands, otherwise to `abstain`.
+  anchor stands, otherwise to `abstain`. When a skeptic note narrows a claim (a reset it found
+  misses the crashing object), the mechanism states the narrowed claim.
 - `abstain` (with an `abstain_reason`, NO `needinfo_draft`) covers everything you cannot
   hand a human as a candidate — which is NOT only noise. Most abstains carry a real
   conclusion, so also set `abstain_kind` to the one word for which it is:

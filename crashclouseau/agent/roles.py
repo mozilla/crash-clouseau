@@ -224,6 +224,29 @@ _ACTIONABLE_SKEPTIC = (
     "citations is. "
 )
 
+# Panel, 2026-10-06: in 10 of the 12 FIXED filings where a crash read state set or reset
+# elsewhere, the dossier already named the right writer or lifecycle phase. Both misses (bugs
+# 2073079 and 2073442) explained the state through the candidate's own writer and stopped there.
+_STATE_AUDIT = (
+    "WHEN THE CRASH READS STATE THAT OUTLIVES THE CALL -- a check rejects it, or a read finds it "
+    "null, stale or out of range -- the candidate's change to it is one writer among several. "
+    "List the other sites that set or reset that state, including those the call graph cannot "
+    "see (script through bindings, IPC), and say which one, in which phase (before "
+    "initialization, after teardown, re-entrancy, an async release, a cached object, a failure "
+    "path), leaves the value the crash found. A value computed inside the crashing function has "
+    "no writers to audit. "
+)
+
+# Reserve `fail` for contradictions: Dossier._skeptic_veto can suppress a lead.
+_ABSENCE = (
+    "A claim that something NEVER happens -- nothing else calls or writes it, nothing resets it, "
+    "this is the only path -- passes only on a search that could have found the counter-example "
+    "(`mcp__searchfox__search` also reaches code the call graph cannot: script bindings, IPC); "
+    "say in the note what you searched. Reading one function is `unverifiable` at best. A "
+    "counter-example is a `fail` only if it reaches the crashing object; if it covers only other "
+    "objects, phases or processes, `pass`, with the narrowed claim in the note. "
+)
+
 _ROLES: dict[str, dict] = {
     "crash-interpreter": {
         "description": "Normalize a raw processed crash into a grounded crash brief "
@@ -330,7 +353,7 @@ _ROLES: dict[str, dict] = {
         "refcount/lifetime changes, task dispatch ordering, IPC actor teardown, GC "
         "marking/tracing, shutdown ordering, assertion invariant changes, thread/race "
         "assumptions, Rust panic paths, and FFI boundary changes; the other threads of this "
-        "report are readable with `mcp__crash__threads`. Return a cited "
+        "report are readable with `mcp__crash__threads`. " + _STATE_AUDIT + "Return a cited "
         "hypothesis or 'insufficient'. End with one fenced ```json block only when "
         "you have at least one citation for the hypothesis, shaped like: {\"summary\":"
         "\"...\",\"object_name\":\"...\",\"operation\":\"free|mutate|null_deref|uaf|"
@@ -368,7 +391,8 @@ _ROLES: dict[str, dict] = {
         "an EMPTY `calls_to`/`calls_from` is not evidence that nothing calls the symbol, so "
         "it can never CONFIRM a 'wired only into X' absence claim. Re-run it fully "
         "qualified (`js::gc::BufferAllocator::allocSmall`, not `BufferAllocator::allocSmall`) "
-        "before you pass or fail such a claim. Remember searchfox indexes ~tip, not the crash build: a small "
+        "before you pass or fail such a claim. " + _ABSENCE + "Remember searchfox indexes ~tip, "
+        "not the crash build: a small "
         "crash-line vs tip-line delta (or a symbol moved/renamed at tip) is revision "
         "drift or inlining, NOT a contradiction — never `fail` a mechanism over a line "
         "delta when the diff and field-layout confirm it; use `unverifiable` at most. "
