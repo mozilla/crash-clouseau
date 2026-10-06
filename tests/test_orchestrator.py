@@ -336,8 +336,8 @@ class TestStructLayoutResolver(unittest.TestCase):
         from crashclouseau.eval import runner as EV
         self.assertNotIn("_resolve_struct_layout",
                          inspect.getsource(orch.apply_deterministic_gates))
-        self.assertIn("_resolve_struct_layout",
-                      inspect.getsource(orch.run_evidence_agent))
+        self.assertIn("_resolve_struct_layout", inspect.getsource(orch._settle))
+        self.assertIn("_settle(result, seed)", inspect.getsource(orch.run_evidence_agent))
         self.assertIn("_resolve_struct_layout", inspect.getsource(EV.rerun_corpus))
 
 
@@ -643,6 +643,306 @@ class TestReaper(unittest.TestCase):
         self.assertEqual(n, 1)                      # the running orphan, not the queued one
         q.enqueue_call.assert_called_once()
         self.assertEqual(q.enqueue_call.call_args.kwargs["args"], ("oom",))
+
+
+class TestConfirmBeforePublishing(unittest.TestCase):
+    """A verdict that may reach Bugzilla is re-run at `publish_effort`, and the re-run is the
+    one persisted and filed, whatever it concludes."""
+
+    def setUp(self):
+        p = mock.patch.object(orch, "_proto_already_triaged", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
+        self.calls = []
+
+    def _triage(self, *results):
+        queue = list(results)
+
+        async def _fake(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
+            self.calls.append(((llm_cfg or {}).get("principal") or {}).get("effort"))
+            nxt = queue.pop(0)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
+
+        return mock.patch("crashclouseau.agent.triage.run_crash_triage", _fake)
+
+    def _run(self, *results, publishable=True, effort="high", settle=None):
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": effort,
+               "max_cost_usd_per_crash": 2.0}
+        real_settle = orch._settle
+        settle_calls = []
+
+        def _settle(result, seed):
+            settle_calls.append(result)
+            if settle and len(settle_calls) in settle:
+                raise settle[len(settle_calls)]
+            return real_settle(result, seed)
+
+        with pD, pV, pC, pS, pSc, self._triage(*results), \
+             mock.patch.object(orch, "_settle", _settle), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=publishable) as gate, \
+             mock.patch.object(orch, "_autofile") as autofile:
+            orch.run_evidence_agent("u-1")
+        done = TestRunEvidenceAgent._done_upsert(self, MDoss)
+        return done, MVerd, gate, autofile
+
+    def test_a_publishable_verdict_is_rerun_and_the_rerun_is_kept(self):
+        done, MVerd, gate, autofile = self._run(_lead_result(cost=0.4), _strong_result(cost=1.1))
+        self.assertEqual(self.calls, ["medium", "high"])
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "culprit")
+        self.assertEqual(MVerd.set.call_args.kwargs["effort"], "high")
+        self.assertAlmostEqual(done.kwargs["cost_usd"], 1.5)
+        conf = done.kwargs["payload"]["publish_confirmation"]
+        self.assertEqual(conf["effort"], "high")
+        self.assertTrue(conf["kept"])
+        self.assertEqual(conf["cost_usd"], 1.1)
+        self.assertEqual((conf["first_pass"]["verdict"], conf["first_pass"]["effort"]),
+                         ("lead", "medium"))
+        # The filer is handed the confirmed verdict.
+        self.assertEqual(autofile.call_args.args[2]["verdict"], "culprit")
+
+    def test_an_abstain_at_high_effort_files_nothing_new(self):
+        done, MVerd, _gate, autofile = self._run(_lead_result(), _abstain_result())
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
+        self.assertEqual(autofile.call_args.args[2]["verdict"], "abstain")
+
+    def test_a_verdict_that_cannot_be_published_runs_once(self):
+        done, MVerd, gate, _autofile = self._run(_lead_result(), publishable=False)
+        self.assertEqual(self.calls, ["medium"])
+        gate.assert_called_once()
+        self.assertNotIn("publish_confirmation", done.kwargs["payload"])
+        self.assertEqual(MVerd.set.call_args.kwargs["effort"], "medium")
+
+    def test_no_publish_effort_or_the_same_effort_runs_once(self):
+        for effort in (None, "medium"):
+            with self.subTest(effort=effort):
+                self.calls = []
+                _done, _MVerd, gate, _autofile = self._run(_lead_result(), effort=effort)
+                self.assertEqual(self.calls, ["medium"])
+                gate.assert_not_called()
+
+    def test_a_confirming_pass_that_cannot_be_settled_keeps_the_first_and_its_cost(self):
+        done, MVerd, _gate, _autofile = self._run(
+            _lead_result(cost=1.0), _strong_result(cost=2.0), settle={2: RuntimeError("gate")})
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "lead")
+        self.assertEqual(MVerd.set.call_args.kwargs["effort"], "medium")
+        self.assertAlmostEqual(done.kwargs["cost_usd"], 3.0)
+        conf = done.kwargs["payload"]["publish_confirmation"]
+        self.assertIn("gate", conf["error"])
+        self.assertEqual(conf["cost_usd"], 2.0)
+        self.assertNotIn("kept", conf)
+
+    def test_a_job_timeout_keeps_the_first_pass_unpublished(self):
+        # RQ kills the job 60 s after raising it: enough to persist, not to publish.
+        from rq.timeouts import JobTimeoutException
+
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with self._triage(JobTimeoutException("late")), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=True):
+            first = _lead_result()
+            result, conf = orch._confirm_before_publishing("u-1", dict(_SEED), first, llm, {})
+        self.assertIs(result, first)
+        self.assertTrue(conf["withheld"])
+        self.assertIn("JobTimeoutException", conf["error"])
+
+    def test_a_timed_out_confirmation_is_persisted_and_not_filed(self):
+        from rq.timeouts import JobTimeoutException
+
+        for name, results, settle, cost in (
+                ("triage", (_lead_result(cost=1.0), JobTimeoutException("late")), None, 1.0),
+                ("settle", (_lead_result(cost=1.0), _strong_result(cost=2.0)),
+                 {2: JobTimeoutException("late")}, 3.0)):
+            with self.subTest(name):
+                self.calls = []
+                pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+                llm = {"principal": {"model": "opus", "effort": "medium"},
+                       "publish_effort": "high"}
+                real_settle = orch._settle
+                seen = []
+
+                def _settle(r, s, settle=settle, seen=seen):
+                    seen.append(r)
+                    if settle and len(seen) in settle:
+                        raise settle[len(seen)]
+                    return real_settle(r, s)
+
+                with pD, pV, pC, pS, pSc, self._triage(*results), \
+                     mock.patch.object(orch, "_settle", _settle), \
+                     mock.patch.object(orch.config, "get_llm", return_value=llm), \
+                     mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                                return_value=True), \
+                     mock.patch.object(orch, "_autofile") as autofile:
+                    orch.run_evidence_agent("u-1")
+                done = TestRunEvidenceAgent._done_upsert(self, MDoss)
+                self.assertIsNotNone(done)
+                self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "lead")
+                self.assertAlmostEqual(done.kwargs["cost_usd"], cost)
+                self.assertTrue(done.kwargs["payload"]["publish_confirmation"]["withheld"])
+                autofile.assert_not_called()
+                decline = MDoss.record_filing_decline.call_args.args[1]
+                self.assertIn("job timeout", decline["skipped"])
+
+    def test_no_confirming_pass_when_the_first_used_half_the_job(self):
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with self._triage(_strong_result()), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=True):
+            first = _lead_result()
+            result, conf = orch._confirm_before_publishing(
+                "u-1", dict(_SEED), first, llm, {}, started=orch.time.monotonic() - 2000)
+        self.assertIs(result, first)
+        self.assertEqual(self.calls, [])
+        self.assertIn("2000s of the 3600s", conf["skipped"])
+        self.assertNotIn("kept", conf)
+
+    def test_the_budget_holds_each_pass_not_the_sum(self):
+        done, _MVerd, _g, _a = self._run(_lead_result(cost=1.5), _strong_result(cost=1.5))
+        self.assertNotIn("over_budget", done.kwargs["payload"])     # $3 over two passes
+        self.assertAlmostEqual(done.kwargs["cost_usd"], 3.0)
+        self.calls = []
+        done, _MVerd, _g, _a = self._run(_lead_result(cost=0.5), _strong_result(cost=2.5))
+        self.assertTrue(done.kwargs["payload"]["over_budget"])     # the confirming pass ran away
+
+    def test_a_timeout_swallowed_inside_a_resolver_does_not_publish(self):
+        # `_resolve_candidate_git_commit` catches Exception, so RQ's JobTimeoutException raised
+        # in its hg lookup never reaches `_withhold`; the clock still says the job is out of time.
+        from rq.timeouts import JobTimeoutException
+
+        import inspect
+
+        now = [1000.0]
+        swallowed = []
+
+        def _json_rev(node, channel=None):
+            # Only the git-commit resolver's lookup, and only in the confirming pass.
+            if (len(self.calls) == 2
+                    and inspect.stack()[1].function == "_resolve_candidate_git_commit"):
+                now[0] = 1000.0 + 3600 - 30
+                swallowed.append(node)
+                raise JobTimeoutException("late")
+            return {}
+
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with pD, pV, pC, pS, pSc, self._triage(_lead_result(), _lead_result()), \
+             mock.patch.object(orch, "_clock", lambda: now[0]), \
+             mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600), \
+             mock.patch("crashclouseau.sigage.json_rev", _json_rev), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=True), \
+             mock.patch.object(orch, "_autofile") as autofile:
+            orch.run_evidence_agent("u-1")
+        self.assertEqual(self.calls, ["medium", "high"])
+        self.assertEqual(len(swallowed), 1)
+        done = TestRunEvidenceAgent._done_upsert(self, MDoss)
+        # The resolver hid the timeout, so the confirmation reads as kept...
+        self.assertTrue(done.kwargs["payload"]["publish_confirmation"]["kept"])
+        # ...and the clock still stops the publish.
+        autofile.assert_not_called()
+        decline = MDoss.record_filing_decline.call_args.args[1]
+        self.assertIn("30s of job time left", decline["skipped"])
+
+    def test_any_run_out_of_job_time_is_not_published(self):
+        now = [0.0]
+
+        async def _slow(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
+            now[0] = 3500.0
+            return _lead_result()
+
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        with pD, pV, pC, pS, pSc, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _slow), \
+             mock.patch.object(orch, "_clock", lambda: now[0]), \
+             mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=False), \
+             mock.patch.object(orch, "_autofile") as autofile:
+            orch.run_evidence_agent("u-1")
+        autofile.assert_not_called()
+        self.assertIn("100s of job time left",
+                      MDoss.record_filing_decline.call_args.args[1]["skipped"])
+
+    def test_the_running_jobs_timeout_wins_over_the_config(self):
+        # A job queued before the deploy keeps its 1800 s RQ timeout while the config says 3600.
+        now = [0.0]
+
+        async def _slow(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
+            now[0] = 1800.0 - 30
+            return _lead_result()
+
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        with pD, pV, pC, pS, pSc, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _slow), \
+             mock.patch.object(orch, "_clock", lambda: now[0]), \
+             mock.patch.object(orch, "_current_job",
+                               return_value=mock.Mock(id="j", timeout=1800)), \
+             mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=False), \
+             mock.patch.object(orch, "_autofile") as autofile:
+            orch.run_evidence_agent("u-1")
+        autofile.assert_not_called()
+        self.assertIn("30s of job time left",
+                      MDoss.record_filing_decline.call_args.args[1]["skipped"])
+
+    def test_job_timeout_sources(self):
+        with mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600):
+            for job, expected in ((None, 3600),                          # outside RQ
+                                  (mock.Mock(timeout=1800), 1800),       # the job's own
+                                  (mock.Mock(timeout="1800"), 1800),
+                                  (mock.Mock(timeout=None), 3600),       # no usable value
+                                  (mock.Mock(timeout=-1), None)):        # RQ: no timeout
+                with self.subTest(job=job), \
+                     mock.patch.object(orch, "_current_job", return_value=job):
+                    self.assertEqual(orch._job_timeout(), expected)
+
+    def test_the_half_the_job_rule_reads_the_jobs_timeout(self):
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with self._triage(_strong_result()), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(timeout=1800)), \
+             mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=True):
+            _r, conf = orch._confirm_before_publishing(
+                "u-1", dict(_SEED), _lead_result(), llm, {}, started=orch._clock() - 1000)
+        self.assertEqual(self.calls, [])
+        self.assertIn("of the 1800s job timeout", conf["skipped"])
+
+    def test_a_paid_failure_merges_its_tokens(self):
+        from crashclouseau.agent.errors import MissingHandoffError
+
+        exc = MissingHandoffError("no handoff", raw_result="x", cost_usd=2.0, num_turns=9,
+                                  input_tokens=100, output_tokens=200, cache_read_tokens=300)
+        first = _lead_result(cost=1.0)
+        first.input_tokens, first.output_tokens, first.cache_read_tokens = 10, 20, 30
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with self._triage(exc), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=True):
+            result, conf = orch._confirm_before_publishing("u-1", dict(_SEED), first, llm, {})
+        self.assertIs(result, first)
+        self.assertAlmostEqual(result.total_cost_usd, 3.0)
+        self.assertEqual((result.input_tokens, result.output_tokens, result.cache_read_tokens),
+                         (110, 220, 330))
+        self.assertEqual(conf["cost_usd"], 2.0)
+
+    def test_a_failed_confirming_pass_keeps_the_first(self):
+        done, MVerd, _gate, autofile = self._run(_lead_result(), RuntimeError("boom"))
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "lead")
+        self.assertEqual(MVerd.set.call_args.kwargs["effort"], "medium")
+        self.assertIn("boom", done.kwargs["payload"]["publish_confirmation"]["error"])
+        self.assertEqual(autofile.call_args.args[2]["verdict"], "lead")
 
 
 class TestOwnJobIdWiring(unittest.TestCase):

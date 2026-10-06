@@ -622,7 +622,11 @@ class TestTheOrchestrator(unittest.TestCase):
 
         # Production has online candidate-specific resolvers before the shared gate ladder.
         # Route first so they inspect the awaited-work candidate, not the discarded model pick.
-        worker = inspect.getsource(orch.run_evidence_agent)
+        # Both passes settle through `_settle` (the first, and a confirming one).
+        self.assertIn("_settle(result, seed)", inspect.getsource(orch.run_evidence_agent))
+        self.assertIn("_settle(confirmed, seed)",
+                      inspect.getsource(orch._confirm_before_publishing))
+        worker = inspect.getsource(orch._settle)
         worker_origin = "_apply_hang_origin_gate(result.dossier, seed)"
         backout = "_resolve_candidate_backout(result.dossier, seed)"
         compiled = "_resolve_compiled_out(result.dossier, seed)"

@@ -721,6 +721,12 @@ def get_llm():
     return get_agent().get("llm", {})
 
 
+def get_llm_publish_effort():
+    """The principal's effort for the confirming pass a publishable verdict gets
+    (``orchestrator._confirm_before_publishing``); ``None`` runs no confirming pass."""
+    return get_llm().get("publish_effort")
+
+
 def get_llm_role(role):
     return get_llm().get("roles", {}).get(role, {})
 

@@ -648,6 +648,29 @@ The previous lock used SDK 0.2.134 (Claude Code 2.1.226). These versions establi
 bundled, not the first CLI version to support the model. No one-off dyno transcript or crash
 replay output is retained in this repository.
 
+### Confirming pass before publishing (2026-10-06)
+
+A verdict that passes the filer's local gates (`bugzilla_apply.passes_local_filing_gates`: holds,
+kill switch, rung, observe-only, already filed, daily cap, token) is re-run with the principal at
+`agent.llm.publish_effort` (`high`) before anything reaches Bugzilla. The re-run replaces the
+first pass whatever it concludes; the first pass is kept in the payload as
+`publish_confirmation.first_pass`, and the costs are summed. `null` turns the confirming pass off.
+`agent.job_timeout` is 3600 s (was 1800) so both passes fit; a first pass that has already used
+half of it is not confirmed (`publish_confirmation.skipped`). An RQ timeout during the confirming
+pass keeps the first pass and its cost but publishes nothing (`publish_confirmation.withheld`, and
+a `filing_declined` saying so); a retrigger confirms again. The same holds for ANY run with less
+than 600 s of job time left at the publish step (against the RUNNING job's RQ timeout, so a job
+queued before a timeout change keeps its own deadline), read off the clock rather than the exception,
+because best-effort handlers (resolvers, second opinion, the filer) catch RQ's timeout. `max_cost_usd_per_crash` holds each pass,
+not their sum, so `over_budget` still means a run that ran away. The reaper's orphan threshold
+follows the timeout (now ~65 min).
+
+Measured offline on 14 FIXED nightly filings, medium and high named the landed fix's function 10
+and 11 times and matched `regressed_by` 9/9 and 8/9, at 2.3x the cost. On bug 2073442, three medium
+runs missed bug 1709529 and the high run found it. To read the effect in prod:
+`select payload->'publish_confirmation'->'first_pass'->>'verdict' as first,
+payload->'publish_confirmation'->>'effort' as effort from dossiers where payload ? 'publish_confirmation';`
+
 [Anthropic's model documentation](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 confirms the model ID, $4/$20 per million input/output tokens, always-on thinking, and the
 restriction on forced tool use. Classifier declines can return

@@ -43,7 +43,9 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(cfg["enabled"])
         self.assertEqual((cfg["model"], cfg["effort"]), ("claude-opus-5-5", "medium"))
         self.assertEqual(cfg["comment_on_existing"], "comment")
-        self.assertGreater(cfg["job_timeout"], config.get_agent_job_timeout())
+        # The investigator can outlast one triage run. The triage JOB is now as long only
+        # because it may hold two passes (a confirming one before publishing).
+        self.assertGreaterEqual(cfg["job_timeout"], config.get_agent_job_timeout())
 
     def test_the_spend_switch_is_an_env_var(self):
         with mock.patch.dict(os.environ, {"SPIKE_ESCALATION_ENABLED": "0"}):

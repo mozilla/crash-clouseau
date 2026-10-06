@@ -268,6 +268,67 @@ class TestGates(_Base):
         self.assertEqual(self.created, [])
 
 
+class TestLocalFilingGates(_Base):
+    """`passes_local_filing_gates` is what decides whether a verdict earns a confirming pass
+    (`orchestrator._confirm_before_publishing`), so it must refuse exactly where
+    `autofile_bug`'s local gates refuse, and pass a verdict they let through."""
+
+    def _both(self, verdict="lead", confidence=70, dossier=None, info=None):
+        dossier = dossier or {"candidate": {"node": "n"}}
+        info = info or _INFO
+        return (bugzilla_apply.passes_local_filing_gates("u-1", info, dossier, verdict,
+                                                         confidence),
+                bugzilla_apply.autofile_bug("u-1", info, {}, dossier, verdict, confidence))
+
+    def test_a_fileable_verdict_passes_and_files(self):
+        ok, res = self._both()
+        self.assertTrue(ok)
+        self.assertTrue(res["filed"])
+
+    def test_each_local_gate_refuses_in_both(self):
+        cases = {
+            "below the rung": dict(confidence=50),
+            "abstain": dict(verdict="abstain", confidence=90),
+            "observe-only": dict(dossier={"candidate": {"node": "n"},
+                                          "corroborations": {"offstack_observe_only": True}}),
+            "unsymbolicated": dict(info={**_INFO, "signature": "@0xe2ba40f948"}),
+        }
+        for name, kw in cases.items():
+            with self.subTest(name):
+                ok, res = self._both(**kw)
+                self.assertFalse(ok)
+                self.assertFalse(res["filed"])
+
+    def test_switches_and_records_refuse_in_both(self):
+        setups = {
+            "kill switch": lambda: setattr(bugzilla_apply.config.get_agent_autofile,
+                                           "return_value", _cfg(enabled=False)),
+            "already filed": lambda: setattr(bugzilla_apply.models.Dossier.already_filed,
+                                             "return_value", {"bug": 5}),
+            "daily cap": lambda: setattr(bugzilla_apply.models.Dossier.filed_bugs_since,
+                                         "return_value", 10),
+            "no token": lambda: setattr(bugzilla_apply.config.get_bugzilla_token,
+                                        "return_value", ""),
+        }
+        for name, setup in setups.items():
+            with self.subTest(name):
+                bugzilla_apply.config.get_agent_autofile.return_value = _cfg()
+                bugzilla_apply.models.Dossier.already_filed.return_value = None
+                bugzilla_apply.models.Dossier.filed_bugs_since.return_value = 0
+                bugzilla_apply.config.get_bugzilla_token.return_value = "tok"
+                setup()
+                ok, res = self._both()
+                self.assertFalse(ok)
+                self.assertFalse(res["filed"])
+
+    def test_a_run_triggered_without_filing_refuses_in_both(self):
+        with mock.patch.object(bugzilla_apply.models.Dossier, "run_options",
+                               return_value={"autofile": False}):
+            ok, res = self._both()
+        self.assertFalse(ok)
+        self.assertFalse(res["filed"])
+
+
 class TestDuplicates(_Base):
     def test_existing_open_bug_gets_a_comment_not_a_duplicate(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345)]

@@ -2363,6 +2363,48 @@ def skipped_regressor(bug):
     return bug if bug in config.autofile_skip_regressor_bugs() else None
 
 
+def passes_local_filing_gates(uuid, uuid_info, dossier, verdict, confidence):
+    """Would ``autofile_bug`` take THIS verdict past its local gates, to the Bugzilla lookups
+    that decide between a new bug, a comment and a decline? Both of the first two publish.
+
+    The orchestrator asks before paying for a confirming pass (``_confirm_before_publishing``),
+    so only a verdict that may reach Bugzilla gets one. The same predicates as the top of
+    ``autofile_bug``, in its order, for a verdict that is fileable on its own merits; no
+    network. The gates that need Bugzilla or Socorro (venues, the actionable population floor,
+    same-defect) are not run here: a confirming pass they later decline is the accepted cost.
+    ``tests/test_autofile.py::TestLocalFilingGates`` keeps the two in step."""
+    channel = uuid_info.get("channel")
+    product = uuid_info.get("product")
+    if config.autofile_product_held(product):
+        return False
+    if models.Dossier.run_options(uuid).get("autofile") is False:
+        return False
+    cfg = config.get_agent_autofile(channel, product=product)
+    if not (config.autofile_product_declared(product)
+            and config.autofile_channel_declared(channel) and cfg["enabled"]):
+        return False
+    if skipped_regressor(((dossier or {}).get("candidate") or {}).get("bug")):
+        return False
+    if not (verdict in cfg["verdicts"]
+            and confidence is not None and confidence >= cfg["min_confidence"]):
+        return False
+    if ((dossier or {}).get("corroborations") or {}).get("offstack_observe_only"):
+        return False
+    if _is_unsymbolicated(uuid_info.get("signature")):
+        return False
+    if models.Dossier.already_filed(uuid):
+        return False
+    cap = cfg["daily_cap"]
+    if cap is not None:
+        since = datetime.now(timezone.utc) - timedelta(days=1)
+        try:
+            if models.Dossier.filed_bugs_since(since, channel=channel, product=product) >= cap:
+                return False
+        except Exception:                                   # pragma: no cover - defensive
+            return False
+    return bool(config.get_bugzilla_token())
+
+
 def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
     """File a Bugzilla bug for a reported crash, unattended. Returns a result dict; NEVER
     raises — a filing failure must not lose an analysis that is already persisted.

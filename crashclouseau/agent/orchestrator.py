@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -3887,7 +3888,7 @@ def _resolve_struct_layout(dossier, seed):
     lookup failure", so this says "never promote on one". searchfox-cli missing
     (``SearchfoxNotFound`` at construction), a timeout (retries+1 = 3 attempts x
     ``agent.searchfox.timeout_secs``=60 = ~3 min PER LOOKUP, so ~12 min if all four hang —
-    against ``agent.job_timeout``=1800s on a ~20-min run, which is the tail worth watching;
+    against ``agent.job_timeout``=3600s (1800s before the confirming pass) on a ~20-min run, which is the tail worth watching;
     the measured happy path is 1.0-2.1s and the agent's own tool calls already run on the
     same budget many more times), a non-zero exit,
     or ``No field layout information found`` — which the CLI returns with EXIT 0 for a
@@ -4752,6 +4753,230 @@ def _autofile(uuid, payload, row):
         logger.error("agent: autofile raised for %s (analysis is safe)", uuid, exc_info=True)
 
 
+def _settle(result, seed):
+    """The post-run steps of one agent pass, in order: the online resolvers, the second
+    opinion and the shared deterministic gates. Run once per pass, so a confirming pass
+    (``_confirm_before_publishing``) is settled exactly like the first."""
+    # An actionable shutdown hang is routed by the awaited work's blame, not by the
+    # model's candidate. Do that BEFORE every online candidate-specific lookup below:
+    # otherwise backout state is resolved for the discarded model candidate and a
+    # diff-derived compiled-out answer describes the wrong patch. The shared gate ladder
+    # repeats these two idempotent calls for offline/eval runs; `_apply_hang_origin_gate`
+    # preserves the online metadata when it sees the routed candidate again.
+    _record_hang_awaited_work(result.dossier, seed)
+    _apply_hang_origin_gate(result.dossier, seed)
+
+    # Was the chosen candidate backed out — or is it ITSELF a backout? Resolved HERE,
+    # before the second opinion, so a candidate we are about to suppress never buys a
+    # ~$1 independent review. Online only (a cached hg lookup, plus one json-pushes
+    # request on the ~0.5% of runs that name a backout); the gates that act on the
+    # answers live in the shared ladder.
+    _resolve_candidate_backout(result.dossier, seed)
+
+    # Is the mechanism's own machinery even in this build? Online (searchfox + one
+    # cached raw-rev), and beside the backout resolver for the same reason: the gate
+    # that acts on the answer lives in the shared, offline-safe ladder. After the
+    # backout resolve so a candidate we are about to suppress buys no lookups.
+    _resolve_compiled_out(result.dossier, seed)
+
+    # Does the cited struct layout actually say what the model said it says? One
+    # `searchfox --field-layout` call, and only when a `struct_layout` citation
+    # already matches the fault address. BEFORE the second opinion because
+    # `_will_corroboration_promote` peeks at the same answer to decide whether a
+    # sub-threshold lead is worth reviewing.
+    _resolve_struct_layout(result.dossier, seed)
+
+    # Blind second-opinion (#SO): an independent, no-context re-analysis of a
+    # would-be-reported lead, run from the RAW verdict (async home) and folded inside the
+    # gates below. Prod-only / env-gated (SECOND_OPINION_ENABLED); None otherwise.
+    second_opinion, second_opinion_status = _maybe_run_second_opinion(result, seed)
+
+    # Reshape the raw agent verdict into the shipped verdict (area-experts + the
+    # callpath/exposer/corroboration gates + the second-opinion fold + needinfo reconcile
+    # + observe-only). Shared with the offline eval runner so calibration scores the
+    # pipeline we ship (the eval runner passes no second opinion).
+    apply_deterministic_gates(
+        result, seed,
+        second_opinion=second_opinion,
+        second_opinion_status=second_opinion_status,
+    )
+    # Resolve the candidate's git sha for the filed bug's (gh) link. Deliberately OUTSIDE
+    # apply_deterministic_gates: that function is shared with the offline eval runner, and
+    # an hg json-rev call (8-13s) per corpus crash would wreck an eval run's runtime and
+    # its determinism. Online only, once per run, usually a cache hit from the gate above.
+    _resolve_candidate_git_commit(result.dossier, seed)
+    _record_file_components(result.dossier, seed)
+
+
+_USAGE_FIELDS = ("total_cost_usd", "input_tokens", "output_tokens", "cache_read_tokens")
+# The run's clock, a seam so tests can move it without patching `time.monotonic` itself.
+_clock = time.monotonic
+# Job time the filer needs left to publish: it makes about ten Bugzilla requests (venues,
+# render, create, regressed_by, flags, needinfo, disclosure), each allowed
+# `bugzilla_apply._HTTP_TIMEOUT` = 60 s. Less than that and RQ's alarm, then its kill 60 s
+# later, can land in the middle of the writes.
+_PUBLISH_MARGIN_S = 600
+
+
+def _job_timeout():
+    """The RUNNING job's timeout in seconds, ``None`` for none. RQ fixes it at enqueue, so a job
+    queued (or retried) across a config change keeps the old value: reading the config instead
+    put the deadline of an 1800 s job 30 minutes late. Outside RQ, or without a usable value,
+    the configured one. RQ's ``-1`` is no timeout."""
+    job = _current_job()
+    raw = getattr(job, "timeout", None) if job is not None else None
+    try:
+        timeout = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        timeout = None
+    if timeout is None:
+        return config.get_agent_job_timeout()
+    return None if timeout < 0 else timeout
+
+
+def _job_time_left(started):
+    """Seconds left before RQ's job timeout fires, or ``None`` when there is no deadline.
+
+    THE CLOCK, NOT THE EXCEPTION, decides whether there is time to publish: best-effort
+    handlers all over a run (the resolvers, the second opinion, the filer itself) catch
+    ``Exception``, which includes RQ's ``JobTimeoutException``, so the exception may never
+    reach a handler that would stop the publish. The clock passes the deadline either way."""
+    timeout = _job_timeout()
+    if not timeout or started is None:
+        return None
+    return started + timeout - _clock()
+
+
+def _add_usage(into, other, cost_attr="total_cost_usd"):
+    """Add ``other``'s cost and tokens to ``into`` (None-safe), so a crash's record carries
+    every pass it paid for. ``cost_attr`` names ``other``'s cost field (an error's is
+    ``cost_usd``)."""
+    for field in _USAGE_FIELDS:
+        source = cost_attr if field == "total_cost_usd" else field
+        mine, theirs = getattr(into, field, None), getattr(other, source, None)
+        if mine is not None or theirs is not None:
+            setattr(into, field, (mine or 0) + (theirs or 0))
+
+
+def _withhold(uuid, confirmation, exc):
+    """Mark a confirmation that ran out of job time: the first pass is kept, and NOT published."""
+    logger.error("agent: %s confirming pass hit the job timeout; keeping the first pass "
+                 "unpublished", uuid)
+    confirmation["error"] = "{}: {}".format(type(exc).__name__, exc)
+    confirmation["withheld"] = True
+    return confirmation
+
+
+def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=None):
+    """Re-run a verdict that may reach Bugzilla with the principal at ``agent.llm.publish_effort``.
+    Returns ``(result, confirmation)``; ``confirmation`` is ``None`` when no pass was due.
+
+    Medium effort serves every run and matches high on most crashes: over 14 FIXED filings
+    (2026-10-06) the landed fix's function was named 10 times against 11 and the regressor 9/9
+    against 8/9, at 2.3x the cost. It also stops at the first changeset that explains the
+    crash: on bug 2073442 three medium runs missed the change that made the check fail, and a
+    high run found it and the reset that left the stale flag. So the extra effort is spent only
+    where the analysis is published (``bugzilla_apply.passes_local_filing_gates``).
+
+    The confirming pass REPLACES the first whatever it concludes (``confirmation["kept"]``), so
+    an abstain at high effort files nothing. The first pass's verdict stays in the payload and
+    every pass's cost is added. A confirming pass that fails, or that would not fit in the job (it takes longer
+    than the first: 22 turns against 14 on 2073442), leaves the first in place, as before this
+    existed, and says so in ``confirmation``. RQ's job timeout is different: RQ kills the job
+    60 s after raising it, which leaves time to persist the first pass and its cost but not to
+    publish (the filer makes several Bugzilla requests), so the first pass is returned
+    ``withheld`` and the caller records it without filing. Re-raising instead lost a finished,
+    paid first pass, and RQ retried the whole run at full price."""
+    effort = config.get_llm_publish_effort()
+    principal = llm_cfg.get("principal") or {}
+    if not effort or effort == principal.get("effort"):
+        return result, None
+    from rq.timeouts import BaseTimeoutException
+
+    from crashclouseau import bugzilla_apply
+
+    row = _verdict_row(result)
+    dossier = result.dossier.model_dump(mode="json") if result.dossier else {}
+    crash = {"channel": seed.get("channel"), "product": seed.get("product"),
+             "signature": seed.get("signature")}
+    try:
+        if not bugzilla_apply.passes_local_filing_gates(uuid, crash, dossier, row["verdict"],
+                                                        row["confidence"]):
+            return result, None
+    except Exception:                                    # pragma: no cover - defensive
+        logger.error("agent: %s publish gate check failed; not confirming", uuid,
+                     exc_info=True)
+        return result, None
+    confirmation = {
+        "effort": effort,
+        "first_pass": {
+            "effort": principal.get("effort"), "verdict": row["verdict"],
+            "confidence": row["confidence"],
+            "candidate": (dossier.get("candidate") or {}).get("node"),
+            "mechanism": ((dossier.get("verdict") or {}).get("mechanism") or {}).get("statement"),
+            "cost_usd": result.total_cost_usd, "num_turns": result.num_turns,
+        },
+    }
+    timeout = _job_timeout()
+    elapsed = (_clock() - started) if started is not None else 0.0
+    if timeout and elapsed > timeout / 2:
+        logger.warning("agent: %s not confirmed: the first pass took %.0fs of a %ss job", uuid,
+                       elapsed, timeout)
+        confirmation["skipped"] = "the first pass took {:.0f}s of the {}s job timeout".format(
+            elapsed, timeout)
+        return result, confirmation
+    from crashclouseau.agent.triage import run_crash_triage  # lazy: pulls the SDK
+
+    logger.info("agent: %s may be published (%s/%s); confirming at %s effort", uuid,
+                row["verdict"], row["confidence"], effort)
+    try:
+        confirmed = asyncio.run(run_crash_triage(
+            crash=seed, tools_cfg=tools_cfg,
+            llm_cfg={**llm_cfg, "principal": {**principal, "effort": effort}},
+            recorder=ActionsRecorder()))
+    except BaseTimeoutException as exc:
+        return result, _withhold(uuid, confirmation, exc)
+    except Exception as exc:
+        logger.error("agent: %s confirming pass failed; keeping the first", uuid, exc_info=True)
+        confirmation["error"] = "{}: {}".format(type(exc).__name__, exc)
+        # A paid failure (`MissingHandoffError`) carries its usage: cost AND tokens.
+        if getattr(exc, "cost_usd", None) is not None:
+            confirmation["cost_usd"] = exc.cost_usd
+        _add_usage(result, exc, cost_attr="cost_usd")
+        return result, confirmation
+    # Account for the pass BEFORE settling it, so a settle failure cannot drop what it cost.
+    confirmation["cost_usd"] = confirmed.total_cost_usd
+    confirmation["num_turns"] = confirmed.num_turns
+    try:
+        _settle(confirmed, seed)
+    except BaseTimeoutException as exc:
+        _add_usage(result, confirmed)
+        return result, _withhold(uuid, confirmation, exc)
+    except Exception as exc:
+        logger.error("agent: %s confirming pass could not be settled; keeping the first", uuid,
+                     exc_info=True)
+        confirmation["error"] = "{}: {}".format(type(exc).__name__, exc)
+        _add_usage(result, confirmed)
+        return result, confirmation
+    _add_usage(confirmed, result)
+    confirmation["kept"] = True
+    return confirmed, confirmation
+
+
+def _record_withheld(uuid, seed, row, reason):
+    """Record why a run that ran out of job time was not published."""
+    try:
+        models.Dossier.record_filing_decline(uuid, {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "skipped": reason,
+            "channel": seed.get("channel"), "product": seed.get("product"),
+            "signature": seed.get("signature"),
+            "verdict": row["verdict"], "confidence": row["confidence"],
+        })
+    except Exception:                                    # pragma: no cover - defensive
+        logger.error("agent: %s withheld decline not recorded", uuid, exc_info=True)
+
+
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     On failure it records the reason (dossier ``payload['error']``) and marks status; a
@@ -4763,6 +4988,7 @@ def run_evidence_agent(uuid, force=False):
     cost dedup (skip-existing / proto) early-out. It still goes through the atomic
     claim below — ``retrigger_agent`` first resets the dossier to ``pending`` so the
     claim can re-take it — so two concurrent retriggers collapse to a single run."""
+    started = _clock()
     try:
         skip_dedup = config.get_agent_skip_if_existing()
         stale_after = config.get_agent_job_timeout() + _STALE_BUFFER_S
@@ -4894,63 +5120,24 @@ def run_evidence_agent(uuid, force=False):
                 if seed.get("is_offstack")
                 else llm_cfg.get("max_cost_usd_per_crash", _DEFAULT_COST_CAP)
             )
-            cost = result.total_cost_usd
-            over_budget = cap is not None and cost is not None and cost > cap
+            pass_costs = [result.total_cost_usd]
+
+            _settle(result, seed)
+            # A verdict that may be published gets a second, higher-effort pass, which
+            # replaces this one whatever it concludes (`_confirm_before_publishing`).
+            result, confirmation = _confirm_before_publishing(uuid, seed, result, llm_cfg,
+                                                              tools_cfg, started=started)
+            if confirmation and confirmation.get("cost_usd") is not None:
+                pass_costs.append(confirmation["cost_usd"])
+            # PER PASS: the cap bounds one agent run, and a confirmed crash is two by design.
+            # Held against the sum, nearly every confirmed (= published) crash would carry the
+            # flag, and it would stop meaning "a run ran away".
+            over_budget = cap is not None and any(c is not None and c > cap for c in pass_costs)
             if over_budget:
                 logger.warning(
-                    "agent: %s over budget: $%.4f > $%s",
-                    uuid, result.total_cost_usd, cap,
+                    "agent: %s over budget: a pass cost more than $%s (passes: %s)",
+                    uuid, cap, ", ".join("$%.4f" % (c or 0) for c in pass_costs),
                 )
-
-            # An actionable shutdown hang is routed by the awaited work's blame, not by the
-            # model's candidate. Do that BEFORE every online candidate-specific lookup below:
-            # otherwise backout state is resolved for the discarded model candidate and a
-            # diff-derived compiled-out answer describes the wrong patch. The shared gate ladder
-            # repeats these two idempotent calls for offline/eval runs; `_apply_hang_origin_gate`
-            # preserves the online metadata when it sees the routed candidate again.
-            _record_hang_awaited_work(result.dossier, seed)
-            _apply_hang_origin_gate(result.dossier, seed)
-
-            # Was the chosen candidate backed out — or is it ITSELF a backout? Resolved HERE,
-            # before the second opinion, so a candidate we are about to suppress never buys a
-            # ~$1 independent review. Online only (a cached hg lookup, plus one json-pushes
-            # request on the ~0.5% of runs that name a backout); the gates that act on the
-            # answers live in the shared ladder.
-            _resolve_candidate_backout(result.dossier, seed)
-
-            # Is the mechanism's own machinery even in this build? Online (searchfox + one
-            # cached raw-rev), and beside the backout resolver for the same reason: the gate
-            # that acts on the answer lives in the shared, offline-safe ladder. After the
-            # backout resolve so a candidate we are about to suppress buys no lookups.
-            _resolve_compiled_out(result.dossier, seed)
-
-            # Does the cited struct layout actually say what the model said it says? One
-            # `searchfox --field-layout` call, and only when a `struct_layout` citation
-            # already matches the fault address. BEFORE the second opinion because
-            # `_will_corroboration_promote` peeks at the same answer to decide whether a
-            # sub-threshold lead is worth reviewing.
-            _resolve_struct_layout(result.dossier, seed)
-
-            # Blind second-opinion (#SO): an independent, no-context re-analysis of a
-            # would-be-reported lead, run from the RAW verdict (async home) and folded inside the
-            # gates below. Prod-only / env-gated (SECOND_OPINION_ENABLED); None otherwise.
-            second_opinion, second_opinion_status = _maybe_run_second_opinion(result, seed)
-
-            # Reshape the raw agent verdict into the shipped verdict (area-experts + the
-            # callpath/exposer/corroboration gates + the second-opinion fold + needinfo reconcile
-            # + observe-only). Shared with the offline eval runner so calibration scores the
-            # pipeline we ship (the eval runner passes no second opinion).
-            apply_deterministic_gates(
-                result, seed,
-                second_opinion=second_opinion,
-                second_opinion_status=second_opinion_status,
-            )
-            # Resolve the candidate's git sha for the filed bug's (gh) link. Deliberately OUTSIDE
-            # apply_deterministic_gates: that function is shared with the offline eval runner, and
-            # an hg json-rev call (8-13s) per corpus crash would wreck an eval run's runtime and
-            # its determinism. Online only, once per run, usually a cache hit from the gate above.
-            _resolve_candidate_git_commit(result.dossier, seed)
-            _record_file_components(result.dossier, seed)
 
             # ``result.actions`` is the single source of truth (build_result folds the
             # recorder's actions + the synthesized needinfo into it); model_dump already
@@ -4959,6 +5146,8 @@ def run_evidence_agent(uuid, force=False):
             payload = result.model_dump(mode="json")
             if over_budget:
                 payload["over_budget"] = True
+            if confirmation:
+                payload["publish_confirmation"] = confirmation
 
             # Did the reaper put us here? The upsert below replaces `payload` WHOLESALE, so a
             # recovered run erased its own attempt counter on the way out — which is what made
@@ -5007,7 +5196,9 @@ def run_evidence_agent(uuid, force=False):
                 principal_model=_full_model(principal.get("model", "opus")),
                 rationale=row["rationale"],
                 evidence=row["evidence"],
-                effort=principal.get("effort"),
+                # The pass that was kept: a confirming pass that ran replaced the first.
+                effort=(confirmation["effort"] if confirmation and confirmation.get("kept")
+                        else principal.get("effort")),
             )
             models.commit()
             logger.info(
@@ -5018,7 +5209,20 @@ def run_evidence_agent(uuid, force=False):
             # never cost us the run: the dossier is already durable, and `autofile_bug`
             # returns rather than raises, so the worst case is a crash we analysed and
             # didn't report — recoverable — instead of one we analysed and lost.
-            _autofile(uuid, payload, row)
+            # Out of job time: the run is recorded, and the decline says why it was not
+            # published. A retrigger clears the decline and runs again.
+            left = _job_time_left(started)
+            if confirmation and confirmation.get("withheld"):
+                _record_withheld(uuid, seed, row,
+                                 "not published: the confirming pass hit the job timeout")
+            elif left is not None and left < _PUBLISH_MARGIN_S:
+                logger.error("agent: %s not published: %.0fs of job time left (needs %ss)",
+                             uuid, left, _PUBLISH_MARGIN_S)
+                _record_withheld(uuid, seed, row,
+                                 "not published: {:.0f}s of job time left, the filer needs "
+                                 "{}s".format(left, _PUBLISH_MARGIN_S))
+            else:
+                _autofile(uuid, payload, row)
     except Exception as exc:
         logger.error("agent: run_evidence_agent failed for %s", uuid, exc_info=True)
         reason = "{}: {}".format(type(exc).__name__, exc)

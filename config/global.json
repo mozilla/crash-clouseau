@@ -246,7 +246,7 @@
         "channels": ["nightly", "beta"],
         "products": ["Firefox", "Fenix"],
         "queue": "agent",
-        "job_timeout": 1800,
+        "job_timeout": 3600,
         "handoff_repair_turns": 1,
         "skip_if_existing": true,
         "max_seed_frames": 40,
@@ -432,6 +432,7 @@
         "llm":
         {
             "principal": {"model": "claude-opus-5-5", "effort": "medium", "max_turns": 60},
+            "publish_effort": "high",
             "roles":
             {
                 "crash-interpreter": {"model": "claude-opus-5-5", "effort": "medium"},
