@@ -4681,23 +4681,23 @@ def _heartbeat(uuid):
         t.join(timeout=5)
 
 
-def _autofile(uuid, payload, row):
-    """Hand a settled, PERSISTED run to the automatic Bugzilla filer.
+def _autofile(uuid, payload, row, planned=None):
+    """File a persisted analysis, or record a decline supplied by the dry run.
 
-    Deliberately swallows everything. The dossier is already committed by the time this
-    runs, so any exception escaping here would turn a successful analysis into a run the
-    caller marks ``error`` — and then the reaper would re-run it and pay for it twice.
-    Gating lives entirely in ``bugzilla_apply.autofile_bug``; this only supplies the crash
-    context it needs and keeps the failure contained."""
+    Catch filing errors so they do not mark the completed analysis as failed.
+    ``planned`` bypasses the filer to preserve the dry run's decline."""
     try:
         from crashclouseau import bugzilla_apply
         stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
         if not uuid_info:
             return
-        res = bugzilla_apply.autofile_bug(
+        res = planned if planned is not None else bugzilla_apply.autofile_bug(
             uuid, uuid_info, stack, payload.get("dossier") or {},
             row["verdict"], row["confidence"],
         )
+        if planned is not None and planned.get("filing_error"):
+            # Defer dry-run error records until the analysis is persisted.
+            models.Dossier.record_filing_error(uuid, planned["filing_error"])
         if res.get("filed"):
             logger.info("agent: %s filed bug %s (%s)", uuid, res["bug"], res["mode"])
         elif res.get("skipped") not in (None, "autofile disabled"):
@@ -4737,6 +4737,8 @@ def _autofile(uuid, payload, row):
             # -- `html._declined_bug` still parses the prose for the rows recorded before this.
             if res.get("bug"):
                 decline["bug"] = res["bug"]
+            if res.get("dry_run"):
+                decline["dry_run"] = True
             if res.get("same_defect"):
                 decline["same_defect"] = res["same_defect"]
             # Keep disclosure flags and stale-bug details in the decline record.
@@ -4867,26 +4869,25 @@ def _withhold(uuid, confirmation, exc):
     return confirmation
 
 
+def _too_late_to_confirm(uuid, started):
+    """Return a skip reason if more than half the job time is used, otherwise None."""
+    timeout = _job_timeout()
+    elapsed = (_clock() - started) if started is not None else 0.0
+    if not timeout or elapsed <= timeout / 2:
+        return None
+    logger.warning("agent: %s not confirmed: %.0fs of a %ss job already used", uuid, elapsed,
+                   timeout)
+    return "{:.0f}s of the {}s job timeout already used".format(elapsed, timeout)
+
+
 def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=None):
-    """Re-run a verdict that may reach Bugzilla with the principal at ``agent.llm.publish_effort``.
-    Returns ``(result, confirmation)``; ``confirmation`` is ``None`` when no pass was due.
+    """Confirm a verdict at ``publish_effort`` if a filing dry run would publish it.
 
-    Medium effort serves every run and matches high on most crashes: over 14 FIXED filings
-    (2026-10-06) the landed fix's function was named 10 times against 11 and the regressor 9/9
-    against 8/9, at 2.3x the cost. It also stops at the first changeset that explains the
-    crash: on bug 2073442 three medium runs missed the change that made the check fail, and a
-    high run found it and the reset that left the stale flag. So the extra effort is spent only
-    where the analysis is published (``bugzilla_apply.passes_local_filing_gates``).
-
-    The confirming pass REPLACES the first whatever it concludes (``confirmation["kept"]``), so
-    an abstain at high effort files nothing. The first pass's verdict stays in the payload and
-    every pass's cost is added. A confirming pass that fails, or that would not fit in the job (it takes longer
-    than the first: 22 turns against 14 on 2073442), leaves the first in place, as before this
-    existed, and says so in ``confirmation``. RQ's job timeout is different: RQ kills the job
-    60 s after raising it, which leaves time to persist the first pass and its cost but not to
-    publish (the filer makes several Bugzilla requests), so the first pass is returned
-    ``withheld`` and the caller records it without filing. Re-raising instead lost a finished,
-    paid first pass, and RQ retried the whole run at full price."""
+    Return ``(result, confirmation)``. A successful, settled confirmation replaces the first
+    result; retain a summary of the first pass and combine both passes' reported usage.
+    A skipped or failed confirmation keeps the first result. A dry-run decline prevents
+    filing, and a caught RQ timeout marks the result withheld. Check the time budget before
+    planning and again before confirmation."""
     effort = config.get_llm_publish_effort()
     principal = llm_cfg.get("principal") or {}
     if not effort or effort == principal.get("effort"):
@@ -4904,7 +4905,7 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
                                                         row["confidence"]):
             return result, None
     except Exception:                                    # pragma: no cover - defensive
-        logger.error("agent: %s publish gate check failed; not confirming", uuid,
+        logger.error("agent: %s local filing gates failed; not confirming", uuid,
                      exc_info=True)
         return result, None
     confirmation = {
@@ -4917,13 +4918,33 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
             "cost_usd": result.total_cost_usd, "num_turns": result.num_turns,
         },
     }
-    timeout = _job_timeout()
-    elapsed = (_clock() - started) if started is not None else 0.0
-    if timeout and elapsed > timeout / 2:
-        logger.warning("agent: %s not confirmed: the first pass took %.0fs of a %ss job", uuid,
-                       elapsed, timeout)
-        confirmation["skipped"] = "the first pass took {:.0f}s of the {}s job timeout".format(
-            elapsed, timeout)
+    # Planning makes network requests and may run the optional same-defect agent.
+    late = _too_late_to_confirm(uuid, started)
+    if late:
+        confirmation["skipped"] = late
+        return result, confirmation
+    # Preserve declines and errors: retrying a failed lookup during filing could publish
+    # the first pass without confirmation.
+    try:
+        stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
+        plan = bugzilla_apply.autofile_bug(uuid, uuid_info or {}, stack, dossier,
+                                           row["verdict"], row["confidence"], dry_run=True)
+    except BaseTimeoutException as exc:
+        return result, _withhold(uuid, confirmation, exc)
+    except Exception as exc:
+        logger.error("agent: %s could not plan the filing; not publishing", uuid, exc_info=True)
+        plan = {"filed": False, "dry_run": True,
+                "skipped": "could not plan the filing: {}: {}".format(type(exc).__name__, exc)}
+    confirmation["plan"] = plan
+    if not plan.get("would_publish"):
+        logger.info("agent: %s not confirmed: the filer would not publish it (%s)", uuid,
+                    plan.get("skipped"))
+        return result, confirmation
+    confirmation["would_publish"] = plan["would_publish"]
+    # Planning consumes time; its helpers can also catch RQ's timeout exception.
+    late = _too_late_to_confirm(uuid, started)
+    if late:
+        confirmation["skipped"] = late
         return result, confirmation
     from crashclouseau.agent.triage import run_crash_triage  # lazy: pulls the SDK
 
@@ -5212,6 +5233,7 @@ def run_evidence_agent(uuid, force=False):
             # Out of job time: the run is recorded, and the decline says why it was not
             # published. A retrigger clears the decline and runs again.
             left = _job_time_left(started)
+            plan = (confirmation or {}).get("plan")
             if confirmation and confirmation.get("withheld"):
                 _record_withheld(uuid, seed, row,
                                  "not published: the confirming pass hit the job timeout")
@@ -5221,6 +5243,8 @@ def run_evidence_agent(uuid, force=False):
                 _record_withheld(uuid, seed, row,
                                  "not published: {:.0f}s of job time left, the filer needs "
                                  "{}s".format(left, _PUBLISH_MARGIN_S))
+            elif plan is not None and not plan.get("would_publish"):
+                _autofile(uuid, payload, row, planned=plan)
             else:
                 _autofile(uuid, payload, row)
     except Exception as exc:

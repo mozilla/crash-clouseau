@@ -31,6 +31,7 @@ the global switch and product holds; channel holds apply only to the ordinary fi
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -203,6 +204,37 @@ def _check_rendered_links(text, where):
         raise links.LinkRefused("{} renders with a link outside the allowlist".format(where))
 
 
+class _WouldPublish(BaseException):
+    """Stop a dry run after screening, before its first Bugzilla write.
+
+    Inherit BaseException to bypass the filer's write-error handlers."""
+
+    def __init__(self, action, bug=None):
+        super().__init__(action)
+        self.action, self.bug = action, bug
+
+
+_DRY_RUN = contextvars.ContextVar("autofile_dry_run", default=False)
+
+
+def _stop_if_dry_run(action, bug=None):
+    if _DRY_RUN.get():
+        raise _WouldPublish(action, bug)
+
+
+def _note_filing_error(uuid, info):
+    """Record a filing error, or return it for deferred recording during a dry run.
+
+    Screening can fail before the dry-run stop; those failures must not write to the DB."""
+    if _DRY_RUN.get():
+        return {"filing_error": info}
+    try:
+        models.Dossier.record_filing_error(uuid, info)
+    except Exception:                                       # pragma: no cover - defensive
+        logger.warning("autofile: could not record the filing error for %s", uuid)
+    return {}
+
+
 def _post_comment(bug_id, text, is_private, token):
     """Post a comment and return its ID.
 
@@ -212,6 +244,7 @@ def _post_comment(bug_id, text, is_private, token):
     if not is_private:
         disclosure.check_public_write(text, bug_id)
     _check_rendered_links(text, where)
+    _stop_if_dry_run("comment", bug_id)
     r = net.post(
         "{}/{}/comment".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
@@ -236,6 +269,7 @@ def _put_bug(bug_id, changes, token):
         if not comment.get("is_private"):
             disclosure.check_public_write(comment["body"], bug_id)
         _check_rendered_links(comment["body"], "a comment on bug {}".format(bug_id))
+    _stop_if_dry_run("comment" if comment.get("body") else "update", bug_id)
     r = net.put(
         "{}/{}".format(_bz_rest(), bug_id),
         headers={"X-Bugzilla-API-Key": token},
@@ -279,6 +313,7 @@ def _create_bug(payload, token):
         disclosure.check_public_write("{}\n{}".format(payload.get("summary") or "",
                                                       payload.get("description") or ""))
     _check_rendered_links(payload.get("description"), "a new bug's description")
+    _stop_if_dry_run("new_bug")
     r = net.post(
         _bz_rest(),
         headers={"X-Bugzilla-API-Key": token},
@@ -2143,15 +2178,13 @@ def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
         return {"filed": False, "bug": bug, "same_defect": check,
                 "skipped": "bug {} already carries this signature".format(bug)}
     if attached != "attached":
-        try:
-            models.Dossier.record_filing_error(uuid, {
-                "at": datetime.now(timezone.utc).isoformat(),
-                "error": "adding the signature to bug {} failed".format(bug),
-                "signature": signature, "mode": "same_defect"})
-        except Exception:                                   # pragma: no cover - defensive
-            logger.warning("autofile: could not record the filing error for %s", uuid)
+        noted = _note_filing_error(uuid, {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "error": "adding the signature to bug {} failed".format(bug),
+            "signature": signature, "mode": "same_defect"})
         return {"filed": False, "bug": bug, "same_defect": check,
-                "skipped": "bugzilla write failed: adding the signature to bug {}".format(bug)}
+                "skipped": "bugzilla write failed: adding the signature to bug {}".format(bug),
+                **noted}
     result = {"filed": True, "bug": bug, "mode": "same_defect", "uuid": uuid,
               "signature": signature, "channel": uuid_info.get("channel"),
               "product": uuid_info.get("product"),
@@ -2295,13 +2328,10 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
         _put_bug(venue["id"], changes, token)
     except Exception as exc:
         logger.error("autofile: Bugzilla write failed for %s: %s", uuid, exc)
-        try:
-            models.Dossier.record_filing_error(uuid, {
-                "at": datetime.now(timezone.utc).isoformat(), "error": str(exc)[:500],
-                "signature": signature, "mode": "wake_stale"})
-        except Exception:                                   # pragma: no cover - defensive
-            logger.warning("autofile: could not record the filing error for %s", uuid)
-        return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}
+        noted = _note_filing_error(uuid, {
+            "at": datetime.now(timezone.utc).isoformat(), "error": str(exc)[:500],
+            "signature": signature, "mode": "wake_stale"})
+        return {"filed": False, "skipped": "bugzilla write failed: {}".format(exc), **noted}
     result = {"filed": True, "bug": venue["id"], "mode": "comment_on_existing", "uuid": uuid,
               "signature": signature, "channel": uuid_info.get("channel"),
               "product": uuid_info.get("product"),
@@ -2364,15 +2394,10 @@ def skipped_regressor(bug):
 
 
 def passes_local_filing_gates(uuid, uuid_info, dossier, verdict, confidence):
-    """Would ``autofile_bug`` take THIS verdict past its local gates, to the Bugzilla lookups
-    that decide between a new bug, a comment and a decline? Both of the first two publish.
+    """Check local eligibility for filing on the verdict, without network requests.
 
-    The orchestrator asks before paying for a confirming pass (``_confirm_before_publishing``),
-    so only a verdict that may reach Bugzilla gets one. The same predicates as the top of
-    ``autofile_bug``, in its order, for a verdict that is fileable on its own merits; no
-    network. The gates that need Bugzilla or Socorro (venues, the actionable population floor,
-    same-defect) are not run here: a confirming pass they later decline is the accepted cost.
-    ``tests/test_autofile.py::TestLocalFilingGates`` keeps the two in step."""
+    The orchestrator follows this with ``autofile_bug(dry_run=True)`` for the remaining
+    checks. ``TestLocalFilingGates`` checks agreement with the filer's local gates."""
     channel = uuid_info.get("channel")
     product = uuid_info.get("product")
     if config.autofile_product_held(product):
@@ -2405,59 +2430,36 @@ def passes_local_filing_gates(uuid, uuid_info, dossier, verdict, confidence):
     return bool(config.get_bugzilla_token())
 
 
-def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
-    """File a Bugzilla bug for a reported crash, unattended. Returns a result dict; NEVER
-    raises — a filing failure must not lose an analysis that is already persisted.
+def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence):
+    """Run filing checks until a decline or the first screened Bugzilla write.
 
-    This is a write to Bugzilla with no human in the loop (the spike filer is the other), so
-    every gate is here rather than at the call site, and each one fails CLOSED except where
-    marked otherwise:
+    Return the decline or a ``would_publish`` action (``new_bug``, ``comment``, ``update``),
+    without writing to Bugzilla or recording filing results in the DB."""
+    token = _DRY_RUN.set(True)
+    try:
+        res = autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence)
+    except _WouldPublish as stop:
+        return {"filed": False, "dry_run": True, "would_publish": stop.action, "bug": stop.bug}
+    finally:
+        _DRY_RUN.reset(token)
+    return dict(res or {}, dry_run=True)
 
-    * held for a PRODUCT whose filing is held (``agent.autofile.products.<p>.enabled: false``
-      -- Fenix, plans/16 D4) before any other gate, the operator's per-run instruction
-      included, and refused for a product nobody has decided about (fails closed, like the
-      channel gate);
-    * disabled unless ``AUTOFILE_BUGS`` is on (a real kill-switch: it writes to production
-      BMO on a schedule, so it has to be stoppable without a deploy);
-    * verdict must be reported and at/above ``min_confidence`` (70 = the ``probable`` rung);
-    * never twice for one crash (``Dossier.already_filed``), which matters because the
-      orphan reaper re-runs a crashed run and would otherwise re-file on recovery;
-    * prior filings (``Dossier.already_filed_for_signature``) stop ``skip``/``file_new``
-      channels. On ``comment`` channels, ``_own_bug_out_of_sight`` checks prior bugs
-      absent from the venue results, following duplicates and allowing only FIXED
-      endpoints to proceed to the remaining gates;
-    * a ``daily_cap`` bound, because the pipeline itself has none and a bad gate at 3/day
-      is a nuisance while a bad gate at 300/day is an incident;
-    * if an OPEN bug already references the signature AND that bug belongs to this crash's own
-      application (``_split_by_application``) AND it is not a ``[meta]`` tracker
-      (``_split_out_metas``) AND it can be shown to be about this regression
-      (``_bug_for_this_regression``, which needs the candidate's landing date and refuses the
-      venue without one), comment there instead of filing a duplicate — and if that
-      lookup FAILS we skip entirely rather than risk the duplicate;
-    * if we are about to file a NEW bug and a bug on this signature was RESOLVED FIXED AFTER
-      this crash's build was produced, the crash is a pre-fix report of a defect somebody has
-      already fixed: skip (``_fixed_after_build_bug``). That lookup is the one gate here that
-      fails OPEN — a second fail-closed BMO request would turn one flaky call into a silent
-      global filing stop, for a rule measured to fire on 1 filing in 52;
-    * never twice on one BUG for one signature (``Dossier.already_commented``), which is a
-      different question from "never twice for one crash": several proto-signature clusters of
-      the same signature are analysed independently and all land on the same bug.
-    * before a new bug, optionally compare bugs sharing the regressor (``_same_defect_bug``).
-      An accepted match follows the channel's comment policy; no match continues normal filing.
-    * an ``actionable`` crash with an open venue follows ``wake_stale``, independently of
-      ``comment_on_existing``; otherwise decline.
-    * eligible filings with a nonpublic regressor or remaining nonpublic text references
-      use a restricted bug. Public filings remove list items naming nonpublic bugs;
-      a failed visibility lookup prevents the write (``disclosure``).
 
-    A RELEASE filing is titled ``[new in release] Crash in [@ ...]`` and nominates the crash's
-    version for tracking (``cf_tracking_firefox<major>`` = ?, in the create, ``_train_flags``);
-    both come from ``config.get_agent_autofile(channel)`` via the preview.
+def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False):
+    """File a crash analysis under the configured policy and return filing or decline details.
 
-    ``regressed_by`` is set — under the pushlog-window gate, on a bug we filed ourselves, and in
-    its own PUT (see ``_link_regressed_by`` and ``report_bug.build_bug_preview``). Because we now
-    write the field the feedback loop reads, ``models.Feedback.classify`` is told what we claimed:
-    our own write agreeing with us is ``unconfirmed``, not ``correct``."""
+    Check product/channel policy, run options, verdict eligibility, prior filings and the
+    daily cap before choosing a venue. Existing bugs may receive a comment; resolved bugs,
+    prior comments and duplicate checks can prevent filing. Eligible crashes with remaining
+    nonpublic references or memory-safety signals use a restricted bug. An incomplete-fix report can
+    qualify independently of the verdict.
+
+    ``dry_run`` stops before the first screened Bugzilla write and returns filing errors
+    without recording them in the DB. The orchestrator uses it to decide whether to confirm
+    the analysis. Errors outside the write handlers can propagate to the caller.
+    """
+    if dry_run:
+        return _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence)
     channel = uuid_info.get("channel")
     product = uuid_info.get("product")
     # THE PRODUCT HOLD OUTRANKS EVERYTHING, the operator's per-run instruction included. Fenix
@@ -3262,20 +3264,17 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence):
         # "already filed" and permanently close a crash whose bug was never created. This key
         # is not in `_STICKY_PAYLOAD_KEYS` either, so a later successful run drops it rather
         # than leaving a stale error beside a real filing.
-        try:
-            models.Dossier.record_filing_error(uuid, {
-                "at": datetime.now(timezone.utc).isoformat(),
-                "error": str(exc)[:500],
-                "signature": signature,
-                "title_len": len((preview or {}).get("title") or ""),
-                "mode": "comment" if bug_id is not None else "new_bug",
-                **_with_restricted({}, restricted, withdrawn),
-            })
-        except Exception:                                   # pragma: no cover - defensive
-            logger.warning("autofile: could not record the filing error for %s", uuid)
+        noted = _note_filing_error(uuid, {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "error": str(exc)[:500],
+            "signature": signature,
+            "title_len": len((preview or {}).get("title") or ""),
+            "mode": "comment" if bug_id is not None else "new_bug",
+            **_with_restricted({}, restricted, withdrawn),
+        })
         return _with_restricted(
-            {"filed": False, "skipped": "bugzilla write failed: {}".format(exc)}, restricted,
-            withdrawn)
+            {"filed": False, "skipped": "bugzilla write failed: {}".format(exc), **noted},
+            restricted, withdrawn)
 
     models.Dossier.record_filed_bug(uuid, result)
     logger.info("autofile: %s -> bug %s (%s, needinfo=%s)",

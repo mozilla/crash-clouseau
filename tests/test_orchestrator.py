@@ -654,6 +654,27 @@ class TestConfirmBeforePublishing(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         self.calls = []
+        # Reject real filing calls; tests can override the dry-run result or error.
+        self.plan = {"filed": False, "dry_run": True, "would_publish": "new_bug", "bug": None}
+        self.plan_error = None
+        self.dry_runs = []
+
+        self.during_dry_run = None
+
+        def _filer(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False):
+            self.assertTrue(dry_run, "only the dry run may reach the filer here")
+            self.dry_runs.append((verdict, confidence))
+            if self.during_dry_run:
+                self.during_dry_run()
+            if self.plan_error:
+                raise self.plan_error
+            return self.plan
+
+        for p in (mock.patch("crashclouseau.bugzilla_apply.autofile_bug", _filer),
+                  mock.patch.object(orch.models.CrashStack, "get_by_uuid",
+                                    return_value=([], {"channel": "nightly"}))):
+            p.start()
+            self.addCleanup(p.stop)
 
     def _triage(self, *results):
         queue = list(results)
@@ -704,6 +725,73 @@ class TestConfirmBeforePublishing(unittest.TestCase):
                          ("lead", "medium"))
         # The filer is handed the confirmed verdict.
         self.assertEqual(autofile.call_args.args[2]["verdict"], "culprit")
+
+    def test_a_verdict_the_filer_would_decline_is_not_confirmed(self):
+        self.plan = {"filed": False, "dry_run": True,
+                     "skipped": "already filed bug 2073887 for this signature; it was resolved "
+                                "WONTFIX — not filing again"}
+        done, MVerd, _gate, autofile = self._run(_lead_result())
+        self.assertEqual(self.calls, ["medium"])
+        self.assertEqual(self.dry_runs, [("lead", 50)])
+        conf = done.kwargs["payload"]["publish_confirmation"]
+        self.assertEqual(conf["plan"], self.plan)
+        self.assertNotIn("kept", conf)
+        # Pass the decline through for recording, without repeating filing checks.
+        self.assertEqual(autofile.call_args.kwargs["planned"], self.plan)
+
+    def test_a_dry_run_that_crosses_the_cutoff_starts_no_confirmation(self):
+        # Planning crosses the 1800 s cutoff of a 3600 s job.
+        now = [1700.0]
+        self.during_dry_run = lambda: now.__setitem__(0, 1900.0)
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with self._triage(_strong_result()), \
+             mock.patch.object(orch, "_clock", lambda: now[0]), \
+             mock.patch.object(orch.config, "get_llm", return_value=llm), \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(timeout=3600)), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=True):
+            first = _lead_result()
+            result, conf = orch._confirm_before_publishing("u-1", dict(_SEED), first, llm, {},
+                                                           started=0.0)
+        self.assertIs(result, first)
+        self.assertEqual(len(self.dry_runs), 1)
+        self.assertEqual(self.calls, [])
+        self.assertIn("1900s of the 3600s job timeout already used", conf["skipped"])
+
+    def test_a_write_refused_in_the_dry_run_is_recorded_as_a_filing_error(self):
+        error = {"error": "LinkRefused: offsite link", "mode": "new_bug"}
+        plan = {"filed": False, "dry_run": True,
+                "skipped": "bugzilla write failed: LinkRefused: offsite link",
+                "filing_error": error}
+        with mock.patch.object(orch.models, "Dossier") as MDoss:
+            orch._autofile("u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 70},
+                           planned=plan)
+        MDoss.record_filing_error.assert_called_once_with("u-1", error)
+        self.assertIn("bugzilla write failed",
+                      MDoss.record_filing_decline.call_args.args[1]["skipped"])
+
+    def test_a_dry_run_that_fails_is_a_decline(self):
+        self.plan_error = RuntimeError("bmo down")
+        done, _MVerd, _gate, autofile = self._run(_lead_result())
+        self.assertEqual(self.calls, ["medium"])
+        planned = autofile.call_args.kwargs["planned"]
+        self.assertIn("could not plan the filing: RuntimeError: bmo down", planned["skipped"])
+
+    def test_a_planned_decline_is_recorded_without_asking_the_filer(self):
+        plan = {"filed": False, "dry_run": True, "skipped": "open bug 1505660 exists"}
+        with mock.patch.object(orch.models, "Dossier") as MDoss:
+            orch._autofile("u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 70},
+                           planned=plan)
+        self.assertEqual(self.dry_runs, [])
+        decline = MDoss.record_filing_decline.call_args.args[1]
+        self.assertEqual((decline["skipped"], decline["dry_run"]),
+                         ("open bug 1505660 exists", True))
+
+    def test_the_planned_write_is_recorded(self):
+        self.plan = {"filed": False, "dry_run": True, "would_publish": "comment", "bug": 1505660}
+        done, _MVerd, _gate, _autofile = self._run(_lead_result(), _strong_result())
+        self.assertEqual(done.kwargs["payload"]["publish_confirmation"]["would_publish"],
+                         "comment")
 
     def test_an_abstain_at_high_effort_files_nothing_new(self):
         done, MVerd, _gate, autofile = self._run(_lead_result(), _abstain_result())
@@ -800,6 +888,7 @@ class TestConfirmBeforePublishing(unittest.TestCase):
                 "u-1", dict(_SEED), first, llm, {}, started=orch.time.monotonic() - 2000)
         self.assertIs(result, first)
         self.assertEqual(self.calls, [])
+        self.assertEqual(self.dry_runs, [])
         self.assertIn("2000s of the 3600s", conf["skipped"])
         self.assertNotIn("kept", conf)
 

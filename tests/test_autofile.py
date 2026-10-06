@@ -47,6 +47,9 @@ _PREVIEW = {
     "needinfo_email": "dev@moz.example",
 }
 _INFO = {"uuid": "u-1", "signature": "Foo::Bar", "channel": "nightly", "product": "Firefox"}
+# Preserve the real writes before `_Base` mocks them.
+_REAL_WRITES = {name: getattr(bugzilla_apply, name)
+                for name in ("_create_bug", "_post_comment", "_put_bug")}
 # Bug 1798397 (`Crash in [@ nsAtom::IsStatic]`, open since 2022, its own comments proposing
 # nsAtom for the irrelevant-signature list) versus the changeset named for crash
 # ddeac1a4-64d1-4413-b03b-f79540260809, which landed 1375 days later. The numbers below are
@@ -327,6 +330,124 @@ class TestLocalFilingGates(_Base):
             ok, res = self._both()
         self.assertFalse(ok)
         self.assertFalse(res["filed"])
+
+
+class TestDryRun(_Base):
+    """Exercise the dry-run stop in real write primitives, with mocked screening and I/O."""
+
+    def setUp(self):
+        super().setUp()
+        self.writes = []
+
+        def _http(*args, **kwargs):
+            self.writes.append((args, kwargs))
+            return mock.Mock(status_code=201, text="", json=lambda: {"id": 999},
+                             raise_for_status=lambda: None)
+
+        for p in [mock.patch.object(bugzilla_apply, n, real) for n, real in _REAL_WRITES.items()] + [
+                mock.patch.object(bugzilla_apply.net, "post", side_effect=_http),
+                mock.patch.object(bugzilla_apply.net, "put", side_effect=_http),
+                mock.patch.object(bugzilla_apply, "_check_rendered_links"),
+                mock.patch.object(bugzilla_apply.links, "screen_write",
+                                  side_effect=lambda text, where: text),
+                mock.patch.object(bugzilla_apply.links, "screen_fields",
+                                  side_effect=lambda fields, where: fields),
+                mock.patch.object(bugzilla_apply.disclosure, "check_public_write"),
+                mock.patch.object(bugzilla_apply.models.Dossier, "record_filing_error")]:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _dry(self):
+        return bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},
+                                           "lead", 70, dry_run=True)
+
+    def test_a_new_bug_is_planned_not_created(self):
+        res = self._dry()
+        self.assertEqual((res["would_publish"], res["dry_run"]), ("new_bug", True))
+        self.assertEqual(self.writes, [])
+        self.assertEqual(self.filed, [])
+        # The stop must bypass the filer's write-error handler.
+        bugzilla_apply.models.Dossier.record_filing_error.assert_not_called()
+
+    def test_a_venue_is_planned_as_a_comment_on_it(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(4242)]
+        res = self._dry()
+        self.assertEqual((res["would_publish"], res["bug"]), ("comment", 4242))
+        self.assertEqual(self.writes, [])
+        self.assertEqual(self.filed, [])
+
+    def test_a_decline_comes_back_as_the_filer_returns_it(self):
+        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(enabled=False)
+        res = self._dry()
+        self.assertNotIn("would_publish", res)
+        self.assertEqual((res["skipped"], res["dry_run"]), ("autofile disabled", True))
+
+    def test_a_failed_venue_lookup_is_the_filers_decline(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = None
+        res = self._dry()
+        self.assertNotIn("would_publish", res)
+        self.assertEqual(res["skipped"], "signature lookup failed; not risking a duplicate")
+        self.assertEqual(self.writes, [])
+
+    def test_every_write_primitive_stops_after_its_screening(self):
+        token = bugzilla_apply._DRY_RUN.set(True)
+        try:
+            for call, action, bug, renders in (
+                    (lambda: bugzilla_apply._create_bug({"summary": "s"}, "tok"),
+                     "new_bug", None, True),
+                    (lambda: bugzilla_apply._post_comment(7, "text", False, "tok"),
+                     "comment", 7, True),
+                    (lambda: bugzilla_apply._put_bug(8, {"comment": {"body": "b"}}, "tok"),
+                     "comment", 8, True),
+                    (lambda: bugzilla_apply._put_bug(9, {"flags": [{"name": "needinfo"}]}, "tok"),
+                     "update", 9, False)):
+                with self.subTest(action=action, bug=bug):
+                    bugzilla_apply._check_rendered_links.reset_mock()
+                    with self.assertRaises(bugzilla_apply._WouldPublish) as stop:
+                        call()
+                    self.assertEqual((stop.exception.action, stop.exception.bug), (action, bug))
+                    # Rendering must be checked before the dry-run stop.
+                    self.assertEqual(bugzilla_apply._check_rendered_links.called, renders)
+            self.assertEqual(self.writes, [])
+        finally:
+            bugzilla_apply._DRY_RUN.reset(token)
+        bugzilla_apply.links.screen_write.assert_called()
+        bugzilla_apply.links.screen_fields.assert_called()
+
+    def test_the_flag_is_cleared_however_the_dry_run_ends(self):
+        # Both caught and escaping exceptions must leave subsequent real writes enabled.
+        def _real_create_writes():
+            bugzilla_apply._check_rendered_links.side_effect = None
+            res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},
+                                              "lead", 70)
+            self.assertTrue(res["filed"])
+            self.assertTrue(self.writes)
+            self.writes.clear()
+
+        bugzilla_apply._check_rendered_links.side_effect = \
+            bugzilla_apply.links.LinkRefused("offsite link")
+        res = self._dry()
+        self.assertIn("bugzilla write failed", res["skipped"])
+        self.assertNotIn("would_publish", res)
+        # Return the error for later recording without changing the DB.
+        bugzilla_apply.models.Dossier.record_filing_error.assert_not_called()
+        self.assertIn("offsite link", res["filing_error"]["error"])
+        self.assertFalse(bugzilla_apply._DRY_RUN.get())
+        _real_create_writes()
+
+        with mock.patch.object(bugzilla_apply.config, "autofile_product_held",
+                               side_effect=RuntimeError("config broke")):
+            with self.assertRaises(RuntimeError):
+                self._dry()
+        self.assertFalse(bugzilla_apply._DRY_RUN.get())
+        _real_create_writes()
+
+    def test_a_real_run_after_a_dry_run_writes(self):
+        self._dry()
+        res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},
+                                          "lead", 70)
+        self.assertTrue(res["filed"])
+        self.assertTrue(self.writes)
 
 
 class TestDuplicates(_Base):

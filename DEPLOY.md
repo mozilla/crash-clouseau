@@ -650,26 +650,25 @@ replay output is retained in this repository.
 
 ### Confirming pass before publishing (2026-10-06)
 
-A verdict that passes the filer's local gates (`bugzilla_apply.passes_local_filing_gates`: holds,
-kill switch, rung, observe-only, already filed, daily cap, token) is re-run with the principal at
-`agent.llm.publish_effort` (`high`) before anything reaches Bugzilla. The re-run replaces the
-first pass whatever it concludes; the first pass is kept in the payload as
-`publish_confirmation.first_pass`, and the costs are summed. `null` turns the confirming pass off.
-`agent.job_timeout` is 3600 s (was 1800) so both passes fit; a first pass that has already used
-half of it is not confirmed (`publish_confirmation.skipped`). An RQ timeout during the confirming
-pass keeps the first pass and its cost but publishes nothing (`publish_confirmation.withheld`, and
-a `filing_declined` saying so); a retrigger confirms again. The same holds for ANY run with less
-than 600 s of job time left at the publish step (against the RUNNING job's RQ timeout, so a job
-queued before a timeout change keeps its own deadline), read off the clock rather than the exception,
-because best-effort handlers (resolvers, second opinion, the filer) catch RQ's timeout. `max_cost_usd_per_crash` holds each pass,
-not their sum, so `over_budget` still means a run that ran away. The reaper's orphan threshold
-follows the timeout (now ~65 min).
+Before a confirming pass, the orchestrator checks local filing eligibility and calls
+`autofile_bug(dry_run=True)`. The dry run performs filing checks up to a decline or the first
+screened Bugzilla write, without writing to Bugzilla or recording filing results in the DB.
+`publish_confirmation.plan` records its result; `would_publish` names the planned action.
+A decline or planning error prevents filing for that run. Screening errors are recorded after
+the analysis is persisted.
 
-Measured offline on 14 FIXED nightly filings, medium and high named the landed fix's function 10
-and 11 times and matched `regressed_by` 9/9 and 8/9, at 2.3x the cost. On bug 2073442, three medium
-runs missed bug 1709529 and the high run found it. To read the effect in prod:
-`select payload->'publish_confirmation'->'first_pass'->>'verdict' as first,
-payload->'publish_confirmation'->>'effort' as effort from dossiers where payload ? 'publish_confirmation';`
+A publishable plan permits a second pass at `agent.llm.publish_effort` (currently `high`).
+`null`, or an effort equal to the principal's, disables confirmation. A successful confirmation
+replaces the first result and adds its reported usage; `publish_confirmation.first_pass` keeps
+a summary of the first pass. A failed confirmation retains the first result.
+
+Planning and confirmation each require at least half the running job's time to remain. If either
+check fails, `publish_confirmation.skipped` records the reason and the first result is retained.
+The configured job timeout is 3600 s; queued jobs retain their own RQ timeout. A caught RQ timeout
+during planning or confirmation sets `publish_confirmation.withheld`. The caller persists the
+result and declines filing when withheld or when less than 600 s remain. Otherwise, filing uses
+the retained result unless planning already declined it. `max_cost_usd_per_crash` is checked
+per triage pass, and exceeding it sets `over_budget`.
 
 [Anthropic's model documentation](https://platform.claude.com/docs/en/models/opus-5-5/overview)
 confirms the model ID, $4/$20 per million input/output tokens, always-on thinking, and the
