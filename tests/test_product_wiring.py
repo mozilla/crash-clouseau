@@ -2121,6 +2121,62 @@ class TestBugPreview(unittest.TestCase):
         self.assertEqual(pc, ("Core", "X"))
         recent_bugs.assert_called_once_with("jteh@mozilla.com", "nightly")
 
+    def test_resolve_pc_falls_back_to_the_codes_component(self):
+        # Regressor bug restricted, no author email: the files say where the code lives.
+        with mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+            pc = report_bug.resolve_product_component(
+                {"bug": 2057112, "node": "n", "author": ""}, "nightly", "Firefox",
+                file_components={"overlap": ["Firefox", "Launcher Process"]})
+        self.assertEqual(pc, ("Firefox", "Launcher Process"))
+
+    def test_resolve_pc_the_codes_component_beats_a_mismatched_author_tally(self):
+        # 2026-09-15: the author's tally said CSS Parsing for a layout/tables crash.
+        cand = {"bug": 123, "node": "n", "author": "Dev <dev@x.com>"}
+        fc = {"stack": ["Core", "Layout: Tables"], "changeset": ["Core", "Layout: Tables"]}
+        self.assertEqual(self._author_fallback(cand, fc)[0], ("Core", "Layout: Tables"))
+
+    def test_resolve_pc_the_codes_component_needs_overlap_or_agreement(self):
+        cand = {"bug": 123, "node": "n", "author": ""}
+        for fc in ({"stack": ["Core", "X"]}, {"changeset": ["Core", "X"]},
+                   {"stack": ["Core", "X"], "changeset": ["Toolkit", "Y"]}):
+            with self.subTest(file_components=fc), \
+                    mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
+                    mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+                self.assertEqual(
+                    report_bug.resolve_product_component(cand, "nightly", "Firefox",
+                                                         file_components=fc), (None, None))
+
+    def test_resolve_pc_the_codes_component_is_never_another_applications(self):
+        with mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n", "author": ""}, "nightly", "Firefox",
+                file_components={"overlap": ["MailNews Core", "Backend"]})
+        self.assertEqual(pc, (None, None))
+
+    def test_resolve_pc_crash_15a9fe82_files_into_launcher_process(self):
+        # The real paths: bug 2057112 Part 2's files and the crash's top frames.
+        from crashclouseau import bugcomponents
+        rules = {"browser/app/winlauncher/": ["Firefox", "Launcher Process"],
+                 "dom/ipc/": ["Core", "DOM: Content Processes"],
+                 "dom/media/gmp/": ["Core", "Audio/Video: GMP"],
+                 "mozglue/": ["Core", "mozglue"]}
+        changed = ["browser/app/winlauncher/DllBlocklistInit.cpp",
+                   "browser/app/winlauncher/freestanding/DllBlocklist.cpp",
+                   "browser/app/winlauncher/freestanding/ModuleLoadFrame.cpp",
+                   "dom/ipc/PContent.ipdl", "dom/media/gmp/GMPPlatform.h",
+                   "mozglue/misc/NativeNt.h"]
+        stack = ["browser/app/winlauncher/freestanding/SafeThreadLocal.h",
+                 "browser/app/winlauncher/freestanding/DllBlocklist.cpp"]
+        fc = bugcomponents.file_components(changed, stack, rules)
+        with mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+            pc = report_bug.resolve_product_component(
+                {"bug": 2057112, "node": "e6d5a7a65cc6", "author": "David Parks"}, "nightly",
+                "Firefox", file_components=fc)
+        self.assertEqual(pc, ("Firefox", "Launcher Process"))
+
     def test_resolve_pc_with_no_crash_product_exempts_nobody(self):
         # The gate must not be switchable off by an absent product (page previews and old
         # dossiers both reach here without one).

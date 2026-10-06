@@ -1893,12 +1893,33 @@ def _first_email(author):
     return author if ("@" in author and " " not in author) else ""
 
 
+def _code_component(file_components, foreign):
+    """The moz.build component of the crashing code, when the code says so unambiguously: the
+    files the candidate changed ON the stack (``overlap``), else the stack's when the
+    changeset's agrees. ``None`` otherwise, and for another application's product."""
+    fc = file_components or {}
+    stack, changeset = fc.get("stack"), fc.get("changeset")
+    for pc in (fc.get("overlap"), stack if stack and stack == changeset else None):
+        if pc and pc[0] not in foreign:
+            return tuple(pc)
+    return None
+
+
 def resolve_product_component(candidate, channel, product=None, file_components=None):
-    """Resolve a filing component, excluding other applications' products at both steps.
+    """Resolve a filing component, excluding other applications' products at every step.
 
     Prefer the regressor bug's pair. Otherwise, use the most frequent allowed pair from
     the author's recent patches' bugs only if it matches a ``file_components`` value
-    (changeset, stack or overlap). Return ``(None, None)`` if neither resolves.
+    (changeset, stack or overlap). Otherwise, the code's own moz.build component
+    (``_code_component``). Return ``(None, None)`` if none resolves.
+
+    THE LAST STEP EXISTS FOR AN UNREADABLE REGRESSOR BUG. A security bug is invisible to the
+    bot, and the author tally alone would misfile: crash 15a9fe82 (2026-10-06, bug 2057112
+    restricted) died "product/component unresolved" with every group of its files saying
+    Firefox :: Launcher Process, and on 2026-09-15 seven release leads naming security bugs died
+    the same way, one of them a real regression in ``layout/tables`` (Core :: Layout: Tables,
+    filed by hand as bug 2072310) whose author's tally said CSS Parsing. Stack and changeset
+    that disagree with no overlap still resolve nothing.
 
     ``product`` is the crash's Socorro product, used by ``config.get_other_app_products``.
     """
@@ -1937,6 +1958,10 @@ def resolve_product_component(candidate, channel, product=None, file_components=
                             "component of the changeset or stack (%s)", pc, file_components)
     except Exception:
         logger.warning("bug preview: could not resolve product/component", exc_info=True)
+    pc = _code_component(file_components, foreign)
+    if pc:
+        logger.info("bug preview: filing in %s, the crashing code's moz.build component", pc)
+        return pc
     return None, None
 
 
