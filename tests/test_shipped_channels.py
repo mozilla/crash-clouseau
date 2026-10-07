@@ -172,7 +172,8 @@ class TestShippedAgentChannels(unittest.TestCase):
         # state production is in.
         with mock.patch.dict(os.environ, {"AUTOFILE_BUGS": "1"}):
             self.assertTrue(config.get_agent_autofile("release")["enabled"])
-            self.assertEqual(config.get_agent_autofile("release")["comment_on_existing"], "skip")
+            self.assertEqual(config.get_agent_autofile("release")["comment_on_existing"],
+                             "comment_unless_dropped")
             self.assertIsNone(config.get_agent_autofile("release")["daily_cap"])
             self.assertTrue(config.get_agent_autofile("nightly")["enabled"])
         # ...and the global kill switch still beats the per-channel arm.
@@ -233,7 +234,7 @@ class TestShippedAutofilePolicyPerChannel(unittest.TestCase):
         self.assertEqual(beta["comment_on_existing"], "skip")
         self.assertIsNone(beta["daily_cap"])
         release = config.get_agent_autofile("release")
-        self.assertEqual(release["comment_on_existing"], "skip")
+        self.assertEqual(release["comment_on_existing"], "comment_unless_dropped")
         self.assertIsNone(release["daily_cap"])
         # Release's two marks (2026-09-07): the title prefix and the tracking nomination. A
         # release bug reads as one in any list, and release management meets it in the

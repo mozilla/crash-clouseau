@@ -58,7 +58,8 @@ than one machine", and the z comes from a published alert rate. See
 ``tests/test_spike_escalation.py`` for what each condition does and does not admit.
 """
 import math
-from datetime import timedelta
+import re
+from datetime import datetime, timedelta, timezone
 from statistics import NormalDist
 
 from libmozdata import socorro
@@ -309,3 +310,54 @@ def describe(spike, channel=None, build_day=None, buildid=None):
         when += " (buildid {})".format(buildid)
     return "{} reports from {} distinct installations on the {}{}; {}.".format(
         spike.get("count"), spike.get("installs"), where, when, against)
+
+
+_UPSTREAM = {"release": "beta"}
+_UPSTREAM_DAYS = 84
+
+
+def _by_major(result):
+    """Sum version counts by major, or ``None`` if the version facet is not a list."""
+    rows = ((result or {}).get("facets") or {}).get("version") if isinstance(result, dict) else None
+    if not isinstance(rows, list):
+        return None
+    counts = {}
+    for row in rows:
+        m = re.match(r"(\d+)\.", str(row.get("term") or ""))
+        if m:
+            counts[int(m.group(1))] = counts.get(int(m.group(1)), 0) + int(row.get("count") or 0)
+    return counts
+
+
+def upstream_drop(signatures, product, channel, version):
+    """Compare the signature's share of upstream crash reports on the next major with
+    its share on this release major, using the excess test at ``spike.real_alert_rate``.
+    Return counts and a drop decision, or ``None`` if the comparison is unavailable.
+    """
+    upstream = _UPSTREAM.get(channel)
+    m = re.match(r"\s*(\d+)", str(version or ""))
+    sigs = [s for s in (signatures or []) if s]
+    if not upstream or not m or not sigs:
+        return None
+    base_major = int(m.group(1))
+    start = datetime.now(timezone.utc) - timedelta(days=_UPSTREAM_DAYS)
+    params = {"product": product, "release_channel": utils.get_search_channel(upstream),
+              "date": ">=" + start.strftime("%Y-%m-%d"), "_results_number": 0,
+              "_facets": "version", "_facets_size": 300}
+    try:
+        counts = _by_major(_search(dict(params, signature=["=" + s for s in sigs])))
+        totals = _by_major(_search(params))
+    except Exception:
+        logger.warning("spike: cannot read %s on %s-%s", sigs[0], product, upstream,
+                       exc_info=True)
+        return None
+    major = base_major + 1
+    if counts is None or totals is None or not totals.get(base_major) or not totals.get(major):
+        return None
+    count, total = counts.get(major, 0), totals.get(major, 0)
+    base_count, base_total = counts.get(base_major, 0), totals[base_major]
+    z = excess_z(count, total * base_count / base_total)
+    z_min = z_threshold(config.get_spike("real_alert_rate", product, upstream))
+    return {"channel": upstream, "major": major, "count": count, "total": total,
+            "base_major": base_major, "base_count": base_count, "base_total": base_total,
+            "z": round(z, 2), "dropped": z <= -z_min}

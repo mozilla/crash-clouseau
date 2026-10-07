@@ -341,7 +341,7 @@
                 "release":
                 {
                     "enabled": true,
-                    "comment_on_existing": "skip",
+                    "comment_on_existing": "comment_unless_dropped",
                     "daily_cap": null,
                     "summary_prefix": "[new in release]",
                     "nominate_tracking": true

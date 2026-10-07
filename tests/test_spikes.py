@@ -222,6 +222,64 @@ class TestThePredicate(unittest.TestCase):
         self.assertIn("none of the preceding 3 build-days had any", text)
 
 
+def _versions(counts):
+    return {"facets": {"version": [{"term": v, "count": n} for v, n in counts.items()]}}
+
+
+class TestUpstreamDrop(unittest.TestCase):
+    """Compare beta crash shares across adjacent major versions."""
+
+    def _drop(self, crashes, totals, channel="release", version="157.0.1"):
+        with mock.patch.object(spikes, "_search",
+                               side_effect=[_versions(crashes), _versions(totals)]) as search:
+            return spikes.upstream_drop(["A::B", "A::B<T>"], "Firefox", channel, version), search
+
+    def test_a_significant_share_drop_is_detected(self):
+        # 17.3 reports per 1,000 falls to 10.2 on the next major.
+        got, search = self._drop({"157.0b3": 300, "157.0b5": 41, "158.0b2": 98},
+                                 {"157.0b3": 15000, "157.0b5": 4750, "158.0b2": 9599})
+        self.assertEqual((got["base_count"], got["base_total"], got["count"], got["total"]),
+                         (341, 19750, 98, 9599))
+        self.assertEqual((got["channel"], got["major"], got["base_major"]), ("beta", 158, 157))
+        self.assertTrue(got["dropped"])
+        params = search.call_args_list[0].args[0]
+        self.assertEqual(params["signature"], ["=A::B", "=A::B<T>"])
+        self.assertEqual(params["release_channel"], ["beta", "aurora"])
+        self.assertNotIn("signature", search.call_args_list[1].args[0])
+
+    def test_too_few_reports_to_show_a_drop_is_no_drop(self):
+        # Zero observed versus 5.4 expected does not meet the drop threshold.
+        got, _s = self._drop({"157.0b1": 11}, {"157.0b1": 19751, "158.0b1": 9611})
+        self.assertFalse(got["dropped"])
+        self.assertEqual(got["z"], -3.56)
+
+    def test_a_crash_beta_never_had_is_no_drop(self):
+        got, _s = self._drop({}, {"157.0b1": 19751, "158.0b1": 9611})
+        self.assertFalse(got["dropped"])
+
+    def test_what_cannot_be_told_is_none(self):
+        got, _s = self._drop({"157.0b1": 11}, {"158.0b1": 9611})
+        self.assertIsNone(got, "no base share on the release major's betas")
+        # No next-major reports: the comparison is unavailable.
+        got, _s = self._drop({"157.0b1": 11}, {"157.0b1": 19751})
+        self.assertIsNone(got)
+        # Missing facets must not count as zero reports.
+        for broken in (None, {}, {"facets": {}}, {"facets": {"version": None}}):
+            with self.subTest(broken=broken), \
+                 mock.patch.object(spikes, "_search",
+                                   side_effect=[broken, _versions({"157.0b1": 19751,
+                                                                   "158.0b1": 9611})]):
+                self.assertIsNone(spikes.upstream_drop(["A::B"], "Firefox", "release", "157.0"))
+        with mock.patch.object(spikes, "_search", side_effect=Exception("503")):
+            self.assertIsNone(spikes.upstream_drop(["A::B"], "Firefox", "release", "157.0"))
+        for channel, version in (("beta", "158.0b2"), ("nightly", "159.0a1"),
+                                 ("release", None)):
+            with self.subTest(channel=channel), \
+                 mock.patch.object(spikes, "_search") as search:
+                self.assertIsNone(spikes.upstream_drop(["A::B"], "Firefox", channel, version))
+                search.assert_not_called()
+
+
 class TestTheKnobs(unittest.TestCase):
     def test_the_history_horizon_holds_the_channels_previous_build(self):
         # Nightly and beta ship several builds a week; release and ESR one every four, so their

@@ -923,6 +923,9 @@ def _env_bool(name, default):
 #   skip       an open bug on the signature means we write NOTHING. `False` maps here, and two
 #              tests pin that meaning by name.
 #   file_new   never comment; file a new bug, naming the open bugs we chose not to comment on.
+#   comment_unless_dropped
+#              Comment unless `spikes.upstream_drop` finds a drop or cannot compare.
+#              No new public bug past an open bug.
 #
 # `skip` is STRICTER than "file only new bugs", measurably so -- but two of the three figures this
 # comment used to give were wrong, in ways worth naming because the conclusion survives both.
@@ -951,7 +954,7 @@ def _env_bool(name, default):
 # accepted by `_bug_for_this_regression` (median venue-bug age 995 days). A 4.4x swing across
 # populations, and on the filer-visible one it argues FOR `skip`, since `file_new` would file a
 # near-duplicate of a bug genuinely about this crash about two thirds of the time.
-COMMENT_ON_EXISTING = ("comment", "skip", "file_new")
+COMMENT_ON_EXISTING = ("comment", "skip", "file_new", "comment_unless_dropped")
 
 
 def comment_mode(value):

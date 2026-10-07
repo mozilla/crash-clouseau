@@ -1668,6 +1668,15 @@ def _train_flag_field(major):
     return "cf_status_firefox{}".format(major)
 
 
+def _upstream_clause(upstream):
+    """Explain a skip caused by the upstream trend check."""
+    if upstream is None:
+        return "; its trend on the upstream channel could not be read"
+    return "; it dropped on {} {} ({} in {} crash reports, against {} in {} on {})".format(
+        upstream["channel"], upstream["major"], upstream["count"], upstream["total"],
+        upstream["base_count"], upstream["base_total"], upstream["base_major"])
+
+
 def _major_version(version):
     """``"155.0.1"`` -> ``155``; ``None`` when there is no leading number to read."""
     m = re.match(r"\s*(\d+)", str(version or ""))
@@ -2779,14 +2788,19 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
             "skipped": "open bug {}{} exists; an actionable crash is filed only where no bug "
                        "is".format(existing[0]["id"], _via_clause(existing[0])),
             **_via_fields(existing[0])}, family)
-    # (mode/comment_allowed/withheld are resolved above, right after `cfg`.)
-    # THREE MODES, not a boolean (``config.COMMENT_ON_EXISTING``). ``skip`` is what ``False``
-    # always DID -- no comment AND no new bug, decided before anything asks whether that bug
-    # could even be about this regression -- and two tests pin that meaning by name.
-    # ``file_new`` is the mode for "file only crashes that have no bug in Bugzilla, and never
-    # write on an existing one": no comment, but a new bug that NAMES the open bugs it declined
-    # to comment on, or it reads as a broken deduplicator.
+    # `skip` writes nothing past an open public bug; `file_new` files separately and
+    # references it. Restricted filings bypass these policies below.
     mode = config.comment_mode(cfg["comment_on_existing"])
+    # Missing upstream data must skip, just like a significant drop.
+    upstream = None
+    comment_only = asked_upstream = False
+    if mode == "comment_unless_dropped" and existing:
+        asked_upstream = True
+        from crashclouseau import spikes
+
+        upstream = spikes.upstream_drop(spellings, product, channel, uuid_info.get("version"))
+        comment_only = bool(upstream) and not upstream["dropped"]
+        mode = "comment" if comment_only else "skip"
     comment_allowed = mode == "comment"
     # THE MEMORY-SAFETY CARVE-OUT, and it is a security regression that ``skip`` would otherwise
     # introduce rather than a pre-existing one. ``sensitive.is_withheld`` used to be consulted
@@ -2818,9 +2832,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
         # is written, not even the new name onto the old bug, so the decline is the only trace
         # (2073210 -> 1737467 on release).
         return {"filed": False, "bug": existing[0]["id"],
-                "skipped": "open bug {}{} exists".format(
-                    existing[0]["id"], _via_clause(existing[0])),
-                **_via_fields(existing[0])}
+                "skipped": "open bug {}{} exists{}".format(
+                    existing[0]["id"], _via_clause(existing[0]),
+                    _upstream_clause(upstream) if asked_upstream else ""),
+                **_via_fields(existing[0]), **({"upstream": upstream} if upstream else {})}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
     # cannot, and with no landing date NONE of them can be shown to
     # (``_bug_for_this_regression``). Resolved before the preview is built so a new bug filed
@@ -2834,6 +2849,12 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
         signature=signature,
     )
     landing_unresolved = landed is None and bug_id is None and bool(predating)
+    if comment_only and bug_id is None and not withheld:
+        # No suitable venue: skip rather than file a new public bug.
+        return {"filed": False, "bug": existing[0]["id"], "upstream": upstream,
+                "skipped": "open bug {}{} exists and none can be about this regression".format(
+                    existing[0]["id"], _via_clause(existing[0])),
+                **_via_fields(existing[0])}
     # ...AND THEN THE MODE OVERRIDES THE VENUE. Computed in this order on purpose:
     # ``landing_unresolved`` must describe what the EVIDENCE said, so a bug filed because of the
     # policy is not reported as one filed because an hg lookup failed. A venue we are not

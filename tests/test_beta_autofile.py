@@ -239,13 +239,15 @@ class TestTheOverlayCannotMoveNightly(unittest.TestCase):
         for value in ("coment", "", None, "0", 1, [], "SKIP_", "file-new"):
             with self.subTest(value=value):
                 self.assertEqual(cconfig.comment_mode(value), "comment")
-        # The three real values survive whitespace and case, because they are hand-typed.
+        # Policy names are case-insensitive and whitespace-tolerant.
         for value, expected in ((" skip ", "skip"), ("SKIP", "skip"), ("File_New", "file_new"),
                                 ("comment", "comment"), ("skip", "skip"),
-                                ("file_new", "file_new")):
+                                ("file_new", "file_new"),
+                                ("Comment_Unless_Dropped", "comment_unless_dropped")):
             with self.subTest(value=value):
                 self.assertEqual(cconfig.comment_mode(value), expected)
-        self.assertEqual(cconfig.COMMENT_ON_EXISTING, ("comment", "skip", "file_new"))
+        self.assertEqual(cconfig.COMMENT_ON_EXISTING,
+                         ("comment", "skip", "file_new", "comment_unless_dropped"))
 
 
 class _BetaBase(_Base):
