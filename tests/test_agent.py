@@ -493,6 +493,18 @@ class TestRunCrashTriage(unittest.TestCase):
         self.assertEqual(r.num_turns, 3)
         self.assertIsNone(r.handoff_repair)
 
+    def test_the_seeds_candidate_bugs_reach_the_skeptic_veto(self):
+        crash = dict(_CRASH, candidates=[{"node": "aaa111bbb222", "bug": 7},
+                                         {"node": "ccc333ddd444", "bug": None}])
+        fake_type = type(_result_msg(""))
+        with mock.patch.object(triage, "ClaudeSDKClient", _FakeSDKClient), \
+             mock.patch.object(triage, "Reporter", _DummyReporter), \
+             mock.patch.object(triage, "ResultMessage", fake_type), \
+             mock.patch.object(triage, "build_options", return_value=object()), \
+             mock.patch.object(triage, "parse_and_validate", wraps=triage.parse_and_validate) as parse:
+            asyncio.run(run_crash_triage(crash=crash))
+        self.assertEqual(parse.call_args.kwargs["candidate_bugs"], {"aaa111bbb222": 7})
+
 
 # The handoff block from the strong dossier with one character broken: an unescaped quote
 # inside a string, which is the shape prod's syntax-error family takes (a stray `"` in a

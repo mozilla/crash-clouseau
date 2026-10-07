@@ -2575,7 +2575,8 @@ def _sum_tokens(result_msg):
     return 0, 0, 0
 
 
-def build_result(result_msg, *, recorder=None, tool_calls=None, handoff_repair=None) -> CrashTriageResult:
+def build_result(result_msg, *, recorder=None, tool_calls=None, handoff_repair=None,
+                 candidate_bugs=None) -> CrashTriageResult:
     """Fold a terminal ``ResultMessage`` into a typed ``CrashTriageResult``,
     best-effort parsing + #03-validating the trailing ```json handoff. Raises
     ``AgentError`` on a missing/errored result, and ``MissingHandoffError`` when the
@@ -2589,7 +2590,7 @@ def build_result(result_msg, *, recorder=None, tool_calls=None, handoff_repair=N
     if getattr(result_msg, "is_error", False):
         detail = result_msg.result or getattr(result_msg, "subtype", "")
         raise AgentError(f"crash triage failed: {detail}")
-    dossier = parse_and_validate(result_msg.result)
+    dossier = parse_and_validate(result_msg.result, candidate_bugs=candidate_bugs)
     verdict = dossier.verdict if dossier is not None else None
     if verdict is not None and verdict.abstain_reason == NO_HANDOFF_REASON:
         # NO handoff is an infrastructure failure, not a verdict, and it must not be
@@ -2812,4 +2813,6 @@ async def run_crash_triage(
     trace.summary(result_msg)
     return build_result(
         result_msg, recorder=recorder, tool_calls=trace.provenance(), handoff_repair=handoff_repair,
+        candidate_bugs={c["node"]: c["bug"] for c in crash.get("candidates") or []
+                        if isinstance(c, dict) and c.get("node") and c.get("bug")},
     )

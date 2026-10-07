@@ -32,6 +32,7 @@ from pydantic import (
     Field,
     TypeAdapter,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -778,7 +779,7 @@ class Dossier(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _skeptic_veto(self):
+    def _skeptic_veto(self, info: ValidationInfo):
         """Skeptic ladder + lead-anchor gate (on Dossier, so it can see the skeptic
         results alongside candidate/hunks/call_path). Mutates in place and NEVER raises
         — a raising validator would fall through ``parse_and_validate``'s salvage
@@ -824,6 +825,11 @@ class Dossier(BaseModel):
         v = self.verdict
         if v is None:
             return self
+        # Result construction and DB reload re-run this validator without context.
+        # Retain the relevant seed entries in corroborations for those calls.
+        # parse_and_validate strips model-supplied corroborations.
+        candidate_bugs = ((info.context or {}).get("candidate_bugs")
+                          or (self.corroborations or {}).get("skeptic_same_bug_nodes") or {})
         # Split the fails by what they REST ON, not by what they conclude (1c). Per RESULT,
         # because the skeptic emits one per claim: a genuine contradiction sitting in its
         # own entry must keep its teeth even when another entry cites a configure switch.
@@ -832,7 +838,7 @@ class Dossier(BaseModel):
         for s in self.skeptic:
             if s.status != SkepticStatus.failed:
                 continue
-            if is_alternative_check(s, self.candidate):
+            if is_alternative_check(s, self.candidate, candidate_bugs):
                 # (1e) Exclude alternatives from both downgrade and abstain rules.
                 alternatives.append(s.claim_ref)
                 continue
@@ -849,6 +855,12 @@ class Dossier(BaseModel):
             self.corroborations = {
                 **(self.corroborations or {}),
                 "skeptic_alternatives_unbound": alternatives,
+            }
+        same_bug = _same_bug_nodes(self.candidate, candidate_bugs)
+        if same_bug and any(s.status == SkepticStatus.failed for s in self.skeptic):
+            self.corroborations = {
+                **(self.corroborations or {}),
+                "skeptic_same_bug_nodes": same_bug,
             }
         # (1) Skeptic ladder on a strong-evidence verdict.
         if v.decision == Decision.strong_evidence and failed:
@@ -1015,13 +1027,30 @@ def _same_changeset(a, b):
     return n >= 7 and a[:n] == b[:n]
 
 
-def is_alternative_check(result, candidate) -> bool:
+def _bug_of(node, candidate_bugs):
+    return next((str(b) for n, b in candidate_bugs.items()
+                 if b and _same_changeset(str(n).lower(), node)), "")
+
+
+def _same_bug_nodes(candidate, candidate_bugs):
+    """Keep seed entries for the candidate's bug for later validation."""
+    node = str(getattr(candidate, "node", "") or "").strip().lower()
+    if not node or not candidate_bugs:
+        return {}
+    bug = str(getattr(candidate, "bug", "") or "") or _bug_of(node, candidate_bugs)
+    return {n: b for n, b in candidate_bugs.items() if bug and str(b) == bug}
+
+
+def is_alternative_check(result, candidate, candidate_bugs=None) -> bool:
     """Heuristically identify a check of another changeset.
 
-    ``candidate`` is a Candidate or node string. Candidate hash prefixes or bug numbers
-    in claim_ref/note prevent exemption. Otherwise compare hashes from node, claim_ref,
-    or a note under a seed/window-candidate/alternative label, in that order, against
-    the candidate's known hg/git hashes. False without a candidate node."""
+    Accept a Candidate or node string; return False without a candidate node.
+    Compare node, claim_ref hashes, or note hashes under a seed/window/alternative
+    claim_ref, in that order. References to the candidate's hg/git hash prevent exemption.
+    Its bug number also prevents exemption unless every recognized hash across all three
+    fields maps to that bug in the seed's ``candidate_bugs``. This allows checks of other
+    parts or backouts sharing the bug number."""
+    candidate_bugs = candidate_bugs or {}
     if isinstance(candidate, str) or candidate is None:
         ids, bug = [str(candidate or "").strip().lower()], ""
     else:
@@ -1030,25 +1059,30 @@ def is_alternative_check(result, candidate) -> bool:
         bug = str(candidate.bug or "")
     if not ids[0]:
         return False
+    bug = bug or _bug_of(ids[0], candidate_bugs)
     ids = [i for i in ids if i]
     ref = str(result.claim_ref or "").lower()
     note = str(result.note or "").lower()
     text = ref + " " + note
-    if any(i[:7] in text for i in ids) or (bug and re.search(r"(?<!\d){}(?!\d)".format(bug), text)):
+    if any(i[:7] in text for i in ids):
         return False
-
-    def others(hashes):
-        return bool(hashes) and not any(_same_changeset(h, i) for h in hashes for i in ids)
 
     node = str(getattr(result, "node", "") or "").strip().lower()
     if _NODE_RE.fullmatch(node):
-        return others([node])
-    ref_hashes = _changesets(ref)
-    if ref_hashes:
-        return others(ref_hashes)
-    if _ALTERNATIVE_REF_RE.search(ref):
-        return others(_changesets(note))
-    return False
+        hashes = [node]
+    elif _changesets(ref):
+        hashes = _changesets(ref)
+    elif _ALTERNATIVE_REF_RE.search(ref):
+        hashes = _changesets(note)
+    else:
+        return False
+    if not hashes or any(_same_changeset(h, i) for h in hashes for i in ids):
+        return False
+    if bug and re.search(r"(?<!\d){}(?!\d)".format(bug), text):
+        # The same-bug exception requires checking hashes in all three fields.
+        named = set(hashes) | set(_changesets(ref)) | set(_changesets(note))
+        return all(_bug_of(h, candidate_bugs) == bug for h in named)
+    return True
 
 
 def handoff_parse_failure(text: str | None) -> str | None:
@@ -1248,10 +1282,10 @@ def humanize_validation_reason(reason: str | None) -> str | None:
     )
 
 
-def validate_dossier(obj: dict) -> Dossier:
+def validate_dossier(obj: dict, context: dict | None = None) -> Dossier:
     """Strict gate: ``Dossier.model_validate`` — raises ``ValidationError`` on any
     uncited claim or malformed field."""
-    return Dossier.model_validate(obj)
+    return Dossier.model_validate(obj, context=context)
 
 
 def _abstain(reason: str) -> Dossier:
@@ -1421,14 +1455,16 @@ def _salvage(obj: dict):
     return kwargs, dropped
 
 
-def parse_and_validate(result: str | dict) -> Dossier:
+def parse_and_validate(result: str | dict, *, candidate_bugs: dict | None = None) -> Dossier:
     """Validate the best-effort handoff #02 parses from ``ResultMessage.result``.
     Never raises into the caller. On a missing/malformed ```json block or invalid
     JSON, returns an abstain Dossier. On a schema-validation failure, SALVAGES: keep
     the sub-objects/verdict that validate, drop the ones that don't — so one bad
     optional field can't discard a properly-cited verdict. A verdict that is absent
     or fails its own grounding rules (uncited strong-evidence, confidence below the
-    floor, ...) is forced to abstain, but any salvaged evidence is still attached."""
+    floor, ...) is forced to abstain, but any salvaged evidence is still attached.
+    ``candidate_bugs`` is the seed's node-to-bug map for the skeptic veto."""
+    context = {"candidate_bugs": candidate_bugs or {}}
     obj = result if isinstance(result, dict) else _extract_last_json_block(result)
     if obj is None:
         return _abstain(NO_HANDOFF_REASON)
@@ -1466,7 +1502,7 @@ def parse_and_validate(result: str | dict) -> Dossier:
     # place, so the ``_salvage`` fallback below sees the normalized citations too.
     _normalize_citations(obj)
     try:
-        return validate_dossier(obj)
+        return validate_dossier(obj, context)
     except ValidationError as exc:
         kwargs, dropped = _salvage(obj)
         if dropped:
@@ -1487,7 +1523,7 @@ def parse_and_validate(result: str | dict) -> Dossier:
                 abstain_kind=AbstainKind.pipeline_error,
             )
         try:
-            return Dossier(**kwargs)
+            return Dossier.model_validate(kwargs, context=context)
         except ValidationError as inner:
             logger.warning("dossier validation failed, nothing salvageable: %s", inner)
             return _abstain("dossier validation failed: {}".format(

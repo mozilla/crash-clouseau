@@ -405,6 +405,10 @@ REGISTRY = {
     "skeptic_alternatives_unbound": (
         "diagnostic", (),
         "Claim refs of skeptic failures excluded by `schema.is_alternative_check`."),
+    "skeptic_same_bug_nodes": (
+        "evidence", ("agent/schema.py",),
+        "Seed node-to-bug entries for the candidate's bug, retained for skeptic revalidation "
+        "without the seed context."),
     "skeptic_presence_unbound": (
         "diagnostic", (),
         "A skeptic `fail` whose stated ground was that the candidate is ALREADY PRESENT in the "
