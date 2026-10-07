@@ -277,6 +277,18 @@ class TestUntriagedSelection(unittest.TestCase):
         }}, status="done")
         self.assertEqual([r[0] for r in self._find()], [uid])
 
+    def test_a_repeat_cooldown_sibling_does_not_close_the_cluster(self):
+        sib = "sweep-0090-aaaa-bbbb-ccccddddeeee"
+        self._uuid(sib)
+        uid = self._uuid("sweep-0091-aaaa-bbbb-ccccddddeeee")
+        models.Dossier.upsert(sib, payload={"decided_before_run": "repeat_cooldown", "dossier": {
+            "verdict": {"decision": "abstain"},
+            "corroborations": {"repeat_cooldown_suppressed": True, "repeat_cooldown_runs": {
+                "runs": ["u-3", "u-2"], "kinds": ["hardware", "hardware"], "version": "159"}},
+        }}, status="done")
+        self.assertEqual([r[0] for r in self._find()], [uid])
+        self.assertFalse(models.UUID.proto_already_analyzed("sweep-0091-aaaa-bbbb-ccccddddeeee"))
+
     def test_a_different_cluster_is_unaffected_by_our_sibling(self):
         # The correlated subquery must compare against EACH candidate's own cluster; unaliased it
         # would match any done dossier at all and the sweep would find nothing, ever.

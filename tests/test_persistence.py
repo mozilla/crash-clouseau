@@ -436,6 +436,77 @@ class TestPersistenceRoundTrip(unittest.TestCase):
             db.session.commit()
 
 
+@unittest.skipUnless(_is_postgres(), "the payload paths need a disposable Postgres backend")
+class TestRanOnSignature(unittest.TestCase):
+    """Prior-run filtering, ordering and suppression detection."""
+
+    SIG = "test::ran_on_signature"
+
+    def setUp(self):
+        models.db.create_all()
+        self.builds, self.uuids = [], []
+        sid = models.Signature.get_id(self.SIG)
+        other = models.Signature.get_id(self.SIG + "::other")
+        self.nightly = self._build("20261004090000", "Firefox", "nightly", "159.0a1")
+        newer = self._build("20261005090000", "Firefox", "nightly", "159.0a1")
+        beta = self._build("20261004090000", "Firefox", "beta", "158.0b3")
+        fenix = self._build("20261004090000", "Fenix", "nightly", "159.0a1")
+        self._run("t-sos-older", sid, self.nightly, "done", "abstain", "hardware")
+        self._run("t-sos-gated", sid, newer, "done", "abstain", "third_party",
+                  corroborations={"hardware_noise_signature_suppressed": True})
+        self._run("t-sos-pre", sid, newer, "done", "abstain", None,
+                  decided_before_run="repeat_cooldown")
+        self._run("t-sos-oom", sid, newer, "done", "abstain", "resource_exhaustion",
+                  corroborations={"oom_not_actionable": {"kind": "large"}})
+        self._run("t-sos-running", sid, newer, "running", None, None)
+        self._run("t-sos-beta", sid, beta, "done", "abstain", "hardware")
+        self._run("t-sos-fenix", sid, fenix, "done", "abstain", "hardware")
+        self._run("t-sos-other", other, newer, "done", "abstain", "hardware")
+        self._run("t-sos-self", sid, newer, "done", "lead", None)
+
+    def _build(self, bid, product, channel, version):
+        b = models.Build(utils.get_build_date(bid), product, channel, version, None)
+        db.session.add(b)
+        db.session.commit()
+        self.builds.append(b.id)
+        return b
+
+    def _run(self, uuid, sid, build, status, decision, kind, corroborations=None,
+             decided_before_run=None):
+        db.session.add(UUID(uuid, sid, "hash", build.id))
+        db.session.commit()
+        self.uuids.append(uuid)
+        payload = {"dossier": {"verdict": {"decision": decision, "abstain_kind": kind},
+                               "corroborations": corroborations or {}}}
+        if decided_before_run:
+            payload["decided_before_run"] = decided_before_run
+        Dossier.upsert(uuid, payload=payload, status=status)
+        db.session.commit()
+
+    def tearDown(self):
+        db.session.query(UUID).filter(UUID.uuid.in_(self.uuids)).delete(synchronize_session=False)
+        db.session.query(models.Build).filter(models.Build.id.in_(self.builds)).delete(
+            synchronize_session=False)
+        db.session.commit()
+
+    def test_the_runs_on_one_signature_product_and_channel_newest_first(self):
+        from crashclouseau import corroborations
+
+        rows = Dossier.ran_on_signature(self.SIG, "Firefox", "nightly",
+                                        exclude_uuid="t-sos-self",
+                                        suppressions=sorted(corroborations.suppressions()))
+        # Pre-run decisions must not count toward another cooldown.
+        self.assertEqual([r["uuid"] for r in rows], ["t-sos-oom", "t-sos-gated", "t-sos-older"])
+        by = {r["uuid"]: r for r in rows}
+        self.assertEqual(by["t-sos-older"], {
+            "uuid": "t-sos-older", "buildid": "20261004090000", "version": "159.0a1",
+            "decision": "abstain", "abstain_kind": "hardware", "suppressed": False})
+        self.assertTrue(by["t-sos-gated"]["suppressed"])
+        self.assertTrue(by["t-sos-oom"]["suppressed"], "a dict-valued suppression counts")
+        self.assertEqual(Dossier.ran_on_signature(self.SIG, "Firefox", "nightly", limit=1)[0]
+                         ["uuid"], "t-sos-self")
+
+
 class TestUnusableVerdictPrefixes(unittest.TestCase):
     """Needs no backend — the prefixes are literals, and that is exactly the risk."""
 

@@ -149,6 +149,17 @@ class TestThePredicate(unittest.TestCase):
         with mock.patch.object(spikes, "build_history", return_value=None):
             self.assertIsNone(spikes.judge_selection(_row(32, [1, 0, 2], 21), "Firefox", "nightly"))
 
+    def test_strict_says_unreadable_instead_of_no_spike(self):
+        with mock.patch.object(spikes, "build_history", return_value=None):
+            with self.assertRaises(spikes.HistoryUnavailable):
+                spikes.judge_selection(_row(32, [1, 0, 2], 21), "Firefox", "nightly", strict=True)
+        # Strict mode preserves decisions when build history is available.
+        with mock.patch.object(spikes, "build_history", return_value=[]):
+            self.assertIsNotNone(spikes.judge_selection(_row(32, [1, 0, 2], 21), "Firefox",
+                                                        "nightly", strict=True))
+            self.assertIsNone(spikes.judge_selection(_row(1, [0, 0, 0], 1), "Firefox", "nightly",
+                                                     strict=True))
+
     def test_judge_selection_reads_the_history_of_the_siblings_before_the_picked_build(self):
         calls = []
 

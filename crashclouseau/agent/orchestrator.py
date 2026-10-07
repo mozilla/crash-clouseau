@@ -3875,7 +3875,6 @@ def _hardware_decided_before_run(seed):
     Run triage when an incomplete fix could make an abstain fileable, or when
     the fix lookup fails.
     """
-    from crashclouseau import bugzilla_apply
     from crashclouseau.agent.result import CrashTriageResult
     from crashclouseau.agent.schema import Dossier
 
@@ -3884,22 +3883,137 @@ def _hardware_decided_before_run(seed):
     _apply_bit_flip_gate(probe, seed, before_run=True)
     if probe.verdict.abstain_reason == "not run":
         return None
+    if _incomplete_fix_may_file(seed):
+        return None
+    return CrashTriageResult(dossier=probe, num_turns=0, total_cost_usd=0.0)
+
+
+def _incomplete_fix_may_file(seed):
+    """Allow triage if an incomplete fix could make an abstain fileable, or lookup fails."""
+    from crashclouseau import bugzilla_apply
+
     try:
-        if bugzilla_apply._incomplete_fix_bug(
-                seed.get("signature"), seed.get("buildid"), seed.get("product"),
-                seed.get("channel"), first_seen=(seed.get("signature_first_seen_ever")
-                                                 or seed.get("signature_first_seen_buildid")),
-                strict=True):
-            return None
+        return bool(bugzilla_apply._incomplete_fix_bug(
+            seed.get("signature"), seed.get("buildid"), seed.get("product"),
+            seed.get("channel"), first_seen=(seed.get("signature_first_seen_ever")
+                                             or seed.get("signature_first_seen_buildid")),
+            strict=True))
     except Exception:
         # A landing query failure can leave the database session unusable.
         logger.warning("agent: incomplete-fix lookup failed for %s; running",
                        seed.get("uuid"), exc_info=True)
-        try:
-            db.session.rollback()
-        except Exception:                          # pragma: no cover - defensive
-            pass
+        _rollback_quietly()
+        return True
+
+
+def _rollback_quietly():
+    try:
+        db.session.rollback()
+    except Exception:                              # pragma: no cover - defensive
+        pass
+
+
+def _version_train(version, channel):
+    """Return the major (major.minor for ESR), or None if those parts are not numeric."""
+    parts = str(version or "").split(".")
+    if not parts[0].isdigit():
         return None
+    if str(channel or "").startswith("esr"):
+        if len(parts) < 2 or not parts[1].isdigit():
+            return None
+        return "{}.{}".format(parts[0], parts[1])
+    return parts[0]
+
+
+def _spike_reopens(seed):
+    """Reopen triage for a real rate or build-day spike.
+
+    Use the current trend and build-day counts: the selector can overwrite a queued
+    pick's outcome. Missing selection rows or failed lookups also allow triage.
+    """
+    from crashclouseau import spikes
+
+    signature, product, channel = seed.get("signature"), seed.get("product"), seed.get("channel")
+    trend = seed.get("signature_trend") or {}
+    try:
+        if spikes.judge_rate(trend, product, channel):
+            return True
+        day = utils.get_build_date(str(seed.get("buildid"))).date().isoformat()
+        # Match the truncation in Selection._row.
+        rows = models.Selection.for_signature(signature[:512], product, channel, limit=30)
+        row = next((r for r in rows if r.get("build_day") == day), None)
+        if row is None:
+            logger.warning("agent: no selection row for %s on %s; running",
+                           seed.get("uuid"), day)
+            return True
+        if row.get("outcome") == utils.RISING_RATE:
+            # Rate picks have no baseline; allow triage if the trend is unavailable.
+            return not trend
+        pick = dict(row, outcome=utils.SELECTED, picked=row.get("picked") or seed.get("buildid"))
+        return spikes.judge_selection(pick, product, channel, strict=True) is not None
+    except Exception:
+        logger.warning("agent: spike lookup failed for %s; running", seed.get("uuid"),
+                       exc_info=True)
+        _rollback_quietly()
+        return True
+
+
+def _cooldown_decided_before_run(seed):
+    """Return a zero-cost abstain if the cooldown applies, otherwise None.
+
+    Require the configured number of consecutive unsuppressed abstains of an allowed
+    kind for the same signature, product, channel and version train. Pre-run decisions
+    do not count. A real spike on a newer build, a possible incomplete fix or a lookup
+    failure allows triage.
+    """
+    from crashclouseau import corroborations
+    from crashclouseau.agent.result import CrashTriageResult
+    from crashclouseau.agent.schema import Dossier
+
+    cfg = config.get_agent_repeat_cooldown()
+    if not cfg["enabled"]:
+        return None
+    signature, product, channel = seed.get("signature"), seed.get("product"), seed.get("channel")
+    buildid = str(seed.get("buildid") or "")
+    train = _version_train(seed.get("version"), channel)
+    if not (signature and product and channel and buildid and train):
+        return None
+    try:
+        ran = models.Dossier.ran_on_signature(
+            signature, product, channel, exclude_uuid=seed.get("uuid"),
+            suppressions=sorted(corroborations.suppressions()))
+    except Exception:
+        logger.warning("agent: prior runs unreadable for %s; running", seed.get("uuid"),
+                       exc_info=True)
+        _rollback_quietly()
+        return None
+    prior = [r for r in ran if _version_train(r["version"], channel) == train][:cfg["runs"]]
+
+    def arms(r):
+        cooled = r["decision"] == Decision.abstain.value and r["abstain_kind"] in cfg["kinds"]
+        return cooled and not r["suppressed"]
+
+    if len(prior) < cfg["runs"] or not all(arms(r) for r in prior):
+        return None
+    if buildid > max(r["buildid"] or "" for r in prior) and _spike_reopens(seed):
+        return None
+    if _incomplete_fix_may_file(seed):
+        return None
+    kinds = [r["abstain_kind"] for r in prior]
+    probe = Dossier(verdict=Verdict(
+        decision=Decision.abstain, confidence=Confidence.low,
+        abstain_reason=(
+            "not run: the last {} runs on this signature ({} {} {}) abstained as {}; a repeat "
+            "is not analysed until a new version or a real spike on a newer build".format(
+                len(prior), product, channel, train, ", ".join(kinds))),
+    ))
+    # _cluster_dossiers requires boolean true to keep the cluster open.
+    probe.corroborations = {
+        **probe.corroborations,
+        "repeat_cooldown_suppressed": True,
+        "repeat_cooldown_runs": {"runs": [r["uuid"] for r in prior], "kinds": kinds,
+                                 "version": train},
+    }
     return CrashTriageResult(dossier=probe, num_turns=0, total_cost_usd=0.0)
 
 
@@ -5154,10 +5268,14 @@ def run_evidence_agent(uuid, force=False):
             "run_started"
         )
 
-        # Forced retriggers bypass the pre-run shortcut.
-        decided = None if force else _hardware_decided_before_run(seed)
+        # Forced retriggers bypass the pre-run shortcuts.
+        decided, decided_by = None, None
+        if not force:
+            decided, decided_by = _hardware_decided_before_run(seed), "bit_flip_gate"
+            if decided is None:
+                decided, decided_by = _cooldown_decided_before_run(seed), "repeat_cooldown"
         if decided is not None:
-            payload = {**decided.model_dump(mode="json"), "decided_before_run": "bit_flip_gate"}
+            payload = {**decided.model_dump(mode="json"), "decided_before_run": decided_by}
             if run_started:
                 payload["run_started"] = run_started
             reap_attempts = models.Dossier.get_reap_attempts(uuid)
@@ -5170,8 +5288,8 @@ def run_evidence_agent(uuid, force=False):
             models.Verdict.set(uuid, verdict=row["verdict"], confidence=row["confidence"],
                                rationale=row["rationale"], evidence=row["evidence"])
             models.commit()
-            logger.info("agent: %s decided before the run by the bit-flip gate: %s",
-                        uuid, row["rationale"][:120])
+            logger.info("agent: %s decided before the run by %s: %s",
+                        uuid, decided_by, row["rationale"][:120])
             _autofile(uuid, payload, row)
             return
 

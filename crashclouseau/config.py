@@ -1542,6 +1542,16 @@ def get_agent_bit_flip():
     }
 
 
+def get_agent_repeat_cooldown():
+    """Cooldown settings; REPEAT_COOLDOWN_ENABLED overrides the enabled flag."""
+    a = get_agent().get("repeat_cooldown", {})
+    return {
+        "enabled": _env_bool("REPEAT_COOLDOWN_ENABLED", a.get("enabled", True)),
+        "runs": max(1, int(a.get("runs", 2))),
+        "kinds": tuple(a.get("kinds", ("hardware", "resource_exhaustion", "third_party"))),
+    }
+
+
 def get_agent_bad_machine():
     """Bad-machine suppression knobs.
 

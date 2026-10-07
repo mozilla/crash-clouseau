@@ -312,6 +312,7 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "hang_bucket_age_waived",
         # Retain page-aligned annotations for auditing the exclusion.
         "possible_bit_flip_page_aligned",
+        "repeat_cooldown_runs",
         "absent_named_threads", "absent_thread_clamped", "actionable_origin_postdates_signature",
         "call_path_verified",
         "compiled_out_macro", "compiled_out_rev", "exposer_suspected",

@@ -239,19 +239,17 @@ def judge_rate(facts, product, channel):
     }
 
 
-def judge_selection(row, product, channel, trend_facts=None):
-    """Is this selection-log row (``models.Selection.to_dict()``) a real spike? The facts dict,
-    or ``None``. Only a pair the pipeline SELECTED can be one: a declined pair has no crashes
-    ingested to investigate, and a ``selected`` row already cleared the selector's bar, so this
-    only ever tightens.
+class HistoryUnavailable(LookupError):
+    """Build history required for spike detection could not be read."""
 
-    A ``rising_rate`` row has no baseline of its own (``[]``); it is judged on the trend facts
-    the caller measured (``sigtrend.trend_facts`` as of today), never on its count.
 
-    A ``selected`` row is judged against the selector's baseline AND the signature's own
-    per-build history over ``spike.history_days`` (``build_history``, one SuperSearch); a history
-    Socorro would not give us is not a quiet one, so the row is not a spike until it can be
-    read (the sweep asks again every tick)."""
+def judge_selection(row, product, channel, trend_facts=None, strict=False):
+    """Return spike facts for a selection row, or None.
+
+    rising_rate rows use trend_facts. selected rows use the maximum of their baseline
+    and per-build history over spike.history_days. Other outcomes return None.
+    Missing build history returns None, or raises HistoryUnavailable if strict=True.
+    """
     outcome = (row or {}).get("outcome")
     if outcome == utils.RISING_RATE:
         return judge_rate(trend_facts or {}, product, channel)
@@ -261,6 +259,8 @@ def judge_selection(row, product, channel, trend_facts=None):
     history = build_history(signatures, product, channel, row.get("picked"),
                             config.get_spike("history_days", product, channel))
     if history is None:
+        if strict:
+            raise HistoryUnavailable("no build history for {}".format(row.get("signature")))
         logger.info("spike: no build history for %s on %s-%s; not judged a spike",
                     row.get("signature"), product, channel)
         return None

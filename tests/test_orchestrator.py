@@ -1501,6 +1501,122 @@ class TestRunEvidenceAgent(unittest.TestCase):
                                    return_value=dict(self._BIT_FLIP_CFG, enabled=False)):
                 self.assertIsNone(orch._hardware_decided_before_run(self._HARDWARE_SEED))
 
+    # Repeat-run cooldown.
+
+    _COOLDOWN_SEED = dict(_SEED, product="Firefox", buildid="20261005090000", version="159.0a1")
+
+    @staticmethod
+    def _settled(uuid, kind="hardware", decision="abstain", version="159.0a1",
+                 buildid="20261005090000", suppressed=False):
+        return {"uuid": uuid, "buildid": buildid, "version": version, "decision": decision,
+                "abstain_kind": kind, "suppressed": suppressed}
+
+    def _cooldown_run(self, settled, seed=None, force=False, incomplete_fix=None, reopens=False):
+        pD, pV, pC, _pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.get_reap_attempts.return_value = None
+        MDoss.ran_on_signature.return_value = settled
+        triage_run = mock.AsyncMock(return_value=_lead_result())
+        with pD, pV, pC, pSc, \
+             mock.patch.object(orch, "build_seed", return_value=dict(seed or self._COOLDOWN_SEED)), \
+             mock.patch.object(orch, "_hardware_decided_before_run", return_value=None), \
+             mock.patch("crashclouseau.bugzilla_apply._incomplete_fix_bug",
+                        return_value=incomplete_fix), \
+             mock.patch.object(orch, "_spike_reopens", return_value=reopens) as spike, \
+             mock.patch.object(orch, "_autofile") as autofile, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", triage_run):
+            orch.run_evidence_agent("u-1", force=force)
+        return triage_run, MDoss, MVerd, autofile, spike
+
+    def test_two_settled_abstains_of_a_cooldown_kind_decide_without_a_run(self):
+        settled = [self._settled("u-3", "third_party"), self._settled("u-2", "hardware"),
+                   self._settled("u-0", "noise")]
+        triage_run, MDoss, MVerd, autofile, spike = self._cooldown_run(settled)
+        triage_run.assert_not_called()
+        done = self._done_upsert(MDoss)
+        self.assertEqual(done.kwargs["cost_usd"], 0.0)
+        payload = done.kwargs["payload"]
+        self.assertEqual(payload["decided_before_run"], "repeat_cooldown")
+        corr = payload["dossier"]["corroborations"]
+        # Cluster dedup checks for boolean true, not the diagnostic dict.
+        self.assertIs(corr["repeat_cooldown_suppressed"], True)
+        self.assertIn("repeat_cooldown_suppressed", orch.models._INSTANCE_SUPPRESSED)
+        self.assertEqual(corr["repeat_cooldown_runs"],
+                         {"runs": ["u-3", "u-2"], "kinds": ["third_party", "hardware"],
+                          "version": "159"})
+        self.assertIn("Firefox nightly 159", payload["dossier"]["verdict"]["abstain_reason"])
+        self.assertIsNone(payload["dossier"]["verdict"]["abstain_kind"])
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
+        autofile.assert_called_once()
+        # Spike reopening is checked only on newer builds.
+        spike.assert_not_called()
+        kwargs = MDoss.ran_on_signature.call_args.kwargs
+        self.assertEqual(kwargs["exclude_uuid"], "u-1")
+        self.assertIn("hardware_noise_signature_suppressed", kwargs["suppressions"])
+
+    def test_one_run_or_a_disagreeing_one_does_not_arm_it(self):
+        for settled in ([self._settled("u-2")],
+                        [self._settled("u-3", "noise"), self._settled("u-2")],
+                        [self._settled("u-3", None, decision="lead"), self._settled("u-2")],
+                        [self._settled("u-3", suppressed=True), self._settled("u-2")],
+                        [self._settled("u-3", "pre_existing"), self._settled("u-2")]):
+            with self.subTest(settled=settled):
+                triage_run, MDoss, _V, _a, _s = self._cooldown_run(settled)
+                triage_run.assert_called_once()
+                self.assertNotIn("decided_before_run", self._done_upsert(MDoss).kwargs["payload"])
+
+    def test_a_new_version_disarms_it(self):
+        settled = [self._settled("u-3", version="158.0a1"), self._settled("u-2", version="158.0a1")]
+        triage_run, _M, _V, _a, _s = self._cooldown_run(settled)
+        triage_run.assert_called_once()
+        settled = [self._settled("u-4")] + settled
+        triage_run, _M, _V, _a, _s = self._cooldown_run(settled)
+        triage_run.assert_called_once()
+
+    def test_a_real_spike_on_a_newer_build_disarms_it(self):
+        settled = [self._settled("u-3", buildid="20261003090000"),
+                   self._settled("u-2", buildid="20261002090000")]
+        triage_run, _M, _V, _a, spike = self._cooldown_run(settled, reopens=True)
+        spike.assert_called_once()
+        triage_run.assert_called_once()
+        triage_run, MDoss, _V, _a, spike = self._cooldown_run(settled, reopens=False)
+        spike.assert_called_once()
+        triage_run.assert_not_called()
+
+    def test_a_retrigger_an_incomplete_fix_and_the_kill_switch_run(self):
+        settled = [self._settled("u-3"), self._settled("u-2")]
+        fix = {"id": 2062219, "node": "abcdef123456", "pushdate": "2026-09-01"}
+        for kwargs in ({"force": True}, {"incomplete_fix": fix}):
+            with self.subTest(**kwargs):
+                triage_run, _M, _V, _a, _s = self._cooldown_run(settled, **kwargs)
+                triage_run.assert_called_once()
+        with mock.patch.dict(os.environ, {"REPEAT_COOLDOWN_ENABLED": "0"}):
+            triage_run, _M, _V, _a, _s = self._cooldown_run(settled)
+        triage_run.assert_called_once()
+
+    def test_unreadable_prior_runs_run(self):
+        pD, pV, pC, _pS, pSc, MDoss, _MVerd = self._patches()
+        MDoss.ran_on_signature.side_effect = RuntimeError("SSL connection has been closed")
+        with pD, mock.patch.object(orch.db.session, "rollback") as rollback:
+            self.assertIsNone(orch._cooldown_decided_before_run(dict(self._COOLDOWN_SEED)))
+        rollback.assert_called_once()
+
+    def test_an_unknown_version_runs(self):
+        settled = [self._settled("u-3"), self._settled("u-2")]
+        for version in (None, "", "abc"):
+            with self.subTest(version=version):
+                seed = dict(self._COOLDOWN_SEED, version=version)
+                triage_run, _M, _V, _a, _s = self._cooldown_run(settled, seed=seed)
+                triage_run.assert_called_once()
+
+    def test_the_version_train(self):
+        for version, channel, train in (("157.0b3", "beta", "157"), ("157.0.1", "release", "157"),
+                                        ("159.0a1", "nightly", "159"),
+                                        ("140.17.0esr", "esr140", "140.17"),
+                                        ("153.3.0esr", "esr153", "153.3"),
+                                        ("153", "esr153", None), (None, "nightly", None)):
+            with self.subTest(version=version):
+                self.assertEqual(orch._version_train(version, channel), train)
+
     def test_abstain_persists_abstain(self):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
         with pD, pV, pC, pS, pSc, \
@@ -1842,6 +1958,122 @@ class TestStackText(unittest.TestCase):
         frames = [self._f(0, "mozilla::dom::AbortController::Abort", "AbortController.cpp", 9),
                   self._f(1, "x::y", "a.cpp", 1)]
         self.assertTrue(orch._stack_text(frames).startswith("#0 "))
+
+
+class TestSpikeReopens(unittest.TestCase):
+    _SEED = dict(_SEED, product="Firefox", buildid="20261005090000",
+                 signature_trend={"signature_trend_installs": 9})
+    # Clears judge_rate's installation and excess thresholds.
+    _STRONG = {"signature_trend_ratio": 18.0, "signature_trend_installs": 45,
+               "signature_trend_expected_installs": 2.5, "signature_trend_window_days": 7,
+               "signature_trend_baseline_days": 56}
+
+    def _reopens(self, rows, judged=None, raises=None, seed=None):
+        from crashclouseau import spikes
+
+        judge = mock.Mock(return_value=judged, side_effect=raises)
+        with mock.patch.object(orch.models.Selection, "for_signature", return_value=rows), \
+             mock.patch.object(spikes, "judge_selection", judge), \
+             mock.patch.object(orch.db.session, "rollback"):
+            return orch._spike_reopens(dict(seed or self._SEED)), judge
+
+    def test_no_selection_row_for_the_build_day_runs(self):
+        # Selection.record_many can fail without stopping ingestion.
+        got, judge = self._reopens([{"build_day": "2026-10-04", "outcome": "selected"}])
+        self.assertTrue(got)
+        judge.assert_not_called()
+
+    def test_a_long_signature_is_looked_up_as_the_log_stores_it(self):
+        with mock.patch.object(orch.models.Selection, "for_signature", return_value=[]) as rows, \
+             mock.patch.object(orch.db.session, "rollback"):
+            orch._spike_reopens(dict(self._SEED, signature="A" * 600))
+        self.assertEqual(rows.call_args.args[0], "A" * 512)
+
+    def test_the_build_day_is_judged_on_its_counts_whatever_its_label(self):
+        for outcome in ("selected", "not_spiking", "immature", "untestable_prefix"):
+            with self.subTest(outcome=outcome):
+                row = {"build_day": "2026-10-05", "outcome": outcome, "number": 40,
+                       "picked": None}
+                got, judge = self._reopens([row], judged={"kind": "build_day"})
+                self.assertTrue(got)
+                pick = judge.call_args.args[0]
+                self.assertEqual((pick["outcome"], pick["number"], pick["picked"]),
+                                 ("selected", 40, "20261005090000"))
+                self.assertTrue(judge.call_args.kwargs["strict"])
+                got, _j = self._reopens([row], judged=None)
+                self.assertFalse(got)
+
+    def test_the_rate_is_the_seeds_trend_whatever_the_label(self):
+        seed = dict(self._SEED, signature_trend=self._STRONG)
+        for outcome in ("rising_rate", "not_spiking"):
+            with self.subTest(outcome=outcome):
+                got, judge = self._reopens([{"build_day": "2026-10-05", "outcome": outcome}],
+                                           seed=seed)
+                self.assertTrue(got)
+                judge.assert_not_called()
+        # An unavailable trend allows triage; a measured non-spike does not.
+        got, judge = self._reopens([{"build_day": "2026-10-05", "outcome": "rising_rate"}])
+        self.assertFalse(got)
+        judge.assert_not_called()
+        got, _j = self._reopens([{"build_day": "2026-10-05", "outcome": "rising_rate"}],
+                                seed=dict(self._SEED, signature_trend={}))
+        self.assertTrue(got)
+
+    def test_an_unreadable_history_runs(self):
+        from crashclouseau import spikes
+
+        row = {"build_day": "2026-10-05", "outcome": "selected"}
+        got, _j = self._reopens([row], raises=spikes.HistoryUnavailable("503"))
+        self.assertTrue(got)
+
+
+def _is_postgres():
+    try:
+        return orch.db.engine.dialect.name == "postgresql"
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(_is_postgres(), "the selection log's upsert needs a disposable Postgres")
+class TestSpikeReopensAcrossASelectorPass(unittest.TestCase):
+    """Reopening must survive a selector update between enqueue and execution."""
+
+    SIG = "test::spike_reopens_across_a_pass"
+    DAY = "2026-10-05"
+    SEED = dict(_SEED, signature=SIG, product="Firefox", buildid="20261005090000",
+                signature_trend=TestSpikeReopens._STRONG)
+
+    def _record(self, outcome, count, baseline):
+        from datetime import datetime
+
+        return {"signature": self.SIG, "day": datetime(2026, 10, 5), "count": count, "index": 3,
+                "evaluable": True, "baseline": baseline, "bids": {"20261005090000": count},
+                "installs": {"20261005090000": count}, "picked": "20261005090000",
+                "outcome": outcome}
+
+    def setUp(self):
+        orch.models.create()
+        self._clean()
+
+    def _clean(self):
+        orch.db.session.rollback()
+        orch.db.session.query(orch.models.Selection).filter(
+            orch.models.Selection.signature == self.SIG).delete(synchronize_session=False)
+        orch.db.session.commit()
+
+    tearDown = _clean
+
+    def test_a_rate_pick_relabelled_before_the_run_still_reopens(self):
+        Selection = orch.models.Selection
+        Selection.record_many([self._record("rising_rate", 6, [])], "Firefox", "nightly")
+        # Simulate the next selector pass overwriting the outcome.
+        Selection.record_many([self._record("not_spiking", 6, [4, 5, 6])], "Firefox", "nightly")
+        row = Selection.for_signature(self.SIG, "Firefox", "nightly")[0]
+        self.assertEqual((row["outcome"], row["ever_selected"]), ("not_spiking", True))
+        self.assertTrue(orch._spike_reopens(dict(self.SEED)))
+        # These build-day counts alone do not qualify as a spike.
+        with mock.patch("crashclouseau.spikes.build_history", return_value=[]):
+            self.assertFalse(orch._spike_reopens(dict(self.SEED, signature_trend={})))
 
 
 if __name__ == "__main__":

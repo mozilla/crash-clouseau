@@ -70,8 +70,11 @@ DOSSIER_SCHEMA_VERSION = 1
 # gate as ``possible_bit_flip_suppressed``: it says the SIGNATURE is mostly hardware error, which
 # is equally true of every report in the cluster, so it closes the cluster exactly as the backout
 # gate does. Re-deriving that answer costs ~$3 a report and cannot come out differently.
+#
+# Cooldown decisions must keep the cluster open so later crashes can be reconsidered.
 _INSTANCE_SUPPRESSED = (
     "bad_machine_suppressed", "possible_bit_flip_suppressed", "broken_cpu_suppressed",
+    "repeat_cooldown_suppressed",
 )
 
 # ``abstain_reason`` prefixes meaning CLOUSEAU broke — the agent's handoff had no readable
@@ -2794,6 +2797,42 @@ class Dossier(db.Model):
         if row is None:
             return 0
         return int((row[0] or {}).get("reap_attempts", 0) or 0)
+
+    @staticmethod
+    def ran_on_signature(signature, product, channel, exclude_uuid=None, suppressions=(),
+                         limit=30):
+        """Return up to limit done dossiers for a signature, product and channel,
+        ordered by updated descending, excluding pre-run decisions and exclude_uuid.
+
+        Rows contain uuid, buildid, version, decision, abstain_kind and suppressed.
+        suppressed indicates whether any supplied suppression flag is set.
+        """
+        verdict = Dossier.payload["dossier"]["verdict"]
+        corrob = Dossier.payload["dossier"]["corroborations"]
+        flags = [corrob[f].astext for f in suppressions]
+        query = (
+            db.session.query(
+                UUID.uuid, Build.buildid, Build.version, verdict["decision"].astext,
+                verdict["abstain_kind"].astext, *flags,
+            )
+            .select_from(Dossier)
+            .join(UUID, Dossier.uuidid == UUID.id)
+            .join(Signature, UUID.signatureid == Signature.id)
+            .join(Build, Build.id == UUID.buildid)
+            .filter(Signature.signature == signature, Build.product == product,
+                    Build.channel == channel, Dossier.status == "done",
+                    Dossier.payload["decided_before_run"].astext.is_(None))
+        )
+        if exclude_uuid:
+            query = query.filter(UUID.uuid != exclude_uuid)
+        out = []
+        for row in query.order_by(Dossier.updated.desc()).limit(limit).all():
+            out.append({
+                "uuid": row[0], "buildid": utils.get_buildid(row[1]) if row[1] else None,
+                "version": row[2], "decision": row[3], "abstain_kind": row[4],
+                "suppressed": any(v not in (None, "", "false", "null") for v in row[5:]),
+            })
+        return out
 
     @staticmethod
     def heartbeat(uuid):
