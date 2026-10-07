@@ -1571,8 +1571,12 @@ def _fixed_after_build_bug(signature, buildid, product, spellings=None):
 _FIXED_BUGS_CACHE: dict = {}
 
 
+class LookupFailed(RuntimeError):
+    """A failed Bugzilla lookup in strict mode."""
+
+
 def _fixed_bugs_about(signature, product, use_cache=False, major=None,
-                      resolutions=("FIXED",), spellings=None):
+                      resolutions=("FIXED",), spellings=None, strict=False):
     """``[(bug_row, resolved_datetime), ...]`` for the bugs on *signature* that are RESOLVED
     FIXED and belong to this crash's own application, lowest id first.
 
@@ -1587,8 +1591,8 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
     ``resolution="---"`` and must keep doing so (a closed bug is not a comment venue), and 30+
     tests mock it by name. Keep the two param dicts in step by hand.
 
-    Public, unauthenticated, read-only. ``[]`` on any failure, which both callers read as "no
-    information" — see each one for which way that makes it fail.
+    Public, unauthenticated, read-only. Request or JSON decoding errors return ``[]``.
+    With ``strict=True``, they raise ``LookupFailed`` to distinguish failure from no matches.
 
     ``spellings`` widens the question over the crash's other names (``sigfamily``): a bug FIXED
     on the old name after this build is this crash's fix as much as one on the new name."""
@@ -1638,6 +1642,8 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
         bugs = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
         logger.warning("autofile: fixed-bug lookup failed for %r: %s", signature, exc)
+        if strict:
+            raise LookupFailed("fixed-bug lookup failed for {!r}: {}".format(signature, exc))
         return []
     ours, _theirs = _split_by_application(bugs, product)
     out = []
@@ -1719,7 +1725,7 @@ def _known_on_train_bug(signature, product, major, spellings=None):
 _OWN_SIGNATURE_GRACE = timedelta(days=7)
 
 
-def _incomplete_fix_bug(signature, buildid, product, channel, first_seen=None):
+def _incomplete_fix_bug(signature, buildid, product, channel, first_seen=None, strict=False):
     """The bug whose FIX IS ALREADY IN THIS BUILD and whose crash is still happening — the
     mirror of ``_fixed_after_build_bug`` across the same inequality. ``None``, or
     ``{"id", "resolved", "node", "pushdate", "component", "assigned_to", "predates_days"}``.
@@ -1773,8 +1779,8 @@ def _incomplete_fix_bug(signature, buildid, product, channel, first_seen=None):
     ``SignatureFirstDate``'s cron has not minted a row for the newest signatures, which is this
     rule's own target class, so a missing clock must never read as "brand new".
 
-    FAILS OPEN like its mirror: no bugs, no lookup, no node — no claim, and the ordinary
-    filing rules decide."""
+    Returns ``None`` when no qualifying fix is found. With ``strict=True``, Bugzilla
+    lookup failures raise ``LookupFailed``."""
     sig = (signature or "").strip()
     if not sig or buildid is None or buildid == "":
         return None
@@ -1787,7 +1793,7 @@ def _incomplete_fix_bug(signature, buildid, product, channel, first_seen=None):
     if seen_dt is None:
         return None
 
-    for bug, resolved in _fixed_bugs_about(sig, product, use_cache=True):
+    for bug, resolved in _fixed_bugs_about(sig, product, use_cache=True, strict=strict):
         if resolved is None or resolved >= build_dt:
             continue
         filed = sigage.to_datetime(bug.get("creation_time"))

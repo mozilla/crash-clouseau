@@ -3599,7 +3599,7 @@ def _signature_is_mostly_hardware(sample, flip_rate, cpu_rate, cfg):
     return cpu_rate is not None and cpu_rate >= cfg["max_broken_cpu_rate"]
 
 
-def _apply_bit_flip_gate(dossier, seed):
+def _apply_bit_flip_gate(dossier, seed, before_run=False):
     """SUPPRESS a verdict whose crash was probably HARDWARE, not software: there is no bug at all.
 
     Bug 2061961 is why. Crash ff888d42-ce3e-4308-8c2f-b3f060260807 faulted at
@@ -3739,7 +3739,8 @@ def _apply_bit_flip_gate(dossier, seed):
         flags["signature_top_cpu_term"] = noise.get("top_cpu_term")
         flags["signature_top_cpu_share"] = round(top_share, 3)
     dossier.corroborations = {**(dossier.corroborations or {}), **flags}
-    if v.decision == Decision.abstain:
+    # Preserve existing abstains; the pre-run probe still needs a suppression decision.
+    if v.decision == Decision.abstain and not before_run:
         return
 
     # "Nobody else has ever hit this", which is what makes a per-report hardware signal decisive
@@ -3866,6 +3867,40 @@ def _apply_bit_flip_gate(dossier, seed):
         "?" if cpu_rate is None else "{:.0%}".format(cpu_rate),
         v.decision.value, v.confidence.value, (seed or {}).get("uuid"),
     )
+
+
+def _hardware_decided_before_run(seed):
+    """Return a hardware-suppressed result, or ``None`` to run triage.
+
+    Run triage when an incomplete fix could make an abstain fileable, or when
+    the fix lookup fails.
+    """
+    from crashclouseau import bugzilla_apply
+    from crashclouseau.agent.result import CrashTriageResult
+    from crashclouseau.agent.schema import Dossier
+
+    probe = Dossier(verdict=Verdict(decision=Decision.abstain, confidence=Confidence.low,
+                                    abstain_reason="not run"))
+    _apply_bit_flip_gate(probe, seed, before_run=True)
+    if probe.verdict.abstain_reason == "not run":
+        return None
+    try:
+        if bugzilla_apply._incomplete_fix_bug(
+                seed.get("signature"), seed.get("buildid"), seed.get("product"),
+                seed.get("channel"), first_seen=(seed.get("signature_first_seen_ever")
+                                                 or seed.get("signature_first_seen_buildid")),
+                strict=True):
+            return None
+    except Exception:
+        # A landing query failure can leave the database session unusable.
+        logger.warning("agent: incomplete-fix lookup failed for %s; running",
+                       seed.get("uuid"), exc_info=True)
+        try:
+            db.session.rollback()
+        except Exception:                          # pragma: no cover - defensive
+            pass
+        return None
+    return CrashTriageResult(dossier=probe, num_turns=0, total_cost_usd=0.0)
 
 
 # How many distinct cited types one run may buy a ``searchfox --field-layout`` lookup for. The
@@ -5118,6 +5153,27 @@ def run_evidence_agent(uuid, force=False):
         run_started = (getattr(models.Dossier.get_by_uuid(uuid), "payload", None) or {}).get(
             "run_started"
         )
+
+        # Forced retriggers bypass the pre-run shortcut.
+        decided = None if force else _hardware_decided_before_run(seed)
+        if decided is not None:
+            payload = {**decided.model_dump(mode="json"), "decided_before_run": "bit_flip_gate"}
+            if run_started:
+                payload["run_started"] = run_started
+            reap_attempts = models.Dossier.get_reap_attempts(uuid)
+            if reap_attempts:
+                payload["reap_attempts"] = reap_attempts
+            models.Dossier.upsert(uuid, payload=payload, status="done", seed_score=seed_score,
+                                  cost_usd=0.0, input_tokens=0, output_tokens=0,
+                                  cache_read_tokens=0)
+            row = _verdict_row(decided)
+            models.Verdict.set(uuid, verdict=row["verdict"], confidence=row["confidence"],
+                               rationale=row["rationale"], evidence=row["evidence"])
+            models.commit()
+            logger.info("agent: %s decided before the run by the bit-flip gate: %s",
+                        uuid, row["rationale"][:120])
+            _autofile(uuid, payload, row)
+            return
 
         # Heartbeat the WHOLE run, not just the agent call. `updated` is the only liveness signal
         # a dossier has: RQ's SIGKILL at job_timeout beats the error handler, so an abandoned run

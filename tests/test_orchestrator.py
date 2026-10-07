@@ -9,6 +9,7 @@ import os
 
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
+import contextlib  # noqa: E402
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
@@ -1380,6 +1381,125 @@ class TestRunEvidenceAgent(unittest.TestCase):
         MVerd.set.assert_called_once()
         self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "culprit")
         self.assertEqual(MVerd.set.call_args.kwargs["confidence"], 85)
+
+    _HARDWARE_SEED = dict(_SEED, hardware_noise={
+        "reports": 124, "bit_flip_reports": 62, "bit_flip_rate": 0.5, "bit_flip_aligned": 0,
+        "broken_cpu_reports": 0, "broken_cpu_rate": 0.0, "cpu_reports": None, "cpu_terms": None,
+        "top_cpu_term": None, "top_cpu_share": None}, signature_report_count=124)
+    _BIT_FLIP_CFG = {"enabled": True, "min_confidence": 50, "max_reports": 1,
+                     "min_signature_reports": 5, "max_bit_flip_rate": 0.2,
+                     "max_broken_cpu_rate": 0.7}
+
+    _REAL_LOOKUP = object()
+
+    def _hardware_run(self, seed, force=False, incomplete_fix=None, reap_attempts=None):
+        pD, pV, pC, _pS, pSc, MDoss, MVerd = self._patches()
+        MDoss.get_reap_attempts.return_value = reap_attempts
+        triage_run = mock.AsyncMock(return_value=_lead_result())
+        lookup = (contextlib.nullcontext() if incomplete_fix is self._REAL_LOOKUP else
+                  mock.patch("crashclouseau.bugzilla_apply._incomplete_fix_bug",
+                             return_value=incomplete_fix))
+        with pD, pV, pC, pSc, lookup, \
+             mock.patch.object(orch, "build_seed", return_value=dict(seed)), \
+             mock.patch.object(orch.config, "get_agent_bit_flip", return_value=self._BIT_FLIP_CFG), \
+             mock.patch.object(orch, "_autofile") as autofile, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", triage_run):
+            orch.run_evidence_agent("u-1", force=force)
+        return triage_run, MDoss, MVerd, autofile
+
+    def test_a_mostly_hardware_signature_is_decided_without_a_run(self):
+        triage_run, MDoss, MVerd, autofile = self._hardware_run(self._HARDWARE_SEED)
+        triage_run.assert_not_called()
+        done = self._done_upsert(MDoss)
+        self.assertEqual(done.kwargs["cost_usd"], 0.0)
+        payload = done.kwargs["payload"]
+        self.assertEqual(payload["decided_before_run"], "bit_flip_gate")
+        corr = payload["dossier"]["corroborations"]
+        self.assertTrue(corr["hardware_noise_signature_suppressed"])
+        self.assertEqual(corr["signature_bit_flip_rate"], 0.5)
+        self.assertIn("mostly hardware error", payload["dossier"]["verdict"]["abstain_reason"])
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
+        autofile.assert_called_once()
+        self.assertNotIn("reap_attempts", payload)
+
+    def test_a_signature_a_fixed_bug_owns_still_runs(self):
+        # Preserve the filer's incomplete-fix path for abstains.
+        fix = {"id": 2062219, "node": "abcdef123456", "pushdate": "2026-09-01"}
+        triage_run, MDoss, _MVerd, _a = self._hardware_run(self._HARDWARE_SEED, incomplete_fix=fix)
+        triage_run.assert_called_once()
+        self.assertNotIn("decided_before_run", self._done_upsert(MDoss).kwargs["payload"])
+
+    def _lookup_seed(self):
+        from crashclouseau import bugzilla_apply
+
+        bugzilla_apply._FIXED_BUGS_CACHE.clear()
+        self.addCleanup(bugzilla_apply._FIXED_BUGS_CACHE.clear)
+        return dict(self._HARDWARE_SEED, product="Firefox", buildid="20260910095525",
+                    signature_first_seen_ever="20260801000000")
+
+    def test_a_bugzilla_outage_runs_instead_of_deciding(self):
+        from crashclouseau import bugzilla_apply
+
+        seed = self._lookup_seed()
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=OSError("BMO is down")):
+            triage_run, MDoss, _V, _a = self._hardware_run(seed, incomplete_fix=self._REAL_LOOKUP)
+        triage_run.assert_called_once()
+        self.assertNotIn("decided_before_run", self._done_upsert(MDoss).kwargs["payload"])
+
+    def test_a_failed_landing_query_rolls_back_and_runs(self):
+        from crashclouseau import bugzilla_apply, sigage
+
+        seed = self._lookup_seed()
+        owner = {"id": 2062219, "creation_time": "2026-08-01T00:00:00Z"}
+        resolved = sigage.to_datetime("20260901000000")
+        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about",
+                               return_value=[(owner, resolved)]), \
+             mock.patch.object(bugzilla_apply.models.Node, "landing_for_bug",
+                               side_effect=RuntimeError("SSL connection has been closed")):
+            # Isolate this rollback from unrelated database reads in run_evidence_agent.
+            with mock.patch.object(orch.config, "get_agent_bit_flip",
+                                   return_value=self._BIT_FLIP_CFG), \
+                 mock.patch.object(orch.db.session, "rollback") as rollback:
+                self.assertIsNone(orch._hardware_decided_before_run(seed))
+            rollback.assert_called_once()
+            triage_run, MDoss, _V, _a = self._hardware_run(seed, incomplete_fix=self._REAL_LOOKUP)
+        triage_run.assert_called_once()
+        self.assertNotIn("decided_before_run", self._done_upsert(MDoss).kwargs["payload"])
+
+    def test_an_answered_lookup_with_no_fixed_bug_decides(self):
+        from crashclouseau import bugzilla_apply
+
+        seed = self._lookup_seed()
+        answer = mock.Mock(raise_for_status=mock.Mock(), json=mock.Mock(return_value={"bugs": []}))
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=answer) as get:
+            triage_run, MDoss, _V, _a = self._hardware_run(seed, incomplete_fix=self._REAL_LOOKUP)
+        get.assert_called_once()
+        triage_run.assert_not_called()
+        self.assertEqual(self._done_upsert(MDoss).kwargs["payload"]["decided_before_run"],
+                         "bit_flip_gate")
+
+    def test_a_recovered_job_keeps_its_reap_counter(self):
+        _t, MDoss, _V, _a = self._hardware_run(self._HARDWARE_SEED, reap_attempts=2)
+        self.assertEqual(self._done_upsert(MDoss).kwargs["payload"]["reap_attempts"], 2)
+
+    def test_a_retrigger_and_a_clean_signature_still_run(self):
+        clean = dict(self._HARDWARE_SEED, hardware_noise=dict(
+            self._HARDWARE_SEED["hardware_noise"], bit_flip_rate=0.01))
+        for seed, force in ((self._HARDWARE_SEED, True), (clean, False), (_SEED, False)):
+            with self.subTest(force=force, noise=seed.get("hardware_noise")):
+                triage_run, MDoss, _MVerd, _a = self._hardware_run(seed, force=force)
+                triage_run.assert_called_once()
+                self.assertNotIn("decided_before_run", self._done_upsert(MDoss).kwargs["payload"])
+
+    def test_the_decision_is_the_gate_itself(self):
+        with mock.patch.object(orch.config, "get_agent_bit_flip", return_value=self._BIT_FLIP_CFG), \
+             mock.patch("crashclouseau.bugzilla_apply._incomplete_fix_bug", return_value=None):
+            decided = orch._hardware_decided_before_run(self._HARDWARE_SEED)
+            self.assertEqual(decided.total_cost_usd, 0.0)
+            self.assertEqual(decided.dossier.verdict.decision.value, "abstain")
+            with mock.patch.object(orch.config, "get_agent_bit_flip",
+                                   return_value=dict(self._BIT_FLIP_CFG, enabled=False)):
+                self.assertIsNone(orch._hardware_decided_before_run(self._HARDWARE_SEED))
 
     def test_abstain_persists_abstain(self):
         pD, pV, pC, pS, pSc, MDoss, MVerd = self._patches()
