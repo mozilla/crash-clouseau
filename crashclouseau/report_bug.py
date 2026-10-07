@@ -1113,8 +1113,9 @@ def build_hardware_note(corroborations, channel=None, product=None):
     pop_cpu = sigage.population_broken_cpu_rate(channel, product)
     pop_name = sigage.population_label(channel, product)
     if flip is not None and pop_flip is not None and flip >= _HARDWARE_NOTE_LIFT * pop_flip:
-        parts.append("{:.0f}% carry a possible-bit-flip annotation ({} population: "
-                     "{:.0f}%)".format(100 * flip, pop_name, 100 * pop_flip))
+        parts.append("{:.0f}% carry a possible-bit-flip annotation{} ({} population: "
+                     "{:.0f}%)".format(100 * flip, sigage.flip_discount_phrase(
+                         c.get("signature_bit_flip_aligned")), pop_name, 100 * pop_flip))
     if cpu is not None and pop_cpu is not None and cpu >= _HARDWARE_NOTE_LIFT * pop_cpu:
         parts.append("{:.0f}% come from the known-buggy Intel Raptor Lake (family 6 model 183 "
                      "stepping 1, bug 1975808; {} population: {:.0f}%)".format(

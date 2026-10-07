@@ -469,28 +469,12 @@ def _gpu_summary(raw: dict) -> str:
 _MAX_BIT_FLIPS = 3
 
 
-def _bit_flip_summary(info: dict) -> str:
-    """Socorro's stackwalker verdict on whether the FAULT ADDRESS is trustworthy at all, or "".
+def _bit_flip_summary(info: dict, address=None) -> str:
+    """Summarize Socorro's flip candidates, including confidence and heuristic details.
 
-    THE FACT THAT WAS MISSING. Bug 2061961 was filed, and needinfo'd at a developer, for crash
-    ff888d42-ce3e-4308-8c2f-b3f060260807 -- whose processed crash said, in this very dict,
-    ``possible_bit_flips: [{address: 0x0, confidence: 0.625, source_register: rax,
-    details: {is_null: true}}]``. The reported address ``0x00000001000000d0`` is one flipped bit
-    from ``0xd0``, i.e. a NULL base plus a struct offset, and had the pointer really been null the
-    code would have taken its ``None`` branch and not crashed at all. It was hardware. The
-    agent, its five subagents and the blind second opinion (which shares this function -- see
-    ``second_opinion._user_prompt``) all reasoned about a wild pointer because this dict was
-    opened for ``type``/``address``/``crashing_thread`` and nothing else, so a fluent
-    use-after-free story had nothing to contradict it. Two developers closed it INVALID in two
-    days using precisely this field.
-
-    Renders the DISCRIMINATING detail rather than the bare score, because the flags are what
-    make the number readable: ``is_null``/``was_non_canonical`` argue for a flip, while
-    ``poison_registers`` argues AGAINST one (a poison value means a use-after-free -- software)
-    and ``was_low`` means the corrected value is small enough to have arisen many other ways.
-
-    Kept SHORT on purpose: ``_short_value`` truncates every fact at 300 chars, and the flags are
-    the part that must survive."""
+    Use ``info['address']`` unless an address is supplied. Put the page-alignment caveat
+    first so it survives the shared crash brief's 300-character limit.
+    """
     flips = info.get("possible_bit_flips")
     if not isinstance(flips, list) or not flips:
         return ""
@@ -514,6 +498,9 @@ def _bit_flip_summary(info: dict) -> str:
             flip.get("address") or "?", pct,
             "; " + ", ".join(notes) if notes else "",
         ))
+    if parts and sigage.page_aligned(info.get("address") if address is None else address):
+        return ("NOT hardware evidence here: the fault address is page-aligned. An access past "
+                "a mapping can also fault here. Flagged: " + "; ".join(parts))
     return "; ".join(parts)
 
 
@@ -986,8 +973,8 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     pop_name = sigage.population_label(channel, product)
     bits = []
     if flip is not None:
-        bits.append("{:.0f}% carry a Socorro bit-flip annotation{}".format(
-            100 * flip,
+        bits.append("{:.0f}% carry a Socorro bit-flip annotation{}{}".format(
+            100 * flip, sigage.flip_discount_phrase(noise.get("bit_flip_aligned")),
             "" if pop_flip is None else
             " ({} population: {:.0f}%)".format(pop_name, 100 * pop_flip)))
     if cpu is not None:
@@ -1825,7 +1812,7 @@ def _crash_facts(crash: dict) -> list[str]:
         # field offset, which is what makes the bit-flip line below checkable.
         ("Faulting instruction", info.get("instruction")),
         ("POSSIBLE BIT FLIP (the fault address may be hardware corruption, not a real pointer)",
-         _bit_flip_summary(info)),
+         _bit_flip_summary(info, _first_present(info.get("address"), raw.get("address")))),
         # "hang" means nothing faulted: a watchdog killed the process because the main thread
         # stopped making progress. Never reached a prompt before bug 2064436, so an agent handed
         # a hang's stack had no way to know it was not looking at a fault.

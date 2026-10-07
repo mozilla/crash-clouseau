@@ -362,6 +362,24 @@ class TestCrashBriefCarriesTheEvidence(unittest.TestCase):
         self.assertIn("POISON", facts)
         self.assertIn("UAF", facts)
 
+    def test_a_page_aligned_fault_address_is_called_no_evidence_first(self):
+        # Both models must receive the gate's page-alignment caveat.
+        from crashclouseau.agent import second_opinion
+
+        info = dict(_CRASH_INFO, address="0x00000234c34b8000")
+        facts = "\n".join(triage._crash_facts({"raw_crash": {"json_dump": {"crash_info": info}}}))
+        self.assertIn("POSSIBLE BIT FLIP", facts)
+        self.assertIn("NOT hardware evidence here: the fault address is page-aligned", facts)
+        self.assertIn("rax should have been 0x0000000000000000", facts)
+        prompt = second_opinion._user_prompt(
+            {"signature": "S", "channel": "nightly", "stack": "#0 f a:1",
+             "raw_crash": {"json_dump": {"crash_info": info}}}, {"node": "c998e317e0cc"})
+        self.assertIn("NOT hardware evidence here", prompt)
+        summary = triage._bit_flip_summary(dict(info, possible_bit_flips=[
+            {**_FLIP, "source_register": "r{}".format(i)} for i in range(8)]))
+        self.assertIn("NOT hardware evidence", triage._short_value(summary, limit=300))
+        self.assertNotIn("NOT hardware evidence", triage._bit_flip_summary(_CRASH_INFO))
+
     def test_no_bit_flip_data_adds_no_line(self):
         for info in ({}, {"possible_bit_flips": []}, {"possible_bit_flips": None},
                      {"possible_bit_flips": "nonsense"}):
@@ -561,6 +579,96 @@ class TestSignatureHistory(unittest.TestCase):
                                return_value={"first_seen": "20260101000000", "total": 3}):
             self.assertEqual(sigage.first_seen_buildid("S"), "20260101000000")
 
+
+
+class TestPageAlignedFlipsSayNothing(unittest.TestCase):
+    """Exclude page-aligned flip annotations without shrinking the signature denominator."""
+
+    def setUp(self):
+        p = mock.patch.object(config, "get_agent_bit_flip", return_value=_cfg())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _lookup(self, *payloads):
+        calls = []
+
+        def ctor(params=None, handler=None, handlerdata=None, **kw):
+            calls.append(params)
+            payload = payloads[len(calls) - 1]
+            if isinstance(payload, Exception):
+                raise payload
+            handler(payload, handlerdata)
+            return mock.Mock(wait=mock.Mock())
+        with mock.patch.object(sigage.socorro, "SuperSearch", side_effect=ctor):
+            return sigage.hardware_noise("S"), calls
+
+    @staticmethod
+    def _flips(total, count):
+        return {"total": total,
+                "facets": {"possible_bit_flips_max_confidence": [{"term": 43, "count": count}]}}
+
+    def test_page_aligned(self):
+        for address in ("0x00000234c34b8000", "0x1000", "0x0000000000000000"):
+            self.assertTrue(sigage.page_aligned(address), address)
+        for address in ("0x0", "0x00000001000000d0", "0x7ff6fb034c43", "", None, "8000"):
+            self.assertFalse(sigage.page_aligned(address), address)
+
+    def test_aligned_flips_are_not_counted(self):
+        # An empty facet measures zero; a missing facet leaves the original count intact.
+        out, calls = self._lookup(self._flips(124, 124),
+                                  {"total": 0, "facets": {"possible_bit_flips_max_confidence": []}})
+        self.assertEqual(out["reports"], 124)
+        self.assertEqual(out["bit_flip_reports"], 0)
+        self.assertEqual(out["bit_flip_rate"], 0.0)
+        self.assertEqual(out["bit_flip_aligned"], 124)
+        self.assertEqual(calls[1]["address"], "!$000")
+        self.assertEqual(calls[1]["_facets"], ["possible_bit_flips_max_confidence"])
+        self.assertEqual(calls[1]["release_channel"], calls[0]["release_channel"])
+
+    def test_the_share_stays_over_every_report(self):
+        # 995 aligned reports and one flip among the five others: 0.1%, not 1 in 5.
+        out, _ = self._lookup(self._flips(1000, 996), self._flips(5, 1))
+        self.assertAlmostEqual(out["bit_flip_rate"], 0.001)
+        self.assertEqual(out["bit_flip_aligned"], 995)
+        self.assertFalse(orch._signature_is_mostly_hardware(
+            out["reports"], out["bit_flip_rate"], 0.0, _cfg()))
+
+    def test_a_failed_or_incomplete_split_counts_every_flip(self):
+        for split in (RuntimeError("boom"), {"total": 50, "facets": {}}, {"facets": {}}, {}):
+            with self.subTest(split=split):
+                out, _ = self._lookup(self._flips(31, 9), split)
+                self.assertAlmostEqual(out["bit_flip_rate"], 9 / 31)
+                self.assertEqual(out["bit_flip_aligned"], 0)
+
+    def test_the_2073852_signature_is_not_suppressed(self):
+        noise = dict(_noise(reports=124, flip=0.0, cpu=0.0), bit_flip_aligned=124)
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=124, hardware_noise=noise))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertEqual(d.corroborations["signature_bit_flip_aligned"], 124)
+
+    def test_the_reason_the_brief_and_the_bug_say_what_was_not_counted(self):
+        noise = dict(_noise(reports=124, flip=0.5, cpu=0.0), bit_flip_aligned=40)
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=124, hardware_noise=noise))
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        phrase = "50% carry a Socorro bit-flip annotation, not counting 40 on a page-aligned"
+        self.assertIn(phrase, d.verdict.abstain_reason)
+        self.assertIn(phrase, "\n".join(triage._hardware_noise_lines(
+            {"hardware_noise": noise, "channel": "nightly", "product": "Firefox"})))
+        note = report_bug.build_hardware_note({
+            "signature_hardware_sample": 124, "signature_bit_flip_rate": 0.5,
+            "signature_bit_flip_aligned": 40}, "nightly", "Firefox")
+        self.assertIn("annotation, not counting 40 on a page-aligned fault address", note)
+
+    def test_a_page_aligned_singleton_is_not_suppressed_on_its_flip(self):
+        seed = _seed()
+        seed["raw_crash"]["json_dump"]["crash_info"]["address"] = "0x00000234c34b8000"
+        d = _lead()
+        orch._apply_bit_flip_gate(d, seed)
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        self.assertTrue(d.corroborations["possible_bit_flip_page_aligned"])
+        self.assertNotIn("possible_bit_flip_suppressed", d.corroborations)
 
 if __name__ == "__main__":
     unittest.main()

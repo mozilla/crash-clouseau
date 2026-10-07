@@ -3694,8 +3694,13 @@ def _apply_bit_flip_gate(dossier, seed):
     noise = (seed or {}).get("hardware_noise") or {}
     sample = noise.get("reports")
     flip_rate = noise.get("bit_flip_rate")
+    flip_aligned = noise.get("bit_flip_aligned")
     cpu_rate = noise.get("broken_cpu_rate")
-    # For the background rates quoted in the abstain reason below, which reaches the filed bug.
+    # Apply the same page-alignment exclusion as the signature-level count.
+    address = raw.get("address") or ((raw.get("json_dump") or {}).get("crash_info") or {}).get(
+        "address")
+    aligned = sigage.page_aligned(address)
+    # Channel-specific background rates for the abstain reason.
     channel = (seed or {}).get("channel")
 
     # Recorded for EVERY verdict, fired or not: without the flags there is no way to count how
@@ -3717,6 +3722,10 @@ def _apply_bit_flip_gate(dossier, seed):
         flags["signature_hardware_sample"] = sample
     if flip_rate is not None:
         flags["signature_bit_flip_rate"] = round(flip_rate, 3)
+    if flip_aligned:
+        flags["signature_bit_flip_aligned"] = flip_aligned
+    if confidence is not None and aligned:
+        flags["possible_bit_flip_page_aligned"] = True
     if cpu_rate is not None:
         flags["signature_broken_cpu_rate"] = round(cpu_rate, 3)
     # The CPU-model spread, recorded and never compared with a threshold: it is what the filed
@@ -3741,7 +3750,8 @@ def _apply_bit_flip_gate(dossier, seed):
     # scanner (tests/test_corroboration_registry.py), and all three of these were declared,
     # written, firing in prod, and unseen by it. The name still reaches the log line, off the dict.
     suppressed = reason = None
-    if confidence is not None and confidence >= cfg["min_confidence"] and singleton:
+    if (confidence is not None and confidence >= cfg["min_confidence"] and singleton
+            and not aligned):
         suppressed = {"possible_bit_flip_suppressed": True}
         reason = (
             "Socorro rates the faulting address a possible hardware BIT FLIP (confidence {}%) "
@@ -3822,7 +3832,8 @@ def _apply_bit_flip_gate(dossier, seed):
 
         bits = [
             b for b in (
-                _share(flip_rate, "carry a Socorro bit-flip annotation", pop_flip),
+                _share(flip_rate, "carry a Socorro bit-flip annotation{}".format(
+                    sigage.flip_discount_phrase(flip_aligned)), pop_flip),
                 _share(cpu_rate, "come from a known-defective Raptor Lake CPU", pop_cpu,
                        extra="meta bug 1975808"),
             ) if b is not None

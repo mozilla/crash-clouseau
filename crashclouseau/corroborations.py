@@ -274,6 +274,14 @@ REGISTRY = {
         "the cluster, and re-deriving it per crash costs ~$3 for an answer that cannot differ."),
     "report_on_broken_cpu": ("evidence", ("report_bug.py", "agent/orchestrator.py"), ""),
     "signature_bit_flip_rate": ("evidence", ("report_bug.py",), ""),
+    "signature_bit_flip_aligned": (
+        "evidence", ("report_bug.py",),
+        "Flip annotations excluded for page-aligned fault addresses; "
+        "`signature_bit_flip_rate` still uses all reports as its denominator."),
+    "possible_bit_flip_page_aligned": (
+        "diagnostic", (),
+        "Records a flip annotation on a page-aligned fault address. "
+        "Used to audit the alignment exclusion; not consumed by another gate or renderer."),
     "signature_broken_cpu_rate": ("evidence", ("report_bug.py",), ""),
     "signature_hardware_sample": ("evidence", ("report_bug.py",), ""),
     "signature_cpu_reports": ("evidence", ("report_bug.py",), ""),

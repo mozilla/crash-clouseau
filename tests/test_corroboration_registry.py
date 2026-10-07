@@ -310,6 +310,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # it routes by the wait code) and the age gate's waiver for the awaited work's blame.
         "hang_model_origin",
         "hang_bucket_age_waived",
+        # Retain page-aligned annotations for auditing the exclusion.
+        "possible_bit_flip_page_aligned",
         "absent_named_threads", "absent_thread_clamped", "actionable_origin_postdates_signature",
         "call_path_verified",
         "compiled_out_macro", "compiled_out_rev", "exposer_suspected",
