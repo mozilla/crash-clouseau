@@ -2506,8 +2506,8 @@ def _resolve_candidate_backout(dossier, seed):
     from decide (``_apply_backout_gate``) is what keeps the gate a pure, offline-safe no-op.
 
     Runs BEFORE the second-opinion pass so a doomed lead never buys a ~$1 independent review of
-    a changeset we are about to suppress. Costs nothing: ``json_rev`` is cached per node and
-    ``_resolve_candidate_git_commit`` fetches the same URL for the same node later in the run.
+    a changeset we are about to suppress. The ``json_rev`` request is shared with
+    ``_resolve_candidate_git_commit``; recent Git candidates may also need a revert lookup.
 
     Best-effort — a failed lookup leaves ``backedout_by`` empty, which the gate treats as "not
     backed out". That asymmetry is deliberate: never suppress a verdict on a lookup failure."""

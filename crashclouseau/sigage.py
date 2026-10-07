@@ -1154,25 +1154,62 @@ def git_commit_for_node(node, channel="nightly"):
 
 
 def backedout_by_for_node(node, channel="nightly"):
-    """The sha that BACKED OUT this changeset: ``""`` when hg says it was not backed out, and
-    ``None`` when we could not find out.
+    """Return a backout node, ``""`` if none is found or the Git lookup is skipped,
+    or ``None`` on lookup failure.
 
-    TRI-STATE on purpose. A backed-out candidate is SUPPRESSED outright, not downweighted, so
-    "we don't know" must never collapse into "it's clean" — a failed lookup has to leave the
-    verdict alone. ``json_rev`` returns (and caches) ``{}`` for every no-answer case: an empty
-    channel makes no request at all, and a 404/timeout is swallowed. Hence the ``node`` sentinel
-    rather than testing ``backedoutby`` directly, which is simply ABSENT on a clean changeset
-    and would be indistinguishable from a failure.
+    A backout suppresses the candidate, so a failed lookup must remain distinguishable
+    from an absent ``backedoutby`` field. If hg omits that field, check recent descendants
+    for a Git revert via ``_git_revert_of``.
 
-    Free in practice: this is the same cached ``json-rev`` request ``pushdate_for_node`` and
-    ``git_commit_for_node`` already make for this same node on every online run.
-
-    Note it says nothing about WHEN the backout landed, and it stays set forever — a change
-    that was backed out and later RE-LANDED (as a new node) still reports the old backout."""
+    This does not compare the backout date with the crash build date."""
     rev = json_rev(node, channel)
     if not rev.get("node"):
         return None
-    return rev.get("backedoutby") or ""
+    if rev.get("backedoutby"):
+        return rev["backedoutby"]
+    return _git_revert_of(rev, channel)
+
+
+_GIT_REVERT_CACHE: dict = {}
+_GIT_REVERT_TIMEOUT_S = 30
+
+
+def _git_revert_of(rev, channel):
+    """Return a Git revert node, ``""`` on no match or skipped lookup, or ``None`` on failure.
+
+    Skip candidates without a Git SHA or push date, or outside pushlog retention, to avoid
+    searching long histories. Cache successful responses only."""
+    node, git = rev.get("node") or "", rev.get("git_commit") or ""
+    pushdate = (rev.get("pushdate") or [None])[0]
+    if not git or not pushdate:
+        return ""
+    oldest = datetime.now(timezone.utc) - timedelta(days=config.get_ndays_of_data())
+    if datetime.fromtimestamp(pushdate, timezone.utc) < oldest:
+        return ""
+    key = (node, channel or "")
+    if key in _GIT_REVERT_CACHE:
+        return _GIT_REVERT_CACHE[key]
+    from libmozdata.hgmozilla import Mercurial
+    from crashclouseau import net
+
+    repo_url = Mercurial.get_repo_url(channel) if channel else ""
+    if not repo_url:
+        return None
+    try:
+        r = net.get("{}/json-log".format(repo_url), allow_redirects=True,
+                    timeout=_GIT_REVERT_TIMEOUT_S,
+                    params={"rev": 'descendants({}) and desc("reverts commit {}")'.format(node, git)})
+        r.raise_for_status()
+        entries = (r.json() or {}).get("entries")
+    except Exception as exc:
+        logger.warning("sigage: git-revert lookup failed for %s: %s", node, exc)
+        return None
+    if not isinstance(entries, list):
+        return None
+    reverts = [e.get("node") for e in entries if isinstance(e, dict) and e.get("node")]
+    out = reverts[-1] if reverts else ""
+    _GIT_REVERT_CACHE[key] = out
+    return out
 
 
 def desc_for_node(node, channel="nightly"):

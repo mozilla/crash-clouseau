@@ -268,6 +268,45 @@ class TestSigageLookup(unittest.TestCase):
         with self._rev({}):                       # 404 / timeout / empty channel
             self.assertIsNone(sigage.backedout_by_for_node(_NODE))
 
+    _GIT = "24efc699dee41ffd6bb0326016fec8ee594a5b79"
+    _REVERT = "b7761109b6ca0e82b98603c9789c0b63c1b7792a"
+
+    def _git_rev(self, days_ago=2, git=None):
+        import time
+        pushdate = int(time.time()) - days_ago * 86400
+        return {"node": _NODE, "pushdate": [pushdate, 0], "git_commit": self._GIT if git is None else git}
+
+    def _log(self, entries=None, exc=None):
+        sigage._GIT_REVERT_CACHE.clear()
+        self.addCleanup(sigage._GIT_REVERT_CACHE.clear)
+        if exc is not None:
+            return mock.patch.object(sigage.net, "get", side_effect=exc)
+        answer = mock.Mock(raise_for_status=mock.Mock(), json=mock.Mock(return_value=entries))
+        return mock.patch.object(sigage.net, "get", return_value=answer)
+
+    def test_a_git_era_revert_is_a_backout(self):
+        with self._rev(self._git_rev()), \
+             self._log({"entries": [{"node": "1fa5f18dcc99" + "0" * 28}, {"node": self._REVERT}]}) as get:
+            self.assertEqual(sigage.backedout_by_for_node(_NODE), self._REVERT)
+        query = get.call_args.kwargs["params"]["rev"]
+        self.assertIn("descendants({})".format(_NODE), query)
+        self.assertIn('desc("reverts commit {}")'.format(self._GIT), query)
+        self.assertIsNotNone(get.call_args.kwargs.get("timeout"))
+
+    def test_no_revert_is_clean_and_a_failed_query_is_unknown(self):
+        with self._rev(self._git_rev()), self._log({"entries": []}):
+            self.assertEqual(sigage.backedout_by_for_node(_NODE), "")
+        for broken in (self._log(exc=OSError("hg is down")), self._log({"oops": 1})):
+            with self.subTest(broken=broken), self._rev(self._git_rev()), broken:
+                self.assertIsNone(sigage.backedout_by_for_node(_NODE))
+                self.assertNotIn((_NODE, "nightly"), sigage._GIT_REVERT_CACHE)
+
+    def test_an_old_or_git_less_candidate_asks_nothing(self):
+        for rev in (self._git_rev(days_ago=400), self._git_rev(git="")):
+            with self.subTest(rev=rev), self._rev(rev), self._log({"entries": []}) as get:
+                self.assertEqual(sigage.backedout_by_for_node(_NODE), "")
+                get.assert_not_called()
+
     def test_it_rides_the_shared_json_rev_cache(self):
         """Free by construction: the same cached request already serves pushdate + git sha."""
         payload = {"node": _NODE, "backedoutby": _BACKOUT,
