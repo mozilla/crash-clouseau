@@ -2425,7 +2425,8 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch.object(report_bug.config, "get_bugzilla_token", return_value="KEY"):
             u = report_bug._bugzilla_user("stransky@x.com")
             u2 = report_bug._bugzilla_user("stransky@x.com")      # served from cache
-        self.assertEqual(u, {"exists": True, "nick": "stransky", "real": "", "askable": True})
+        self.assertEqual(u, {"exists": True, "nick": "stransky", "real": "", "askable": True,
+                             "moved": False})
         self.assertEqual(u2, u)
         self.assertEqual(len(calls), 1)                           # cached: one lookup
         url, kw = calls[0]
@@ -2447,14 +2448,16 @@ class TestBugPreview(unittest.TestCase):
         reply["v"] = {"users": [], "faults": [{"name": "farre@mozilla.com", "error": True}]}
         with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("farre@mozilla.com"),
-                             {"exists": False, "nick": "", "real": "", "askable": False})
+                             {"exists": False, "nick": "", "real": "", "askable": False,
+                              "moved": False})
 
         # A real account with NO nick still exists -- the old lookup could not tell these
         # apart, and conflating them is what would drop a usable needinfo.
         reply["v"] = {"users": [{"name": "nonick@x.com", "nick": ""}], "faults": []}
         with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("nonick@x.com"),
-                             {"exists": True, "nick": "", "real": "", "askable": True})
+                             {"exists": True, "nick": "", "real": "", "askable": True,
+                              "moved": False})
 
         # No token -> no header at all (a BOGUS key is a hard 400/code 306), and the fields it
         # would have carried are simply absent, which must read as "askable" -- see below.

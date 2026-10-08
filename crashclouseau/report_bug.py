@@ -2294,6 +2294,8 @@ _USER_CACHE: dict = {}   # email -> {"exists", "nick"}
 # "Foo Bar [:foo] ⌚UTC+1". Strip every bracketed group WHEREVER it appears, not just a nick
 # tag at the end, or an author with a trailing note never matches their own hg name.
 _BZ_ANNOTATION = re.compile(r"[\[(][^\])]*[\])]")
+# Match "use <email or :nick> instead" in the display name.
+_BZ_MOVED = re.compile(r"\buse\s+(?::[\w.-]+|[\w.+-]+@[\w.-]*)\s+instead\b", re.IGNORECASE)
 
 
 def _norm_name(name):
@@ -2319,7 +2321,9 @@ def _askable(user):
 
 def _bugzilla_user(email):
     """What Bugzilla knows about the login ``email``:
-    ``{"exists": bool, "nick": str, "askable": bool}``.
+    ``{"exists": bool, "nick": str, "askable": bool, "moved": bool}``.
+
+    ``moved`` indicates a display-name match for ``_BZ_MOVED``, not a verified replacement.
 
     ``exists`` is the field the old nick-only lookup threw away. It is NOT ``bool(nick)`` --
     plenty of real accounts have no nick -- but whether ``/rest/user`` returned a user at all.
@@ -2393,12 +2397,14 @@ def _bugzilla_user(email):
         return {"exists": True, "nick": "", "real": "", "askable": True, "unverified": True}
     user = users[0] if users else None
     blocked = (((user or {}).get("requests") or {}).get("needinfo") or {}).get("blocked")
+    real = ((user or {}).get("real_name") or "").strip()
     out = {"exists": user is not None,
            "nick": ((user or {}).get("nick") or "").strip(),
            # The account's CURRENT display name. hg records the name the person had when they
            # pushed and can never be corrected; Bugzilla is the one they maintain.
-           "real": ((user or {}).get("real_name") or "").strip(),
-           "askable": bool(user) and user.get("can_login") is not False and blocked is not True}
+           "real": real,
+           "askable": bool(user) and user.get("can_login") is not False and blocked is not True,
+           "moved": bool(_BZ_MOVED.search(real))}
     _USER_CACHE[email] = out
     return out
 
@@ -2543,6 +2549,12 @@ def _sole_bug_person(people):
     return only if only.get("role") == "assignee" else None
 
 
+def _drop_account(people, email):
+    """Exclude an address using the same normalization as ``_match_author``."""
+    key = (email or "").strip().casefold()
+    return [p for p in people or [] if (p.get("email") or "").strip().casefold() != key]
+
+
 def _needinfo_account(candidate, channel, email, name):
     """The Bugzilla LOGIN to put in the needinfo flag: ``{"email", "nick"}``, or ``{}``.
 
@@ -2584,8 +2596,14 @@ def _needinfo_account(candidate, channel, email, name):
     if not email and not name:
         return {}
     user = _bugzilla_user(email)
+    # Exclude moved accounts from bug lookups; retain only an askable fallback.
+    moved = bool(user.get("moved"))
+    retired = None
     if user.get("exists") and not user.get("unverified") and _askable(user):
-        return {"email": email, "nick": user.get("nick", ""), "real": user.get("real", "")}
+        found = {"email": email, "nick": user.get("nick", ""), "real": user.get("real", "")}
+        if not moved:
+            return found
+        retired = found
     # An account we FOUND and cannot ask is a different outcome from finding none, and the
     # caller has to be able to tell them apart: one means "no flag, but name the human in the
     # prose so a triager can set it in one click", the other means the ask cannot land at all.
@@ -2600,6 +2618,8 @@ def _needinfo_account(candidate, channel, email, name):
         bug = 0
     if bug > 0:
         people = _bug_people([bug]).get(bug)
+        if moved:
+            people = _drop_account(people, email)
         hit = _match_author(people, name, email)
         if not hit and user.get("exists") is False:
             # Rung 2b. The hg address is NOT a Bugzilla account -- BMO said so -- so there is no
@@ -2622,7 +2642,9 @@ def _needinfo_account(candidate, channel, email, name):
             # recent_bugs_by_author is newest-first; keep that order so the account we pick
             # comes from the author's most recent work.
             for b in others:
-                hit = _match_author(people.get(b), name, email)
+                bug_people = people.get(b)
+                hit = _match_author(_drop_account(bug_people, email) if moved else bug_people,
+                                    name, email)
                 if not hit:
                     continue
                 # Worth carrying on past one: these are DIFFERENT addresses for the same human,
@@ -2631,6 +2653,8 @@ def _needinfo_account(candidate, channel, email, name):
                     return {"email": hit["email"], "nick": hit["nick"],
                             "real": hit.get("real", "")}
                 unaskable = True
+    if retired:
+        return retired
     # Last: an address we could not CHECK (BMO would not answer the user lookup) beats no
     # needinfo at all, but only after the bug-verified rungs have had their turn -- a
     # name-matched account is better evidence than an unverified guess. If it turns out not

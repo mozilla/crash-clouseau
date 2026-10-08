@@ -171,5 +171,89 @@ class TestBug2067059EndToEnd(unittest.TestCase):
         self.assertIn("by {}.".format(HG_NAME), text)
 
 
+class TestMovedAccount(unittest.TestCase):
+    """Prefer a matching account on the author's bugs over a moved hg account."""
+
+    OLD = {"exists": True, "nick": "jkew", "real": "[please use jfkthame@gmail instead]",
+           "askable": True, "moved": True}
+    NEW = {"email": "jfkthame@gmail.com", "real": "Jonathan Kew [:jfkthame]",
+           "nick": "jfkthame", "role": "assignee"}
+
+    def setUp(self):
+        report_bug._USER_CACHE.clear()
+        report_bug._BUG_CACHE.clear()
+        self.addCleanup(report_bug._USER_CACHE.clear)
+        self.addCleanup(report_bug._BUG_CACHE.clear)
+
+    OLD_PERSON = {"email": "jkew@mozilla.com", "real": "[please use jfkthame@gmail instead]",
+                  "nick": "jkew", "role": "creator"}
+
+    def _account(self, people, hg_email="jkew@mozilla.com", recent=None, old_askable=True):
+        def user(email):
+            if email.strip().casefold() == "jkew@mozilla.com":
+                return dict(self.OLD, askable=old_askable)
+            return {"exists": True, "nick": "jfkthame", "real": self.NEW["real"],
+                    "askable": True}
+
+        def bug_people(ids):
+            return {b: list((recent or {}).get(b, people)) for b in ids}
+
+        with mock.patch.object(report_bug, "_bugzilla_user", side_effect=user), \
+                mock.patch.object(report_bug, "_bug_people", side_effect=bug_people), \
+                mock.patch("crashclouseau.models.Node.recent_bugs_by_author",
+                           return_value=list(recent or [])):
+            return report_bug._needinfo_account({"bug": 2059824}, "nightly", hg_email,
+                                                "Jonathan Kew")
+
+    def test_the_replacement_on_the_regressor_bug_is_asked(self):
+        self.assertEqual(self._account([self.NEW])["email"], "jfkthame@gmail.com")
+
+    def test_the_moved_account_on_the_bug_is_not_picked_again(self):
+        for hg_email in ("jkew@mozilla.com", "JKew@mozilla.com", " jkew@Mozilla.com "):
+            with self.subTest(hg_email=hg_email):
+                report_bug._USER_CACHE.clear()
+                self.assertEqual(self._account([self.OLD_PERSON, self.NEW], hg_email)["email"],
+                                 "jfkthame@gmail.com")
+
+    def test_the_moved_account_on_a_recent_bug_is_not_picked_again(self):
+        recent = {111: [self.OLD_PERSON, self.NEW]}
+        for hg_email in ("jkew@mozilla.com", "JKew@mozilla.com"):
+            with self.subTest(hg_email=hg_email):
+                report_bug._USER_CACHE.clear()
+                self.assertEqual(self._account([self.OLD_PERSON], hg_email, recent)["email"],
+                                 "jfkthame@gmail.com")
+
+    def test_without_a_replacement_the_moved_account_is_kept(self):
+        self.assertEqual(self._account([])["email"], "jkew@mozilla.com")
+
+    def test_an_unaskable_moved_account_does_not_hide_its_replacement(self):
+        new = dict(self.NEW, role="assignee")
+        self.assertEqual(self._account([new, self.OLD_PERSON], old_askable=False)["email"],
+                         "jfkthame@gmail.com")
+        recent = {111: [self.OLD_PERSON, new]}
+        self.assertEqual(self._account([self.OLD_PERSON], recent=recent,
+                                       old_askable=False)["email"], "jfkthame@gmail.com")
+        # An unaskable account is never a fallback.
+        self.assertEqual(self._account([], old_askable=False), {"unaskable": True})
+
+    def test_which_display_names_are_moved(self):
+        for real, moved in (("[please use jfkthame@gmail instead]", True),
+                            ("Bob [:bob] (use :bob2 instead)", True),
+                            ("Use bob@example.com instead", True),
+                            ("Jonathan Kew [:jfkthame]", False),
+                            ("Foo [:foo] (please use needinfo)", False),
+                            ("Alice [:alice] please use :bob for reviews", False),
+                            ("", False)):
+            with self.subTest(real=real):
+                report_bug._USER_CACHE.clear()
+                resp = mock.Mock(json=lambda real=real: {"users": [
+                    {"name": "x@example.com", "nick": "x", "real_name": real}]},
+                    raise_for_status=lambda: None)
+                with mock.patch.object(report_bug.net, "get", return_value=resp), \
+                        mock.patch.object(report_bug.config, "get_bugzilla_token",
+                                          return_value="tok"):
+                    self.assertEqual(report_bug._bugzilla_user("x@example.com")["moved"], moved)
+
+
 if __name__ == "__main__":
     unittest.main()
