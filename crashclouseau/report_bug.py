@@ -1616,6 +1616,11 @@ def _comment_provenance(channel=None):
             "human._".format(_provenance_scope(channel)))
 
 
+def existing_bug_comment(text, channel=None):
+    """Replace the new-bug footer with the existing-bug comment footer."""
+    return text.replace(_provenance(channel), _comment_provenance(channel))
+
+
 _PROVENANCE_TEMPLATE = (
     "_Filed automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), which "
     "analyses {scope} with an LLM. Nothing above was written or checked by a human. "

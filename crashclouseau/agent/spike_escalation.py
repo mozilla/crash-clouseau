@@ -1424,7 +1424,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     # The crash's other names ride along (`sigfamily`, on the brief): a bug open on the name
     # this crash had before the rename is its venue, and gets this name attached.
     family = brief.get("signature_family") or {}
-    existing = (bugzilla_apply._open_bugs_for_signature(signature, family=family)
+    existing = (bugzilla_apply._open_bugs_for_signature(signature, family=family, product=product)
                 if bugzilla_apply._family_spelling_map(signature, family)
                 else bugzilla_apply._open_bugs_for_signature(signature))
     if existing is None:

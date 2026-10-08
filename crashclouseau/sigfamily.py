@@ -64,7 +64,8 @@ ONE DETERMINISTIC LOOKUP, AT SEED TIME, from data we already hold -- the signatu
    sharing none is a sibling name's predecessor, not S's, and is dropped: the JS OOM change
    renamed two abort sites on one build, and each new name has exactly one old one.
    A pushed-down relation alone does not establish a shared crash site. After classification,
-   keep these names only as handoff predecessors or `undecided` siblings.
+   keep these names only as handoff predecessors or `undecided` siblings. Unsymbolicated
+   names remain in family diagnostics but are excluded from filing lookups.
 4. **Two discriminators**, recorded because they change what the model may claim. ALIGNMENT:
    a code rename hands off at a build boundary and the old name keeps reporting on old builds
    afterwards (``build``); a skip-list change or a symbol gap hands off on a DATE, on every live
@@ -884,22 +885,30 @@ def handoff_for_spike(signature, proto, product, channel, buildid, until=None):
                 alignment=fam.get("alignment"), fan_in=fam.get("fan_in"))
 
 
+def is_filing_name(signature):
+    """Reject empty or unsymbolicated signatures."""
+    return bool(signature) and not is_unsymbolicated(signature)
+
+
 def is_filing_sibling(row):
-    """Allow pushed-down siblings only when undecided, for potential handoff venues.
-    Names without a relation remain eligible for compatibility with saved records."""
+    """Reject unsymbolicated siblings; allow pushed-down siblings only when undecided.
+
+    Accept saved sibling names without relation metadata."""
+    sig = row.get("signature") if isinstance(row, dict) else row
+    if isinstance(sig, str) and not is_filing_name(sig):
+        return False
     if not isinstance(row, dict) or row.get("relation") != "pushed-down":
         return True
     return row.get("status") == "undecided"
 
 
 def spellings(family):
-    """Return unique filing names: predecessors first, then siblings passing ``is_filing_sibling``.
-    Preserve input order within each group; return an empty list for no family."""
+    """Return unique eligible predecessor and sibling names, predecessors first."""
     out = []
     fam = family or {}
     for row in fam.get("predecessors") or []:
         s = row.get("signature") if isinstance(row, dict) else row
-        if s and s not in out:
+        if s and s not in out and is_filing_name(s):
             out.append(s)
     for row in fam.get("siblings") or []:
         s = row.get("signature") if isinstance(row, dict) else row

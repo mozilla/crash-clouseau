@@ -183,6 +183,17 @@ class TestPushedDownSiblingsAreNotFilingNames(unittest.TestCase):
         self.assertTrue(sigfamily.is_filing_sibling({"signature": A}))
         self.assertFalse(sigfamily.is_filing_sibling(SIBLINGS[0]))
 
+    def test_unsymbolicated_names_are_never_filing_names(self):
+        wait = "shutdownhang | RtlWaitOnAddress | WaitOnAddress"
+        self.assertFalse(sigfamily.is_filing_sibling(wait))
+        self.assertFalse(sigfamily.is_filing_sibling({"signature": wait}))
+        self.assertFalse(sigfamily.is_filing_sibling(
+            {"signature": wait, "relation": "pushed-down", "status": "undecided"}))
+        family = {"predecessors": [{"signature": wait, "relation": "pushed-down",
+                                    "status": "handoff"}, {"signature": "P"}],
+                  "siblings": [{"signature": wait}, {"signature": A}]}
+        self.assertEqual(sigfamily.spellings(family), ["P", A])
+
 
 BLOCK = {"reason": REASON, "platform": "Windows NT", "since": "2026-04-03", "days": 182,
          "rows": [

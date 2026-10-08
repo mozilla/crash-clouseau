@@ -525,6 +525,9 @@ class TestFiling(_FilerBase):
         self.assertFalse(res["venue_for_spike"])
         self.assertEqual(self.created, [])
         self.assertIn("crash volume spiked", self.comments[0][1])
+        # The footer must not ask readers to resolve the existing bug.
+        self.assertIn("_Posted automatically by", self.comments[0][1])
+        self.assertNotIn("resolve THIS bug", self.comments[0][1])
 
     def test_without_a_culprit_the_oldest_open_bug_gets_the_comment(self):
         findings = self.findings.model_copy(update={"culprit": None})

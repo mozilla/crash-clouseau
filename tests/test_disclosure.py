@@ -299,6 +299,17 @@ class TestTheOrdinaryFiler(_Base):
         self.assertIn("because the analysis above names bug 2068336, which is not public, and "
                       "bug 55 is public._", self.created[0]["description"])
 
+    def test_a_restricted_bug_filed_instead_of_a_comment_keeps_the_filing_footer(self):
+        text = ("the whole bug opener\n\nBug 2068336 converted the invariant check.\n\n"
+                + report_bug._provenance("nightly"))
+        report_bug.build_bug_preview.side_effect = lambda *a, **k: dict(_PREVIEW, comment=text)
+        self._hide(2068336)
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[_bug(55)]):
+            res = self._file(dossier={"candidate": {"node": "n", "bug": 42}})
+        self.assertEqual(res["public_venue_declined"], 55)
+        self.assertIn(report_bug._provenance("nightly"), self.created[0]["description"])
+        self.assertNotIn("_Posted automatically", self.created[0]["description"])
+
     def test_a_decline_or_a_failed_write_carries_the_reason(self):
         self._hide(_HIDDEN)
         report_bug.build_bug_preview.side_effect = lambda *a, **k: dict(_PREVIEW)

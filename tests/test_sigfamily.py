@@ -520,8 +520,8 @@ class TestSymbolGap(_Base):
         self.assertEqual(fam["family_first_seen_ever"], "20240416043247")
         statuses = {s["signature"]: s["status"] for s in fam["siblings"]}
         self.assertEqual(statuses, {WAIT2: "undecided", HANG_VARIANT: "younger"})
-        # The undecided pushed-down name remains eligible for venue lookup.
-        self.assertIn(WAIT2, sf.spellings(fam))
+        # Unsymbolicated wait names remain in the family but are excluded from filing lookups.
+        self.assertEqual(set(sf.spellings(fam)) & {WAIT1, WAIT2, WAIT3}, set())
         # The bare (non-hang) spelling is a different crash and never entered the family.
         self.assertNotIn(WAIT_BARE, sf.spellings(fam))
         self.assertIn("took over the name from `RtlWaitOnAddress`, `WaitOnAddress`", top["change"])

@@ -400,6 +400,130 @@ class TestTheVenueSearch(unittest.TestCase):
         self.assertEqual((rows[0]["via_signature"], rows[0]["via_relation"]), (NORETURN, "sibling"))
         self.assertNotIn("venue_since", rows[0])
 
+    def test_a_sibling_venue_yields_to_the_signatures_own_bug_even_a_meta(self):
+        fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
+               "s_first_build": HANDOFF_BUILD}
+        sib_bug = dict(self.OLD_BUG, id=77, cf_crash_signature="[@ {}]".format(NORETURN))
+        meta = dict(self.NEW_BUG, id=2000000, keywords=["meta"],
+                    summary="[meta] Crash in [@ {}]".format(CHECK))
+        with mock.patch.object(bugzilla_apply.net, "get",
+                               return_value=_Resp({"bugs": [sib_bug, meta]})), \
+                mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature", return_value=[]):
+            rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=fam)
+        self.assertEqual([r["id"] for r in rows], [2000000])
+        self.assertEqual(bugzilla_apply._split_out_metas(rows), ([], rows))
+
+    def test_another_applications_bug_does_not_evict_a_sibling_venue(self):
+        fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
+               "s_first_build": HANDOFF_BUILD}
+        sib_bug = dict(self.OLD_BUG, id=77, cf_crash_signature="[@ {}]".format(NORETURN))
+        tb_bug = dict(self.NEW_BUG, id=2000001, product="Thunderbird")
+        with mock.patch.object(bugzilla_apply.net, "get",
+                               return_value=_Resp({"bugs": [sib_bug, tb_bug]})), \
+                mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature", return_value=[]):
+            rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=fam, product="Firefox")
+        ours, theirs = bugzilla_apply._split_by_application(rows, "Firefox")
+        self.assertEqual(([r["id"] for r in ours], [r["id"] for r in theirs]), ([77], [2000001]))
+
+    def test_a_sibling_duplicate_target_yields_to_the_signatures_own_bug(self):
+        fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
+               "s_first_build": HANDOFF_BUILD}
+        meta = dict(self.NEW_BUG, id=2000000, keywords=["meta"])
+        target = {"id": 77, "creation_time": "2021-10-25T09:00:00Z", "product": "Core",
+                  "keywords": [], "regressed_by": [], "via_duplicates": [9],
+                  "via_relation": "sibling"}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp({"bugs": [meta]})), \
+                mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature",
+                                  return_value=[target]) as dups:
+            rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=fam, product="Firefox")
+        self.assertEqual([r["id"] for r in rows], [2000000])
+        self.assertEqual(dups.call_args.kwargs["relations"], {NORETURN: "sibling"})
+
+    def test_duplicate_targets_carry_the_relation_of_the_name_they_came_through(self):
+        dups = [{"id": 9, "summary": "Crash in [@ {}]".format(NORETURN), "dupe_of": 77,
+                 "cf_crash_signature": "[@ {}]".format(NORETURN),
+                 "cf_last_resolved": "2026-09-01T00:00:00Z"},
+                {"id": 10, "summary": "Crash in [@ {}]".format(CHECK), "dupe_of": 88,
+                 "cf_crash_signature": "[@ {}]".format(CHECK),
+                 "cf_last_resolved": "2026-09-02T00:00:00Z"},
+                {"id": 11, "summary": "Crash in [@ {}]".format(NORETURN), "dupe_of": 88,
+                 "cf_crash_signature": "[@ {}]".format(NORETURN),
+                 "cf_last_resolved": "2026-09-03T00:00:00Z"}]
+        open_bugs = [{"id": 77, "status": "NEW", "resolution": "", "product": "Core"},
+                     {"id": 88, "status": "NEW", "resolution": "", "product": "Core"}]
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp({"bugs": dups})), \
+                mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=open_bugs):
+            out = bugzilla_apply._duplicate_targets_for_signature(
+                CHECK, spellings=[CHECK, NORETURN], relations={NORETURN: "sibling"})
+        by_id = {r["id"]: r for r in out}
+        self.assertEqual(by_id[77]["via_relation"], "sibling")
+        self.assertNotIn("via_signature", by_id[77])
+        self.assertNotIn("via_relation", by_id[88], "an own-name duplicate makes it our bug")
+
+    def test_converging_duplicate_chains_keep_the_stronger_relation(self):
+        # sibling -> 100 -> 300; own -> 200 -> 100 -> 300.
+        dups = [{"id": 9, "summary": "Crash in [@ {}]".format(NORETURN), "dupe_of": 100,
+                 "cf_crash_signature": "[@ {}]".format(NORETURN),
+                 "cf_last_resolved": "2026-09-01T00:00:00Z"},
+                {"id": 10, "summary": "Crash in [@ {}]".format(CHECK), "dupe_of": 200,
+                 "cf_crash_signature": "[@ {}]".format(CHECK),
+                 "cf_last_resolved": "2026-09-02T00:00:00Z"}]
+        bugs = {100: {"id": 100, "resolution": "DUPLICATE", "dupe_of": 300,
+                      "cf_last_resolved": "2026-09-03T00:00:00Z"},
+                200: {"id": 200, "resolution": "DUPLICATE", "dupe_of": 100,
+                      "cf_last_resolved": "2026-09-04T00:00:00Z"},
+                300: {"id": 300, "resolution": "", "product": "Core"}}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp({"bugs": dups})), \
+                mock.patch.object(bugzilla_apply, "_bugs_by_id",
+                                  side_effect=lambda ids, timeout=None: [bugs[i] for i in ids]):
+            out = bugzilla_apply._duplicate_targets_for_signature(
+                CHECK, spellings=[CHECK, NORETURN], relations={NORETURN: "sibling"})
+        self.assertEqual([r["id"] for r in out], [300])
+        self.assertNotIn("via_relation", out[0])
+        self.assertEqual(out[0]["via_duplicates"], [9, 10, 100, 200])
+        self.assertEqual(out[0]["venue_since"], "2026-09-04T00:00:00+00:00")
+
+    def test_a_duplicate_cycle_ends(self):
+        dups = [{"id": 9, "summary": "Crash in [@ {}]".format(CHECK), "dupe_of": 100,
+                 "cf_crash_signature": "[@ {}]".format(CHECK), "cf_last_resolved": None}]
+        bugs = {100: {"id": 100, "resolution": "DUPLICATE", "dupe_of": 200},
+                200: {"id": 200, "resolution": "DUPLICATE", "dupe_of": 100}}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp({"bugs": dups})), \
+                mock.patch.object(bugzilla_apply, "_bugs_by_id",
+                                  side_effect=lambda ids, timeout=None: [bugs[i] for i in ids]):
+            self.assertEqual(bugzilla_apply._duplicate_targets_for_signature(CHECK), [])
+
+    def test_an_own_duplicate_makes_a_sibling_row_the_signatures_own(self):
+        def row():
+            return {"id": 77, "via_signature": NORETURN, "via_relation": "sibling"}
+
+        merged = bugzilla_apply._merge_duplicate_targets([row()], [{"id": 77, "via_duplicates": [9]}])
+        self.assertNotIn("via_signature", merged[0])
+        self.assertNotIn("via_relation", merged[0])
+        kept = bugzilla_apply._merge_duplicate_targets(
+            [row()], [{"id": 77, "via_duplicates": [9], "via_relation": "sibling"}])
+        self.assertEqual(kept[0]["via_signature"], NORETURN)
+
+    def test_a_handoff_tie_outranks_a_sibling_tie_on_the_same_bug(self):
+        fam = dict(FAMILY, siblings=[dict(SIB, relation="frame-variant")])
+        both = dict(self.OLD_BUG, id=77, summary="Crash in logging",
+                    cf_crash_signature="[@ {}]\n[@ {}]".format(NORETURN, PATCH))
+        sib_only = dict(self.OLD_BUG, id=78, summary="Crash in [@ {}]".format(NORETURN),
+                        cf_crash_signature="[@ {}]".format(NORETURN))
+        handoff_dup = {"id": 78, "via_duplicates": [9], "via_relation": "handoff",
+                       "venue_since": "2026-09-01T00:00:00+00:00"}
+        with mock.patch.object(bugzilla_apply.net, "get",
+                               return_value=_Resp({"bugs": [both, sib_only, self.NEW_BUG]})), \
+                mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature",
+                                  return_value=[handoff_dup]):
+            rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=fam, product="Firefox")
+        by_id = {r["id"]: r for r in rows}
+        self.assertEqual(sorted(by_id), [77, 78, 2073210])
+        # 77 matches both names directly; 78 gets its handoff relation through a duplicate.
+        self.assertEqual((by_id[77]["via_signature"], by_id[77]["via_relation"]), (PATCH, "handoff"))
+        self.assertEqual(by_id[78]["via_relation"], "handoff")
+        self.assertNotIn("via_signature", by_id[78])
+
     def test_no_family_is_the_old_query(self):
         seen = {}
 

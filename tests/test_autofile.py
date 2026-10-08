@@ -460,6 +460,17 @@ class TestDuplicates(_Base):
         self.assertEqual(self.comments, [(12345, "the whole bug opener")])
         self.assertEqual(self.puts[0][0], 12345)
 
+    def test_a_comment_gets_the_comment_footer_and_a_new_bug_keeps_its_own(self):
+        opener = "the whole bug opener\n\n" + report_bug._provenance("nightly")
+        report_bug.build_bug_preview.return_value = dict(_PREVIEW, comment=opener)
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345)]
+        self._file()
+        self.assertEqual(self.comments[0][1],
+                         "the whole bug opener\n\n" + report_bug._comment_provenance("nightly"))
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        self._file()
+        self.assertEqual(self.created[0]["description"], opener)
+
     def test_the_oldest_open_bug_is_preferred(self):
         # With several open bugs for one signature the earliest is the canonical one.
         # Newest-first would prefer a recent duplicate — possibly one we filed ourselves.

@@ -746,57 +746,18 @@ def _family_spelling_map(signature, family):
     return out
 
 
-def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None):
-    """OPEN bugs referencing *signature* as
-    ``[{"id", "creation_time", "product", "keywords"}, ...]``, oldest first.
+def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, product=None):
+    """Return public open venues for the signature and its family, sorted by bug ID.
 
-    Every field beyond the id is there because the oldest open bug is not automatically the
-    right place to comment: ``creation_time`` for ``_bug_for_this_regression``, ``product``
-    for ``_split_by_application``, ``keywords`` for ``_split_out_metas``.
+    Recheck substring results against exact signature entries or bracketed signatures
+    in summaries, including lambda variants. Direct family matches record ``via_signature``
+    and ``via_relation``; handoffs use the new name's first build as ``venue_since``.
 
-    Read-only and unauthenticated (public bugs only, which is the right scope: we must not
-    reason about a security bug we can only see because the filing account can).
+    Merge duplicate targets, then prefer own-signature venues (including metas) in
+    ``product``'s application over sibling-only matches. Keep handoff matches.
 
-    ``cf_crash_signature`` is QUERIED on the BARE signature, not the ``[@ signature]`` form:
-    bug 1990812 carries ``[@ mozilla::MediaDecoder::SetCDMProxy ]`` — with a trailing space —
-    so the bracketed form missed it and we filed 2060922 as a near-duplicate of a REOPENED bug
-    for the exact same crash. The rows that come back are then held to an EXACT ``[@ sig]``
-    entry by ``_row_is_about``, because a one-blocker ``AsyncShutdownTimeout`` signature is a
-    substring of every longer blocker list that starts with it (bug 2067456 against the cookie
-    crash 0027161c). The SUMMARY half is the other way round and ungated: it asks for
-    the crash-bug form ``[@ sig`` and then keeps only an exact ``[@ sig]``/``[@ sig ]``
-    (``_summary_is_about``), which is what the retired ``_is_specific_signature`` length test
-    was really reaching for. One request, so the rows are re-checked here rather than in a
-    second query — BMO's OR does not say which clause matched.
-
-    Oldest first, because among the bugs that could be about this crash the earliest is the
-    canonical one, carrying whatever discussion already exists; newest-first would prefer a
-    recent duplicate, including one we filed ourselves. Only a tie-break, though —
-    ``_bug_for_this_regression`` decides which of them qualify at all.
-
-    PLUS THE OPEN TARGETS OF THE SIGNATURE'S DUPLICATES (``_duplicate_targets_for_signature``).
-    A bug on this signature that a human resolved DUPLICATE of bug N is that human saying "this
-    signature's crashes are bug N", and N is a venue whether or not they also copied the
-    signature onto it — they usually should and often do not. Those rows carry two extra keys,
-    ``venue_since`` (when the dup was resolved: the moment the signature was tied to N) and
-    ``via_duplicates`` (the dup ids on the chain), and a target that the direct search already
-    returned keeps its row and gains the two keys. Bug 2070711 (2026-09-09) is what this costs
-    without it: our own 2069647 on ``wgpu_server_buffer_get_mapped_range`` had been duped into
-    1976766 two days earlier, the DUPLICATE was invisible to ``resolution="---"``, and 1976766
-    was rejected as predating the regressor by fourteen months — so we filed the same analysis
-    a second time, past both, and :teoxoy's comment 3 asked why we track neither.
-
-    PLUS THE CRASH'S OTHER NAMES (*family*, a ``sigfamily.lookup`` answer or the facts the run
-    recorded): the older name a rename handed off from and the spellings still live beside this
-    one. One filing in eight was named for a crash that already had another name, and 17 of the
-    18 clearest had an open bug on the OLD name at filing time (plans/24): 1737467 on
-    ``PatchNtdll`` for our 2073210, 1976766 on ``WebGPUParent::MapCallback`` for our 2069647. A
-    row reached only through another name carries ``via_signature`` (that name) and
-    ``via_relation`` (``handoff`` / ``sibling``); a handoff row also carries ``venue_since`` --
-    the instant the crash took this name -- because that is when the crash under THIS signature
-    became that bug's, whatever year the bug was filed in (the same clock as a dup or an
-    attached signature, see ``_bug_for_this_regression``). A sibling row keeps its creation
-    clock: another spelling of the same crash is exactly as old as the crash."""
+    Return ``None`` if the direct search fails; duplicate lookup failures leave direct
+    matches intact."""
     if not signature:
         return []
     sig = signature.strip()
@@ -838,7 +799,8 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None):
         if any(_row_is_about(b, s) for s in own):
             rows.append(_venue_row(b))
             continue
-        via = next((s for s in sorted(others) if _row_is_about(b, s)), None)
+        via = next((s for s in sorted(others, key=lambda s: (_relation_rank(others[s]["relation"]), s))
+                    if _row_is_about(b, s)), None)
         if via is None:
             continue
         row = _venue_row(b)
@@ -847,8 +809,22 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None):
         if others[via]["since"]:
             row["venue_since"] = others[via]["since"]
         rows.append(row)
-    return _merge_duplicate_targets(
-        rows, _duplicate_targets_for_signature(sig, timeout=timeout, spellings=spellings))
+    relations = {s: v["relation"] for s, v in others.items()}
+    merged = _merge_duplicate_targets(
+        rows, _duplicate_targets_for_signature(sig, timeout=timeout, spellings=spellings,
+                                               relations=relations))
+    return _prefer_own_signature(merged, product)
+
+
+def _prefer_own_signature(rows, product):
+    """Drop sibling-only matches when a same-application own-signature venue exists.
+
+    Own-signature matches and targets of own-signature duplicates qualify, including
+    metas. Keep handoff matches."""
+    foreign = config.get_other_app_products(product)
+    if any(not r.get("via_relation") and (r.get("product") or "") not in foreign for r in rows):
+        return [r for r in rows if r.get("via_relation") != "sibling"]
+    return rows
 
 
 def _venue_row(bug):
@@ -858,14 +834,20 @@ def _venue_row(bug):
             "regressed_by": bug.get("regressed_by") or []}
 
 
-def _merge_duplicate_targets(rows, targets):
-    """*rows* (the direct open-bug search) plus *targets* (the open bugs the signature's
-    DUPLICATEs resolve into), one row per bug id, oldest id first.
+# Prefer own-signature matches over handoffs, then siblings.
+_RELATION_RANK = {None: 0, "handoff": 1, "sibling": 2}
 
-    A target the direct search already found keeps its row and gains ``venue_since`` (the later
-    of the two, if both know one) and the union of ``via_duplicates``: bug 1976766 carried the
-    signature itself by the time 2070711 was filed AND was the target of our duped 2069647, and
-    it is the second fact that dates the tie."""
+
+def _relation_rank(relation):
+    return _RELATION_RANK.get(relation, len(_RELATION_RANK))
+
+
+def _merge_duplicate_targets(rows, targets):
+    """Merge direct matches and duplicate targets by bug ID.
+
+    For shared IDs, keep the latest valid ``venue_since``, union ``via_duplicates``,
+    and take the stronger relation. A stronger duplicate relation clears ``via_signature``.
+    Return rows sorted by bug ID."""
     from crashclouseau import sigage
 
     by_id = {r["id"]: r for r in rows or []}
@@ -874,6 +856,11 @@ def _merge_duplicate_targets(rows, targets):
         if row is None:
             by_id[t["id"]] = dict(t)
             continue
+        if _relation_rank(t.get("via_relation")) < _relation_rank(row.get("via_relation")):
+            row.pop("via_signature", None)
+            row.pop("via_relation", None)
+            if t.get("via_relation"):
+                row["via_relation"] = t["via_relation"]
         dated = [(sigage.to_datetime(s), s) for s in (row.get("venue_since"), t.get("venue_since"))
                  if s]
         dated = [(d, s) for d, s in dated if d is not None]
@@ -885,60 +872,27 @@ def _merge_duplicate_targets(rows, targets):
     return [by_id[k] for k in sorted(by_id)]
 
 
-# How many ``dupe_of`` hops to follow from a DUPLICATE on the signature to an open bug. BMO
-# itself redirects a dup-of-a-dup at resolution time, so real chains are one or two long; the
-# bound is against a cycle, not a budget.
+# Bound lookup rounds; cached hops handle revisits and cycles.
 _DUP_CHAIN_MAX_HOPS = 5
 
 
-def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings=None):
-    """The OPEN bugs that the RESOLVED DUPLICATE bugs on *signature* resolve into, as venue rows
-    (``_venue_row`` plus ``venue_since`` and ``via_duplicates``), oldest id first; ``[]`` when
-    there are none or BMO could not be asked.
+def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings=None,
+                                     relations=None):
+    """Return public open targets of exact-signature duplicates, sorted by bug ID.
 
-    THE DUP IS THE HUMAN'S VERDICT ON THE SIGNATURE, and it is the one verdict the open-only
-    venue search cannot see. When :teoxoy resolved our 2069647 as a duplicate of 1976766
-    (2026-09-07 11:37) they were saying that ``wgpu_server_buffer_get_mapped_range`` crashes are
-    bug 1976766 — a bug filed in July 2025 for the destroy-while-mapping race, which the
-    September regressor re-signatured rather than created. Two minutes later they also copied the
-    signature onto 1976766, which is the hygiene Calixte asks for on every dup; this function
-    exists so the filer does not DEPEND on it, because the duplicate list of a crash bug is full
-    of dups whose signature was never copied (plan 17: 5 of 7 duplicate targets of our filings
-    were our own earlier bugs, and the target carried the variant signature in 2 of them).
+    Follow duplicate chains; omit closed or unavailable targets. Return ``[]`` on lookup
+    failure. ``venue_since`` is the latest valid resolution timestamp across merged paths;
+    ``via_duplicates`` records their duplicate IDs.
 
-    ``venue_since`` IS THE DUP'S RESOLUTION TIME (``cf_last_resolved``), the later one when
-    several dups point at one target, and the latest hop when a chain is followed: it is the
-    moment the signature was tied to the target, and ``_bug_for_this_regression`` reads it as
-    the bug's clock in place of its creation time. So an old dup rescues nothing — a 2022
-    signature duped into a 2022 bug still predates a 2026 regressor — and a dup resolved after
-    the regressor landed is a human who looked at crashes that include this regression's and
-    filed them under that bug. That is the same reasoning as the reopen rescue, on the field
-    that actually records the decision.
-
-    MEASURED over the 106 bugs Clouseau had filed by 2026-09-10, each rewound to its own filing
-    instant against today's BMO (landing approximated by the filing time, which is generous):
-    five filings had a DUPLICATE on their signature pointing at a then-open bug, and the clock
-    rejects four of them — ties 120, 466, 967 days old (two of those targets are ``[meta]``
-    trackers the meta split would drop anyway) — and accepts exactly one, 2070711 into 1976766
-    at 2.4 days. The attachment rescue (``_signature_attached``) saw two and fired on the same
-    one. So neither rule moves a filing a human later kept; both catch the one they were built
-    on, by the clock rather than by a fitted number.
-
-    CHAINS: a target that is itself RESOLVED DUPLICATE is followed (``_DUP_CHAIN_MAX_HOPS``);
-    any other closed target is dropped, because a closed bug is not a comment venue and the
-    FIXED-after-this-build question stays with ``_fixed_after_build_bug``, which does not follow
-    dups. Public, unauthenticated, read-only like every venue lookup, so a restricted target
-    comes back as a ``faults`` entry and is simply not a venue. FAILS OPEN — no rows on any
-    failure — for the reason ``_fixed_after_build_bug`` gives: the direct search already fails
-    closed for the whole path, and a second fail-closed BMO request would make one flaky read
-    a silent filing stop."""
+    ``relations`` maps family spellings to ``handoff`` or ``sibling``. Preserve the strongest
+    relation when paths converge; own-signature matches omit ``via_relation``. These rows
+    omit ``via_signature``, so they do not request signature attachment."""
     sig = (signature or "").strip()
     if not sig:
         return []
     from crashclouseau import sigage
 
-    # The caller's spellings when it widened them over the crash's other names (a dup on the
-    # OLD name into an open bug is that human saying "this crash is bug N" too).
+    # Search own lambda variants and any family spellings supplied by the caller.
     spellings = sorted(set(spellings or ()) | utils.lambda_siblings(sig))
     params = {
         "include_fields": "id,summary,cf_crash_signature,dupe_of,cf_last_resolved",
@@ -960,25 +914,45 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
         logger.warning("autofile: duplicate lookup failed for %r: %s", signature, exc)
         return []
 
-    def tie(into, target, since, via):
-        cur = into.setdefault(target, {"since": None, "via": []})
+    relations = relations or {}
+
+    def tie(into, target, since, via, rels):
+        cur = into.setdefault(target, {"since": None, "via": [], "rels": set()})
         if since is not None and (cur["since"] is None or since > cur["since"]):
             cur["since"] = since
         cur["via"] = sorted({*cur["via"], *via})
+        cur["rels"] |= set(rels)
+
+    def later(a, b):
+        return max((x for x in (a, b) if x is not None), default=None)
 
     pending = {}
     for d in dups:
         if not d.get("id") or not d.get("dupe_of"):
             continue
-        if not any(_row_is_about(d, s) for s in spellings):
+        matched = [s for s in spellings if _row_is_about(d, s)]
+        if not matched:
             continue
-        tie(pending, d["dupe_of"], sigage.to_datetime(d.get("cf_last_resolved")), [d["id"]])
+        rel = min((relations.get(s) for s in matched), key=_relation_rank)
+        tie(pending, d["dupe_of"], sigage.to_datetime(d.get("cf_last_resolved")), [d["id"]],
+            [rel])
     out = {}
+    out_rels = {}
+    hops = {}
     seen = set()
     for _hop in range(_DUP_CHAIN_MAX_HOPS):
-        # A target reached a second way (2070711 -> 2069647 -> 1976766 beside 2069647 ->
-        # 1976766) merges its tie into the row it already has; anything else already visited
-        # is a cycle and is dropped.
+        # Forward new provenance through cached duplicate hops; stop at cycles.
+        for k in [k for k in pending if k in hops]:
+            t = pending.pop(k)
+            since, via, walked = t["since"], list(t["via"]), set()
+            while k in hops and k not in walked:
+                walked.add(k)
+                via.append(k)
+                k, resolved = hops[k]
+                since = later(since, resolved)
+            if k not in walked:
+                tie(pending, k, since, via, t["rels"])
+        # Merge additional paths into targets already found.
         for k in [k for k in pending if k in out]:
             t = pending.pop(k)
             row = out[k]
@@ -986,6 +960,7 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
             if t["since"] is not None and (since is None or t["since"] > since):
                 row["venue_since"] = t["since"].isoformat()
             row["via_duplicates"] = sorted({*row["via_duplicates"], *t["via"]})
+            out_rels[k] |= t["rels"]
         pending = {k: v for k, v in pending.items() if k not in seen}
         if not pending:
             break
@@ -1005,12 +980,17 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
                     row["venue_since"] = t["since"].isoformat()
                 row["via_duplicates"] = t["via"]
                 out[b["id"]] = row
+                out_rels[b["id"]] = set(t["rels"])
             elif resolution == "DUPLICATE" and b.get("dupe_of"):
                 resolved = sigage.to_datetime(b.get("cf_last_resolved"))
-                since = max(x for x in (t["since"], resolved) if x is not None) \
-                    if (t["since"] is not None or resolved is not None) else None
-                tie(following, b["dupe_of"], since, [*t["via"], b["id"]])
+                hops[b["id"]] = (b["dupe_of"], resolved)
+                tie(following, b["dupe_of"], later(t["since"], resolved), [*t["via"], b["id"]],
+                    t["rels"])
         pending = following
+    for k, row in out.items():
+        rel = min(out_rels[k], key=_relation_rank)
+        if rel:
+            row["via_relation"] = rel
     return [out[k] for k in sorted(out)]
 
 
@@ -2703,7 +2683,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     # Byte-identical calls when the crash has no other name, so the lookups' contracts (and
     # the thirty-odd tests that pin them by name) do not move for the ordinary crash.
     widened = {"spellings": spellings} if len(spellings) > own_count else {}
-    existing = (_open_bugs_for_signature(signature, family=family) if widened
+    existing = (_open_bugs_for_signature(signature, family=family,
+                                         product=uuid_info.get("product")) if widened
                 else _open_bugs_for_signature(signature))
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
@@ -3189,7 +3170,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
             # target). The attach is its own PUT after the comment, and a failure there is
             # recorded, never raised: the comment is posted.
             via_note = _venue_via_signature_note(signature, venue, family)
-            text = preview["comment"] + ("\n\n" + via_note if via_note else "")
+            text = report_bug.existing_bug_comment(preview["comment"], uuid_info.get("channel"))
+            text += "\n\n" + via_note if via_note else ""
             _post_comment(bug_id, text, False, token)
             if via_note:
                 result["venue_via_signature"] = venue.get("via_signature")

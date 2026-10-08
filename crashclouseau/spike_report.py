@@ -341,7 +341,7 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
             landing_unresolved=landing_unresolved,
             node=getattr(getattr(findings, "culprit", None), "node", None)),
         report_bug._needinfo_line(person) if person else None,
-        report_bug._provenance(channel),
+        report_bug._comment_provenance(channel) if as_comment else report_bug._provenance(channel),
     ]
     return report_bug._unbacktick_bug_refs("\n\n".join(s for s in sections if s))
 
