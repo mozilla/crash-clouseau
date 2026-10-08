@@ -96,6 +96,23 @@ def _lead_result(cost=0.2):
     )
 
 
+def _actionable_result(node="abc123def456", cost=0.3):
+    return CrashTriageResult(
+        num_turns=4,
+        total_cost_usd=cost,
+        result="ok",
+        dossier=Dossier(
+            candidate=Candidate(node=node, bug=42) if node else None,
+            verdict=Verdict(
+                decision=Decision.actionable,
+                confidence=Confidence.probable,
+                mechanism=Claim(statement="m", citations=[_SF]),
+                consistency=Claim(statement="c", citations=[_SF]),
+            )
+        ),
+    )
+
+
 def _triage_returning(result, record_action=False):
     async def _fake(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
         if record_action and recorder is not None:
@@ -662,9 +679,13 @@ class TestConfirmBeforePublishing(unittest.TestCase):
 
         self.during_dry_run = None
 
-        def _filer(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False):
+        self.floor_waivers = []
+
+        def _filer(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False,
+                   floor_waiver=None):
             self.assertTrue(dry_run, "only the dry run may reach the filer here")
             self.dry_runs.append((verdict, confidence))
+            self.floor_waivers.append(floor_waiver)
             if self.during_dry_run:
                 self.during_dry_run()
             if self.plan_error:
@@ -1026,6 +1047,87 @@ class TestConfirmBeforePublishing(unittest.TestCase):
         self.assertEqual((result.input_tokens, result.output_tokens, result.cache_read_tokens),
                          (110, 220, 330))
         self.assertEqual(conf["cost_usd"], 2.0)
+
+    def test_an_agreeing_actionable_pass_waives_the_floor(self):
+        done, MVerd, _gate, autofile = self._run(_actionable_result(), _actionable_result())
+        self.assertEqual(self.floor_waivers, ["pending"])
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "actionable")
+        self.assertEqual(done.kwargs["payload"]["publish_confirmation"]["floor_waiver"],
+                         "agreed")
+        self.assertEqual(autofile.call_args.args[1]["publish_confirmation"]["floor_waiver"],
+                         "agreed")
+
+    def test_another_origin_or_verdict_disagrees(self):
+        for name, confirmed in (("origin", _actionable_result(node="fff000111222")),
+                                ("lead", _lead_result()),
+                                ("abstain", _abstain_result())):
+            with self.subTest(name):
+                done, _MVerd, _gate, _autofile = self._run(_actionable_result(), confirmed)
+                self.assertEqual(done.kwargs["payload"]["publish_confirmation"]["floor_waiver"],
+                                 "disagreed")
+
+    def test_origins_compare_on_the_short_node(self):
+        first = {"verdict": "actionable", "candidate": "ABC123DEF456"}
+        self.assertTrue(orch._same_actionable_origin(
+            first, _actionable_result(node="abc123def4567890abcdef")))
+        self.assertFalse(orch._same_actionable_origin(
+            {"verdict": "actionable", "candidate": None}, _actionable_result(node=None)))
+
+    def test_a_lead_is_not_offered_the_waiver(self):
+        done, _MVerd, _gate, _autofile = self._run(_lead_result(), _strong_result())
+        self.assertEqual(self.floor_waivers, [None])
+        self.assertNotIn("floor_waiver", done.kwargs["payload"]["publish_confirmation"])
+
+    def test_hangs_ooms_and_stack_overflows_keep_the_floor(self):
+        seeds = {
+            "shutdown hang": dict(_SEED, signature="shutdownhang | Foo"),
+            "hang report": dict(_SEED, raw_crash={"report_type": "hang",
+                                                  "ipc_channel_error": "ShutDownKill"}),
+            "OOM signature": dict(_SEED, signature="OOM | large | Foo"),
+            "OOM reason": dict(_SEED, raw_crash={"moz_crash_reason": "[unhandlable oom] x"}),
+            "Java OOM": dict(_SEED, signature="java.lang.OutOfMemoryError: at Foo.bar"),
+            "stack overflow signature": dict(_SEED, signature="stackoverflow | Foo"),
+            "stack overflow reason": dict(_SEED, raw_crash={"reason": "EXCEPTION_STACK_OVERFLOW"}),
+            "stack overflow crash type": dict(_SEED, raw_crash={"json_dump": {"crash_info": {
+                "type": "EXCEPTION_STACK_OVERFLOW"}}}),
+            "Java stack overflow": dict(_SEED, signature="java.lang.StackOverflowError: at A.b"),
+            "Java stack overflow cause": dict(
+                _SEED, signature="java.lang.RuntimeException: at A.b",
+                raw_crash={"java_exception": {"exception": {"values": [
+                    {"stacktrace": {"module": "java.lang", "type": "StackOverflowError"}},
+                    {"stacktrace": {"module": "java.lang", "type": "RuntimeException"}}]}}}),
+        }
+        for name, seed in seeds.items():
+            with self.subTest(name):
+                self.assertEqual(self._offered(seed), (None, False))
+        # A frame name is not the exception class.
+        seed = dict(_SEED, signature="java.lang.IllegalStateException: at "
+                                     "OutOfMemoryErrorHandler.report")
+        self.assertEqual(self._offered(seed), ("pending", True))
+
+    def _offered(self, seed):
+        llm = {"principal": {"model": "opus", "effort": "medium"}, "publish_effort": "high"}
+        with self._triage(_actionable_result()), \
+                mock.patch.object(orch.config, "get_llm", return_value=llm), \
+                mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                           return_value=True):
+            self.floor_waivers.clear()
+            _result, conf = orch._confirm_before_publishing(
+                "u-1", seed, _actionable_result(), llm, {})
+        return self.floor_waivers[-1], "floor_waiver" in conf
+
+    def test_the_filer_is_handed_the_recorded_waiver(self):
+        for confirmation, expected in (({"floor_waiver": "agreed"}, "agreed"), (None, None)):
+            payload = {"dossier": {}}
+            if confirmation:
+                payload["publish_confirmation"] = confirmation
+            with self.subTest(expected=expected), \
+                    mock.patch.object(orch.models, "Dossier"), \
+                    mock.patch("crashclouseau.samesite.record_for_dossier"), \
+                    mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                               return_value={"filed": False, "skipped": "x"}) as filer:
+                orch._autofile("u-1", payload, {"verdict": "actionable", "confidence": 70})
+            self.assertEqual(filer.call_args.kwargs["floor_waiver"], expected)
 
     def test_a_failed_confirming_pass_keeps_the_first(self):
         done, MVerd, _gate, autofile = self._run(_lead_result(), RuntimeError("boom"))

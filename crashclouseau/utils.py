@@ -623,6 +623,23 @@ OOM_SIZE_NOT_REQUEST = {
 }
 
 
+def is_oom_crash(signature, raw):
+    """Whether the signature or processed-crash annotations identify an OOM."""
+    raw = raw or {}
+    signature = str(signature or raw.get("signature") or "")
+    if signature.startswith("OOM | "):
+        return True
+    dump = raw.get("json_dump") or {}
+    reason = str(raw.get("moz_crash_reason") or dump.get("moz_crash_reason") or "")
+    if OOM_REASON_RE.search(reason):
+        return True
+    size = raw.get("oom_allocation_size")
+    if isinstance(size, (int, float)) and not isinstance(size, bool):
+        return True
+    # `Recovered` alone is not an OOM signal.
+    return raw.get("js_large_allocation_failure") == "Reporting"
+
+
 def oom_size_not_request(signature):
     """Return ``(caller, note)`` for a listed ``NS_ABORT_OOM`` caller, else ``None``."""
     parts = [p.strip() for p in str(signature or "").split("|")]

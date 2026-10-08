@@ -4854,6 +4854,7 @@ def _autofile(uuid, payload, row, planned=None):
         res = planned if planned is not None else bugzilla_apply.autofile_bug(
             uuid, uuid_info, stack, payload.get("dossier") or {},
             row["verdict"], row["confidence"],
+            floor_waiver=(payload.get("publish_confirmation") or {}).get("floor_waiver"),
         )
         if planned is not None and planned.get("filing_error"):
             # Defer dry-run error records until the analysis is persisted.
@@ -5040,14 +5041,47 @@ def _too_late_to_confirm(uuid, started):
     return "{:.0f}s of the {}s job timeout already used".format(elapsed, timeout)
 
 
-def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=None):
-    """Confirm a verdict at ``publish_effort`` if a filing dry run would publish it.
+_VOLUME_JAVA_ERRORS = frozenset({"OutOfMemoryError", "StackOverflowError"})
 
-    Return ``(result, confirmation)``. A successful, settled confirmation replaces the first
-    result; retain a summary of the first pass and combine both passes' reported usage.
-    A skipped or failed confirmation keeps the first result. A dry-run decline prevents
-    filing, and a caught RQ timeout marks the result withheld. Check the time budget before
-    planning and again before confirmation."""
+
+def _java_error_names(signature, raw):
+    """Return Java exception class names without package qualifiers."""
+    names = {signature.split(":", 1)[0].strip()} if ":" in signature else set()
+    values = (((raw or {}).get("java_exception") or {}).get("exception") or {}).get("values")
+    for value in values if isinstance(values, list) else ():
+        names.add(str(((value or {}).get("stacktrace") or {}).get("type") or ""))
+    return {name.rsplit(".", 1)[-1] for name in names if name}
+
+
+def _files_on_volume(seed):
+    """Identify hangs, OOMs and stack overflows excluded from the confirmation waiver."""
+    seed = seed or {}
+    raw = seed.get("raw_crash") or {}
+    info = (raw.get("json_dump") or {}).get("crash_info") or {}
+    signature = str(seed.get("signature") or raw.get("signature") or "")
+    return (_is_watchdog_seed(seed) or utils.is_oom_crash(signature, raw)
+            or signature.startswith("stackoverflow |")
+            or any(str(t or "").startswith("EXCEPTION_STACK_OVERFLOW")
+                   for t in (info.get("type"), raw.get("reason")))
+            or bool(_java_error_names(signature, raw) & _VOLUME_JAVA_ERRORS))
+
+
+def _same_actionable_origin(first_pass, confirmed):
+    """Whether both passes are ``actionable`` with the same origin changeset."""
+    candidate = confirmed.dossier.candidate if confirmed.dossier else None
+    node = str((candidate.node if candidate else "") or "")[:12].lower()
+    first = str((first_pass or {}).get("candidate") or "")[:12].lower()
+    return bool(node and node == first and (first_pass or {}).get("verdict") == "actionable"
+                and _verdict_row(confirmed)["verdict"] == "actionable")
+
+
+def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=None):
+    """Confirm at ``publish_effort`` when a filing dry run would publish.
+
+    Return ``(result, confirmation)``. A settled confirmation replaces the first pass and
+    combines usage. Skips and failures keep the first pass; dry-run declines and caught RQ
+    timeouts prevent filing. For eligible actionable crashes, a kept confirmation records
+    origin agreement in ``floor_waiver``."""
     effort = config.get_llm_publish_effort()
     principal = llm_cfg.get("principal") or {}
     if not effort or effort == principal.get("effort"):
@@ -5083,12 +5117,15 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
     if late:
         confirmation["skipped"] = late
         return result, confirmation
+    # Defer the floor check so eligible crashes can reach confirmation.
+    waivable = row["verdict"] == "actionable" and not _files_on_volume(seed)
     # Preserve declines and errors: retrying a failed lookup during filing could publish
     # the first pass without confirmation.
     try:
         stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
         plan = bugzilla_apply.autofile_bug(uuid, uuid_info or {}, stack, dossier,
-                                           row["verdict"], row["confidence"], dry_run=True)
+                                           row["verdict"], row["confidence"], dry_run=True,
+                                           floor_waiver="pending" if waivable else None)
     except BaseTimeoutException as exc:
         return result, _withhold(uuid, confirmation, exc)
     except Exception as exc:
@@ -5141,6 +5178,10 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
         return result, confirmation
     _add_usage(confirmed, result)
     confirmation["kept"] = True
+    if waivable:
+        confirmation["floor_waiver"] = (
+            "agreed" if _same_actionable_origin(confirmation["first_pass"], confirmed)
+            else "disagreed")
     return confirmed, confirmation
 
 

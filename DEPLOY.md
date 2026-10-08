@@ -505,6 +505,22 @@ its supporting chip alone does not establish waiver eligibility.
 After deployment, inspect `actionable_origin_age` and the `actionable floor ... waived` log
 entries. The behavior is covered in `tests/test_actionable_verdict.py`.
 
+## Confirmed actionable floor waiver (2026-10-08)
+
+An eligible `actionable` crash gets `floor_waiver="pending"` in the filing dry run so it
+can reach confirmation below `spike.real_installs`. A kept confirmation records `agreed`
+or `disagreed` in `publish_confirmation.floor_waiver`. Agreement requires both settled
+passes to be `actionable` with matching origin nodes (first 12 characters, ignoring case);
+only `agreed` grants this waiver during filing.
+
+Hangs, OOMs and stack overflows are excluded from this waiver, including Java
+`OutOfMemoryError` and `StackOverflowError` in the signature's exception class or exception
+chain. Skipped or failed confirmations grant no confirmation waiver. The existing fresh-origin
+waiver and recent-channel fallback remain available; other filing gates still apply.
+
+Tests: `tests/test_actionable_population.py`, `tests/test_autofile.py` and
+`tests/test_orchestrator.py`.
+
 ## Stale open bugs and the actionable decline (2026-10-04)
 
 `agent.autofile.wake_stale` controls comments on open bugs for `actionable` crashes:

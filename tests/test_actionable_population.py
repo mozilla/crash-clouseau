@@ -15,7 +15,7 @@ from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, report_bug  # noqa: E402
 from tests import test_actionable_verdict as tav  # noqa: E402
-from tests.test_autofile import _Base, _bug  # noqa: E402
+from tests.test_autofile import _INFO, _Base, _bug, _cfg  # noqa: E402
 
 _RECENT = {"release": {"count": 106, "installs": 100}, "beta": {"count": 1, "installs": 1},
            "nightly": {"count": 1, "installs": 1}}
@@ -178,6 +178,61 @@ class TestTheFloor(_Base):
     def test_passing_reaches_the_open_bug_gate(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(5)]
         res = self._actionable(wake_stale="off")
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["skipped"], "open bug 5 exists; an actionable crash is filed only "
+                                         "where no bug is")
+
+
+class TestTheConfirmedWaiver(_Base):
+    """Confirmation waiver below the installation floor."""
+
+    def setUp(self):
+        super().setUp()
+        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(population_days=30)
+        for p in (
+            mock.patch.object(report_bug, "fetch_signature_stats",
+                              return_value=(True, {"count": 4, "installs": 1})),
+            mock.patch.object(report_bug, "fetch_recent_channel_stats",
+                              return_value={"nightly": {"count": 4, "installs": 1}}),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _waiver(self, floor_waiver):
+        return bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},
+                                           "actionable", 70, floor_waiver=floor_waiver)
+
+    def test_agreement_files_below_the_floor(self):
+        res = self._waiver("agreed")
+        self.assertTrue(res["filed"], res)
+        self.assertEqual(len(self.created), 1)
+        report_bug.fetch_recent_channel_stats.assert_not_called()
+
+    def test_without_agreement_the_floor_holds(self):
+        floor = bugzilla_apply.config.get_spike("real_installs", "Firefox", "nightly")
+        below = ("1 installation on this signature, below the actionable floor of {}, and no "
+                 "channel reached its floor in the last 30 days".format(floor))
+        for waiver, skipped in (
+                (None, below),
+                ("pending", below),
+                ("disagreed", below + "; the confirming pass did not reach the same "
+                                      "actionable verdict and origin")):
+            with self.subTest(waiver=waiver):
+                res = self._waiver(waiver)
+                self.assertFalse(res["filed"])
+                self.assertEqual(res["skipped"], skipped)
+        self.assertEqual(self.created, [])
+
+    def test_a_disagreement_still_passes_on_another_channel(self):
+        report_bug.fetch_recent_channel_stats.return_value = _RECENT
+        res = self._waiver("disagreed")
+        self.assertTrue(res["filed"], res)
+
+    def test_agreement_does_not_pass_the_open_bug_gate(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(5)]
+        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(population_days=30,
+                                                                     wake_stale="off")
+        res = self._waiver("agreed")
         self.assertFalse(res["filed"])
         self.assertEqual(res["skipped"], "open bug 5 exists; an actionable crash is filed only "
                                          "where no bug is")

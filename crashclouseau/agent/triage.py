@@ -1727,19 +1727,7 @@ def _thread_inventory(raw: dict) -> list[str]:
 
 def _is_oom(crash, raw):
     """Whether the signature or processed-crash annotations identify an OOM."""
-    raw = raw or {}
-    signature = str((crash or {}).get("signature") or raw.get("signature") or "")
-    if signature.startswith("OOM | "):
-        return True
-    dump = raw.get("json_dump") or {}
-    reason = str(raw.get("moz_crash_reason") or dump.get("moz_crash_reason") or "")
-    if utils.OOM_REASON_RE.search(reason):
-        return True
-    # `Reporting` only: `Recovered` means the GC satisfied the allocation after all, and a later
-    # unrelated crash carrying it is not an OOM.
-    if _oom_allocation_size(raw) is not None:
-        return True
-    return raw.get("js_large_allocation_failure") == "Reporting"
+    return utils.is_oom_crash((crash or {}).get("signature"), raw)
 
 
 def _oom_allocation_size(raw):

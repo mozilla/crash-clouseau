@@ -442,6 +442,19 @@ class TestDryRun(_Base):
         self.assertFalse(bugzilla_apply._DRY_RUN.get())
         _real_create_writes()
 
+    def test_an_actionable_crash_below_the_floor_is_planned_pending_its_confirmation(self):
+        dossier = {"candidate": {"node": "n"}}
+        with mock.patch.object(report_bug, "fetch_signature_stats",
+                               return_value=(True, {"count": 1, "installs": 1})):
+            res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, dossier, "actionable", 70,
+                                              dry_run=True, floor_waiver="pending")
+            self.assertEqual(res["would_publish"], "new_bug")
+            res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, dossier, "actionable", 70,
+                                              dry_run=True)
+            self.assertNotIn("would_publish", res)
+            self.assertIn("below the actionable floor", res["skipped"])
+        self.assertEqual(self.writes, [])
+
     def test_a_real_run_after_a_dry_run_writes(self):
         self._dry()
         res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, {"candidate": {"node": "n"}},

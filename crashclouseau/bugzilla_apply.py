@@ -2425,14 +2425,15 @@ def passes_local_filing_gates(uuid, uuid_info, dossier, verdict, confidence):
     return bool(config.get_bugzilla_token())
 
 
-def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence):
+def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floor_waiver=None):
     """Run filing checks until a decline or the first screened Bugzilla write.
 
     Return the decline or a ``would_publish`` action (``new_bug``, ``comment``, ``update``),
     without writing to Bugzilla or recording filing results in the DB."""
     token = _DRY_RUN.set(True)
     try:
-        res = autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence)
+        res = autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
+                           floor_waiver=floor_waiver)
     except _WouldPublish as stop:
         return {"filed": False, "dry_run": True, "would_publish": stop.action, "bug": stop.bug}
     finally:
@@ -2440,7 +2441,8 @@ def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence):
     return dict(res or {}, dry_run=True)
 
 
-def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False):
+def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False,
+                 floor_waiver=None):
     """File a crash analysis under the configured policy and return filing or decline details.
 
     Check product/channel policy, run options, verdict eligibility, prior filings and the
@@ -2452,9 +2454,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     ``dry_run`` stops before the first screened Bugzilla write and returns filing errors
     without recording them in the DB. The orchestrator uses it to decide whether to confirm
     the analysis. Errors outside the write handlers can propagate to the caller.
+
+    ``floor_waiver="agreed"`` bypasses the actionable installation floor; ``"pending"``
+    only bypasses it during a dry run.
     """
     if dry_run:
-        return _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence)
+        return _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence,
+                                 floor_waiver=floor_waiver)
     channel = uuid_info.get("channel")
     product = uuid_info.get("product")
     # THE PRODUCT HOLD OUTRANKS EVERYTHING, the operator's per-run instruction included. Fenix
@@ -2615,19 +2621,29 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
                 logger.info("autofile: %s -- %s, waived: the failing code landed %.1f days "
                             "before the build and no available first-seen build predates it",
                             uuid, below, fresh)
+            elif floor_waiver == "agreed":
+                logger.info("autofile: %s -- %s, waived: the confirming pass reached the same "
+                            "actionable verdict and origin", uuid, below)
+            elif floor_waiver == "pending" and _DRY_RUN.get():
+                logger.info("autofile: %s -- %s, waived if the confirming pass agrees", uuid,
+                            below)
             else:
+                unconfirmed = ("; the confirming pass did not reach the same actionable verdict "
+                               "and origin" if floor_waiver == "disagreed" else "")
                 # Any channel of this product may meet its own installation floor.
                 days = cfg.get("population_days")
                 if not days:
-                    return {"filed": False, "skipped": below}
+                    return {"filed": False, "skipped": below + unconfirmed}
                 recent = report_bug.fetch_recent_channel_stats(uuid_info, days)
                 if recent is None:
                     return {"filed": False, "skipped": "{}; the last {} days of reports could "
-                                                       "not be read".format(below, days)}
+                                                       "not be read{}".format(below, days,
+                                                                              unconfirmed)}
                 over = report_bug.channels_over_floor(recent, product)
                 if not over:
                     return {"filed": False, "skipped": "{}, and no channel reached its floor in "
-                                                       "the last {} days".format(below, days)}
+                                                       "the last {} days{}".format(below, days,
+                                                                                   unconfirmed)}
                 logger.info("autofile: %s -- %s, passed on %s over the last %s days (%s)",
                             uuid, below, ", ".join(over), days,
                             ", ".join("{} {}".format(ch, recent[ch]["installs"]) for ch in over))
