@@ -737,6 +737,7 @@ def build_signature_since_note(corroborations, buildid=None):
     from crashclouseau import sigage
 
     c = corroborations or {}
+    buildid = utils.get_buildid(buildid)
     ever = c.get("signature_first_seen_ever")
     age_ever = c.get("signature_age_days_ever")
     drift = c.get("signature_clock_drift_days")
@@ -759,30 +760,15 @@ def build_signature_since_note(corroborations, buildid=None):
 
 
 def build_signature_age_note(corroborations, buildid=None):
-    """One sentence saying when this signature first appeared, or ``""``.
+    """Describe signature onset from recorded age facts, or return ``""`` if unknown.
 
-    ONSET ANCHORING, which is what the bugs a human files have and ours did not. Of the archive's
-    `Core :: JavaScript*` FIXED crash bugs that named a regressor, 12 of 12 also said which build
-    the signature started in; and when the signature was old, 7 of 7 stopped naming a regressor and
-    got actionable another way. Nine of our ten filings into that component accused a changeset
-    that landed 283 to 3205 days after the signature was already crashing, and all four owner
-    refutations attacked the analysis rather than the report. This is the line that lets the
-    recipient make that call in one glance — or say "that is just a signature change", the way
-    peterv did on bug 1898399.
-
-    FROM THE UNBOUNDED CLOCK (``sigage.first_seen_ever``), never the windowed one. On the first
-    prod day after `86f6799`, five of the seven dossiers whose windowed clock said "0 days old"
-    sat on signatures 1098 to 2255 days old; printing that number would be printing the error.
-    The disagreement is stated too, briefly, because a reader who checks crash-stats will see the
-    truncated date and conclude WE are wrong.
-
-    ``buildid`` is the crash's own build, used only so that "the build above" is said when the
-    signature really did start in THIS build and not merely within a day of it.
-
-    Costs nothing: ``_record_signature_age_facts`` already put all of this in ``corroborations``."""
+    Prefer all-time first-seen data and explain discrepancies with the search window.
+    ``buildid`` accepts a build ID or datetime; "the build above" requires an exact match.
+    """
     from crashclouseau import sigage
 
     c = corroborations or {}
+    buildid = utils.get_buildid(buildid)
     ever = c.get("signature_first_seen_ever")
     age_ever = c.get("signature_age_days_ever")
     windowed = c.get("signature_first_seen_windowed")

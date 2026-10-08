@@ -22,6 +22,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 from urllib.parse import urlencode  # noqa: E402
 
@@ -523,6 +524,38 @@ class TestTheFiledBugStatesTheAge(unittest.TestCase):
         self.assertIn("This signature is not new", comment)
         self.assertLess(comment.find("There are 2 crashes"),
                         comment.find("This signature is not new"))
+
+
+class TestTheBuildAsTheDBStoresIt(unittest.TestCase):
+    """Cover datetime build IDs in signature notes."""
+
+    _BUILD = datetime(2026, 10, 7, 9, 54, 43, tzinfo=timezone.utc)
+    _NEW = {"signature_first_seen_ever": "20261007095443", "signature_age_days_ever": 0.0}
+
+    def test_a_signature_first_seen_in_this_build_is_the_build_above(self):
+        self.assertEqual(report_bug.build_signature_since_note(self._NEW, self._BUILD),
+                         "This signature's first report anywhere is in the build above.")
+        self.assertIn("first report anywhere is in build 20261007095443 (2026-10-07), the build "
+                      "above.", report_bug.build_signature_age_note(self._NEW, self._BUILD))
+
+    def test_an_undated_signature_first_seen_in_this_build(self):
+        c = {"signature_first_seen_windowed": "20261007095443", "signature_age_days_windowed": 0.0}
+        self.assertIn("new with this build", report_bug.build_signature_age_note(c, self._BUILD))
+
+    def test_a_rename_states_how_old_the_crash_is(self):
+        c = {"signature_predecessor": "Old::Name",
+             "signature_predecessor_first_seen_ever": "20250310180126"}
+        self.assertIn("first recorded in build 20250310180126 (2025-03-10), 576 days before the "
+                      "build above", report_bug.build_signature_age_note(c, self._BUILD))
+
+    def test_the_filed_comment(self):
+        stack = {"frames": [{"stackpos": 0, "function": "Foo::bar", "filename": "dom/Foo.cpp",
+                             "line": 51, "module": "xul.dll"}]}
+        comment = report_bug.build_bug_comment(
+            {"uuid": "u-1", "channel": "nightly", "buildid": self._BUILD}, stack,
+            {"candidate": {"node": "abc123"}, "verdict": {}, "corroborations": self._NEW},
+            stats={"count": 4, "installs": 1}, first=True, version="159.0a1")
+        self.assertIn("(2026-10-07), the build above.", comment)
 
 
 class TestStaleSignatureNote(unittest.TestCase):
