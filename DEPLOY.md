@@ -521,6 +521,21 @@ waiver and recent-channel fallback remain available; other filing gates still ap
 Tests: `tests/test_actionable_population.py`, `tests/test_autofile.py` and
 `tests/test_orchestrator.py`.
 
+## Confirming verdicts below the filing threshold (2026-10-08)
+
+When `agent.llm.publish_effort` is set and differs from the principal's effort, eligible
+verdicts in `[agent.autofile.confirm_min_confidence, min_confidence)` (default `[50, 70)`)
+are planned at `min_confidence`. Confirmation still requires a publishable dry run and
+enough job time. Filing uses the resulting verdict's actual confidence.
+
+Verdicts lowered by gates are excluded from this increase. A decline planned at higher
+confidence is retried at the actual confidence to preserve incomplete-fix filing.
+`publish_confirmation.planned_confidence` records the temporary value.
+Set `confirm_min_confidence` to `null` or `min_confidence` to disable the increase.
+
+Tests: `tests/test_orchestrator.py`, `tests/test_second_opinion_fold.py` and
+`tests/test_corroboration_registry.py`.
+
 ## Stale open bugs and the actionable decline (2026-10-04)
 
 `agent.autofile.wake_stale` controls comments on open bugs for `actionable` crashes:

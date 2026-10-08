@@ -5075,13 +5075,39 @@ def _same_actionable_origin(first_pass, confirmed):
                 and _verdict_row(confirmed)["verdict"] == "actionable")
 
 
+# Gates that block a confidence increase during filing planning.
+_PLANNING_CLAMPS = frozenset({
+    "absent_thread_clamped", "candidate_backout_capped", "downgraded_from_strong",
+    "second_opinion_clamped", "second_opinion_clamped_strong", "stale_signature_clamped",
+})
+
+
+def _planning_confidence(seed, result, row):
+    """Use the filing threshold to plan eligible confirmations without changing the verdict."""
+    conf = row["confidence"]
+    cfg = config.get_agent_autofile((seed or {}).get("channel"),
+                                    product=(seed or {}).get("product"))
+    lowest, rung = cfg.get("confirm_min_confidence"), cfg["min_confidence"]
+    if (conf is None or lowest is None or not lowest <= conf < rung
+            or row["verdict"] not in cfg["verdicts"]):
+        return conf
+    raw = result.dossier.raw_verdict if result.dossier else None
+    if raw is None or int(round(CONFIDENCE_SCORE.get(raw.confidence, 0.0) * 100)) > conf:
+        return conf
+    # A clamp can undo a promotion, leaving raw and final confidence equal.
+    corro = result.dossier.corroborations or {}
+    if any(corro.get(flag) for flag in _PLANNING_CLAMPS):
+        return conf
+    return rung
+
+
 def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=None):
     """Confirm at ``publish_effort`` when a filing dry run would publish.
 
-    Return ``(result, confirmation)``. A settled confirmation replaces the first pass and
-    combines usage. Skips and failures keep the first pass; dry-run declines and caught RQ
-    timeouts prevent filing. For eligible actionable crashes, a kept confirmation records
-    origin agreement in ``floor_waiver``."""
+    Return ``(result, confirmation)``. A settled pass replaces the first and combines usage;
+    skips and failures keep the first. Caught RQ timeouts withhold filing. Other declines
+    are reused only when planned at the original confidence. Eligible actionable passes
+    record origin agreement in ``floor_waiver``."""
     effort = config.get_llm_publish_effort()
     principal = llm_cfg.get("principal") or {}
     if not effort or effort == principal.get("effort"):
@@ -5094,9 +5120,10 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
     dossier = result.dossier.model_dump(mode="json") if result.dossier else {}
     crash = {"channel": seed.get("channel"), "product": seed.get("product"),
              "signature": seed.get("signature")}
+    planned = _planning_confidence(seed, result, row)
     try:
         if not bugzilla_apply.passes_local_filing_gates(uuid, crash, dossier, row["verdict"],
-                                                        row["confidence"]):
+                                                        planned):
             return result, None
     except Exception:                                    # pragma: no cover - defensive
         logger.error("agent: %s local filing gates failed; not confirming", uuid,
@@ -5119,12 +5146,11 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
         return result, confirmation
     # Defer the floor check so eligible crashes can reach confirmation.
     waivable = row["verdict"] == "actionable" and not _files_on_volume(seed)
-    # Preserve declines and errors: retrying a failed lookup during filing could publish
-    # the first pass without confirmation.
+    # Keep the plan so filing can reuse declines made at the original confidence.
     try:
         stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
         plan = bugzilla_apply.autofile_bug(uuid, uuid_info or {}, stack, dossier,
-                                           row["verdict"], row["confidence"], dry_run=True,
+                                           row["verdict"], planned, dry_run=True,
                                            floor_waiver="pending" if waivable else None)
     except BaseTimeoutException as exc:
         return result, _withhold(uuid, confirmation, exc)
@@ -5133,6 +5159,8 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
         plan = {"filed": False, "dry_run": True,
                 "skipped": "could not plan the filing: {}: {}".format(type(exc).__name__, exc)}
     confirmation["plan"] = plan
+    if planned != row["confidence"]:
+        confirmation["planned_confidence"] = planned
     if not plan.get("would_publish"):
         logger.info("agent: %s not confirmed: the filer would not publish it (%s)", uuid,
                     plan.get("skipped"))
@@ -5469,7 +5497,9 @@ def run_evidence_agent(uuid, force=False):
                 _record_withheld(uuid, seed, row,
                                  "not published: {:.0f}s of job time left, the filer needs "
                                  "{}s".format(left, _PUBLISH_MARGIN_S))
-            elif plan is not None and not plan.get("would_publish"):
+            elif (plan is not None and not plan.get("would_publish")
+                  and "planned_confidence" not in confirmation):
+                # Declines planned at higher confidence need an incomplete-fix check.
                 _autofile(uuid, payload, row, planned=plan)
             else:
                 _autofile(uuid, payload, row)

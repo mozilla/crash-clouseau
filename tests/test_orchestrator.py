@@ -80,7 +80,7 @@ def _abstain_result():
     )
 
 
-def _lead_result(cost=0.2):
+def _lead_result(cost=0.2, confidence=Confidence.medium):
     return CrashTriageResult(
         num_turns=4,
         total_cost_usd=cost,
@@ -89,14 +89,14 @@ def _lead_result(cost=0.2):
             candidate=Candidate(node="abc123def456", bug=42),  # the lead anchor
             verdict=Verdict(
                 decision=Decision.lead,
-                confidence=Confidence.medium,
+                confidence=confidence,
                 needinfo_draft="could you take a look at this crash?",
             )
         ),
     )
 
 
-def _actionable_result(node="abc123def456", cost=0.3):
+def _actionable_result(node="abc123def456", cost=0.3, confidence=Confidence.probable):
     return CrashTriageResult(
         num_turns=4,
         total_cost_usd=cost,
@@ -105,7 +105,7 @@ def _actionable_result(node="abc123def456", cost=0.3):
             candidate=Candidate(node=node, bug=42) if node else None,
             verdict=Verdict(
                 decision=Decision.actionable,
-                confidence=Confidence.probable,
+                confidence=confidence,
                 mechanism=Claim(statement="m", citations=[_SF]),
                 consistency=Claim(statement="c", citations=[_SF]),
             )
@@ -694,7 +694,9 @@ class TestConfirmBeforePublishing(unittest.TestCase):
 
         for p in (mock.patch("crashclouseau.bugzilla_apply.autofile_bug", _filer),
                   mock.patch.object(orch.models.CrashStack, "get_by_uuid",
-                                    return_value=([], {"channel": "nightly"}))):
+                                    return_value=([], {"channel": "nightly"})),
+                  # Avoid network lookups for synthetic nodes.
+                  mock.patch("crashclouseau.sigage.json_rev", return_value={})):
             p.start()
             self.addCleanup(p.stop)
 
@@ -752,14 +754,27 @@ class TestConfirmBeforePublishing(unittest.TestCase):
         self.plan = {"filed": False, "dry_run": True,
                      "skipped": "already filed bug 2073887 for this signature; it was resolved "
                                 "WONTFIX — not filing again"}
-        done, MVerd, _gate, autofile = self._run(_lead_result())
+        done, MVerd, _gate, autofile = self._run(_lead_result(confidence=Confidence.probable))
         self.assertEqual(self.calls, ["medium"])
-        self.assertEqual(self.dry_runs, [("lead", 50)])
+        self.assertEqual(self.dry_runs, [("lead", 70)])
         conf = done.kwargs["payload"]["publish_confirmation"]
         self.assertEqual(conf["plan"], self.plan)
         self.assertNotIn("kept", conf)
+        self.assertNotIn("planned_confidence", conf)
         # Pass the decline through for recording, without repeating filing checks.
         self.assertEqual(autofile.call_args.kwargs["planned"], self.plan)
+
+    def test_a_decline_planned_at_a_raised_rung_files_at_the_verdicts_own(self):
+        self.plan = {"filed": False, "dry_run": True,
+                     "skipped": "bug 4242 already names its regressor (bug 41)"}
+        done, MVerd, _gate, autofile = self._run(_lead_result())
+        self.assertEqual(self.calls, ["medium"])
+        self.assertEqual(self.dry_runs, [("lead", 70)])
+        conf = done.kwargs["payload"]["publish_confirmation"]
+        self.assertEqual((conf["plan"], conf["planned_confidence"]), (self.plan, 70))
+        # Keep the incomplete-fix fallback at the actual confidence.
+        self.assertNotIn("planned", autofile.call_args.kwargs)
+        self.assertEqual(autofile.call_args.args[2]["confidence"], 50)
 
     def test_a_dry_run_that_crosses_the_cutoff_starts_no_confirmation(self):
         # Planning crosses the 1800 s cutoff of a 3600 s job.
@@ -794,7 +809,7 @@ class TestConfirmBeforePublishing(unittest.TestCase):
 
     def test_a_dry_run_that_fails_is_a_decline(self):
         self.plan_error = RuntimeError("bmo down")
-        done, _MVerd, _gate, autofile = self._run(_lead_result())
+        done, _MVerd, _gate, autofile = self._run(_lead_result(confidence=Confidence.probable))
         self.assertEqual(self.calls, ["medium"])
         planned = autofile.call_args.kwargs["planned"]
         self.assertIn("could not plan the filing: RuntimeError: bmo down", planned["skipped"])
@@ -1128,6 +1143,58 @@ class TestConfirmBeforePublishing(unittest.TestCase):
                                return_value={"filed": False, "skipped": "x"}) as filer:
                 orch._autofile("u-1", payload, {"verdict": "actionable", "confidence": 70})
             self.assertEqual(filer.call_args.kwargs["floor_waiver"], expected)
+
+    def test_a_medium_actionable_verdict_is_planned_at_the_rung_and_confirmed(self):
+        done, MVerd, gate, _autofile = self._run(
+            _actionable_result(confidence=Confidence.medium), _actionable_result())
+        self.assertEqual(gate.call_args.args[3:], ("actionable", 70))
+        self.assertEqual(self.dry_runs, [("actionable", 70)])
+        self.assertEqual(self.floor_waivers, ["pending"])
+        self.assertEqual(self.calls, ["medium", "high"])
+        self.assertEqual((MVerd.set.call_args.kwargs["verdict"],
+                          MVerd.set.call_args.kwargs["confidence"]), ("actionable", 70))
+        conf = done.kwargs["payload"]["publish_confirmation"]
+        self.assertEqual(conf["first_pass"]["confidence"], 50)
+        self.assertEqual(conf["floor_waiver"], "agreed")
+
+    def test_a_confirmation_that_stays_medium_keeps_its_rung(self):
+        done, MVerd, _gate, autofile = self._run(
+            _actionable_result(confidence=Confidence.medium),
+            _actionable_result(confidence=Confidence.medium))
+        self.assertEqual(MVerd.set.call_args.kwargs["confidence"], 50)
+        self.assertEqual(autofile.call_args.args[2]["confidence"], 50)
+
+    def test_the_planning_rung(self):
+        seed = dict(_SEED)
+
+        def planned(result, cfg=None):
+            with mock.patch.object(orch.config, "get_agent_autofile", return_value=dict(
+                    {"min_confidence": 70, "verdicts": ["lead", "culprit", "actionable"],
+                     "confirm_min_confidence": 50}, **(cfg or {}))):
+                if result.dossier and result.dossier.verdict:
+                    result.dossier.raw_verdict = result.dossier.raw_verdict or \
+                        result.dossier.verdict.model_copy(deep=True)
+                return orch._planning_confidence(seed, result, orch._verdict_row(result))
+
+        self.assertEqual(planned(_lead_result()), 70)
+        self.assertEqual(planned(_actionable_result(confidence=Confidence.medium)), 70)
+        self.assertEqual(planned(_actionable_result()), 70)
+        self.assertEqual(planned(_actionable_result(confidence=Confidence.low)), 25)
+        self.assertEqual(planned(_lead_result(), {"confirm_min_confidence": None}), 50)
+        self.assertEqual(planned(_lead_result(), {"verdicts": ["culprit"]}), 50)
+        # Model: 70; after gates: 50.
+        lowered = _lead_result()
+        lowered.dossier.raw_verdict = lowered.dossier.verdict.model_copy(
+            update={"confidence": Confidence.probable})
+        self.assertEqual(planned(lowered), 50)
+        # Promotion then clamp: 50 -> 70 -> 50.
+        clamped = _lead_result()
+        clamped.dossier.corroborations = {"fault_address_offset_match": True,
+                                          "stale_signature_clamped": True}
+        self.assertEqual(planned(clamped), 50)
+        promoted = _lead_result()
+        promoted.dossier.corroborations = {"fault_address_offset_match": True}
+        self.assertEqual(planned(promoted), 70)
 
     def test_a_failed_confirming_pass_keeps_the_first(self):
         done, MVerd, _gate, autofile = self._run(_lead_result(), RuntimeError("boom"))

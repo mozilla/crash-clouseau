@@ -45,9 +45,9 @@ the refactor most likely to change behaviour while claiming not to.
 #                it is why the registry asks for the kind rather than just "has a reader".
 KINDS = ("evidence", "promotion", "clamp", "suppression", "diagnostic")
 
-# Readers that are not a file: a flag can be read by being a MEMBER of a declared list, which no
-# grep for `get("flag")` will ever find. Both lists are pinned against this registry by the test.
-POLICY_READERS = ("policy:_INSTANCE_SUPPRESSED", "policy:_SO_BOOST_POLICY")
+# Policy membership counts as a reader; tests check it against this registry.
+POLICY_READERS = ("policy:_INSTANCE_SUPPRESSED", "policy:_SO_BOOST_POLICY",
+                  "policy:_PLANNING_CLAMPS")
 
 # flag -> (kind, readers, note). `readers` is empty ONLY for a `diagnostic`.
 #
@@ -94,9 +94,8 @@ REGISTRY = {
         "(`build_seed`, 2026-09-07: a TaskController marker fix hid bug 2066149). Write-only "
         "until its firing rate and where the named candidate then comes from are read off prod."),
     "downgraded_from_strong": (
-        "clamp", ("policy:_SO_BOOST_POLICY",),
-        "Written by `_downgrade_to_lead_or_abstain` for the exposer/SF-3 downgrades. Read ONLY "
-        "through the boost policy, which is why a grep for it finds no reader."),
+        "clamp", ("policy:_SO_BOOST_POLICY", "policy:_PLANNING_CLAMPS"),
+        "Marks a downgrade to a lead by `_downgrade_to_lead_or_abstain`."),
 
     # -- the second opinion ------------------------------------------------------------------
     "second_opinion_corroborated": (
@@ -114,16 +113,11 @@ REGISTRY = {
         "confidence `high`), so publishing agreement is authority inflation while publishing "
         "disagreement is the only variance the reader can act on."),
     "second_opinion_clamped": (
-        "diagnostic", (),
-        "A refutation cost the lead one rung. Correctly write-only: it clamps a `probable` lead "
-        "to `medium` = rung 50, below `autofile.min_confidence`, so no bug comment exists to "
-        "print it on. Contrast `_clamped_strong`, which lands ON the filing floor."),
+        "clamp", ("policy:_PLANNING_CLAMPS",),
+        "A medium or high second-opinion refutation lowered a lead to `medium` (50)."),
     "second_opinion_clamped_strong": (
-        "clamp", ("report_bug.py", "templates/crashstack.html"),
-        "A `medium` refutation costs strong-evidence one band, to a `probable` lead. Until "
-        "2026-08-24 this case set `_refuted` and moved nothing, so the top rung was the only one "
-        "a blind refutation could not touch (`ca6ebc17`, culprit/85). The clamped verdict is "
-        "still ABOVE the filing floor, which is why this one must print."),
+        "clamp", ("report_bug.py", "templates/crashstack.html", "policy:_PLANNING_CLAMPS"),
+        "A medium second-opinion refutation changed strong-evidence to a `probable` lead."),
     "second_opinion_downgraded_strong": (
         "diagnostic", (),
         "A high-confidence refutation took strong-evidence down to a lead."),
@@ -143,10 +137,9 @@ REGISTRY = {
     "candidate_landed_after_first_seen_days": (
         "evidence", ("report_bug.py", "templates/crashstack.html"), ""),
     "stale_signature_clamped": (
-        "clamp", ("report_bug.py", "templates/crashstack.html", "policy:_SO_BOOST_POLICY"),
-        "`allow` in the boost policy, on the axis argument: the clamp rules on ORIGIN, an "
-        "independent blind agreement is about the MECHANISM. Both surfaces now say so — that "
-        "round trip was invisible until 2026-08-21."),
+        "clamp", ("report_bug.py", "templates/crashstack.html", "policy:_SO_BOOST_POLICY",
+                  "policy:_PLANNING_CLAMPS"),
+        "A second-opinion agreement may undo this clamp under `_SO_BOOST_POLICY`."),
     "signature_report_count": ("evidence", ("agent/orchestrator.py",), ""),
     "stale_signature_waived": (
         "diagnostic", (),
@@ -328,7 +321,8 @@ REGISTRY = {
     "candidate_is_backout": ("evidence", ("templates/crashstack.html",), ""),
     "candidate_backout_same_push": ("evidence", ("templates/crashstack.html",), ""),
     "candidate_backout_suppressed": ("suppression", ("templates/crashstack.html",), ""),
-    "candidate_backout_capped": ("clamp", ("templates/crashstack.html",), ""),
+    "candidate_backout_capped": (
+        "clamp", ("templates/crashstack.html", "policy:_PLANNING_CLAMPS"), ""),
     "candidate_arrived_by_merge": (
         "evidence", ("report_bug.py",),
         "The candidate reached the channel with a MERGE push (a whole cycle at one pushdate), "
@@ -375,7 +369,7 @@ REGISTRY = {
     "absent_named_threads": (
         "diagnostic", (),
         "The quoted thread names a verdict asserted that this process does not have."),
-    "absent_thread_clamped": ("diagnostic", (), ""),
+    "absent_thread_clamped": ("clamp", ("policy:_PLANNING_CLAMPS",), ""),
 
     # -- the awaited work of a shutdown hang (bug 2073349) -----------------------------------
     "hang_awaited_work": (
@@ -564,15 +558,7 @@ REGISTRY = {
 }
 
 
-# A `promotion` or a `clamp` MOVED the rung the filed bug publishes, so the bug has to say why --
-# otherwise a reader sees a number with no reason, which is the exact complaint that produced this
-# file (see the `stale_signature_clamped` story at the top). `test_a_rung_mover_reaches_the_bug`
-# requires `report_bug.py` among the readers of every such flag, and the exceptions below are
-# DECLARED rather than tolerated.
-#
-# All four fired on 0 of the 17 filed bugs in the 500-dossier prod snapshot of 2026-08-24
-# (all-500 counts in the notes), so this invariant carries no debt today. That is the point: it is
-# a guard against the NEXT rung-mover being invisible, not a repair of an existing gap.
+# Tests require promotions and clamps to have a report_bug.py reader or an explanation here.
 UNPUBLISHED = {
     "fault_address_offset_match":
         "7 of 500 runs, 0 of 17 filings. The offset match itself is published as prose by "
@@ -581,10 +567,13 @@ UNPUBLISHED = {
     "prior_signature_match":
         "2 of 500 runs, 0 of 17 filings.",
     "downgraded_from_strong":
-        "0 of 500 runs. Read only through `_SO_BOOST_POLICY`; the downgrade it records is "
-        "already spoken by whichever gate called `_downgrade_to_lead_or_abstain`.",
+        "Shared downgrade marker; the calling gate supplies the specific reason.",
     "candidate_backout_capped":
-        "0 of 500 runs. Caps a backout candidate's rung; the backout itself is printed.",
+        "Caps the decision at lead; the candidate's backout status is shown on the crash page.",
+    "second_opinion_clamped":
+        "Sets confidence to 50, below the default filing threshold. Incomplete fixes may still file.",
+    "absent_thread_clamped":
+        "Sets confidence to 50, below the default filing threshold. Incomplete fixes may still file.",
 }
 
 

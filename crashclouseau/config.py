@@ -1183,6 +1183,8 @@ def get_agent_autofile(channel=None, product=None):
         "fresh_origin_days": a.get("fresh_origin_days", 14),
         # Recent-report window for the alternative population check. 0/null disables it.
         "population_days": a.get("population_days", 30),
+        # Minimum confidence eligible for confirmation below the filing threshold; null disables.
+        "confirm_min_confidence": a.get("confirm_min_confidence", 50),
         # Origin-age and author-activity limit for `_owner_for_old_origin`. 0/null disables it.
         "author_active_days": a.get("author_active_days", 365),
         # Recent FIXED-bug window and minimum for triage-owner routing; 0/null disables it.

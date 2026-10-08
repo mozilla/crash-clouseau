@@ -299,6 +299,17 @@ class TestTheTwoPolicyListsAgree(unittest.TestCase):
             if "policy:_SO_BOOST_POLICY" in readers:
                 self.assertIn(flag, orchestrator._SO_BOOST_POLICY, flag)
 
+    def test_every_clamp_keeps_a_verdict_off_the_filing_rung(self):
+        clamps = {f for f, (kind, _r, _n) in corroborations.REGISTRY.items() if kind == "clamp"}
+        self.assertEqual(set(orchestrator._PLANNING_CLAMPS), clamps)
+        for flag in orchestrator._PLANNING_CLAMPS:
+            self.assertIn("policy:_PLANNING_CLAMPS", corroborations.REGISTRY[flag][1], flag)
+
+    def test_a_flag_declaring_the_planning_policy_is_in_it(self):
+        for flag, (_kind, readers, _note) in corroborations.REGISTRY.items():
+            if "policy:_PLANNING_CLAMPS" in readers:
+                self.assertIn(flag, orchestrator._PLANNING_CLAMPS, flag)
+
 
 class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
     # THE POINT OF THE WHOLE MODULE. Each of these is read by nothing; each is `diagnostic`
@@ -313,13 +324,13 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         # Retain page-aligned annotations for auditing the exclusion.
         "possible_bit_flip_page_aligned",
         "repeat_cooldown_runs",
-        "absent_named_threads", "absent_thread_clamped", "actionable_origin_postdates_signature",
+        "absent_named_threads", "actionable_origin_postdates_signature",
         "call_path_verified",
         "compiled_out_macro", "compiled_out_rev", "exposer_suspected",
         "fault_offset_unverified", "hardware_noise_signature_suppressed",
         "cpu_info", "machine_crash_count", "machine_distinct_cpus",
         "machine_distinct_signatures", "machine_span_seconds",
-        "second_opinion_abstained", "second_opinion_clamped",
+        "second_opinion_abstained",
         "second_opinion_downgraded_strong", "skeptic_build_flag_unbound",
         # `sigtrend`. The tail is deliberately write-only: it is an ordering statistic that is
         # anti-conservative by three to five orders of magnitude against a shuffled null, so no

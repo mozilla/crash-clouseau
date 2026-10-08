@@ -713,6 +713,35 @@ class TestAppliedMoveIsDistinguishable(unittest.TestCase):
         # ...so the applied-move flag is what proves the clamp fired.
         self.assertTrue(d.corroborations["second_opinion_clamped"])
 
+    def test_a_clamp_after_a_bump_is_not_planned_at_the_filing_rung(self):
+        r = self._result(self._corroborated_lead(Confidence.medium))
+        orch.apply_deterministic_gates(
+            r, self._FAULT_SEED,
+            second_opinion=_so(corroborates=False, confidence="high"),
+            second_opinion_status="ok",
+        )
+        self.assertTrue(r.dossier.corroborations["second_opinion_clamped"])
+        self.assertEqual(orch._planning_confidence(self._FAULT_SEED, r, orch._verdict_row(r)), 50)
+
+    def test_an_absent_thread_clamp_after_a_bump_is_not_planned_at_the_filing_rung(self):
+        from tests.test_hang_thread import _CITE, _FILED_MECHANISM, _hang
+
+        lead = self._corroborated_lead(Confidence.medium)
+        lead.verdict = lead.verdict.model_copy(update={
+            "mechanism": Claim(statement=_FILED_MECHANISM, citations=_CITE),
+            "consistency": Claim(statement="fits the evidence", citations=_CITE)})
+        raw = _hang()
+        raw["json_dump"]["crash_info"]["address"] = "0x8"
+        seed = {**self._FAULT_SEED, "raw_crash": raw}
+        r = self._result(lead)
+        orch.apply_deterministic_gates(r, seed)
+        d = r.dossier
+        self.assertEqual((d.raw_verdict.confidence, d.verdict.confidence),
+                         (Confidence.medium, Confidence.medium))
+        self.assertTrue(d.corroborations["fault_address_offset_match"])
+        self.assertTrue(d.corroborations["absent_thread_clamped"])
+        self.assertEqual(orch._planning_confidence(seed, r, orch._verdict_row(r)), 50)
+
     def test_a_refuted_medium_lead_records_the_abstain_not_a_clamp(self):
         """At medium there is no band to clamp to, so the applied move is an ABSTAIN — and the
         flags must say which of the two actually happened."""
