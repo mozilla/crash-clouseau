@@ -674,25 +674,21 @@ def _signature_trend_lines(crash: dict) -> list[str]:
     ]
 
 
-def _watchdog_lines(crash: dict) -> list[str]:
-    """What a hang / timeout crash IS, as prompt lines, or ``[]`` for a fault.
-
-    Shared with the blind second opinion through ``_crash_facts``, like the rate block: it is a
-    fact about the report, not a direction. Both models otherwise reason about it as a fault, and
-    the two arguments that follow from that are inverted here. "The change touches no code on
-    the stack and cannot itself hang" -- the stack is the WATCHDOG's or the waiting thread's, and
-    the work being waited on is elsewhere by construction. "The signature predates the change" --
-    a watchdog signature fires whenever the awaited work exceeds its budget, so it is typically
-    years old and a change that adds work regresses it without introducing it. On 2026-08-15 both
-    were used to refute a lead the module owner confirmed the next day (bug 2063892)."""
+def _is_watchdog(crash: dict) -> bool:
+    """Classify likely hangs using the report metadata."""
     raw = crash.get("raw_crash") or {}
     dump = raw.get("json_dump") or {}
-    if not utils.is_watchdog_crash(
+    return utils.is_watchdog_crash(
         crash.get("signature") or raw.get("signature"),
         raw.get("report_type"),
         raw.get("moz_crash_reason") or dump.get("moz_crash_reason"),
         raw.get("ipc_channel_error"),
-    ):
+    )
+
+
+def _watchdog_lines(crash: dict) -> list[str]:
+    """Render watchdog guidance shared by triage and the blind second opinion."""
+    if not _is_watchdog(crash):
         return []
     return [
         "",
@@ -1833,26 +1829,16 @@ def _crash_facts(crash: dict) -> list[str]:
         )),
         ("Async shutdown timeout", raw.get("async_shutdown_timeout"),
          _render_async_shutdown),
-        # THE three shutdown-hang fields, none of which had ever reached a prompt. On bug
-        # 2064436's crash the spin-loop stack read `default: nsThreadPool::ShutdownWithTimeout
-        # BgIOThreadPool` — Socorro naming the exact pool the main thread was blocked on, while
-        # the agent, blind to it, invented a MediaTrackGraph. Present on 6 of 9 sampled
-        # diverging hangs, each naming a different subsystem (nsHttpConnectionMgr::Shutdown,
-        # QuotaManager::Observer::Observe, ParentImpl::ShutdownBackgroundThread, ...), so this is
-        # the highest-value line in the block for a hang and it is nearly free.
+        # SpinEventLoopUntil annotates active main-thread event loops, innermost last.
+        # On a hang, these can identify the work being awaited.
         ("Shutdown phase reached", raw.get("shutdown_progress")),
         ("Why shutdown started", raw.get("shutdown_reason")),
-        ("BLOCKED SPIN-EVENT-LOOP STACK (what the main thread is waiting for, innermost last "
-         "— this NAMES the stuck subsystem; treat it as the primary lead for a shutdown hang)",
+        ("BLOCKED SPIN-EVENT-LOOP STACK (main-thread nested event loops, innermost last)"
+         if _is_watchdog(crash) else
+         "Spin-event-loop stack (main-thread nested event loops at crash, innermost last)",
          raw.get("xpcom_spin_event_loop_stack"), _render_spin_stack),
     ]
-    # A 3-tuple names a per-field renderer that runs INSTEAD of `_short_value`, keyed on the
-    # FIELD rather than on the string's shape. Of the 23 facts below the 300-char cap is a
-    # measured no-op on 10, unmeasurable on the 3 PHC lines, unmeasured on the rest and a
-    # destructor on exactly two, so only those two have one. Both therefore also
-    # reach the blind second opinion through the shared `_crash_facts`, which is right here:
-    # they restore FACTS Socorro already sent us (the stuck subsystem, the blocker's source
-    # file), never guidance.
+    # An optional third tuple item replaces the default `_short_value` renderer.
     for fact in facts:
         label, value = fact[0], fact[1]
         render = fact[2] if len(fact) > 2 else _short_value
@@ -1863,9 +1849,7 @@ def _crash_facts(crash: dict) -> list[str]:
     lines += _thread_inventory(raw)
     watchdog = _watchdog_lines(crash)
     lines += watchdog
-    # `xpcom_spin_event_loop_stack` is also present on ordinary fault crashes that happened
-    # while a nested event loop was active. Only a watchdog crash may reinterpret that stack as
-    # a shutdown hang and tell the model to investigate the awaited thread instead of the fault.
+    # Show awaited-work guidance only for reports classified as hangs.
     if watchdog:
         lines += _awaited_work_lines(raw, crash.get("hang_awaited_origin"))
         lines += _census_lines(raw)

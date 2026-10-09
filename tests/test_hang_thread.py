@@ -182,6 +182,13 @@ class TestHangFacts(unittest.TestCase):
         self.assertIn("default: nsThreadPool::ShutdownWithTimeout BgIOThreadPool", facts)
         self.assertIn("BLOCKED SPIN-EVENT-LOOP STACK", facts)
 
+    def test_a_fault_with_a_nested_event_loop_is_not_labelled_a_hang(self):
+        raw = dict(_hang(), report_type="crash", moz_crash_reason="MOZ_RELEASE_ASSERT(mDoc)")
+        facts = self._facts(raw)
+        self.assertIn("Spin-event-loop stack (main-thread nested event loops at crash", facts)
+        self.assertNotIn("BLOCKED SPIN-EVENT-LOOP STACK", facts)
+        self.assertIn("default: nsThreadPool::ShutdownWithTimeout BgIOThreadPool", facts)
+
     def test_the_analysed_thread_is_labelled_not_the_crashing_one(self):
         # Printing "45" above thread 0's frames is worse than printing nothing.
         self.assertIn("Analysed thread (the stack below is THIS thread): 0 (MainThread)",
