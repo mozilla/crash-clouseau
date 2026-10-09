@@ -2194,16 +2194,18 @@ def _same_defect_comment(uuid, uuid_info, signature, check):
     ])
 
 
-def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
+def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token, why=None):
     """Attach the signature and comparison in comment mode, without needinfo.
     Restricted matches use authenticated reads and mark result records for redaction.
+    *why* overrides the default skip suffix.
     """
     restricted = bool(check.get("restricted"))
     withheld = {"findings_withheld": True} if restricted else {}
     if mode != "comment":
         return {"filed": False, "bug": bug, "same_defect": check, **withheld,
-                "skipped": "bug {} is the same defect, with the same regressor (bug {}); this "
-                           "channel does not write on existing bugs".format(bug, check["regressor"])}
+                "skipped": "bug {} is the same defect, with the same regressor (bug {}){}".format(
+                    bug, check["regressor"],
+                    why or "; this channel does not write on existing bugs")}
     attached = _attach_signature(bug, signature, token,
                                  comment=_same_defect_comment(uuid, uuid_info, signature, check),
                                  read_token=token if restricted else None)
@@ -3061,13 +3063,25 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     same_defect_check = None
     sd_cfg = config.get_agent_same_defect()
     if bug_id is None and sd_cfg["enabled"] and not (withheld or incomplete_fix or meta_bugs):
-        # Read restricted candidates only on channels that allow comments.
+        unless_dropped = mode == "comment_unless_dropped"
+        # Include restricted candidates when the channel may comment.
         same_bug, same_defect_check = _same_defect_bug(
             uuid, uuid_info, stack, dossier, signature, sd_cfg,
-            token=token if comment_allowed else None)
+            token=token if comment_allowed or unless_dropped else None)
         if same_bug is not None:
+            why = None
+            if unless_dropped:
+                # Skip on an upstream drop or missing data, as for open bugs.
+                from crashclouseau import spikes
+
+                upstream = spikes.upstream_drop(spellings, product, channel,
+                                                uuid_info.get("version"))
+                if upstream and not upstream["dropped"]:
+                    mode = "comment"
+                else:
+                    mode, why = "skip", _upstream_clause(upstream)
             return _file_on_same_defect(uuid, uuid_info, signature, same_bug, same_defect_check,
-                                        mode, token)
+                                        mode, token, why=why)
     try:
         preview = report_bug.build_bug_preview(
             uuid_info, stack, dossier,

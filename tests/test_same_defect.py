@@ -13,9 +13,10 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import bugzilla_apply, config, report_bug  # noqa: E402
+from crashclouseau import bugzilla_apply, config, report_bug, spikes  # noqa: E402
 from crashclouseau.agent import same_defect  # noqa: E402
-from tests.test_autofile import _Base, _INFO, _is_postgres  # noqa: E402
+from tests.test_autofile import _Base, _INFO, _cfg, _is_postgres  # noqa: E402
+from tests.test_release_filing import _RELEASE_INFO, _upstream  # noqa: E402
 
 _DOSSIER = {
     "candidate": {"node": "85ddbfbd3a62", "bug": 42},
@@ -471,6 +472,37 @@ class TestTheFiler(_Base):
         res = self._file(dossier=_DOSSIER)
         self.assertEqual((res["filed"], res["findings_withheld"]), (False, True))
         self.assertTrue(self.errors[-1]["findings_withheld"])
+
+    def _file_release(self):
+        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(
+            comment_on_existing="comment_unless_dropped")
+        return bugzilla_apply.autofile_bug("u-1", _RELEASE_INFO, {}, _DOSSIER, "lead", 70)
+
+    def test_release_writes_on_a_match_unless_it_dropped_on_beta(self):
+        with mock.patch.object(spikes, "upstream_drop", return_value=_upstream(False)) as drop:
+            res = self._file_release()
+        self.assertEqual((res["filed"], res["mode"], res["bug"]), (True, "same_defect", 7))
+        self.assertIn("Foo::Bar", drop.call_args.args[0])
+        self.assertEqual(drop.call_args.args[1:], ("Firefox", "release", "155.0.1"))
+        self.assertEqual(bugzilla_apply._same_defect_bug.call_args.kwargs["token"], "tok")
+        self.assertIn("Build: 20260903215306 (release)", self.puts[0][1]["comment"]["body"])
+        self.puts.clear()
+        for upstream, why in ((_upstream(True), "it dropped on beta 156 (98 in 9599 crash "
+                                                "reports, against 341 in 19750 on 155)"),
+                              (None, "its trend on the upstream channel could not be read")):
+            with mock.patch.object(spikes, "upstream_drop", return_value=upstream):
+                res = self._file_release()
+            self.assertFalse(res["filed"])
+            self.assertEqual(res["skipped"], "bug 7 is the same defect, with the same regressor "
+                                             "(bug 42); " + why)
+            self.assertEqual((self.puts, self.created), ([], []))
+
+    def test_release_asks_beta_only_after_a_match(self):
+        bugzilla_apply._same_defect_bug.return_value = (None, dict(self._CHECK, bug=None))
+        with mock.patch.object(spikes, "upstream_drop") as drop:
+            res = self._file_release()
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        drop.assert_not_called()
 
     def test_a_public_match_is_read_anonymously(self):
         self._file(dossier=_DOSSIER)
