@@ -532,7 +532,9 @@ Field rules:
   the crash. `confidence` is about the CAUSAL link, not about the change existing: high =
   identified (a bounded range or history and a mechanism the diff supports), medium = suspected
   with a mechanism, low = plausible but weakly distinguished. The runtime drops a culprit that is
-  not a changeset it can resolve, or that landed after the spiking build.
+  not a changeset it can resolve, or that landed after the spiking build. If the diff only exposes
+  a failure shown to predate it, use confidence `low`, write "exposed by" in `why`, and name the
+  underlying cause if established.
 - `trigger_path`: the explanation. Mechanism first, then path, then trigger, with the
   Observed / Derived / Inferred status of each step and the confidence of inferred ones.
   Start every labelled part in its own paragraph, separated by blank lines (`\n\n` in the JSON

@@ -173,7 +173,7 @@ def _culprit_paragraph(findings, brief, author_display=None, link_regressor=Fals
         link += " (bug {})".format(c.bug)
     if author_display:
         link += " by {}".format(author_display)
-    if link_regressor:
+    if link_regressor and c.confidence != "low":
         head = "Suspected regressor ({} confidence): {}.".format(c.confidence, link)
     else:
         head = ("Starting point -- a candidate, NOT an established cause ({} confidence): "

@@ -499,6 +499,18 @@ class TestFiling(_FilerBase):
         body = self.created[0]["description"]
         self.assertIn("NOT an established cause", body)
 
+    def test_a_low_confidence_culprit_is_a_starting_point_and_keeps_the_needinfo(self):
+        self.brief["culprit_in_window"] = True
+        self.findings.culprit.confidence = "low"
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertTrue(res["filed"])
+        self.assertNotIn("regressed_by", res)
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+        payload = self.created[0]
+        self.assertEqual(payload["keywords"], ["crash"])
+        self.assertIn("NOT an established cause (low confidence)", payload["description"])
+        self.assertNotIn("Suspected regressor", payload["description"])
+
     def test_no_findings_still_files_the_volume(self):
         res = se.file_spike_bug(_esc(), self.brief, None, grounded=False)
         self.assertTrue(res["filed"])
