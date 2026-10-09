@@ -590,16 +590,17 @@ These are stable facts that cost turns when rediscovered.
   scope); read it with `raw_file`. Treat their values as evidence: `available_page_file` is
   available commit space, `total_page_file` its limit, and `total_virtual_memory` the process's
   virtual-address-space size, not proof of its architecture. For `NS_ABORT_OOM`,
-  `oom_allocation_size` records its argument: `IPC::ParamTraits<JSStructuredCloneData>::Read`
-  passes unread payload bytes, while its `BufferList` segments are 4,096 bytes (bug 1843374 c1).
+  check the caller: `oom_allocation_size` is its argument, not necessarily the failed request size.
+  In `ipc/glue/SerializedStructuredCloneBuffer.cpp`, the structured-clone reader reports
+  `length - read` (unread payload bytes) while allocating 4,096-byte segments.
   Socorro assigns `OOM | large` from
   `js_large_allocation_failure: Reporting` before checking that size, so a size-less `large`
   does not prove a recorded large request. An actionable OOM needs both a recorded large
   request and a caller-specific defect or remediation.
   `toolkit.asyncshutdown.crash_timeout` (60 s default) governs AsyncShutdownTimeout aborts.
-- Build flavours: Nightly and Release are opt builds where `MOZ_ASSERT` is compiled out;
-  `MOZ_DIAGNOSTIC_ASSERT` is active on Nightly and early Beta; `MOZ_RELEASE_ASSERT` is active
-  everywhere.
+- Assertions: `MOZ_ASSERT` is debug-only; `MOZ_DIAGNOSTIC_ASSERT` is enabled in debug,
+  Nightly, and Developer Edition builds (`moz.configure`); `MOZ_RELEASE_ASSERT` is always on.
+  Check the crashing build's configuration.
 - A changeset's bug number is in its description (`Bug NNNNNN - ...`); `changeset` reports
   whether and by what it was backed out; a candidate line in the brief marked
   `arrived-with-the-cycle-merge` landed on trunk earlier and reached this channel with the merge,
