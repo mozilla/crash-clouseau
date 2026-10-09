@@ -199,12 +199,13 @@ _MEASURED = {
     # +1221 characters on 2026-10-05 (also beta/java): mechanism layout and hedge preservation.
     # +452 characters on 2026-10-05 (also beta/java): actionable confidence rules and verdict shape.
     # +126 characters on 2026-10-06 (also beta/java): publish a skeptic's narrowed claim.
-    "system.md": (25703, 400),
+    # 2026-10-09: actionable failing-state guidance; system +589 characters, user +109.
+    "system.md": (26292, 400),
     "crash facts, plain deref": (219, 60),
-    "user prompt, plain deref": (970, 120),
+    "user prompt, plain deref": (1097, 120),
     # 2026-09-23: add up to six census rows on watchdog crashes.
     "crash facts, 40-thread parent hang": (2955, 200),
-    "user prompt, 40-thread parent hang": (3732, 300),
+    "user prompt, 40-thread parent hang": (3841, 300),
     # 2026-09-18, the AWAITED WORK block (bug 2073349): ~2,550 bytes over the same hang without
     # it -- the awaited thread's 14 frames (long Rust symbols and source paths) and the rule
     # sentence. Paid only on a hang whose spin-loop stack names a thread the dump has.
@@ -213,20 +214,20 @@ _MEASURED = {
     # starts with the work and does not restate how the wait works (Jens, 2073349 c1).
     # 2026-09-23: include the census block.
     "crash facts, hang with awaited work": (5672, 300),
-    "user prompt, hang with awaited work": (6500, 400),
+    "user prompt, hang with awaited work": (6609, 400),
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (26243, 400),
+    "system.md, beta": (26832, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
     "crash facts, plain deref (beta)": (219, 60),
-    "user prompt, plain deref (beta)": (985, 120),
+    "user prompt, plain deref (beta)": (1094, 120),
     # The two-age block, which only a non-nightly channel can produce. Compare the nightly
     # single-age fixture below: the second age plus its guidance is what the difference buys.
     "crash facts, beta with two signature ages": (1342, 200),
-    "user prompt, beta with two signature ages": (2108, 300),
+    "user prompt, beta with two signature ages": (2217, 300),
     # +229 on 2026-09-17: `_OLD_SIGNATURE_GUIDANCE` points at `actionable` when the mechanism
     # is established and no changeset explains the crash.
     "crash facts, nightly with one signature age": (1269, 200),
@@ -236,9 +237,9 @@ _MEASURED = {
     # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
     # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
     # long Java signature / paths; it carries no line numbers on its frames.
-    "system.md, java": (26866, 400),
+    "system.md, java": (27455, 400),
     "crash facts, fenix java": (325, 60),
-    "user prompt, fenix java": (3240, 300),
+    "user prompt, fenix java": (3349, 300),
 }
 
 _HOWTO = (

@@ -246,12 +246,19 @@ good ones. So make TWO decisions, in order:
    a shutdown hang, prefer the WORK's line (the awaited thread's, or sampled main-thread work
    above shutdown control flow); generic spin, thread-shutdown or IPC teardown frames are not
    evidence merely because the work runs through them.
-   `confidence` is how sure you are the mechanism is right and worth the owner's time. Score
-   what the dossier cites, not who checked it: your own checks count as much as a skeptic's.
-   `probable` when the failing line and the condition that fires it are cited and nothing you
-   checked contradicts the chain; a step you could not read, or not knowing which of two cited
-   branches ran, does not lower it. `medium` when the line is cited but the condition that fires
-   it is only conjectured. `low` when neither is established. Write `mechanism.statement` as the
+   `confidence` is how sure you are the mechanism is right. Score what the dossier cites, not
+   who checked it: your own checks count as much as a skeptic's. The condition that fires it is
+   the state that fails at the cited line (the false predicate, the null, freed or out-of-range
+   value, the error the code treats as impossible), not how that state arose. `probable` when
+   the failing line and that state are cited and nothing you checked contradicts the chain; an
+   unknown upstream cause, a step you could not read, or not knowing which of two cited branches
+   ran does not lower it. `medium` when the line is cited but the failing state itself is only
+   conjectured. `low` when neither is established. How often the crash happens, and since when,
+   is not part of this decision: the filer reads the population from crash-stats and applies its
+   own floor, and the hardware facts are where a failing machine shows. Do not abstain, or lower
+   confidence, because the crash is rare or old: an old crash whose mechanism you established is
+   `actionable`, with blame on the failing line as its candidate. Write `mechanism.statement`
+   as the
    AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which
    condition and what the owner should look at first. `consistency.statement` remains cited
    analysis in the dossier for audit and is never copied into an `actionable` bug; age and

@@ -1987,8 +1987,10 @@ def _user_prompt(crash: dict) -> str:
          "Reach off-stack functions through the call graph where needed. Report a cited lead "
          "whenever you have a CREDIBLE, SPECIFIC reason (a mechanism hypothesis, a domain / "
          "what-it-enables link, or a corroborating signal) and score how worth-investigating "
-         "it is; use strong-evidence only for a chain verified end to end. ABSTAIN when the "
-         "best you have is noise (mere window-membership or a bare keyword match) — a confident "
+         "it is; use strong-evidence only for a chain verified end to end. When you establish "
+         "what fails and where but no changeset in the window caused it, report it as "
+         "`actionable`. ABSTAIN when the best you have is noise (mere window-membership or a "
+         "bare keyword match) — a confident "
          "'nothing credible here' beats sending someone after noise and losing their trust in "
          "every future finding.").format(crash.get("product") or "Firefox"),
         "",
