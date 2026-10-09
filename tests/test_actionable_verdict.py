@@ -17,6 +17,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
+import copy  # noqa: E402
 import unittest  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from unittest import mock  # noqa: E402
@@ -34,7 +35,7 @@ from crashclouseau.agent.schema import (  # noqa: E402
     Verdict,
     parse_and_validate,
 )
-from tests.test_autofile import _Base, _bug  # noqa: E402
+from tests.test_autofile import _LANDED, _PREVIEW, _Base, _bug  # noqa: E402
 # The module, not its classes: binding a TestCase name here would run its tests twice.
 from tests import test_product_wiring as tpw  # noqa: E402
 from tests.test_prompt_schema_drift import _quoted_tokens  # noqa: E402
@@ -422,6 +423,47 @@ class TestWhatTheFilerChecks(_Base):
         self.assertGreaterEqual(floor, 3)
         self.assertEqual(res["skipped"], "1 installation on this signature, below the actionable "
                                          "floor of {}".format(floor))
+        self.assertEqual(self.created, [])
+
+    _FIX = {"id": 2063678, "node": "bbdaf4e3b2c2", "pushdate": _LANDED, "product": "Core",
+            "component": "Audio/Video: Playback", "assigned_to": "dev@x.com",
+            "resolved": "2026-08-01T00:00:00Z", "predates_days": 3.0}
+
+    def test_below_the_floor_an_incomplete_fix_files_as_it_does_below_the_rung(self):
+        self.stats.return_value = (True, {"count": 1, "installs": 1})
+        # Filing mutates the preview; copy the shared fixture.
+        report_bug.build_bug_preview.side_effect = lambda *a, **k: copy.deepcopy(_PREVIEW)
+        filed = {}
+        for confidence in (50, 70):
+            with mock.patch.object(bugzilla_apply, "_incomplete_fix_bug",
+                                   return_value=dict(self._FIX)) as det:
+                res = self._file(verdict="actionable", confidence=confidence)
+            det.assert_called_once()
+            self.assertTrue(res["filed"], (confidence, res))
+            self.assertEqual(res["incomplete_fix"]["bug"], 2063678)
+            filed[confidence] = (res["bug"], res["mode"])
+        self.assertEqual(filed[50], filed[70])
+
+    def test_below_the_floor_without_an_incomplete_fix_the_floor_decline_stands(self):
+        self.stats.return_value = (True, {"count": 4, "installs": 1})
+        with mock.patch.object(bugzilla_apply, "_incomplete_fix_bug", return_value=None) as det:
+            res = self._actionable()
+        det.assert_called_once()
+        self.assertFalse(res["filed"])
+        self.assertIn("1 installation on this signature, below the actionable floor of",
+                      res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_a_suppressed_verdict_below_the_floor_never_looks_for_an_incomplete_fix(self):
+        self.stats.return_value = (True, {"count": 4, "installs": 1})
+        dossier = {"candidate": {"node": "n"},
+                   "corroborations": {"bad_machine_suppressed": True}}
+        with mock.patch.object(bugzilla_apply, "_incomplete_fix_bug",
+                               return_value=dict(self._FIX)) as det:
+            res = self._file(verdict="actionable", confidence=70, dossier=dossier)
+        det.assert_not_called()
+        self.assertFalse(res["filed"])
+        self.assertIn("below the actionable floor", res["skipped"])
         self.assertEqual(self.created, [])
 
     def _fresh(self, **over):

@@ -2388,6 +2388,61 @@ def skipped_regressor(bug):
     return bug if bug in config.autofile_skip_regressor_bugs() else None
 
 
+def _suppressions(dossier):
+    """Return sorted active suppression flags."""
+    flags = (dossier or {}).get("corroborations") or {}
+    return sorted(k for k in corroborations.suppressions() if flags.get(k))
+
+
+def _actionable_floor_decline(uuid, uuid_info, dossier, product, channel, cfg, floor_waiver):
+    """Return a population decline, or ``None`` if the floor is met or waived."""
+    from crashclouseau import report_bug
+    floor = config.get_spike("real_installs", product, channel)
+    _first, stats = report_bug.fetch_signature_stats(uuid, uuid_info)
+    installs = (stats or {}).get("installs")
+    if installs is None:
+        return {"filed": False,
+                "skipped": "population unknown; an actionable crash is filed on its volume"}
+    if installs >= floor:
+        return None
+    # Use the same fresh-origin eligibility check as the bug comment.
+    fresh = report_bug.fresh_origin_days(
+        (dossier or {}).get("corroborations"), cfg.get("fresh_origin_days"))
+    below = "{} installation{} on this signature, below the actionable floor of {}".format(
+        installs, "" if installs == 1 else "s", floor)
+    if fresh is not None:
+        logger.info("autofile: %s -- %s, waived: the failing code landed %.1f days "
+                    "before the build and no available first-seen build predates it",
+                    uuid, below, fresh)
+        return None
+    if floor_waiver == "agreed":
+        logger.info("autofile: %s -- %s, waived: the confirming pass reached the same "
+                    "actionable verdict and origin", uuid, below)
+        return None
+    if floor_waiver == "pending" and _DRY_RUN.get():
+        logger.info("autofile: %s -- %s, waived if the confirming pass agrees", uuid, below)
+        return None
+    unconfirmed = ("; the confirming pass did not reach the same actionable verdict "
+                   "and origin" if floor_waiver == "disagreed" else "")
+    # Recent counts can qualify on any channel of this product.
+    days = cfg.get("population_days")
+    if not days:
+        return {"filed": False, "skipped": below + unconfirmed}
+    recent = report_bug.fetch_recent_channel_stats(uuid_info, days)
+    if recent is None:
+        return {"filed": False, "skipped": "{}; the last {} days of reports could "
+                                           "not be read{}".format(below, days, unconfirmed)}
+    over = report_bug.channels_over_floor(recent, product)
+    if not over:
+        return {"filed": False, "skipped": "{}, and no channel reached its floor in "
+                                           "the last {} days{}".format(below, days,
+                                                                       unconfirmed)}
+    logger.info("autofile: %s -- %s, passed on %s over the last %s days (%s)",
+                uuid, below, ", ".join(over), days,
+                ", ".join("{} {}".format(ch, recent[ch]["installs"]) for ch in over))
+    return None
+
+
 def passes_local_filing_gates(uuid, uuid_info, dossier, verdict, confidence):
     """Check local eligibility for filing on the verdict, without network requests.
 
@@ -2538,8 +2593,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     # This is the one place a suppressed run could reach a Bugzilla write, because the second
     # reason does not read the verdict at all.
     if not fileable:
-        suppressed = sorted(k for k in corroborations.suppressions()
-                            if ((dossier or {}).get("corroborations") or {}).get(k))
+        suppressed = _suppressions(dossier)
         if suppressed:
             return {"filed": False,
                     "skipped": "suppressed by {}".format(", ".join(suppressed))}
@@ -2592,65 +2646,19 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
 
     signature = (uuid_info.get("signature") or "").strip()
 
-    # AN `actionable` VERDICT FILES ON THE CRASH'S OWN FACTS (Calixte, 2026-09-17), so two facts
-    # are checked here deterministically, before any venue work. First, a real POPULATION: the
-    # spike path's own bar for filing on volume alone (`spike.real_installs`). On nightly the
-    # median cited-mechanism `pre_existing` abstain is ONE installation -- the class developers
-    # dismiss as hardware ("very few reports in common code paths are often hardware related");
-    # on release the selector's 50-install floor already exceeds it. Read off the same Socorro
-    # aggregation the bug's volume sentence quotes, so the floor and the sentence cannot
-    # disagree. The second fact, no open bug on the signature, is checked once the venues are
-    # known below.
+    # Actionable verdicts require a population floor or waiver. Check open venues below.
     actionable = fileable and verdict == "actionable"
+    floor_decline = None
     if actionable:
-        from crashclouseau import report_bug
-        floor = config.get_spike("real_installs", product, channel)
-        _first, stats = report_bug.fetch_signature_stats(uuid, uuid_info)
-        installs = (stats or {}).get("installs")
-        if installs is None:
-            return {"filed": False,
-                    "skipped": "population unknown; an actionable crash is filed on its volume"}
-        if installs < floor:
-            # A recent origin can waive this floor. Share the eligibility check with the bug
-            # comment; the remaining filing gates still apply.
-            fresh = report_bug.fresh_origin_days(
-                (dossier or {}).get("corroborations"), cfg.get("fresh_origin_days"))
-            below = "{} installation{} on this signature, below the actionable floor of {}".format(
-                installs, "" if installs == 1 else "s", floor)
-            if fresh is not None:
-                logger.info("autofile: %s -- %s, waived: the failing code landed %.1f days "
-                            "before the build and no available first-seen build predates it",
-                            uuid, below, fresh)
-            elif floor_waiver == "agreed":
-                logger.info("autofile: %s -- %s, waived: the confirming pass reached the same "
-                            "actionable verdict and origin", uuid, below)
-            elif floor_waiver == "pending" and _DRY_RUN.get():
-                logger.info("autofile: %s -- %s, waived if the confirming pass agrees", uuid,
-                            below)
-            else:
-                unconfirmed = ("; the confirming pass did not reach the same actionable verdict "
-                               "and origin" if floor_waiver == "disagreed" else "")
-                # Any channel of this product may meet its own installation floor.
-                days = cfg.get("population_days")
-                if not days:
-                    return {"filed": False, "skipped": below + unconfirmed}
-                recent = report_bug.fetch_recent_channel_stats(uuid_info, days)
-                if recent is None:
-                    return {"filed": False, "skipped": "{}; the last {} days of reports could "
-                                                       "not be read{}".format(below, days,
-                                                                              unconfirmed)}
-                over = report_bug.channels_over_floor(recent, product)
-                if not over:
-                    return {"filed": False, "skipped": "{}, and no channel reached its floor in "
-                                                       "the last {} days{}".format(below, days,
-                                                                                   unconfirmed)}
-                logger.info("autofile: %s -- %s, passed on %s over the last %s days (%s)",
-                            uuid, below, ", ".join(over), days,
-                            ", ".join("{} {}".format(ch, recent[ch]["installs"]) for ch in over))
+        floor_decline = _actionable_floor_decline(uuid, uuid_info, dossier, product, channel,
+                                                  cfg, floor_waiver)
+        if floor_decline:
+            if _suppressions(dossier):
+                return floor_decline
+            # Check for an incomplete fix even when the actionable population gate fails.
+            fileable = actionable = False
 
-    # THE SECOND REASON TO FILE. A verdict we cannot file on is the ordinary case (90% of runs
-    # abstain), so this is the last gate rather than an early one: everything above it is local
-    # and free, and this is one BMO request, cached per signature.
+    # An incomplete fix can qualify independently of the verdict or population.
     incomplete_fix = None
     if not fileable:
         corro = (dossier or {}).get("corroborations") or {}
@@ -2660,6 +2668,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
             signature, uuid_info.get("buildid"), uuid_info.get("product"), channel,
             first_seen=first_seen)
         if not incomplete_fix:
+            if floor_decline:
+                return floor_decline
             if verdict not in cfg["verdicts"]:
                 return {"filed": False, "skipped": "verdict {} not fileable".format(verdict)}
             return {"filed": False, "skipped": "confidence {} below {}".format(
