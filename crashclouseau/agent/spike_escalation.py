@@ -1262,23 +1262,23 @@ def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
     return unique
 
 
+_DISMISSED = frozenset({"WONTFIX", "INVALID"})
+
+
 def resolve_venue_below_public(signatures, product, buildid, token, *, bucket=None,
                                bucket_title=None):
-    """What decides a spike's fate when no OPEN public bug on the signature exists, in order:
+    """Find a fallback venue or fixed-bug decline; return ``None`` if none applies.
 
-    1. a bug WE filed on the signature (any channel) that is still open but invisible to the
-       public lookup -- a human restricted it -- gets the comment (``kind`` ``own_restricted``);
-    2. a bug we filed that was RESOLVED FIXED after the spiking build was produced means NOTHING
-       IS WRITTEN (``kind`` ``fixed``): the spike is the pre-fix population of a defect already
-       found and fixed, the fix reaches the channel with its next build, and the bug's people
-       are watching the signature. Written out, this is comment 10 on bug 2068262, which
-       explained to the bug's own fixer that his bug was fixed;
-    3. any public same-application bug RESOLVED FIXED after the build, the ordinary filer's
-       ``_fixed_after_build_bug`` question, is the same ``fixed`` decline.
-
-    ``None`` means a new bug: no bug, a bug resolved before the build (its fix is in the build,
-    so this is a new defect or a fix that did not hold) or one closed INVALID / WORKSFORME /
-    DUPLICATE, which say nothing about whether the crash is still happening."""
+    Inspect our prior filings in lookup order: reuse open restricted bugs or
+    matching public bucket bugs; decline FIXED bugs resolved after the build;
+    reuse WONTFIX/INVALID bugs when no bucket is requested or the bucket matches.
+    For a requested bucket, open public bugs with unknown identity return
+    ``own_unknown_bucket`` for the caller to decline.
+    If no prior filing applies, check public FIXED bugs resolved after the build.
+    For dismissed bugs, a failed visibility lookup sets ``public=True`` to keep
+    restricted analysis off a possibly public venue. Resolution dates are a
+    proxy; this does not check fix landings or uplifts.
+    """
     build_dt = sigage.to_datetime(str(buildid)) if buildid else None
     matching_bucket = bool(bucket or bucket_title)
     for prior in _own_prior_bugs(signatures, bucket=bucket, bucket_title=bucket_title):
@@ -1319,6 +1319,11 @@ def resolve_venue_below_public(signatures, product, buildid, token, *, bucket=No
                 and _aware(state["resolved"]) > _aware(build_dt):
             return {"id": bug, "kind": "fixed", "resolved": state["resolved"],
                     "assigned_to": state["assigned_to"]}
+        if state["resolution"] in _DISMISSED and (prior["bucket_match"] or not matching_bucket):
+            visible = bugzilla_apply._bugs_by_id([bug])
+            public = visible is None or any(r.get("id") == bug for r in visible)
+            return {"id": bug, "kind": "own_dismissed", "public": public,
+                    "assigned_to": state["assigned_to"]}
     if build_dt is None:
         return None
     try:
@@ -1352,8 +1357,10 @@ def _needinfo_person_for(findings, brief):
 
 
 def file_spike_bug(esc, brief, findings, grounded=True):
-    """File the spike -- a comment on the open bug about this signature, or a new bug -- and
-    return what happened. NEVER raises. ``retry: True`` marks a decline that may clear later."""
+    """Post a spike to a selected venue or create a bug; return the filing result.
+
+    ``retry: True`` marks a decline that may clear later.
+    """
     channel = esc.channel
     product = esc.product
     signature = (esc.signature or "").strip()
@@ -1464,11 +1471,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         return dict(result, bug=venue["id"], skipped=(
             "bug {} was filed for this spike and already names its regressor ({})".format(
                 venue["id"], ", ".join("bug {}".format(b) for b in venue["regressed_by"]))))
-    # BELOW THE PUBLIC OPEN BUGS: a bug we filed ourselves that a human restricted, or a bug --
-    # ours or anybody's -- fixed AFTER this build; see `resolve_venue_below_public`. The fixed
-    # one is a DECLINE whatever the mode and whatever the crash: there is nothing to say about
-    # the pre-fix crashes of a fixed defect, on a public bug, on a restricted one or in a new
-    # bug. The restricted one is a venue like a public open bug, so `skip` mode skips it too.
+    # Check prior filings and public FIXED bugs when no public venue was selected.
+    # Fixed declines write nothing; skip mode also declines other fallback venues.
     venue_kind = "open" if venue is not None else None
     if venue is None:
         siblings = brief.get("siblings") or [signature]
@@ -1486,8 +1490,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         if below is not None and mode == "skip":
             return dict(result, bug=below["id"],
                         skipped="open bug {} exists".format(below["id"]))
-        if below is not None and withheld and below["kind"] == "own_bucket":
-            # Restricted analysis cannot be posted to our public bucket bug.
+        if below is not None and withheld and (
+                below["kind"] == "own_bucket"
+                or (below["kind"] == "own_dismissed" and below.get("public"))):
+            # Keep restricted analysis off public fallback venues.
             if public_venue_declined is None:
                 public_venue_declined = below["id"]
             below = None

@@ -706,6 +706,9 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
     def _beta(self):
         return _esc(channel="beta"), dict(self.brief, channel="beta", siblings=["mozilla::Foo::Bar"])
 
+    def _esc_nightly(self):
+        return _esc(), dict(self.brief, siblings=["mozilla::Foo::Bar"])
+
     def test_our_open_nightly_bug_is_the_venue_for_the_beta_spike(self):
         esc, brief = self._beta()
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
@@ -759,9 +762,39 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
         self.assertEqual(res["mode"], "spike_new_bug")
         self.assertEqual(self.comments, [])
 
-    def test_a_bug_closed_invalid_or_duplicate_is_not_a_venue(self):
+    def test_our_bug_closed_wontfix_or_invalid_gets_the_spike(self):
+        esc, brief = self._esc_nightly()
+        for resolution in ("WONTFIX", "INVALID"):
+            self.comments.clear()
+            with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                                   return_value={"uuid": "u-0", "bug": 76}), \
+                    mock.patch.object(se, "_bug_state", return_value={
+                        "id": 76, "status": "RESOLVED", "resolution": resolution,
+                        "resolved": datetime(2026, 9, 5, tzinfo=timezone.utc),
+                        "assigned_to": ""}), \
+                    mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=[{"id": 76}]):
+                res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+            self.assertEqual((res["mode"], res["bug"], res["venue_kind"]),
+                             ("spike_comment", 76, "own_dismissed"), resolution)
+        self.assertEqual(self.created, [])
+
+    def test_a_restricted_analysis_is_not_posted_to_our_public_closed_bug(self):
+        esc, brief = self._esc_nightly()
+        brief["raw_crash"] = {"json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
+        with mock.patch.object(models.Dossier, "already_filed_for_signature",
+                               return_value={"uuid": "u-0", "bug": 76}), \
+                mock.patch.object(se, "_bug_state", return_value={
+                    "id": 76, "status": "RESOLVED", "resolution": "WONTFIX",
+                    "resolved": datetime(2026, 9, 5, tzinfo=timezone.utc), "assigned_to": ""}), \
+                mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=[{"id": 76}]):
+            res = se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 76))
+        self.assertEqual(self.comments, [])
+        self.assertTrue(self.created[0]["summary"].startswith("Restricted analysis of bug 76: "))
+
+    def test_a_bug_closed_duplicate_or_worksforme_is_not_a_venue(self):
         esc, brief = self._beta()
-        for resolution in ("INVALID", "DUPLICATE", "WORKSFORME"):
+        for resolution in ("DUPLICATE", "WORKSFORME"):
             self.created.clear()
             with mock.patch.object(models.Dossier, "already_filed_for_signature",
                                    return_value={"uuid": "u-0", "bug": 74}), \

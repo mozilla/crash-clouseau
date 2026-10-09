@@ -1017,6 +1017,25 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual(res["venue_kind"], "own_unknown_bucket")
 
+    def test_our_dismissed_bug_is_the_venue_only_for_its_own_bucket(self):
+        title = "The buffer allocator rewrite made a fresh content process OOM"
+        se._bug_state.return_value = {"id": 88, "status": "RESOLVED", "resolution": "WONTFIX",
+                                      "resolved": None, "assigned_to": ""}
+        bugzilla_apply._bugs_by_id.return_value = [{"id": 88, "resolution": "WONTFIX"}]
+        se.models.SpikeEscalation.prior_bug_for.return_value = {
+            "bug": 88, "bucket": "", "bucket_title": title}
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["bug"], res["mode"], res["venue_kind"]),
+                         (88, "spike_comment", "own_dismissed"))
+        self.comments.clear()
+        se.models.SpikeEscalation.prior_bug_for.return_value = {
+            "bug": 88, "bucket": "", "bucket_title": "A fresh content process OOMs on start"}
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual(res["mode"], "spike_new_bug")
+        self.assertEqual(self.comments, [])
+
     def test_a_spike_with_nothing_to_name_goes_to_the_tracker_as_a_comment(self):
         for findings, grounded in ((None, False), (self.findings, False),
                                    (SpikeFindings(summary="short"), True)):
