@@ -363,7 +363,7 @@
         },
         "same_defect":
         {
-            "enabled": false,
+            "enabled": true,
             "model": "claude-opus-5-5",
             "effort": "medium",
             "max_turns": 20,

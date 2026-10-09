@@ -1875,12 +1875,12 @@ def _family_spellings(signature, family):
     return out
 
 
-def _signature_field(bug_id, timeout=_HTTP_TIMEOUT):
-    """A bug's current ``cf_crash_signature``, or ``None`` when it could not be read."""
+def _signature_field(bug_id, timeout=_HTTP_TIMEOUT, token=None):
+    """Read ``cf_crash_signature`` with an optional token; return ``None`` on failure."""
     try:
         r = net.get(_bz_rest(), params={"id": str(bug_id),
                                         "include_fields": "id,cf_crash_signature"},
-                    timeout=timeout)
+                    timeout=timeout, headers=_auth(token))
         r.raise_for_status()
         bugs = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
@@ -1890,17 +1890,16 @@ def _signature_field(bug_id, timeout=_HTTP_TIMEOUT):
     return None if row is None else (row.get("cf_crash_signature") or "")
 
 
-def _attach_signature(bug_id, signature, token, comment=None):
-    """Append a signature, with an optional comment in the same PUT.
-
-    Return ``attached``, ``already`` (including lambda variants), or ``failed`` on a read/write
-    failure. Read the current field before appending; post no comment if the signature exists.
-    Keep this write separate from ``_link_regressed_by`` so a rejected link cannot block it.
+def _attach_signature(bug_id, signature, token, comment=None, read_token=None):
+    """Append a signature and optional comment in one PUT.
+    Return ``attached``, ``already`` (including lambda variants), or ``failed``.
+    Reads are anonymous unless ``read_token`` is supplied. An existing signature
+    suppresses the comment.
     """
     sig = (signature or "").strip()
     if not sig or not bug_id:
         return "failed"
-    current = _signature_field(bug_id)
+    current = _signature_field(bug_id, token=read_token)
     if current is None:
         return "failed"
     present = {e.lower() for e in _signature_field_entries(current)}
@@ -1977,8 +1976,8 @@ def _regression_ids(regressor, timeout=_HTTP_TIMEOUT):
     return [int(b) for b in (row or {}).get("regressions") or []]
 
 
-def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT):
-    """Fetch candidate fields without authentication; return ``None`` on request failure."""
+def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT, token=None):
+    """Read candidate fields with an optional token; return ``None`` on failure."""
     if not ids:
         return []
     params = {
@@ -1987,7 +1986,7 @@ def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT):
                           "cf_crash_signature,cf_last_resolved",
     }
     try:
-        r = net.get(_bz_rest(), params=params, timeout=timeout)
+        r = net.get(_bz_rest(), params=params, timeout=timeout, headers=_auth(token))
         r.raise_for_status()
         return (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
@@ -1995,17 +1994,23 @@ def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT):
         return None
 
 
+def _auth(token):
+    return {"X-Bugzilla-API-Key": token} if token else None
+
+
 def _is_automation(email):
     email = (email or "").lower()
     return "bot@" in email or email.endswith(".tld")
 
 
-def _bug_comments(bug_id, timeout=_HTTP_TIMEOUT):
-    """Return ``(first text, later comments)``; ``None`` on request failure.
-    Later comments use ``{"author", "text"}`` and exclude emails matching ``_is_automation``.
-    Missing comment data returns ``("", [])``."""
+def _bug_comments(bug_id, timeout=_HTTP_TIMEOUT, token=None):
+    """Read ``(first text, later comments)`` with an optional token.
+    Later comments have ``author`` and ``text`` keys; omit automation accounts.
+    Return ``None`` on failure or ``("", [])`` when comment data is missing.
+    """
     try:
-        r = net.get("{}/{}/comment".format(_bz_rest(), bug_id), timeout=timeout)
+        r = net.get("{}/{}/comment".format(_bz_rest(), bug_id), timeout=timeout,
+                    headers=_auth(token))
         r.raise_for_status()
         comments = (((r.json() or {}).get("bugs") or {}).get(str(bug_id)) or {}).get("comments")
     except Exception as exc:                                   # pragma: no cover - network
@@ -2039,7 +2044,7 @@ def _filing_analysis(filing):
                                   "ipc_fatal_error_msg", "frames")}
 
 
-def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
+def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None, token=None):
     """Select up to *max_bugs* candidates, newest first, from our filings and ``regressions``.
 
     Follow one duplicate hop. Exclude other applications, metas and bugs without signatures
@@ -2058,6 +2063,13 @@ def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
     rows = _crash_bug_rows(sorted(set(filings) | set(listed)))
     if rows is None:
         return None
+    # Retry our missing filings with the token to include restricted bugs.
+    hidden = sorted(set(filings) - {b["id"] for b in rows}) if token else []
+    if hidden:
+        own = _crash_bug_rows(hidden, token=token)
+        if own is None:
+            return None
+        rows += own
     known = {b["id"] for b in rows}
     targets = sorted({b["dupe_of"] for b in rows
                       if b.get("resolution") == "DUPLICATE" and b.get("dupe_of")} - known)
@@ -2091,7 +2103,7 @@ def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
                  "status": "RESOLVED FIXED" if b.get("resolution") else (b.get("status") or ""),
                  "signatures": _signature_field_entries(b.get("cf_crash_signature"))}
         analysis = _filing_analysis(filings[b["id"]]) if b["id"] in filings else {}
-        comments = _bug_comments(b["id"])
+        comments = _bug_comments(b["id"], token=token if b["id"] in hidden else None)
         if comments is None:
             return None
         first, entry["comments"] = comments
@@ -2099,6 +2111,8 @@ def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
             entry.update(analysis)
         else:
             entry["description"] = first
+        if b["id"] in hidden:
+            entry["restricted"] = True
         out.append(entry)
     return out
 
@@ -2106,10 +2120,11 @@ def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None):
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
-def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg):
-    """Ask the same-defect agent whether a crash about to get a new bug belongs on a bug already
-    attributed to its regressor. ``(bug, check)``: the matching bug number or ``None``, and the
-    record of the check (``None`` when there was nothing to compare with)."""
+def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg, token=None):
+    """Compare bugs attributed to the regressor in separate public and restricted runs.
+    Return ``(matching bug, check record)``, or ``(None, None)`` without a regressor
+    or candidates.
+    """
     import asyncio
     from crashclouseau import report_bug
     from crashclouseau.agent import same_defect
@@ -2119,31 +2134,50 @@ def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg):
     if not regressor:
         return None, None
     bugs = _same_regressor_bugs(regressor, signature, uuid_info.get("product"), cfg["max_bugs"],
-                                buildid=uuid_info.get("buildid"))
+                                buildid=uuid_info.get("buildid"), token=token)
     if bugs is None:
         return None, {"regressor": regressor, "error": "bug lookup failed"}
     if not bugs:
         return None, None
-    check = {"regressor": regressor, "bugs": [b["bug"] for b in bugs]}
+    public = [b for b in bugs if not b.get("restricted")]
+    hidden = [b for b in bugs if b.get("restricted")]
     crash = same_defect.crash_from_dossier(
         signature, dossier, (stack or {}).get("frames"),
         report_bug.fetch_crash_reason(uuid).get("ipc_fatal_error_msg"))
-    try:
-        answer = asyncio.run(same_defect.run_same_defect(
-            crash, {"bug": regressor, "node": candidate.get("node")}, bugs,
-            channel=uuid_info.get("channel") or "nightly", build_rev=uuid_info.get("node") or "",
-            product=uuid_info.get("product")))
-    except Exception:
-        logger.warning("autofile: same-defect check raised for %r", signature, exc_info=True)
-        answer = None
-    if answer is None:
-        check["error"] = "no usable answer"
-        return None, check
-    check.update(answer.model_dump())
     floor = _CONFIDENCE_RANK.get(cfg["min_confidence"], 2)
-    if answer.bug is None or _CONFIDENCE_RANK.get(answer.confidence, 0) < floor:
-        return None, check
-    return answer.bug, check
+
+    def compare(group):
+        try:
+            return asyncio.run(same_defect.run_same_defect(
+                crash, {"bug": regressor, "node": candidate.get("node")}, group,
+                channel=uuid_info.get("channel") or "nightly",
+                build_rev=uuid_info.get("node") or "", product=uuid_info.get("product")))
+        except Exception:
+            logger.warning("autofile: same-defect check raised for %r", signature, exc_info=True)
+            return None
+
+    def accepted(answer):
+        return answer.bug is not None and _CONFIDENCE_RANK.get(answer.confidence, 0) >= floor
+
+    check = None
+    if public:
+        check = {"regressor": regressor, "bugs": [b["bug"] for b in public]}
+        answer = compare(public)
+        if answer is None:
+            check["error"] = "no usable answer"
+        else:
+            check.update(answer.model_dump())
+            if accepted(answer):
+                return answer.bug, check
+    # Keep restricted reasoning out of public comments and unmatched check records.
+    if hidden:
+        answer = compare(hidden)
+        if answer is not None and accepted(answer):
+            return answer.bug, dict(answer.model_dump(), regressor=regressor, restricted=True,
+                                    bugs=[b["bug"] for b in hidden])
+        logger.info("autofile: no same-defect match among restricted bugs %s for %r",
+                    [b["bug"] for b in hidden], signature)
+    return None, check
 
 
 def _same_defect_comment(uuid, uuid_info, signature, check):
@@ -2161,23 +2195,27 @@ def _same_defect_comment(uuid, uuid_info, signature, check):
 
 
 def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
-    """Attach the signature and comparison comment in one PUT, without needinfo.
-    Decline unless the channel allows comments on existing bugs."""
+    """Attach the signature and comparison in comment mode, without needinfo.
+    Restricted matches use authenticated reads and mark result records for redaction.
+    """
+    restricted = bool(check.get("restricted"))
+    withheld = {"findings_withheld": True} if restricted else {}
     if mode != "comment":
-        return {"filed": False, "bug": bug, "same_defect": check,
+        return {"filed": False, "bug": bug, "same_defect": check, **withheld,
                 "skipped": "bug {} is the same defect, with the same regressor (bug {}); this "
                            "channel does not write on existing bugs".format(bug, check["regressor"])}
     attached = _attach_signature(bug, signature, token,
-                                 comment=_same_defect_comment(uuid, uuid_info, signature, check))
+                                 comment=_same_defect_comment(uuid, uuid_info, signature, check),
+                                 read_token=token if restricted else None)
     if attached == "already":
-        return {"filed": False, "bug": bug, "same_defect": check,
+        return {"filed": False, "bug": bug, "same_defect": check, **withheld,
                 "skipped": "bug {} already carries this signature".format(bug)}
     if attached != "attached":
         noted = _note_filing_error(uuid, {
             "at": datetime.now(timezone.utc).isoformat(),
             "error": "adding the signature to bug {} failed".format(bug),
-            "signature": signature, "mode": "same_defect"})
-        return {"filed": False, "bug": bug, "same_defect": check,
+            "signature": signature, "mode": "same_defect", **withheld})
+        return {"filed": False, "bug": bug, "same_defect": check, **withheld,
                 "skipped": "bugzilla write failed: adding the signature to bug {}".format(bug),
                 **noted}
     result = {"filed": True, "bug": bug, "mode": "same_defect", "uuid": uuid,
@@ -2185,7 +2223,7 @@ def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token):
               "product": uuid_info.get("product"),
               "buildid": utils.get_buildid(uuid_info.get("buildid")),
               "at": datetime.now(timezone.utc).isoformat(), "needinfo": None,
-              "same_defect": check}
+              "same_defect": check, **withheld}
     models.Dossier.record_filed_bug(uuid, result)
     logger.info("autofile: %s -> bug %s (same defect, regressor bug %s)",
                 uuid, bug, check["regressor"])
@@ -3019,8 +3057,10 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     same_defect_check = None
     sd_cfg = config.get_agent_same_defect()
     if bug_id is None and sd_cfg["enabled"] and not (withheld or incomplete_fix or meta_bugs):
-        same_bug, same_defect_check = _same_defect_bug(uuid, uuid_info, stack, dossier,
-                                                       signature, sd_cfg)
+        # Read restricted candidates only on channels that allow comments.
+        same_bug, same_defect_check = _same_defect_bug(
+            uuid, uuid_info, stack, dossier, signature, sd_cfg,
+            token=token if comment_allowed else None)
         if same_bug is not None:
             return _file_on_same_defect(uuid, uuid_info, signature, same_bug, same_defect_check,
                                         mode, token)

@@ -4903,7 +4903,7 @@ def _autofile(uuid, payload, row, planned=None):
             if res.get("same_defect"):
                 decline["same_defect"] = res["same_defect"]
             # Keep disclosure flags and stale-bug details in the decline record.
-            for key in ("restricted", "withdrawn_refs", "wake_stale"):
+            for key in ("restricted", "withdrawn_refs", "findings_withheld", "wake_stale"):
                 if res.get(key):
                     decline[key] = res[key]
             models.Dossier.record_filing_decline(uuid, decline)

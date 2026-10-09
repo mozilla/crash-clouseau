@@ -648,11 +648,13 @@ class TestTheDeclineRecord(unittest.TestCase):
                                                   "signature": "S", "buildid": None})), \
                 mock.patch.object(bugzilla_apply, "autofile_bug", return_value={
                     "filed": False, "skipped": "product/component unresolved",
-                    "restricted": "regressor", "withdrawn_refs": 2}), \
+                    "restricted": "regressor", "withdrawn_refs": 2,
+                    "findings_withheld": True}), \
                 mock.patch.object(orchestrator.models.Dossier, "record_filing_decline",
                                   side_effect=lambda u, i: seen.append(i)):
             orchestrator._autofile("u-1", {"dossier": {}}, {"verdict": "lead", "confidence": 70})
-        self.assertEqual((seen[0]["restricted"], seen[0]["withdrawn_refs"]), ("regressor", 2))
+        self.assertEqual((seen[0]["restricted"], seen[0]["withdrawn_refs"],
+                          seen[0]["findings_withheld"]), ("regressor", 2, True))
 
 
 class TestTheNote(unittest.TestCase):

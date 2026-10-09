@@ -182,12 +182,28 @@ class TestSameRegressorBugs(unittest.TestCase):
             x.start()
             self.addCleanup(x.stop)
 
-    def _run(self, rows, extra=(), signature="Foo::Bar", max_bugs=5, buildid=_BUILDID):
-        def fetch(ids, timeout=None):
-            return [r for r in list(rows) + list(extra) if r["id"] in ids]
+    def _run(self, rows, extra=(), signature="Foo::Bar", max_bugs=5, buildid=_BUILDID,
+             hidden=(), token=None):
+        def fetch(ids, timeout=None, token=None):
+            visible = [r for r in list(rows) + list(extra) if r["id"] not in hidden or token]
+            return [r for r in visible if r["id"] in ids]
         with mock.patch.object(bugzilla_apply, "_crash_bug_rows", side_effect=fetch):
             return bugzilla_apply._same_regressor_bugs(42, signature, "Firefox", max_bugs,
-                                                       buildid=buildid)
+                                                       buildid=buildid, token=token)
+
+    def test_our_restricted_filing_is_read_with_the_token(self):
+        rows = [_row(7, sigs=("A",)), _row(8, sigs=("B",))]
+        with mock.patch.object(bugzilla_apply, "_bug_comments",
+                               return_value=("comment 0", [])) as comments:
+            out = self._run(rows, hidden={7}, token="tok")
+        self.assertEqual(sorted(b["bug"] for b in out), [7, 8])
+        tokens = {c.args[0]: c.kwargs.get("token") for c in comments.call_args_list}
+        self.assertEqual(tokens, {7: "tok", 8: None})
+        self.assertEqual({b["bug"]: b.get("restricted") for b in out}, {7: True, 8: None})
+
+    def test_without_a_token_our_restricted_filing_stays_out(self):
+        out = self._run([_row(7, sigs=("A",)), _row(8, sigs=("B",))], hidden={7})
+        self.assertEqual([b["bug"] for b in out], [8])
 
     def test_ours_with_analysis_and_theirs_with_comment_0(self):
         out = self._run([_row(7, sigs=("A",), created="2026-09-21T00:00:00Z"),
@@ -271,12 +287,26 @@ class TestBugComments(unittest.TestCase):
             self.assertIsNone(bugzilla_apply._bug_comments(7))
 
 
+class TestSignatureField(unittest.TestCase):
+    def test_read_with_a_token_only_when_given(self):
+        resp = mock.Mock()
+        resp.json.return_value = {"bugs": [{"id": 7, "cf_crash_signature": "[@ A]"}]}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=resp) as get:
+            self.assertEqual(bugzilla_apply._signature_field(7, token="tok"), "[@ A]")
+            self.assertEqual(get.call_args.kwargs["headers"], {"X-Bugzilla-API-Key": "tok"})
+            bugzilla_apply._signature_field(7)
+            self.assertIsNone(get.call_args.kwargs["headers"])
+
+
 class TestSameDefectBug(unittest.TestCase):
     _BUGS = [{"bug": 7, "summary": "s", "status": "NEW", "signatures": ["A"]}]
 
-    def _run(self, answer, bugs=_BUGS, dossier=_DOSSIER, cfg=_SD_CFG):
+    _MIXED = [{"bug": 7, "summary": "s", "status": "NEW", "signatures": ["A"]},
+              {"bug": 9, "summary": "r", "status": "NEW", "signatures": ["B"], "restricted": True}]
+
+    def _run(self, answer, bugs=_BUGS, dossier=_DOSSIER, cfg=_SD_CFG, answers=None):
         async def run(*a, **k):
-            return answer
+            return answers.pop(0) if answers is not None else answer
         with mock.patch.object(bugzilla_apply, "_same_regressor_bugs",
                                return_value=bugs) as lookup, \
                 mock.patch.object(report_bug, "fetch_crash_reason",
@@ -323,6 +353,34 @@ class TestSameDefectBug(unittest.TestCase):
         (bug, check), agent = self._run(None, dossier={"candidate": {"node": "n"}})
         self.assertEqual((bug, check), (None, None))
         agent.assert_not_called()
+
+    def test_restricted_bugs_are_compared_on_their_own(self):
+        (bug, check), agent = self._run(None, bugs=self._MIXED, answers=[
+            same_defect.SameDefect(bug=None, confidence="high", reason="Public: no."),
+            same_defect.SameDefect(bug=9, confidence="high", reason="Restricted: same.")])
+        self.assertEqual([[b["bug"] for b in c.args[2]] for c in agent.call_args_list],
+                         [[7], [9]])
+        self.assertEqual(bug, 9)
+        self.assertEqual((check["restricted"], check["bugs"], check["reason"]),
+                         (True, [9], "Restricted: same."))
+
+    def test_a_public_match_skips_the_restricted_comparison(self):
+        (bug, check), agent = self._run(None, bugs=self._MIXED, answers=[
+            same_defect.SameDefect(bug=7, confidence="high", reason="Same.")])
+        self.assertEqual((bug, agent.call_count), (7, 1))
+        self.assertEqual(check["bugs"], [7])
+        self.assertNotIn("restricted", check)
+
+    def test_no_restricted_match_leaves_no_record_of_them(self):
+        (bug, check), agent = self._run(None, bugs=self._MIXED, answers=[
+            same_defect.SameDefect(bug=None, confidence="high", reason="Public: no."),
+            same_defect.SameDefect(bug=9, confidence="low", reason="Restricted: maybe.")])
+        self.assertIsNone(bug)
+        self.assertEqual(agent.call_count, 2)
+        self.assertEqual((check["bugs"], check["reason"]), ([7], "Public: no."))
+        self.assertNotIn("Restricted", repr(check))
+        (bug, check), _ = self._run(None, bugs=self._MIXED[1:], answers=[None])
+        self.assertEqual((bug, check), (None, None))
 
     def test_a_failed_lookup(self):
         (bug, check), agent = self._run(None, bugs=None)
@@ -391,6 +449,32 @@ class TestTheFiler(_Base):
         self.assertFalse(res["filed"])
         self.assertIn("already carries this signature", res["skipped"])
         self.assertEqual((self.puts, self.created), ([], []))
+
+    def test_restricted_bugs_are_candidates_only_where_a_match_can_be_written(self):
+        self._file(dossier=_DOSSIER)
+        self.assertEqual(bugzilla_apply._same_defect_bug.call_args.kwargs["token"], "tok")
+        self._file(dossier=_DOSSIER, comment_on_existing="skip")
+        self.assertIsNone(bugzilla_apply._same_defect_bug.call_args.kwargs["token"])
+
+    def test_a_restricted_match_is_read_with_the_token_and_withheld(self):
+        check = dict(self._CHECK, bug=9, bugs=[9], restricted=True)
+        bugzilla_apply._same_defect_bug.return_value = (9, check)
+        res = self._file(dossier=_DOSSIER)
+        self.assertEqual((res["filed"], res["bug"], res["findings_withheld"]), (True, 9, True))
+        self.assertEqual(bugzilla_apply._signature_field.call_args.kwargs["token"], "tok")
+        self.assertEqual(self.filed, [("u-1", res)])
+        self.assertTrue(bugzilla_apply.disclosure.withheld_filing(res))
+        bugzilla_apply._signature_field.return_value = "[@ A]\n[@ Foo::Bar]"
+        self.assertTrue(self._file(dossier=_DOSSIER)["findings_withheld"])
+        bugzilla_apply._signature_field.return_value = "[@ A]"
+        bugzilla_apply._put_bug.side_effect = RuntimeError("503")
+        res = self._file(dossier=_DOSSIER)
+        self.assertEqual((res["filed"], res["findings_withheld"]), (False, True))
+        self.assertTrue(self.errors[-1]["findings_withheld"])
+
+    def test_a_public_match_is_read_anonymously(self):
+        self._file(dossier=_DOSSIER)
+        self.assertIsNone(bugzilla_apply._signature_field.call_args.kwargs["token"])
 
     def test_no_match_files_a_new_bug_and_records_the_check(self):
         check = dict(self._CHECK, bug=None)
