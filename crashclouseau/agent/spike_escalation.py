@@ -1575,16 +1575,12 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 return dict(result, skipped="{} and no security group for product {!r}".format(
                     bugzilla_apply._RESTRICTED_SHORT.get(restricted, "memory-safety crash"),
                     bz_product))
-            if restricted:
-                preview["comment"] = "{}\n\n{}".format(
-                    preview["comment"], bugzilla_apply._restricted_note(
-                        restricted, restricted_bugs, declined=public_venue_declined))
-            elif public_venue_declined is not None:
-                preview["comment"] = (
-                    "{}\n\n_Probably a duplicate of bug {}, which is on this same signature. "
-                    "This bug was filed separately, and restricted, because the crash report shows "
-                    "a memory-safety fault and that bug is public._".format(
-                        preview["comment"], public_venue_declined))
+            if public_venue_declined is not None:
+                preview = bugzilla_apply._as_companion(preview, public_venue_declined, restricted,
+                                                       restricted_bugs)
+            elif restricted:
+                note = bugzilla_apply._restricted_note(restricted, restricted_bugs)
+                preview["comment"] = "{}\n\n{}".format(preview["comment"], note)
             email = preview.get("needinfo_email") if config.get_agent_autofile(channel)["needinfo"] else ""
             # Use the same create payload as the ordinary filer.
             train_flags = bugzilla_apply._train_flags(preview, signature, product)

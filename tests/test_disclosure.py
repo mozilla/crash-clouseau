@@ -259,10 +259,12 @@ class TestTheOrdinaryFiler(_Base):
                 res = self._file(dossier=self.DOSSIER, comment_on_existing=mode)
                 self.assertEqual((res["mode"], res["public_venue_declined"]), ("new_bug", 55))
                 self.assertEqual(self.comments, [])
-                self.assertIn("_Probably a duplicate of bug 55, which is open on this same "
-                              "signature. This bug was filed separately, and restricted, because "
-                              "bug {}, the bug of the changeset named above, is not public, and "
-                              "bug 55 is public._".format(_HIDDEN), self.created[0]["description"])
+                self.assertTrue(self.created[0]["description"].startswith(
+                    "Bug 55 tracks this crash. This bug holds Clouseau's analysis of it, which is "
+                    "restricted because bug {}, the bug of the changeset it names, is not "
+                    "public.".format(_HIDDEN)), self.created[0]["description"])
+                self.assertTrue(self.created[0]["summary"].startswith(
+                    "Restricted analysis of bug 55: "), self.created[0]["summary"])
 
     def test_an_unanswered_read_files_nothing(self):
         disclosure.public_bugs.side_effect = None
@@ -296,8 +298,8 @@ class TestTheOrdinaryFiler(_Base):
         self.assertEqual(res["public_venue_declined"], 55)
         self.assertEqual(self.comments, [])
         self.assertEqual(self.created[0]["groups"], ["core-security"])
-        self.assertIn("because the analysis above names bug 2068336, which is not public, and "
-                      "bug 55 is public._", self.created[0]["description"])
+        self.assertIn("restricted because it names bug 2068336, which is not public.",
+                      self.created[0]["description"])
 
     def test_a_restricted_bug_filed_instead_of_a_comment_keeps_the_filing_footer(self):
         text = ("the whole bug opener\n\nBug 2068336 converted the invariant check.\n\n"
@@ -400,7 +402,7 @@ class TestTheSpikeFiler(_FilerBase):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 55))
         self.assertEqual(self.comments, [])
-        self.assertIn("_Probably a duplicate of bug 55", self.created[0]["description"])
+        self.assertTrue(self.created[0]["description"].startswith("Bug 55 tracks this crash."))
 
     def test_a_hidden_bug_in_a_list_item_is_removed_from_a_public_comment(self):
         findings = self.findings.model_copy(update={"culprit": None, "ruled_out": [
@@ -662,10 +664,21 @@ class TestTheNote(unittest.TestCase):
         self.assertEqual(bugzilla_apply._restricted_note("analysis", [2, 1]),
                          "_Filed restricted because the analysis above names bug 1, bug 2, "
                          "which are not public._")
-        self.assertEqual(bugzilla_apply._restricted_note("regressor", [7], declined=55),
-                         "_Probably a duplicate of bug 55, which is open on this same signature. "
-                         "This bug was filed separately, and restricted, because bug 7, the bug "
-                         "of the changeset named above, is not public, and bug 55 is public._")
+        self.assertEqual(bugzilla_apply._restricted_note("regressor", [7]),
+                         "_Filed restricted because bug 7, the bug of the changeset named above, "
+                         "is not public._")
+
+    def test_a_declined_public_venue_makes_a_companion(self):
+        out = bugzilla_apply._as_companion({"title": "Crash in [@ A]", "comment": "body"}, 55,
+                                           "regressor", [7])
+        self.assertEqual(out["title"], "Restricted analysis of bug 55: Crash in [@ A]")
+        self.assertEqual(out["comment"], "Bug 55 tracks this crash. This bug holds Clouseau's "
+                                         "analysis of it, which is restricted because bug 7, the "
+                                         "bug of the changeset it names, is not public.\n\nbody")
+        out = bugzilla_apply._as_companion({"title": "Crash in [@ " + "x" * 300 + "]",
+                                            "comment": ""}, 55)
+        self.assertEqual(len(out["title"]), 255)
+        self.assertIn("memory-safety fault", out["comment"])
 
 
 if __name__ == "__main__":

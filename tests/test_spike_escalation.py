@@ -667,7 +667,8 @@ class TestFiling(_FilerBase):
             res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
         self.assertEqual((res["mode"], res["public_venue_declined"]), ("spike_new_bug", 55))
         self.assertEqual(self.comments, [])
-        self.assertIn("Probably a duplicate of bug 55", self.created[0]["description"])
+        self.assertTrue(self.created[0]["description"].startswith("Bug 55 tracks this crash."))
+        self.assertTrue(self.created[0]["summary"].startswith("Restricted analysis of bug 55: "))
 
     def test_an_unsymbolicated_signature_is_not_filed(self):
         res = se.file_spike_bug(_esc(signature="@0xdeadbeef"), dict(self.brief, signature="@0xdeadbeef"),

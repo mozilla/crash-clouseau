@@ -2314,9 +2314,7 @@ class TestTheSecurityVenue(_Base):
         self.assertEqual(self.created[0]["groups"], ["core-security"])
 
     def test_the_public_venue_is_declined_and_a_restricted_bug_filed_instead(self):
-        """`_open_bugs_for_signature` is unauthenticated by design, so an existing venue is
-        PUBLIC by construction and no `groups` on a create can reach that branch. Commenting
-        there would disclose exactly what the group protects."""
+        """Restricted analysis gets a new bug rather than a comment on the public venue."""
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
                                return_value=[{"id": 2064600, "creation_time": _RECENT,
                                               "product": "Core", "keywords": []}]):
@@ -2326,13 +2324,11 @@ class TestTheSecurityVenue(_Base):
         self.assertEqual(res["mode"], "new_bug")
         self.assertEqual(res["public_venue_declined"], 2064600)
         self.assertEqual(self.created[0]["groups"], ["core-security"])
-        # ...naming the public bug in the COMMENT, so a triager can dup it in one click. NOT in
-        # `see_also`: BMO's `add_see_also` (Bug.pm:3480-3487) mirrors a local reference onto the
-        # referenced bug, which would put a public "See Also: bug <restricted id>" on the public
-        # bug and advertise that a restricted bug exists -- a disclosure of existence, on the one
-        # path built to avoid a disclosure.
+        # Reference the public venue in restricted text, without a see_also link.
         self.assertNotIn("see_also", self.created[0])
-        self.assertIn("Probably a duplicate of bug 2064600", self.created[0]["description"])
+        created = self.created[0]
+        self.assertTrue(created["description"].startswith("Bug 2064600 tracks this crash."))
+        self.assertTrue(created["summary"].startswith("Restricted analysis of bug 2064600: "))
 
     def test_an_ordinary_crash_still_comments_on_the_public_bug(self):
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",

@@ -2401,8 +2401,8 @@ def _with_restricted(res, restricted, withdrawn=()):
     return out
 
 
-def _restricted_note(reason, bugs, declined=None):
-    """Explain the restriction inside the restricted bug, including any declined venue."""
+def _restricted_note(reason, bugs):
+    """Explain why the bug is restricted."""
     ids = sorted({int(b) for b in bugs if b})
     names = ", ".join("bug {}".format(b) for b in ids)
     if reason == "regressor":
@@ -2410,11 +2410,29 @@ def _restricted_note(reason, bugs, declined=None):
     else:
         why = "the analysis above names {}, which {} not public".format(
             names, "is" if len(ids) == 1 else "are")
-    if declined:
-        return ("_Probably a duplicate of bug {}, which is open on this same signature. This bug "
-                "was filed separately, and restricted, because {}, and bug {} is public._".format(
-                    declined, why, declined))
     return "_Filed restricted because {}._".format(why)
+
+
+def _as_companion(preview, declined, reason=None, bugs=()):
+    """Prefix the preview title and description with the public venue and restriction."""
+    from crashclouseau import report_bug
+    ids = sorted({int(b) for b in bugs if b})
+    names = ", ".join("bug {}".format(b) for b in ids)
+    if reason == "regressor":
+        why = "{}, the bug of the changeset it names, is not public".format(names)
+    elif reason:
+        why = "it names {}, which {} not public".format(names, "is" if len(ids) == 1 else "are")
+    else:
+        why = "the crash report shows a memory-safety fault"
+    lead = "Restricted analysis of bug {}: ".format(declined)
+    title = preview.get("title") or ""
+    room = report_bug._BMO_SUMMARY_MAX - len(lead)
+    if len(title) > room:
+        title = title[:room - 3].rstrip() + "..."
+    opening = ("Bug {} tracks this crash. This bug holds Clouseau's analysis of it, which is "
+               "restricted because {}.".format(declined, why))
+    return dict(preview, title=lead + title,
+                comment="{}\n\n{}".format(opening, preview.get("comment") or ""))
 
 
 def skipped_regressor(bug):
@@ -2847,16 +2865,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
         comment_only = bool(upstream) and not upstream["dropped"]
         mode = "comment" if comment_only else "skip"
     comment_allowed = mode == "comment"
-    # THE MEMORY-SAFETY CARVE-OUT, and it is a security regression that ``skip`` would otherwise
-    # introduce rather than a pre-existing one. ``sensitive.is_withheld`` used to be consulted
-    # ~90 lines below this point, so a poison-address crash whose signature has an open PUBLIC
-    # bug would hit the skip first and produce NOTHING: no restricted bug, no comment, no record.
-    # :mccr8 on bug 2065051 -- "Bugs on poison crashes like that should always be filed initially
-    # a security issue" -- and the existing nightly path does exactly that (it declines the
-    # public venue, files a NEW restricted bug, and names the public one as a probable duplicate
-    # in comment 0, never as a ``see_also``). Reach: the deterministic poison gate fires on 1 of
-    # 57 filings and 59.2% of beta signatures have an open venue, so ~1% of rung-70 verdicts --
-    # small, and the highest-value 1%.
+    # Check memory-safety signals before skip mode can decline a public venue.
     withheld = sensitive.is_withheld((dossier or {}).get("corroborations"))
     # Nonpublic regressors use the security filing path. Preserve the reason separately
     # from memory-safety signals; later gates may still decline the filing.
@@ -2905,13 +2914,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     # policy is not reported as one filed because an hg lookup failed. A venue we are not
     # allowed to use becomes a bug the new one references instead.
     never_comment = not comment_allowed
-    # ...EXCEPT on a withheld crash, where the SECURITY branch below owns the same decision and
-    # says something more useful about it. Both paths decline the venue and file a new bug; that
-    # one additionally names the public bug as a probable duplicate, explains that the split is
-    # because the report shows a memory-safety fault, and records `public_venue_declined` for the
-    # audit trail. Overriding here first would set `bug_id = None`, so `if withhold and bug_id is
-    # not None` could never fire and a restricted beta filing would carry the generic
-    # "this filer does not comment on existing bugs" note instead — and lose the audit field.
+    # Preserve withheld venues for the restriction branch, which records
+    # public_venue_declined and adds the companion title and description.
     if never_comment and bug_id is not None and not withheld:
         predating = sorted({*(predating or []), bug_id})
         logger.info("autofile: bug %s could be the venue for %s but this channel (%s) is "
@@ -3142,38 +3146,14 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
                 _RESTRICTED_SHORT.get(restricted, "memory-safety crash"),
                 preview.get("product"))}, restricted)
     if withhold and bug_id is not None:
-        # The venue we picked is an EXISTING bug, and `_open_bugs_for_signature` is
-        # unauthenticated by design, so that bug is public by construction -- posting the
-        # analysis into it discloses exactly what the group would have protected, and no
-        # `groups` on a create can reach this branch. So decline the venue and file a NEW
-        # restricted bug instead, naming the public one as the probable duplicate.
-        #
-        # This knowingly creates something that looks like a duplicate, which is the OTHER thing
-        # :mccr8 asked us to stop doing -- so it is recorded, and it is the lesser of the two: a
-        # restricted bug marked "probably a dup of N" costs a triager one click, and the
-        # alternative costs a disclosure. The third option, a private comment, needs insider-group
-        # membership this account has not been verified to have, and a private comment never
-        # enters sec triage or the bounty process at all.
+        # Anonymous lookups select public venues. File restricted analysis separately
+        # and identify the public venue in the new bug's title and description.
         logger.warning("autofile: %s must be restricted (%s); declining the PUBLIC venue "
                        "bug %s and filing restricted instead", uuid,
                        restricted or "memory safety", bug_id)
         preview = dict(preview)
-        # NOT `see_also`, and this cost a reading of BMO's source to get right. `add_see_also`
-        # MIRRORS a local reference onto the referenced bug (Bugzilla/Bug.pm:3480-3487:
-        # `$ref_bug->add_see_also($self->id, 'skip_recursion')`), so linking the public bug from
-        # a restricted one puts a public "See Also: bug <restricted id>" on it -- advertising to
-        # everyone that a restricted bug exists for this signature. That is a disclosure of
-        # EXISTENCE we did not intend and cannot take back, on the one path built to avoid a
-        # disclosure. The bug id goes in the restricted bug's own comment instead, where it is
-        # just as useful to a triager and mirrors nowhere.
-        if restricted:
-            preview["comment"] = "{}\n\n{}".format(
-                preview["comment"], _restricted_note(restricted, restricted_bugs, declined=bug_id))
-        else:
-            preview["comment"] = "{}\n\n_Probably a duplicate of bug {}, which is open on this "\
-                                 "same signature. This bug was filed separately, and restricted, "\
-                                 "because the crash report shows a memory-safety fault and that "\
-                                 "bug is public._".format(preview["comment"], bug_id)
+        # Keep the reference in restricted text; do not add a see_also link.
+        preview = _as_companion(preview, bug_id, restricted, restricted_bugs)
         public_venue_declined, bug_id = bug_id, None
     elif restricted:
         preview = dict(preview, comment="{}\n\n{}".format(

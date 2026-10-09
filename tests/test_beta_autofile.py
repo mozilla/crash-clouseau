@@ -577,18 +577,12 @@ class TestBetaNeverCommentsOnSomebodyElsesBug(_BetaBase):
                 self.assertEqual(self.created[0]["cc"], ["dev@moz.example"])
                 self.assertEqual(res["security_groups"], ["core-security"])
                 self.assertTrue(res["memory_unsafe_signals"])
-                # THE SECURITY BRANCH, NOT THE POLICY BRANCH, OWNS THIS DECISION, and the order
-                # is load-bearing: the never-comment override runs first and sets `bug_id =
-                # None`, so without its `and not withheld` the branch below could never fire —
-                # the restricted bug would carry the generic "this filer does not comment on
-                # existing bugs" note, which ends "please duplicate if it is", and the audit
-                # field would be lost. What a triager must read instead is WHY it was split.
+                # The restriction branch must preserve the declined venue and explain the split.
                 self.assertEqual(res["public_venue_declined"], 2064600)
-                self.assertIn("Probably a duplicate of bug 2064600",
-                              self.created[0]["description"])
+                self.assertTrue(self.created[0]["description"].startswith(
+                    "Bug 2064600 tracks this crash."), self.created[0]["description"])
                 self.assertIn("memory-safety fault", self.created[0]["description"])
-                # ...and never as `see_also`: BMO mirrors a local reference onto the referenced
-                # bug, which would advertise on the PUBLIC bug that a restricted one exists.
+                # Keep the reference in the restricted description.
                 self.assertNotIn("see_also", self.created[0])
         # THE CONTRAST that makes the carve-out a carve-out: the same crash without the poison
         # address, same open bug, same config, files nothing at all. Under a bare `skip` the
