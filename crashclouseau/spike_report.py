@@ -19,8 +19,9 @@ import re
 
 from crashclouseau import config, report_bug, sigage, sigtrend, spikes, utils
 
-# Split whitespace after . ! ? ) or ` before a recognized label.
-# Labels use a status parenthetical or one of the section names below.
+# Keep existing paragraphs.
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+# Otherwise split before status or section labels after . ! ? ) or `.
 _SECTION = re.compile(
     r"(?<=[.!?)`])\s+(?=(?:[A-Z][a-z]+(?: [A-Za-z-]+){0,5} \([^()]*\b(?i:observed|derived|"
     r"inferred|unknown)\b[^()]*\)|(?:Mechanism|Path|Trigger|Culprit|Population|Derived|"
@@ -204,8 +205,9 @@ def analysis_section(findings, brief, author_display=None, link_regressor=False,
     if culprit:
         lines.append(culprit)
     if findings.trigger_path:
-        sections = _SECTION.split(findings.trigger_path)
-        if len(sections) > 1:
+        laid_out = bool(_PARAGRAPH_BREAK.search(findings.trigger_path))
+        sections = [findings.trigger_path] if laid_out else _SECTION.split(findings.trigger_path)
+        if laid_out or len(sections) > 1:
             lines.append("Possible path to the crash:\n\n" + "\n\n".join(sections))
         else:
             lines.append("Possible path to the crash: " + findings.trigger_path)

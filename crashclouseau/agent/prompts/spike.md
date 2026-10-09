@@ -535,6 +535,13 @@ Field rules:
   not a changeset it can resolve, or that landed after the spiking build.
 - `trigger_path`: the explanation. Mechanism first, then path, then trigger, with the
   Observed / Derived / Inferred status of each step and the confidence of inferred ones.
+  Start every labelled part in its own paragraph, separated by blank lines (`\n\n` in the JSON
+  string), its label and status first: `Mechanism (observed):`, `Trigger (inferred, low):`, and
+  so on for any part you add. Write a path of three or more steps as a numbered list (`1.`,
+  `2.`, ...), in order, ending at the failure, one step per item, one sentence each (two at
+  most); a shorter path stays prose. A hedge ("can", "probably") or a condition ("when", "only
+  if") stays on every claim it covers, also when a sentence becomes several steps. State each
+  fact once. No headings or bold. This sets the layout, not the facts.
 - `evidence`: the checked facts the explanation rests on, one per item, each with its `kind` and
   a `source` precise enough for a developer to re-read it. `confidence` only on inferred items.
   An item without a source is dropped by the runtime. An empty list means you found nothing

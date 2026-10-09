@@ -1368,6 +1368,13 @@ class TestTheBugText(unittest.TestCase):
                                                  self._BRIEF)
             self.assertIn("Possible path to the crash: " + tp, text)
 
+    def test_laid_out_trigger_path_is_kept_verbatim(self):
+        tp = ("Mechanism (suspected): `A` fails.\n\nPath (observed):\n1. `B` calls `C`.\n"
+              "2. `C` asserts. Derived: the size is 0.\n\nTrigger (unknown): no testcase.")
+        text = spike_report.analysis_section(SpikeFindings(summary="S", trigger_path=tp),
+                                             self._BRIEF)
+        self.assertTrue(text.endswith("Possible path to the crash:\n\n" + tp), text)
+
     def test_the_analysis_lists_are_bounded(self):
         f = SpikeFindings(summary="S", evidence=[{"claim": str(i), "source": "s"} for i in range(20)],
                           ruled_out=[str(i) for i in range(20)])
