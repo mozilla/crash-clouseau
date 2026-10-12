@@ -3,9 +3,10 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import functools
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
-from crashclouseau import app, feedback, update
+from crashclouseau import app, feedback, impact, update
 from crashclouseau.agent import orchestrator, spike_escalation
 
 
@@ -95,6 +96,13 @@ def feedback_job():
     # (measured over the 52 filings' last 7 days; busiest bucket 9). Read-only and
     # unauthenticated, so unlike the sweep above it spends nothing.
     feedback.refresh()
+
+
+@scheduled(hours=6, next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2))
+def impact_job():
+    # dashboard.html: what became of every bug we wrote on. Also shortly after boot, so a
+    # deploy fills an empty table; after the first pass only bugs that changed are re-read.
+    impact.refresh()
 
 
 # Importable without starting the clock, so `tests/test_clock_jobs.py` can enumerate the

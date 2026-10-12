@@ -816,6 +816,23 @@ killed those already.
 - Agent evidence accumulates **slowly** (~20 min/run on the single agentworker), so
   early on most scored crashes won't be tagged yet.
 
+## Impact dashboard (2026-10-12)
+
+`dashboard.html` shows every bug Clouseau filed or commented on, and what happened to it next:
+resolution, duplicates, needinfo outcomes, human reactions and landed patches. Filters are
+`?channel=`, `?product=` and `?days=`.
+
+The page reads the `impact` table, which is created at startup. The clock's `impact_job` fills
+it when the clock starts and then every 6 hours. It combines our records (dossiers, spike
+escalations, `feedback`) with Bugzilla searches for `clouseau-bot` as creator and commenter,
+using the bot's token so restricted filings are readable. History and comments are re-read only
+for bugs whose `last_change_time` changed. Rows are kept after the dossiers are pruned. For
+public viewers, the summary, component, assignee and needinfo requestee of restricted bugs are
+hidden.
+
+To fill it by hand: `heroku run -a crash-clouseau-augmented python -c "from crashclouseau import
+impact; print(impact.refresh())"`. Tests: `tests/test_impact.py`.
+
 ## Analysing one crash by hand
 
 `POST /api/tasks/trigger` analyses a crash the pipeline never selected (or re-runs one it did),

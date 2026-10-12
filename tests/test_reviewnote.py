@@ -388,7 +388,8 @@ class TestItIsWiredUp(unittest.TestCase):
             for deco in node.decorator_list:
                 if not isinstance(deco, ast.Call):
                     continue
-                found += [(kw.arg, ast.literal_eval(kw.value)) for kw in deco.keywords]
+                found += [(kw.arg, ast.literal_eval(kw.value)) for kw in deco.keywords
+                          if kw.arg != "next_run_time"]
         self.assertIn(("hours", 6), found,
                       "feedback.refresh() must be scheduled, and six-hourly")
         self.assertNotIn("hours", [k for k, v in found if k == "hours" and v != 6])

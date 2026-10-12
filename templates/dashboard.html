@@ -1,0 +1,403 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/clouseau.css?v=14">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Clouseau on Bugzilla</title>
+    <style>
+      .dash {
+        --surface: #ffffff;
+        --ink: #0b0b0b;
+        --ink-2: #52514e;
+        --ink-muted: #898781;
+        --grid: #e1e0d9;
+        --axis: #c3c2b7;
+        --s1: #2a78d6;
+        --s2: #eb6834;
+        --s3: #1baf7a;
+        --s4: #eda100;
+        --s5: #e87ba4;
+        --s6: #008300;
+        --s0: #c3c2b7;
+        margin: 0 0.4em 2em;
+        color: var(--ink);
+      }
+      .dash h2 { margin: 0.6em 0 0.1em; }
+      .dash h3 { margin: 1.6em 0 0.3em; font-size: 1.1em; }
+      .dash-sub { color: var(--ink-2); font-size: 0.9em; margin: 0 0 0.8em; }
+      .dash-filters { display: flex; gap: 1em; align-items: center; flex-wrap: wrap;
+                      margin: 0.6em 0 1em; font-size: 0.9em; }
+      .dash-filters label { color: var(--ink-2); }
+      .dash-tiles { display: flex; flex-wrap: wrap; gap: 0.6em; }
+      .dash-tile { border: 1px solid rgba(11,11,11,0.10); border-radius: 6px; padding: 0.6em 0.9em;
+                   min-width: 10em; background: var(--surface); }
+      .dash-tile .v { display: block; font-size: 1.7em; font-weight: 600; }
+      .dash-tile .l { display: block; font-size: 0.85em; color: var(--ink-2); }
+      .dash-tile .d { display: block; font-size: 0.8em; color: var(--ink-muted); margin-top: 0.2em; }
+      .dash-row { display: flex; flex-wrap: wrap; gap: 2.5em; }
+      .dash-row > section { flex: 1 1 28em; min-width: 22em; }
+      .dash-bar { display: flex; gap: 2px; height: 20px; margin: 0.4em 0; background: var(--surface); }
+      .dash-bar .seg { min-width: 3px; }
+      .dash-bar .seg:first-child { border-radius: 4px 0 0 4px; }
+      .dash-bar .seg:last-child { border-radius: 0 4px 4px 0; }
+      .dash-bar .seg:only-child { border-radius: 4px; }
+      .dash-bar .seg:hover, .dash-bar .seg:focus, .dash-col:hover .dash-stack, .dash-col:focus .dash-stack { filter: brightness(1.12); outline: none; }
+      .s1 { background: var(--s1); } .s2 { background: var(--s2); } .s3 { background: var(--s3); }
+      .s4 { background: var(--s4); } .s5 { background: var(--s5); } .s6 { background: var(--s6); }
+      .s0 { background: var(--s0); }
+      .dash-legend { list-style: none; padding: 0; margin: 0.3em 0; font-size: 0.88em; }
+      .dash-legend li { display: flex; align-items: baseline; gap: 0.45em; padding: 1px 0; }
+      .dash-legend b { min-width: 2.2em; text-align: right; font-variant-numeric: tabular-nums; }
+      .dash-legend .pct { color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+      .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none;
+            align-self: center; }
+      .dash-facts { font-size: 0.88em; color: var(--ink-2); margin: 0.4em 0; padding-left: 1.1em; }
+      .dash-facts li { margin: 0.15em 0; }
+      .dash-empty { color: var(--ink-muted); font-style: italic; font-size: 0.9em; }
+      .dash-chart { display: flex; gap: 0; margin: 0.6em 0 0; }
+      .dash-yaxis { position: relative; width: 2.2em; height: 150px; font-size: 0.75em;
+                    color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+      .dash-yaxis span { position: absolute; right: 0.4em; transform: translateY(50%); }
+      .dash-plot { position: relative; flex: 1; height: 150px; display: flex; align-items: flex-end;
+                   gap: 6px; border-bottom: 1px solid var(--axis); padding: 0 4px; }
+      .dash-grid { position: absolute; left: 0; right: 0; border-top: 1px solid var(--grid); }
+      .dash-col { position: relative; flex: 1; height: 100%; display: flex; align-items: flex-end;
+                  justify-content: center; z-index: 1; }
+      .dash-stack { width: 100%; max-width: 24px; display: flex; flex-direction: column-reverse;
+                    gap: 2px; }
+      .dash-stack .seg { min-height: 2px; }
+      .dash-stack .seg:last-child { border-radius: 4px 4px 0 0; }
+      .dash-xaxis { display: flex; gap: 6px; margin-left: 2.2em; padding: 0 4px; font-size: 0.72em;
+                    color: var(--ink-muted); }
+      .dash-xaxis span { flex: 1; text-align: center; white-space: nowrap; overflow: visible; }
+      .dash-table { border-collapse: collapse; font-size: 0.85em; margin: 0.4em 0; width: auto;
+                    table-layout: auto; line-height: 1.4; }
+      .dash-table, .dash-table tr, .dash-table th, .dash-table td { border: none; }
+      .dash-table tr:nth-child(2n+1), .dash-table tr:hover { background: none; }
+      .dash-table tr:hover td { background: #f4f4f1; }
+      .dash-table th, .dash-table td { padding: 3px 8px; border-bottom: 1px solid var(--grid);
+                                       text-align: right; font-variant-numeric: tabular-nums; }
+      .dash-table th { border-bottom-color: var(--axis); vertical-align: bottom; }
+      .dash-table th { color: var(--ink-2); font-weight: 600; }
+      .dash-table th:first-child, .dash-table td:first-child { text-align: left; }
+      .dash-bugs { width: 100%; }
+      .dash-bugs th, .dash-bugs td { text-align: left; vertical-align: top; }
+      .dash-bugs td:nth-child(2), .dash-bugs td:nth-child(3), .dash-bugs td:nth-child(4) { white-space: nowrap; }
+      .dash-bugs td.num { text-align: right; }
+      .dash-summary { min-width: 24em; max-width: 44em; overflow-wrap: anywhere; }
+      .dash-bugs .comp { display: block; color: var(--ink-muted); font-size: 0.9em; }
+      .dash-pill { display: inline-flex; align-items: center; gap: 0.3em; white-space: nowrap; }
+      .dash-pill + .dash-pill { margin-left: 0.5em; }
+      .dash-note { color: var(--ink-muted); font-size: 0.85em; }
+      details > summary { cursor: pointer; color: var(--ink-2); font-size: 0.85em; margin-top: 0.3em; }
+      #dash-tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface, #fff);
+                  color: #0b0b0b; border: 1px solid rgba(11,11,11,0.15); border-radius: 6px;
+                  padding: 6px 9px; font-size: 0.82em; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+                  display: none; max-width: 22em; }
+      #dash-tip div:first-child { color: #52514e; margin-bottom: 2px; }
+      #dash-tip b { font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <ul class="nav">
+          <li>
+            <a href="https://www.mozilla.org/" class="brand">mozilla</a>
+          </li>
+          <li>
+            <a href="/reports.html" class="navlink">Reports</a>
+          </li>
+          <li>
+            <a href="/tasks.html" class="navlink">Tasks</a>
+          </li>
+          <li>
+            <a href="/selection.html" class="navlink">Selection log</a>
+          </li>
+          <li style="float:right;">
+            <a href="https://github.com/mozilla/crash-clouseau"><span class="github"></span></a>
+          </li>
+          {% include "_signin.html" %}
+        </ul>
+      </nav>
+    </header>
+
+{%- macro pct(v) -%}{{ '%.0f' | format(v) }}%{%- endmacro -%}
+{%- macro hours(h) -%}
+  {%- if h is none -%}&ndash;
+  {%- elif h < 1 -%}{{ '%.0f' | format(h * 60) }} min
+  {%- elif h < 48 -%}{{ '%.0f' | format(h) }} h
+  {%- else -%}{{ '%.0f' | format(h / 24) }} d{%- endif -%}
+{%- endmacro -%}
+{%- macro bar(segments, what) -%}
+  {%- set total = segments | sum(attribute='count') -%}
+  {%- if segments -%}
+  <div class="dash-bar" role="img" aria-label="{{ what }}: {% for s in segments %}{{ s.count }} {{ s.label }}{{ ', ' if not loop.last }}{% endfor %}">
+    {%- for s in segments %}
+    <span class="seg s{{ s.slot }}" style="flex: {{ s.count }} 1 0;" tabindex="0"
+          data-tip="{{ what }}|{{ s.count }} of {{ total }} ({{ pct(s.pct) }})|{{ s.label }}"></span>
+    {%- endfor %}
+  </div>
+  <ul class="dash-legend">
+    {%- for s in segments %}
+    <li><i class="sw s{{ s.slot }}"></i><b>{{ s.count }}</b> {{ s.label }} <span class="pct">{{ pct(s.pct) }}</span></li>
+    {%- endfor %}
+  </ul>
+  {%- else -%}
+  <p class="dash-empty">None in this selection.</p>
+  {%- endif -%}
+{%- endmacro -%}
+{%- macro weekly(kind, noun) -%}
+  {%- if view.weekly -%}
+  <div class="dash-chart">
+    <div class="dash-yaxis" aria-hidden="true">
+      {%- for v, h in view.weekly_ticks %}<span style="bottom: {{ h }}%;">{{ v }}</span>{% endfor %}
+    </div>
+    <div class="dash-plot" role="img" aria-label="{{ noun }} per week, by current outcome; the table below has the values">
+      {%- for v, h in view.weekly_ticks if v %}<div class="dash-grid" style="bottom: {{ h }}%;"></div>{% endfor %}
+      {%- for w in view.weekly %}
+      {%- set k = w[kind] %}
+      <div class="dash-col" tabindex="0"
+           data-tip="Week of {{ w.week.strftime('%b %d') }}|{{ k.total }} {{ noun }}{% for s in k.segments %}|{{ s.count }} {{ s.label }}{% endfor %}">
+        {%- if k.total %}
+        <div class="dash-stack" style="height: {{ k.height }}%;">
+          {%- for s in k.segments %}<span class="seg s{{ s.slot }}" style="flex: {{ s.count }} 1 0;"></span>{% endfor %}
+        </div>
+        {%- endif %}
+      </div>
+      {%- endfor %}
+    </div>
+  </div>
+  <div class="dash-xaxis" aria-hidden="true">
+    {%- for w in view.weekly %}<span>{{ w.week.strftime('%b %d') if loop.index0 % (2 if view.weekly | length > 12 else 1) == 0 else '' }}</span>{% endfor %}
+  </div>
+  <details>
+    <summary>Table</summary>
+    <table class="dash-table">
+      <tr><th>Week of</th><th>Total</th>{% for key, label in view.outcomes %}<th>{{ label }}</th>{% endfor %}</tr>
+      {%- for w in view.weekly %}
+      {%- set k = w[kind] %}
+      {%- set by = {} %}{% for s in k.segments %}{% set _ = by.update({s.key: s.count}) %}{% endfor %}
+      <tr><td>{{ w.week.isoformat() }}</td><td>{{ k.total }}</td>{% for key, label in view.outcomes %}<td>{{ by.get(key, '') }}</td>{% endfor %}</tr>
+      {%- endfor %}
+    </table>
+  </details>
+  {%- else -%}
+  <p class="dash-empty">None in this selection.</p>
+  {%- endif -%}
+{%- endmacro -%}
+{%- macro tally_table(rows, first) -%}
+  <table class="dash-table">
+    <tr><th>{{ first }}</th><th>New bugs</th><th>fixed</th><th>dup</th><th>open</th><th>closed</th>
+        <th>Comments</th><th>fixed since</th><th>Needinfos</th><th>answered</th></tr>
+    {%- for r in rows %}
+    <tr><td>{{ r.name }}</td>
+        <td>{{ r.filed or 0 }}</td><td>{{ r['filed:fixed'] or '' }}</td><td>{{ r['filed:duplicate'] or '' }}</td>
+        <td>{{ (r['filed:open'] + r['filed:open_assigned']) or '' }}</td><td>{{ r['filed:closed'] or '' }}</td>
+        <td>{{ r.commented or 0 }}</td><td>{{ r['commented:fixed'] or '' }}</td>
+        <td>{{ r.ni or '' }}</td><td>{{ r.ni_answered or '' }}</td></tr>
+    {%- endfor %}
+  </table>
+{%- endmacro -%}
+{%- set t = view.tiles -%}
+{%- set outcome_labels = dict(view.outcomes) -%}
+{%- set ni_labels = dict(view.ni_outcomes) -%}
+{%- set outcome_slots = {} -%}{%- for key, label in view.outcomes %}{% set _ = outcome_slots.update({key: 0 if key == 'unreadable' else loop.index}) %}{% endfor -%}
+{%- set ni_slots = {} -%}{%- for key, label in view.ni_outcomes %}{% set _ = ni_slots.update({key: 0 if key == 'pending' else loop.index}) %}{% endfor %}
+
+    <div class="dash">
+      <h2>What Clouseau did on Bugzilla</h2>
+      <p class="dash-sub">
+        Every bug Clouseau filed or commented on, and its state on Bugzilla
+        {%- if view.checked_at %} as of {{ view.checked_at.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}
+        (refreshed every 6 hours).
+      </p>
+
+      <form class="dash-filters" method="get" action="/dashboard.html">
+        <label>Channel
+          <select name="channel" onchange="this.form.submit()">
+            <option value="">all</option>
+            {%- for c in view.channels %}<option value="{{ c }}"{% if view.filters.channel == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Product
+          <select name="product" onchange="this.form.submit()">
+            <option value="">all</option>
+            {%- for p in view.products %}<option value="{{ p }}"{% if view.filters.product == p %} selected{% endif %}>{{ p }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Period
+          <select name="days" onchange="this.form.submit()">
+            {%- for d, label in ((None, 'since the start'), (7, 'last 7 days'), (30, 'last 30 days'), (90, 'last 90 days')) %}
+            <option value="{{ d or '' }}"{% if view.filters.days == d %} selected{% endif %}>{{ label }}</option>
+            {%- endfor %}
+          </select>
+        </label>
+        <noscript><button type="submit">Apply</button></noscript>
+      </form>
+
+      {%- if not view.bugs %}
+      <p class="dash-empty">Nothing recorded{% if view.filters.channel or view.filters.product or view.filters.days %} for this selection{% else %} yet: the table is filled by the clock's impact job{% endif %}.</p>
+      {%- else %}
+
+      <div class="dash-tiles">
+        <div class="dash-tile"><span class="v">{{ t.filed }}</span><span class="l">bugs filed</span>
+          <span class="d">{{ t.open }} open · {{ t.closed }} closed without a fix</span></div>
+        <div class="dash-tile"><span class="v">{{ t.fixed }} <small>({{ t.fixed_pct }}%)</small></span><span class="l">of them fixed</span>
+          <span class="d">median {{ '%.0f' | format(t.median_fix_days) if t.median_fix_days is not none else '–' }} days to the fix</span></div>
+        <div class="dash-tile"><span class="v">{{ t.duplicate }}</span><span class="l">filed bugs duped</span>
+          <span class="d">{{ t.dupe_fixed }} onto a fixed bug · {{ t.absorbed }} others duped onto ours</span></div>
+        <div class="dash-tile"><span class="v">{{ t.commented }}</span><span class="l">existing bugs commented on</span>
+          <span class="d">{{ t.fixed_after_comment }} fixed since our comment</span></div>
+        <div class="dash-tile"><span class="v">{{ t.ni_answered }} / {{ t.ni_asked }} <small>({{ t.ni_pct }}%)</small></span><span class="l">needinfos answered</span>
+          <span class="d">{{ t.ni_cancelled }} cancelled · {{ t.ni_pending }} pending</span></div>
+        <div class="dash-tile"><span class="v">{{ t.engaged_pct }}%</span><span class="l">bugs a person reacted to</span>
+          <span class="d">median first reaction after {{ hours(t.median_first_human_h) }}</span></div>
+        <div class="dash-tile"><span class="v">{{ t.landed }}</span><span class="l">bugs with a patch landed after us</span>
+          <span class="d">{{ t.patch }} with a patch posted or landed</span></div>
+      </div>
+
+      <div class="dash-row">
+        <section>
+          <h3>Bugs Clouseau filed ({{ t.filed }})</h3>
+          {{ bar(view.filed_outcomes, 'Bugs filed') }}
+          <ul class="dash-facts">
+            {%- if view.closed_resolutions %}
+            <li>Closed without a fix: {% for key, n in view.closed_resolutions.most_common() %}{{ n }} {{ key }}{{ ', ' if not loop.last }}{% endfor %}.</li>
+            {%- endif %}
+            <li>{{ t.triaged }} ({{ t.triaged_pct }}%) have a severity or priority set.</li>
+            <li>{{ t.canonical }} became the bug others were duped onto ({{ t.absorbed }} duplicates in all).</li>
+            {%- if view.attribution_total %}
+            <li>Regressor named in the bug, as judged on Bugzilla ({{ view.attribution_total }} with a record):
+              {% for key, n in view.attribution.most_common() %}{{ n }} {{ key | replace('_', ' ') }}{{ ', ' if not loop.last }}{% endfor %}.
+              <span class="dash-note">"unconfirmed": the regressed_by field matches but only Clouseau set it or nobody else commented.</span></li>
+            {%- endif %}
+          </ul>
+        </section>
+        <section>
+          <h3>Existing bugs Clouseau commented on ({{ t.commented }})</h3>
+          {{ bar(view.commented_outcomes, 'Bugs commented on') }}
+          <p class="dash-note">"Fixed" here means fixed after our first comment; a bug that was already closed
+            and has not changed since counts as "already closed".</p>
+        </section>
+      </div>
+
+      <div class="dash-row">
+        <section>
+          <h3>Needinfos on the bugs we filed</h3>
+          {{ bar(view.ni_filed, 'Needinfos on filed bugs') }}
+        </section>
+        <section>
+          <h3>Needinfos on the bugs we commented on</h3>
+          {{ bar(view.ni_commented, 'Needinfos on commented bugs') }}
+        </section>
+      </div>
+      <ul class="dash-facts">
+        <li>Median time to an answer: {{ hours(t.median_answer_h) }}; pending ones have waited {{ '%.0f' | format(t.median_pending_d) if t.median_pending_d is not none else '–' }} days (median).</li>
+        <li>{{ t.ni_missed }} filing(s) wanted a needinfo Bugzilla refused (unknown or inactive account); they are not counted above.</li>
+        <li class="dash-note">A needinfo removed by the requestee counts as answered; removed by another person who commented at the same time, as answered by someone else; removed without a comment, as cancelled.</li>
+      </ul>
+
+      <div class="dash-row">
+        <section>
+          <h3>New bugs per week, by current outcome</h3>
+          {{ weekly('filed', 'new bugs') }}
+        </section>
+        <section>
+          <h3>Comments on existing bugs per week, by current outcome</h3>
+          {{ weekly('commented', 'bugs commented on') }}
+        </section>
+      </div>
+      <ul class="dash-legend" style="display:flex; flex-wrap:wrap; gap:0 1.2em;">
+        {%- for key, label in view.outcomes %}<li><i class="sw s{{ outcome_slots[key] }}"></i>{{ label }}</li>{% endfor %}
+      </ul>
+
+      <div class="dash-row">
+        <section>
+          <h3>By product and channel</h3>
+          {{ tally_table(view.by_origin, 'Product / channel') }}
+        </section>
+        <section>
+          <h3>By kind of write</h3>
+          {{ tally_table(view.by_mode, 'Kind') }}
+        </section>
+      </div>
+
+      <h3>Components receiving our bugs</h3>
+      <table class="dash-table">
+        <tr><th>Component</th><th>Filed</th>{% for key, label in view.outcomes if key != 'closed_before' %}<th>{{ label }}</th>{% endfor %}</tr>
+        {%- for c in view.components %}
+        <tr><td>{{ c.name }}</td><td>{{ c.total }}</td>{% for key, label in view.outcomes if key != 'closed_before' %}<td>{{ c.outcomes[key] or '' }}</td>{% endfor %}</tr>
+        {%- endfor %}
+      </table>
+
+      <h3>Every bug ({{ view.bugs | length }})</h3>
+      <table class="dash-table dash-bugs">
+        <tr><th>Bug</th><th>When</th><th>What</th><th>Crash</th><th>Summary</th><th>State</th><th>Needinfo</th><th>Reactions</th></tr>
+        {%- for b in view.bugs %}
+        <tr>
+          <td><a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b.id }}">{{ b.id }}</a>{% if b.restricted %} <span class="dash-note" title="restricted bug">(restricted)</span>{% endif %}</td>
+          <td>{{ b.first_at.strftime('%Y-%m-%d') if b.first_at else '' }}</td>
+          <td>{{ b.mode_label }}</td>
+          <td>{{ b.product }} {{ b.channel }}</td>
+          <td class="dash-summary">{{ b.summary or '' }}{% if b.component %}<span class="comp">{{ b.component }}</span>{% endif %}</td>
+          <td><span class="dash-pill"><i class="sw s{{ outcome_slots[b.outcome] }}"></i>{{ outcome_labels[b.outcome] }}</span>
+            {%- if b.outcome == 'duplicate' and b.dupe_of %}<span class="comp dash-note">of <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b.dupe_of }}">{{ b.dupe_of }}</a>{% if b.dupe_fixed %} (fixed){% endif %}</span>{% endif %}
+            {%- if b.attribution and b.attribution != 'unknown' %}<span class="comp dash-note">regressor: {{ b.attribution | replace('_', ' ') }}</span>{% endif %}</td>
+          <td>
+            {%- for n in b.needinfos %}<span class="dash-pill" {% if n.to %}title="{{ n.to }}"{% endif %}><i class="sw s{{ ni_slots[n.outcome] }}"></i>{{ ni_labels[n.outcome] | lower }}</span><br>{% endfor %}
+            {%- if b.needinfo_missed %}<span class="dash-note">refused by Bugzilla</span>{% endif %}
+          </td>
+          <td>
+            {%- if b.human_comments %}{{ b.human_comments }} comment{{ 's' if b.human_comments > 1 }}{% endif %}
+            {%- if b.first_human_h is not none %}<span class="comp dash-note">first after {{ hours(b.first_human_h) }}</span>{% endif %}
+            {%- if b.landed %}<span class="comp" style="color: inherit;">patch landed</span>{% elif b.patch %}<span class="comp" style="color: inherit;">patch posted</span>{% endif %}
+          </td>
+        </tr>
+        {%- endfor %}
+      </table>
+      {%- endif %}
+    </div>
+
+    <div id="dash-tip" role="tooltip"></div>
+    <script>
+      (function () {
+        var tip = document.getElementById("dash-tip");
+        function show(el, x, y) {
+          var parts = (el.getAttribute("data-tip") || "").split("|");
+          tip.textContent = "";
+          parts.forEach(function (line, i) {
+            var div = document.createElement("div");
+            if (i === 1) {
+              var b = document.createElement("b");
+              b.textContent = line;
+              div.appendChild(b);
+            } else {
+              div.textContent = line;
+            }
+            tip.appendChild(div);
+          });
+          tip.style.display = "block";
+          var w = tip.offsetWidth, h = tip.offsetHeight;
+          tip.style.left = Math.min(x + 12, window.innerWidth - w - 8) + "px";
+          tip.style.top = Math.max(8, y - h - 12) + "px";
+        }
+        function hide() { tip.style.display = "none"; }
+        document.querySelectorAll("[data-tip]").forEach(function (el) {
+          el.addEventListener("pointermove", function (e) { show(el, e.clientX, e.clientY); });
+          el.addEventListener("pointerleave", hide);
+          el.addEventListener("focus", function () {
+            var r = el.getBoundingClientRect();
+            show(el, r.left + r.width / 2, r.top);
+          });
+          el.addEventListener("blur", hide);
+        });
+      })();
+    </script>
+  </body>
+</html>

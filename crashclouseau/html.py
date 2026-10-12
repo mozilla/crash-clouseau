@@ -8,7 +8,7 @@ import json
 import re
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, population, report_bug, bugzilla_apply, config
-from . import api, disclosure, sensitive
+from . import api, disclosure, impact, sensitive
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
@@ -602,6 +602,22 @@ def tasks():
                                      public=not api.viewer_authorized())
         return render_template("tasks.html", tasks=tasks_, summary=summary,
                                spikes=spikes_, spike_summary=spike_summary)
+    except Exception:
+        logger.error("Invalid URL: {}".format(request.url), exc_info=True)
+        abort(404)
+
+
+def dashboard():
+    """What Clouseau filed or commented on, and what became of those bugs."""
+    try:
+        days = request.args.get("days", "").strip()
+        view = impact.summarize(
+            models.Impact.rows(), models.Feedback.attributions(),
+            channel=request.args.get("channel", "").strip() or None,
+            product=request.args.get("product", "").strip() or None,
+            days=int(days) if days.isdigit() and int(days) > 0 else None,
+            public=not api.viewer_authorized())
+        return render_template("dashboard.html", view=view)
     except Exception:
         logger.error("Invalid URL: {}".format(request.url), exc_info=True)
         abort(404)

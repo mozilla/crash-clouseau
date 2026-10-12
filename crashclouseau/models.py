@@ -4060,6 +4060,11 @@ class Feedback(db.Model):
         return row
 
     @staticmethod
+    def attributions():
+        """``{bug_id: attribution}`` for every bug with a recorded outcome."""
+        return dict(db.session.query(Feedback.bug_id, Feedback.attribution).all())
+
+    @staticmethod
     def scoreboard(channel=None, product=None):
         """``{attribution -> count}`` plus per-archetype tallies, for the page and the CLI.
 
@@ -4729,7 +4734,7 @@ def _prune_daily(model, days):
         return 0
 
 
-_ADDED_TABLES = ("archetypes", "chandaily", "feedback", "reviewnote",
+_ADDED_TABLES = ("archetypes", "chandaily", "feedback", "impact", "reviewnote",
                  "selection", "sigdaily", "spike_escalations", "sweepmarks")
 
 
@@ -5073,6 +5078,18 @@ class SpikeEscalation(db.Model):
         rows = q.order_by(SpikeEscalation.created.desc()).limit(limit).all()
         return [r.to_dict() for r in rows]
 
+    @staticmethod
+    def filed_rows():
+        """``[{filing, signature, channel, product, uuid}]`` for every escalation that wrote
+        on Bugzilla."""
+        rows = db.session.query(SpikeEscalation.signature, SpikeEscalation.channel,
+                                SpikeEscalation.product, SpikeEscalation.uuid,
+                                SpikeEscalation.payload["filing"]).all()
+        return [{"filing": filing, "signature": signature, "channel": channel,
+                 "product": product, "uuid": uuid}
+                for signature, channel, product, uuid, filing in rows
+                if isinstance(filing, dict) and filing.get("filed") and filing.get("bug")]
+
     def to_dict(self):
         payload = self.payload or {}
         return {
@@ -5105,6 +5122,55 @@ class SpikeEscalation(db.Model):
             "created": self.created.isoformat() if self.created else None,
             "updated": self.updated.isoformat() if self.updated else None,
         }
+
+
+class Impact(db.Model):
+    """One bug Clouseau filed or commented on, and what Bugzilla says became of it.
+
+    Written by ``impact.refresh``; it outlives the dossiers it was built from."""
+
+    __tablename__ = "impact"
+
+    bug_id = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    kind = db.Column(db.String(16), nullable=False)
+    first_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    writes = db.Column(pg.JSONB, nullable=False, default=list)
+    facts = db.Column(pg.JSONB, nullable=False, default=dict)
+    last_change = db.Column(db.String(32), nullable=True)
+    checked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    @staticmethod
+    def rows():
+        return [{"bug_id": r.bug_id, "kind": r.kind,
+                 "first_at": r.first_at.isoformat() if r.first_at else None,
+                 "writes": r.writes or [], "facts": r.facts or {},
+                 "last_change": r.last_change,
+                 "checked_at": r.checked_at.isoformat() if r.checked_at else None}
+                for r in db.session.query(Impact).all()]
+
+    @staticmethod
+    def store(rows):
+        """Insert or replace the given rows, keyed by bug id, in one commit."""
+        if not rows:
+            return 0
+        ids = [r["bug_id"] for r in rows]
+        existing = {r.bug_id: r for r in
+                    db.session.query(Impact).filter(Impact.bug_id.in_(ids)).all()}
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            obj = existing.get(row["bug_id"])
+            if obj is None:
+                obj = Impact(bug_id=row["bug_id"])
+                db.session.add(obj)
+            obj.kind = row["kind"]
+            first_at = row.get("first_at")
+            obj.first_at = datetime.fromisoformat(first_at) if first_at else None
+            obj.writes = row.get("writes") or []
+            obj.facts = row.get("facts") or {}
+            obj.last_change = row.get("last_change")
+            obj.checked_at = now
+        db.session.commit()
+        return len(rows)
 
 
 def _ensure_tables():

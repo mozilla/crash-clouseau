@@ -277,6 +277,13 @@ def tasks_html():
     return html.tasks()
 
 
+@app.route("/dashboard.html")
+def dashboard_html():
+    from crashclouseau import html
+
+    return html.dashboard()
+
+
 @app.route("/selection.html")
 def selection_html():
     from crashclouseau import html

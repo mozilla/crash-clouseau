@@ -37,7 +37,7 @@ from unittest import mock  # noqa: E402
 
 import sqlalchemy as sa  # noqa: E402
 
-from crashclouseau import db, feedback, update  # noqa: E402
+from crashclouseau import db, feedback, impact, update  # noqa: E402
 from crashclouseau.agent import orchestrator, spike_escalation  # noqa: E402
 
 
@@ -64,6 +64,7 @@ _TARGETS = (
     (orchestrator, "sweep_untriaged_crashes"),
     (spike_escalation, "sweep_real_spikes"),
     (feedback, "refresh"),
+    (impact, "refresh"),
 )
 
 
@@ -114,7 +115,7 @@ class TestEveryClockJobRunsInAnAppContext(unittest.TestCase):
         self.assertIn("feedback_job", names)
         self.assertEqual(
             names, {"timed_job", "reap_orphans_job", "sweep_untriaged_job",
-                    "spike_escalation_job", "feedback_job"})
+                    "spike_escalation_job", "feedback_job", "impact_job"})
 
     def test_the_job_names_survive_the_decorator(self):
         """`functools.wraps`, so the operator-facing log line is unchanged. Every diagnosis of
