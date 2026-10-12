@@ -376,11 +376,12 @@ def api_selection():
 
 
 # Same-origin only (no `@cross_origin()`), like the retrigger route: nothing else reads it.
+# Sign-in only, like tasks.html, whose spike table it serves.
 @app.route("/api/spikes", methods=["GET"])
 def api_spikes():
-    from crashclouseau import api
+    from crashclouseau import api, auth
 
-    return api.spikes()
+    return auth.require_user() or api.spikes()
 
 
 @app.route("/api/evidence", methods=["GET"])

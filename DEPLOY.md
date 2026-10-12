@@ -118,9 +118,9 @@ Several things are automated by the repo now; the rest are one-time app setup.
 
 ## Mozilla sign-in (2026-09-30)
 
-Mozilla Google sign-in unlocks withheld analyses in crashstack, codeview, bug.html,
-`/api/evidence` and `/api/spikes`. `tasks.html` and `dashboard.html` require it: anonymous
-viewers are redirected to sign-in, `API_WRITE_TOKEN` does not open them, and both answer 403
+Mozilla Google sign-in unlocks withheld analyses in crashstack, codeview, bug.html and
+`/api/evidence`. `tasks.html`, `dashboard.html` and `/api/spikes` require it: anonymous
+viewers are redirected to sign-in, `API_WRITE_TOKEN` does not open them, and they answer 403
 when sign-in is not configured. Validated ID tokens must have `hd=mozilla.com` and a verified
 `@mozilla.com` email. Access expires 7 days after sign-in, regardless of cookie refreshes.
 Retrigger, trigger and apply still require `API_WRITE_TOKEN`.

@@ -193,11 +193,11 @@ class TestNext(unittest.TestCase):
 
 class TestTheSession(_Base):
     def _authorized(self):
-        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": ""}, clear=False):
-            with mock.patch.object(html.models.SpikeEscalation, "recent",
-                                   return_value=[dict(_WITHHELD_SPIKE)]):
-                row = self.client.get("/api/spikes").get_json()["rows"][0]
-        return row["findings"] is not None
+        from crashclouseau import bugzilla_apply
+        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": ""}, clear=False), \
+                mock.patch.object(bugzilla_apply, "build_evidence", return_value=None) as build:
+            self.client.get("/api/evidence?uuid=u-1")
+        return build.call_args.kwargs["public"] is False
 
     def test_anonymous_viewers_do_not_see_withheld_findings(self):
         self.assertFalse(self._authorized())
@@ -303,9 +303,9 @@ class TestThePages(_Base):
 
 
 class TestSignInOnlyPages(_Base):
-    """tasks.html and dashboard.html are for signed-in Mozilla users only."""
+    """tasks.html, dashboard.html and /api/spikes are for signed-in Mozilla users only."""
 
-    _PAGES = ("/tasks.html", "/dashboard.html")
+    _PAGES = ("/tasks.html", "/dashboard.html", "/api/spikes")
 
     def test_anonymous_viewers_are_sent_to_sign_in(self):
         for page in self._PAGES:
@@ -342,11 +342,21 @@ class TestSignInOnlyPages(_Base):
 
     def test_nothing_is_read_before_sign_in(self):
         with mock.patch.object(html.models.Dossier, "list_tasks") as tasks, \
-                mock.patch.object(html.models.Impact, "rows") as impact_rows:
+                mock.patch.object(html.models.Impact, "rows") as impact_rows, \
+                mock.patch.object(html.models.SpikeEscalation, "recent") as spikes:
             for page in self._PAGES:
                 self.client.get(page)
         tasks.assert_not_called()
         impact_rows.assert_not_called()
+        spikes.assert_not_called()
+
+    def test_the_spike_feed_when_signed_in(self):
+        self._sign_in()
+        with mock.patch.object(html.models.SpikeEscalation, "recent",
+                               return_value=[dict(_WITHHELD_SPIKE)]):
+            rv = self.client.get("/api/spikes")
+        self.assertEqual(rv.status_code, 200)
+        self.assertIsNotNone(rv.get_json()["rows"][0]["findings"])
 
 
 if __name__ == "__main__":

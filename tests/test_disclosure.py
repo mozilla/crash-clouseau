@@ -593,13 +593,15 @@ class TestWhatAnonymousViewersSee(unittest.TestCase):
         from crashclouseau import app
         row = {"id": 1, "signature": "S", "status": "done", "filing": dict(self.FILING),
                "findings": {"culprit": {"node": "0a49d5b304b4", "bug": _HIDDEN}}}
+        from crashclouseau import api
         client = app.test_client()
+        # The feed is sign-in only; it still redacts for a viewer who is not authorized.
         with mock.patch.object(bugzilla_apply.models.SpikeEscalation, "recent",
                                side_effect=lambda **kw: [dict(row, filing=dict(self.FILING))]), \
-                mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}, clear=False):
-            anonymous = client.get("/api/spikes").get_json()["rows"][0]
-            authorized = client.get("/api/spikes",
-                                    headers={"X-Clouseau-Token": "s3cret"}).get_json()["rows"][0]
+                mock.patch("crashclouseau.auth.current_user", return_value={"email": "d@mozilla.com"}):
+            with mock.patch.object(api, "viewer_authorized", return_value=False):
+                anonymous = client.get("/api/spikes").get_json()["rows"][0]
+            authorized = client.get("/api/spikes").get_json()["rows"][0]
         self.assertIsNone(anonymous["findings"])
         self.assertNotIn(str(_HIDDEN), repr(anonymous))
         self.assertNotIn("dev@moz.example", repr(anonymous))
