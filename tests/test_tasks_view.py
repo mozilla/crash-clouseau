@@ -759,5 +759,18 @@ class TestRetriggerEndpoint(unittest.TestCase):
         self.assertEqual(rv.status_code, 400)
 
 
+class TestAutoRefresh(unittest.TestCase):
+    """Check the refresh hook and row keys in the rendered HTML."""
+
+    def test_rows_carry_a_key_and_the_page_refreshes(self):
+        uuid = "keyed001" + "0" * 28
+        with mock.patch.object(html.models.Dossier, "list_tasks",
+                               return_value=[_row(uuid=uuid)]):
+            rv = app.test_client().get("/tasks.html")
+        body = rv.get_data(as_text=True)
+        self.assertIn('<tr data-key="{}">'.format(uuid), body)
+        self.assertIn("autoRefresh(", body)
+
+
 if __name__ == "__main__":
     unittest.main()

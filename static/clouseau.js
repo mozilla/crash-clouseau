@@ -171,3 +171,93 @@ function retriggerTask(uuid, btn) {
         btn.textContent = "retrigger";
     });
 }
+
+let refreshing = false;
+
+function retriggerInFlight() {
+    return document.querySelector(".retrigger-btn:disabled") !== null;
+}
+
+function refreshPage() {
+    if (refreshing || retriggerInFlight()) {
+        return;
+    }
+    refreshing = true;
+    fetch(location.href, { cache: "no-store" }).then(function (r) {
+        if (!r.ok) { throw new Error("HTTP " + r.status); }
+        return r.text();
+    }).then(function (text) {
+        const doc = new DOMParser().parseFromString(text, "text/html");
+        // Preserve button state if a retrigger started during the fetch.
+        // Only accept responses with the current page title.
+        if (doc.title === document.title && !retriggerInFlight()) {
+            morphChildren(document.body, doc.body);
+        }
+    }).catch(function (e) {
+        console.warn("refresh failed:", e);
+    }).finally(function () {
+        refreshing = false;
+    });
+}
+
+// Skip hidden tabs; check for an overdue refresh when shown.
+function autoRefresh(ms) {
+    let last = Date.now();
+    function tick() {
+        if (document.hidden || Date.now() - last < ms - 1000) {
+            return;
+        }
+        last = Date.now();
+        refreshPage();
+    }
+    setInterval(tick, ms);
+    document.addEventListener("visibilitychange", tick);
+}
+
+function morphNode(cur, next) {
+    if (cur.nodeType !== next.nodeType || cur.nodeName !== next.nodeName) {
+        cur.replaceWith(document.importNode(next, true));
+        return;
+    }
+    if (cur.nodeType !== Node.ELEMENT_NODE) {
+        if (cur.nodeValue !== next.nodeValue) { cur.nodeValue = next.nodeValue; }
+        return;
+    }
+    Array.from(cur.attributes).forEach(function (a) {
+        if (!next.hasAttribute(a.name)) { cur.removeAttribute(a.name); }
+    });
+    Array.from(next.attributes).forEach(function (a) {
+        if (cur.getAttribute(a.name) !== a.value) { cur.setAttribute(a.name, a.value); }
+    });
+    morphChildren(cur, next);
+}
+
+// Match keyed children by identity; match unkeyed children at the cursor.
+function morphChildren(cur, next) {
+    const keyed = new Map();
+    Array.from(cur.children).forEach(function (c) {
+        if (c.hasAttribute("data-key")) { keyed.set(c.getAttribute("data-key"), c); }
+    });
+    let ref = cur.firstChild;
+    Array.from(next.childNodes).forEach(function (n) {
+        const key = n.nodeType === Node.ELEMENT_NODE ? n.getAttribute("data-key") : null;
+        let match = key === null ? null : keyed.get(key);
+        if (match) {
+            keyed.delete(key);
+            if (match !== ref) { cur.insertBefore(match, ref); }
+        } else if (key === null && ref
+                   && !(ref.nodeType === Node.ELEMENT_NODE && ref.hasAttribute("data-key"))) {
+            match = ref;
+        } else {
+            cur.insertBefore(document.importNode(n, true), ref);
+            return;
+        }
+        ref = match.nextSibling;
+        morphNode(match, n);
+    });
+    while (ref) {
+        const after = ref.nextSibling;
+        ref.remove();
+        ref = after;
+    }
+}

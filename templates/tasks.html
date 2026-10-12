@@ -9,7 +9,8 @@
     <link rel="stylesheet" href="/clouseau.css?v=14">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
-    <script src="/clouseau.js"></script>
+    <script src="/clouseau.js?v=2"></script>
+    <script>autoRefresh(60 * 1000);</script>
   </head>
   <body>
     <header>
@@ -111,7 +112,7 @@
       </thead>
       <tbody>
         {% for s in spikes -%}
-        <tr>
+        <tr data-key="{{ s.id }}">
           <td>{% if s.uuid %}<a href="/crashstack.html?uuid={{ s.uuid }}" title="{{ s.uuid }}">{{ s.uuid[:8] }}</a>{% else %}&mdash;{% endif %}</td>
           {#- The channel initial, and the product under it when it is not Firefox: see the
               same cell of the triage table below. -#}
@@ -192,7 +193,7 @@
       </thead>
       <tbody>
         {% for t in tasks -%}
-        <tr>
+        <tr data-key="{{ t.uuid }}">
           <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
           {# Which channel this run is on. With one channel it was implicit; with two, "is that
              stalled run beta or nightly?" is a question this view could not answer, and the two
