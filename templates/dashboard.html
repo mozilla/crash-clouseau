@@ -94,6 +94,11 @@
       .dash-pill { display: inline-flex; align-items: center; gap: 0.3em; white-space: nowrap; }
       .dash-pill + .dash-pill { margin-left: 0.5em; }
       .dash-note { color: var(--ink-muted); font-size: 0.85em; }
+      .dash-sort { all: unset; cursor: pointer; }
+      .dash-sort:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+      .dash-sort::after { content: "\2195"; margin-left: 0.25em; color: var(--ink-muted); font-weight: normal; }
+      th[aria-sort="ascending"] .dash-sort::after { content: "\25B2"; color: var(--ink-2); }
+      th[aria-sort="descending"] .dash-sort::after { content: "\25BC"; color: var(--ink-2); }
       details > summary { cursor: pointer; color: var(--ink-2); font-size: 0.85em; margin-top: 0.3em; }
       #dash-tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface, #fff);
                   color: #0b0b0b; border: 1px solid rgba(11,11,11,0.15); border-radius: 6px;
@@ -178,13 +183,15 @@
   </div>
   <details>
     <summary>Table</summary>
-    <table class="dash-table">
-      <tr><th>Week of</th><th>Total</th>{% for key, label in view.outcomes %}<th>{{ label }}</th>{% endfor %}</tr>
+    <table class="dash-table dash-sortable">
+      <thead><tr><th aria-sort="ascending">Week of</th><th>Total</th>{% for key, label in view.outcomes %}<th>{{ label }}</th>{% endfor %}</tr></thead>
+      <tbody>
       {%- for w in view.weekly %}
       {%- set k = w[kind] %}
       {%- set by = {} %}{% for s in k.segments %}{% set _ = by.update({s.key: s.count}) %}{% endfor %}
       <tr><td>{{ w.week.isoformat() }}</td><td>{{ k.total }}</td>{% for key, label in view.outcomes %}<td>{{ by.get(key, '') }}</td>{% endfor %}</tr>
       {%- endfor %}
+      </tbody>
     </table>
   </details>
   {%- else -%}
@@ -192,9 +199,10 @@
   {%- endif -%}
 {%- endmacro -%}
 {%- macro tally_table(rows, first) -%}
-  <table class="dash-table">
-    <tr><th>{{ first }}</th><th>New bugs</th><th>fixed</th><th>dup</th><th>open</th><th>closed</th>
-        <th>Comments</th><th>fixed since</th><th>Needinfos</th><th>answered</th></tr>
+  <table class="dash-table dash-sortable">
+    <thead><tr><th>{{ first }}</th><th>New bugs</th><th>fixed</th><th>dup</th><th>open</th><th>closed</th>
+        <th>Comments</th><th>fixed since</th><th>Needinfos</th><th>answered</th></tr></thead>
+    <tbody>
     {%- for r in rows %}
     <tr><td>{{ r.name }}</td>
         <td>{{ r.filed or 0 }}</td><td>{{ r['filed:fixed'] or '' }}</td><td>{{ r['filed:duplicate'] or '' }}</td>
@@ -202,13 +210,16 @@
         <td>{{ r.commented or 0 }}</td><td>{{ r['commented:fixed'] or '' }}</td>
         <td>{{ r.ni or '' }}</td><td>{{ r.ni_answered or '' }}</td></tr>
     {%- endfor %}
+    </tbody>
   </table>
 {%- endmacro -%}
 {%- set t = view.tiles -%}
 {%- set outcome_labels = dict(view.outcomes) -%}
 {%- set ni_labels = dict(view.ni_outcomes) -%}
 {%- set outcome_slots = {} -%}{%- for key, label in view.outcomes %}{% set _ = outcome_slots.update({key: 0 if key == 'unreadable' else loop.index}) %}{% endfor -%}
-{%- set ni_slots = {} -%}{%- for key, label in view.ni_outcomes %}{% set _ = ni_slots.update({key: 0 if key == 'pending' else loop.index}) %}{% endfor %}
+{%- set ni_slots = {} -%}{%- for key, label in view.ni_outcomes %}{% set _ = ni_slots.update({key: 0 if key == 'pending' else loop.index}) %}{% endfor -%}
+{%- set outcome_order = {} -%}{%- for key, label in view.outcomes %}{% set _ = outcome_order.update({key: loop.index}) %}{% endfor -%}
+{%- set ni_order = {} -%}{%- for key, label in view.ni_outcomes %}{% set _ = ni_order.update({key: loop.index}) %}{% endfor %}
 
     <div class="dash">
       <h2>What Clouseau did on Bugzilla</h2>
@@ -329,42 +340,98 @@
       </div>
 
       <h3>Components receiving our bugs</h3>
-      <table class="dash-table">
-        <tr><th>Component</th><th>Filed</th>{% for key, label in view.outcomes if key != 'closed_before' %}<th>{{ label }}</th>{% endfor %}</tr>
+      <table class="dash-table dash-sortable">
+        <thead><tr><th>Component</th><th aria-sort="descending">Filed</th>{% for key, label in view.outcomes if key != 'closed_before' %}<th>{{ label }}</th>{% endfor %}</tr></thead>
+        <tbody>
         {%- for c in view.components %}
         <tr><td>{{ c.name }}</td><td>{{ c.total }}</td>{% for key, label in view.outcomes if key != 'closed_before' %}<td>{{ c.outcomes[key] or '' }}</td>{% endfor %}</tr>
         {%- endfor %}
+        </tbody>
       </table>
 
       <h3>Every bug ({{ view.bugs | length }})</h3>
-      <table class="dash-table dash-bugs">
-        <tr><th>Bug</th><th>When</th><th>What</th><th>Crash</th><th>Summary</th><th>State</th><th>Needinfo</th><th>Reactions</th></tr>
+      <table class="dash-table dash-bugs dash-sortable">
+        <thead><tr><th>Bug</th><th aria-sort="descending">When</th><th>What</th><th>Crash</th><th>Summary</th>
+          <th data-first="ascending">State</th><th data-first="ascending">Needinfo</th><th>Reactions</th></tr></thead>
+        <tbody>
         {%- for b in view.bugs %}
+        {%- set first_ni = b.needinfos[0].outcome if b.needinfos else none %}
         <tr>
-          <td><a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b.id }}">{{ b.id }}</a>{% if b.restricted %} <span class="dash-note" title="restricted bug">(restricted)</span>{% endif %}</td>
-          <td>{{ b.first_at.strftime('%Y-%m-%d') if b.first_at else '' }}</td>
+          <td data-sort="{{ b.id }}"><a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b.id }}">{{ b.id }}</a>{% if b.restricted %} <span class="dash-note" title="restricted bug">(restricted)</span>{% endif %}</td>
+          <td data-sort="{{ '%d' | format(b.first_at.timestamp()) if b.first_at else '' }}">{{ b.first_at.strftime('%Y-%m-%d') if b.first_at else '' }}</td>
           <td>{{ b.mode_label }}</td>
           <td>{{ b.product }} {{ b.channel }}</td>
-          <td class="dash-summary">{{ b.summary or '' }}{% if b.component %}<span class="comp">{{ b.component }}</span>{% endif %}</td>
-          <td><span class="dash-pill"><i class="sw s{{ outcome_slots[b.outcome] }}"></i>{{ outcome_labels[b.outcome] }}</span>
+          <td class="dash-summary" data-sort="{{ b.summary or '' }}">{{ b.summary or '' }}{% if b.component %}<span class="comp">{{ b.component }}</span>{% endif %}</td>
+          <td data-sort="{{ outcome_order[b.outcome] }}"><span class="dash-pill"><i class="sw s{{ outcome_slots[b.outcome] }}"></i>{{ outcome_labels[b.outcome] }}</span>
             {%- if b.outcome == 'duplicate' and b.dupe_of %}<span class="comp dash-note">of <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b.dupe_of }}">{{ b.dupe_of }}</a>{% if b.dupe_fixed %} (fixed){% endif %}</span>{% endif %}
             {%- if b.attribution and b.attribution != 'unknown' %}<span class="comp dash-note">regressor: {{ b.attribution | replace('_', ' ') }}</span>{% endif %}</td>
-          <td>
+          <td data-sort="{{ ni_order[first_ni] if first_ni else 99 }}">
             {%- for n in b.needinfos %}<span class="dash-pill" {% if n.to %}title="{{ n.to }}"{% endif %}><i class="sw s{{ ni_slots[n.outcome] }}"></i>{{ ni_labels[n.outcome] | lower }}</span><br>{% endfor %}
             {%- if b.needinfo_missed %}<span class="dash-note">refused by Bugzilla</span>{% endif %}
           </td>
-          <td>
+          <td data-sort="{{ b.human_comments }}">
             {%- if b.human_comments %}{{ b.human_comments }} comment{{ 's' if b.human_comments > 1 }}{% endif %}
             {%- if b.first_human_h is not none %}<span class="comp dash-note">first after {{ hours(b.first_human_h) }}</span>{% endif %}
             {%- if b.landed %}<span class="comp" style="color: inherit;">patch landed</span>{% elif b.patch %}<span class="comp" style="color: inherit;">patch posted</span>{% endif %}
           </td>
         </tr>
         {%- endfor %}
+        </tbody>
       </table>
       {%- endif %}
     </div>
 
     <div id="dash-tip" role="tooltip"></div>
+    <script>
+      (function () {
+        // A cell sorts by its data-sort attribute, else by its text. A column whose keys are
+        // all numbers sorts as numbers (an empty cell is 0) and descending first; any other
+        // column sorts as text, ascending first, with empty cells last either way.
+        var NUM = /^-?\d+(\.\d+)?$/;
+        function key(row, i) {
+          var cell = row.cells[i];
+          if (!cell) { return ""; }
+          var v = cell.getAttribute("data-sort");
+          return (v === null ? cell.textContent : v).trim();
+        }
+        function sortBy(table, th, i) {
+          var body = table.tBodies[0];
+          var rows = Array.from(body.rows);
+          var numeric = rows.every(function (r) { var k = key(r, i); return k === "" || NUM.test(k); });
+          var current = th.getAttribute("aria-sort");
+          var dir = current ? (current === "ascending" ? "descending" : "ascending")
+                            : (th.getAttribute("data-first") || (numeric ? "descending" : "ascending"));
+          var sign = dir === "ascending" ? 1 : -1;
+          rows.sort(function (a, b) {
+            var x = key(a, i), y = key(b, i), c;
+            if (numeric) {
+              c = (parseFloat(x) || 0) - (parseFloat(y) || 0);
+            } else if (x === "" || y === "") {
+              return (x === "") - (y === "") || a._dashIndex - b._dashIndex;
+            } else {
+              c = x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" });
+            }
+            return sign * c || a._dashIndex - b._dashIndex;
+          });
+          rows.forEach(function (r) { body.appendChild(r); });
+          Array.from(th.parentNode.cells).forEach(function (h) { h.removeAttribute("aria-sort"); });
+          th.setAttribute("aria-sort", dir);
+        }
+        document.querySelectorAll("table.dash-sortable").forEach(function (table) {
+          if (!table.tHead || !table.tBodies.length) { return; }
+          Array.from(table.tBodies[0].rows).forEach(function (r, n) { r._dashIndex = n; });
+          Array.from(table.tHead.rows[0].cells).forEach(function (th, i) {
+            var button = document.createElement("button");
+            button.type = "button";
+            button.className = "dash-sort";
+            button.title = "Sort by this column";
+            while (th.firstChild) { button.appendChild(th.firstChild); }
+            th.appendChild(button);
+            button.addEventListener("click", function () { sortBy(table, th, i); });
+          });
+        });
+      })();
+    </script>
     <script>
       (function () {
         var tip = document.getElementById("dash-tip");

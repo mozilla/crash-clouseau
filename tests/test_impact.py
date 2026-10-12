@@ -335,6 +335,22 @@ class TestPage(unittest.TestCase):
         self.assertIn("show_bug.cgi?id=1", body)
         self.assertIn("Bugs Clouseau filed (2)", body)
 
+    def test_every_table_is_sortable(self):
+        import re
+        body = self._get([_row(1, status="RESOLVED", resolution="FIXED",
+                               needinfos=[{"to": "a@x", "at": "2026-10-01T10:00:00+00:00",
+                                           "outcome": "answered"}]),
+                          _row(4, kind="commented")])
+        tables = re.findall(r"<table[^>]*>", body)
+        self.assertEqual(len(tables), 6)
+        self.assertTrue(all("dash-sortable" in t for t in tables))
+        self.assertEqual(body.count("<thead>"), 6)
+        self.assertEqual(body.count("<tbody>"), 6)
+        # Sort keys: the bug id, the outcome and first-needinfo order, the comment count.
+        self.assertIn('<td data-sort="1"><a href', body)
+        self.assertIn('<td data-sort="1"><span class="dash-pill">', body)   # fixed is first
+        self.assertIn('<td data-sort="99">', body)                          # no needinfo: last
+
     def test_an_empty_table_renders(self):
         self.assertIn("Nothing recorded yet", self._get([]))
 
