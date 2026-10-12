@@ -321,7 +321,8 @@ class TestSummarize(unittest.TestCase):
 class TestPage(unittest.TestCase):
 
     def _get(self, rows, url="/dashboard.html"):
-        with mock.patch.object(html.models.Impact, "rows", return_value=rows), \
+        with mock.patch("crashclouseau.auth.current_user", return_value={"email": "d@mozilla.com"}), \
+                mock.patch.object(html.models.Impact, "rows", return_value=rows), \
                 mock.patch.object(html.models.Feedback, "attributions", return_value={}):
             rv = app.test_client().get(url)
         self.assertEqual(rv.status_code, 200)
@@ -333,7 +334,6 @@ class TestPage(unittest.TestCase):
                           _row(4, kind="commented")])
         self.assertIn("show_bug.cgi?id=1", body)
         self.assertIn("Bugs Clouseau filed (2)", body)
-        self.assertNotIn("secret", body)
 
     def test_an_empty_table_renders(self):
         self.assertIn("Nothing recorded yet", self._get([]))

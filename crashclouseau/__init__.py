@@ -272,16 +272,16 @@ def reports_no_scorehtml():
 
 @app.route("/tasks.html")
 def tasks_html():
-    from crashclouseau import html
+    from crashclouseau import auth, html
 
-    return html.tasks()
+    return auth.require_user() or html.tasks()
 
 
 @app.route("/dashboard.html")
 def dashboard_html():
-    from crashclouseau import html
+    from crashclouseau import auth, html
 
-    return html.dashboard()
+    return auth.require_user() or html.dashboard()
 
 
 @app.route("/selection.html")

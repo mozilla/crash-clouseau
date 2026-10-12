@@ -8,7 +8,7 @@ Requires SECRET_KEY, GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
 """
 
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from authlib.integrations.flask_client import OAuth
 from flask import abort, redirect, request, session, url_for
@@ -57,6 +57,19 @@ def current_user():
     if time.time() - at > app.permanent_session_lifetime.total_seconds():
         return None
     return user
+
+
+def require_user():
+    """``None`` for a signed-in Mozilla user; otherwise the redirect to sign-in.
+
+    Refuses with 403 when sign-in is not configured."""
+    if current_user() is not None:
+        return None
+    if not enabled():
+        abort(403, "this page needs a {} Google sign-in, which is not configured".format(
+            ALLOWED_DOMAIN))
+    here = request.full_path[:-1] if request.full_path.endswith("?") else request.full_path
+    return redirect("/login?" + urlencode({"next": here}))
 
 
 def _safe_next(target) -> str:

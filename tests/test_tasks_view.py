@@ -18,7 +18,15 @@ from unittest import mock  # noqa: E402
 
 from markupsafe import escape  # noqa: E402
 
-from crashclouseau import app, html, models  # noqa: E402
+from crashclouseau import app, auth, html, models  # noqa: E402
+
+
+def _sign_in(test):
+    """tasks.html is for signed-in Mozilla users only."""
+    patcher = mock.patch.object(auth, "current_user", return_value={
+        "email": "dev@mozilla.com", "name": "", "picture": ""})
+    patcher.start()
+    test.addCleanup(patcher.stop)
 
 
 NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
@@ -244,6 +252,7 @@ class TestFiledBugColumn(unittest.TestCase):
 
     def setUp(self):
         self.client = app.test_client()
+        _sign_in(self)
 
     def _render(self, rows):
         with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
@@ -328,6 +337,7 @@ class TestTheBugColumnSaysWhyNothingWasFiled(unittest.TestCase):
 
     def setUp(self):
         self.client = app.test_client()
+        _sign_in(self)
 
     def _render(self, rows):
         with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
@@ -449,6 +459,7 @@ class TestTheSpikeSection(unittest.TestCase):
 
     def setUp(self):
         self.client = app.test_client()
+        _sign_in(self)
 
     def _render(self, rows, spikes):
         with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows), \
@@ -560,7 +571,11 @@ class TestTheSpikeSection(unittest.TestCase):
         self.assertIn("9dcaf4fe0a10", body)
         self.assertIn("bug 2068764", body)
 
-    def test_a_withheld_analysis_is_not_shown_anonymously(self):
+    def test_a_withheld_analysis_is_redacted_for_an_unauthorized_viewer(self):
+        # The page is sign-in only; the view still redacts if it is ever reached without it.
+        patcher = mock.patch.object(html.api, "viewer_authorized", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         body = self._render([], [_spike(
             findings={"assessment": "regression",
                       "culprit": {"node": "9dcaf4fe0a10", "confidence": "high"}},
@@ -621,6 +636,7 @@ class TestTheSpikeSection(unittest.TestCase):
 class TestTasksRoute(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
+        _sign_in(self)
 
     def test_renders_rows(self):
         rows = [
@@ -735,6 +751,7 @@ class TestRetriggerEndpoint(unittest.TestCase):
 
     def setUp(self):
         self.client = app.test_client()
+        _sign_in(self)
         self.env = mock.patch.dict(
             os.environ, {"API_WRITE_TOKEN": self._TOKEN}, clear=False)
         self.env.start()
@@ -763,6 +780,7 @@ class TestAutoRefresh(unittest.TestCase):
     """Check the refresh hook and row keys in the rendered HTML."""
 
     def test_rows_carry_a_key_and_the_page_refreshes(self):
+        _sign_in(self)
         uuid = "keyed001" + "0" * 28
         with mock.patch.object(html.models.Dossier, "list_tasks",
                                return_value=[_row(uuid=uuid)]):

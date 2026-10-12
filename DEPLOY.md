@@ -118,8 +118,10 @@ Several things are automated by the repo now; the rest are one-time app setup.
 
 ## Mozilla sign-in (2026-09-30)
 
-Mozilla Google sign-in unlocks withheld analyses in crashstack, codeview, bug.html, tasks.html,
-`/api/evidence` and `/api/spikes`. Validated ID tokens must have `hd=mozilla.com` and a verified
+Mozilla Google sign-in unlocks withheld analyses in crashstack, codeview, bug.html,
+`/api/evidence` and `/api/spikes`. `tasks.html` and `dashboard.html` require it: anonymous
+viewers are redirected to sign-in, `API_WRITE_TOKEN` does not open them, and both answer 403
+when sign-in is not configured. Validated ID tokens must have `hd=mozilla.com` and a verified
 `@mozilla.com` email. Access expires 7 days after sign-in, regardless of cookie refreshes.
 Retrigger, trigger and apply still require `API_WRITE_TOKEN`.
 
@@ -826,9 +828,8 @@ The page reads the `impact` table, which is created at startup. The clock's `imp
 it when the clock starts and then every 6 hours. It combines our records (dossiers, spike
 escalations, `feedback`) with Bugzilla searches for `clouseau-bot` as creator and commenter,
 using the bot's token so restricted filings are readable. History and comments are re-read only
-for bugs whose `last_change_time` changed. Rows are kept after the dossiers are pruned. For
-public viewers, the summary, component, assignee and needinfo requestee of restricted bugs are
-hidden.
+for bugs whose `last_change_time` changed. Rows are kept after the dossiers are pruned. The page
+requires Mozilla sign-in (see above).
 
 To fill it by hand: `heroku run -a crash-clouseau-augmented python -c "from crashclouseau import
 impact; print(impact.refresh())"`. Tests: `tests/test_impact.py`.

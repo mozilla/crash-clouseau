@@ -14,7 +14,7 @@ import os
 import time
 import unittest
 from unittest import mock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
@@ -266,11 +266,10 @@ class TestThePages(_Base):
         self.assertEqual(rv.status_code, 200)
         return rv.get_data(as_text=True)
 
-    def test_anonymous(self):
-        body = self._tasks()
-        self.assertIn('href="/login?next=/tasks.html"', body)
-        self.assertIn("assess-withheld", body)
-        self.assertNotIn("0a49d5b304b4", body)
+    def _dashboard(self, url="/dashboard.html"):
+        with mock.patch.object(html.models.Impact, "rows", return_value=[]), \
+                mock.patch.object(html.models.Feedback, "attributions", return_value={}):
+            return self.client.get(url)
 
     def test_signed_in(self):
         self._sign_in(name="A Developer", picture=_PICTURE)
@@ -288,9 +287,66 @@ class TestThePages(_Base):
         self.assertNotIn('class="avatar"', body)
         self.assertIn('title="dev@mozilla.com">dev@mozilla.com</span>', body)
 
+    def test_the_dashboard_is_shown_when_signed_in(self):
+        self._sign_in()
+        rv = self._dashboard()
+        self.assertEqual(rv.status_code, 200)
+        self.assertIn("What Clouseau did on Bugzilla", rv.get_data(as_text=True))
+
     def test_no_sign_in_link_when_unconfigured(self):
+        with mock.patch.dict(app.config, {"GOOGLE_CLIENT_ID": ""}), \
+                mock.patch.object(html.models.Selection, "recent", return_value=[]), \
+                mock.patch.object(html.models.Selection, "summary", return_value={}):
+            rv = self.client.get("/selection.html")
+        self.assertEqual(rv.status_code, 200)
+        self.assertNotIn("/login?", rv.get_data(as_text=True))
+
+
+class TestSignInOnlyPages(_Base):
+    """tasks.html and dashboard.html are for signed-in Mozilla users only."""
+
+    _PAGES = ("/tasks.html", "/dashboard.html")
+
+    def test_anonymous_viewers_are_sent_to_sign_in(self):
+        for page in self._PAGES:
+            with self.subTest(page=page):
+                rv = self.client.get(page)
+                self.assertEqual(rv.status_code, 302)
+                self.assertEqual(rv.location, "/login?" + urlencode({"next": page}))
+
+    def test_the_query_survives_sign_in(self):
+        rv = self.client.get("/dashboard.html?channel=beta&days=30")
+        self.assertEqual(rv.location, "/login?" + urlencode(
+            {"next": "/dashboard.html?channel=beta&days=30"}))
+        self.assertEqual(auth._safe_next("/dashboard.html?channel=beta&days=30"),
+                         "/dashboard.html?channel=beta&days=30")
+
+    def test_an_expired_sign_in_is_sent_back(self):
+        self._sign_in(at=int(time.time() - app.permanent_session_lifetime.total_seconds() - 60))
+        for page in self._PAGES:
+            with self.subTest(page=page):
+                self.assertEqual(self.client.get(page).status_code, 302)
+
+    def test_the_api_token_does_not_open_them(self):
+        with mock.patch.dict(os.environ, {"API_WRITE_TOKEN": "s3cret"}, clear=False):
+            for page in self._PAGES:
+                with self.subTest(page=page):
+                    rv = self.client.get(page, headers={"X-Clouseau-Token": "s3cret"})
+                    self.assertEqual(rv.status_code, 302)
+
+    def test_refused_when_sign_in_is_not_configured(self):
         with mock.patch.dict(app.config, {"GOOGLE_CLIENT_ID": ""}):
-            self.assertNotIn("/login?", self._tasks())
+            for page in self._PAGES:
+                with self.subTest(page=page):
+                    self.assertEqual(self.client.get(page).status_code, 403)
+
+    def test_nothing_is_read_before_sign_in(self):
+        with mock.patch.object(html.models.Dossier, "list_tasks") as tasks, \
+                mock.patch.object(html.models.Impact, "rows") as impact_rows:
+            for page in self._PAGES:
+                self.client.get(page)
+        tasks.assert_not_called()
+        impact_rows.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -183,7 +183,9 @@ function refreshPage() {
         return;
     }
     refreshing = true;
-    fetch(location.href, { cache: "no-store" }).then(function (r) {
+    fetch(location.href, { cache: "no-store", redirect: "manual" }).then(function (r) {
+        // An expired sign-in redirects; reload so the browser follows it.
+        if (r.type === "opaqueredirect") { location.reload(); throw new Error("signed out"); }
         if (!r.ok) { throw new Error("HTTP " + r.status); }
         return r.text();
     }).then(function (text) {

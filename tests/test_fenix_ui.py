@@ -101,7 +101,8 @@ class TestTheProductReachesTheTasksPage(unittest.TestCase):
 
     def test_the_spike_row_is_marked_too_and_its_json_link_is_scoped(self):
         client = app.test_client()
-        with mock.patch.object(models.Dossier, "list_tasks", return_value=[]), \
+        with mock.patch("crashclouseau.auth.current_user", return_value={"email": "d@mozilla.com"}), \
+                mock.patch.object(models.Dossier, "list_tasks", return_value=[]), \
                 mock.patch.object(models.SpikeEscalation, "recent", return_value=[_spike()]):
             rv = client.get("/tasks.html")
         self.assertEqual(rv.status_code, 200)
