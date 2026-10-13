@@ -2119,7 +2119,7 @@ class TestBugPreview(unittest.TestCase):
                 "author_email": "jteh@mozilla.com"}
         pc, recent_bugs = self._author_fallback(cand, {"stack": ["Core", "X"]})
         self.assertEqual(pc, ("Core", "X"))
-        recent_bugs.assert_called_once_with("jteh@mozilla.com", "nightly")
+        recent_bugs.assert_called_once_with("jteh@mozilla.com", "nightly", name="James Teh")
 
     def test_resolve_pc_falls_back_to_the_codes_component(self):
         # Regressor bug restricted, no author email: the files say where the code lives.

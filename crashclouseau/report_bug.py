@@ -13,7 +13,7 @@ from libmozdata.bugzilla import Bugzilla
 from libmozdata.hgmozilla import Mercurial
 from . import net
 from urllib.parse import parse_qs, quote, urlencode, urlparse
-from . import buginfo, config, models, sensitive, utils
+from . import buginfo, config, mailmap, models, sensitive, utils
 from .logger import logger
 
 
@@ -1383,7 +1383,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         link = changeset_links(candidate["node"], channel, candidate.get("git_commit") or "")
         if candidate.get("bug"):
             link += " (bug {})".format(candidate["bug"])
-        who = author_display or candidate.get("author") or ""
+        who = author_display or _candidate_author(candidate)
         origin = ((dossier or {}).get("corroborations") or {}).get("hang_awaited_origin") or {}
         if origin.get("node") and str(origin["node"])[:12].lower() == str(
                 candidate["node"])[:12].lower():
@@ -1873,6 +1873,11 @@ def restrict_preview(preview):
     return dict(preview, groups=[group] if group else [], cc=[account] if account else [])
 
 
+def _candidate_author(candidate):
+    c = candidate or {}
+    return mailmap.author(c.get("author"), c.get("author_email"))
+
+
 def _first_email(author):
     """Best-effort email from an ``hg`` author display string (``Real Name <email>`` or a
     bare address)."""
@@ -1934,7 +1939,8 @@ def resolve_product_component(candidate, channel, product=None, file_components=
         email = info.get("email") or _first_email(candidate.get("author"))
         email = email or (candidate.get("author_email") or "").strip()
         if email:
-            bugs = models.Node.recent_bugs_by_author(email, channel)
+            name = info.get("real") or (candidate.get("author") or "").split("<", 1)[0].strip()
+            bugs = models.Node.recent_bugs_by_author(email, channel, name=name)
             pcs = {b: pc for b, pc in _bugs_product_component(bugs).items()
                    if pc[0] not in foreign}
             if pcs:
@@ -2114,16 +2120,9 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
         link = changeset_links(c["node"], channel, c.get("git_commit") or "")
         if c.get("bug"):
             link += " (bug {})".format(c["bug"])
-        # WHO WROTE IT, named the way the person names themselves today. `candidate["author"]`
-        # is the Mercurial string and is frozen at push time; when the ladder resolved a
-        # Bugzilla account for it, that account's nick/display name is the current identity and
-        # this line and the needinfo ask name the same person the same way. Falls back to the hg
-        # string when nothing resolved. See `_person_display`.
-        #
-        # PASSED IN, not resolved here: `build_bug_preview` already ran the ladder for the
-        # needinfo, and this function is on the crashstack page-view path -- re-running it would
-        # be a second `Node.authors_for` per render for a value that cannot differ.
-        author = (author_display or "").strip() or (c.get("author") or "").strip()
+        # Reuse the needinfo display name from build_bug_preview; fall back to the
+        # mapped commit author.
+        author = (author_display or "").strip() or _candidate_author(c)
         if author:
             link += " by {}".format(author)
         if is_suspected_regression(corroborations):
@@ -2699,6 +2698,7 @@ def _needinfo_person(candidate, channel):
         email = (c.get("author_email") or "").strip()
     if not name and author:
         name = author.split("<", 1)[0].strip()
+    name, email = mailmap.canonical(name, email)
     if not (email or name):
         return {}
     # Never ask a robot to investigate its own crash. STATE OF THE EVIDENCE, so nobody

@@ -12,7 +12,7 @@ from sqlalchemy import and_, case, inspect, func, not_, or_, text
 from sqlalchemy.orm import aliased
 from sqlalchemy.types import TypeDecorator
 import pytz
-from . import config, db, utils
+from . import config, db, mailmap, utils
 from .logger import logger
 
 
@@ -287,23 +287,25 @@ class Node(db.Model):
         return out
 
     @staticmethod
-    def recent_bugs_by_author(email, channel, limit=50):
-        """Distinct recent bug numbers from local changesets authored by ``email`` on
-        ``channel`` (the author's recent patches), newest first. DB-only (no network) —
-        used as the bug-preview product::component fallback when the regressor bug itself
-        is unreadable (e.g. a security bug). Empty when ``email`` is falsy or unknown."""
+    def recent_bugs_by_author(email, channel, limit=50, name=""):
+        """Return distinct bug IDs for the mapped author on ``channel``, newest first.
+
+        Include old addresses; respect name-specific mailmap overrides."""
         if not email:
             return []
+        target = mailmap.canonical(name, email)[1].lower()
         rows = (
-            db.session.query(Node.bug)
+            db.session.query(Node.bug, HGAuthor.email, HGAuthor.real)
             .join(HGAuthor, Node.hgauthor == HGAuthor.id)
-            .filter(Node.channel == channel, HGAuthor.email == email, Node.bug > 0)
+            .filter(Node.channel == channel,
+                    func.lower(HGAuthor.email).in_(sorted(mailmap.aliases(target))), Node.bug > 0)
             .order_by(Node.pushdate.desc())
-            .limit(limit)
             .all()
         )
+        rows = [bug for bug, address, real in rows
+                if mailmap.canonical(real, address)[1].lower() == target][:limit]
         seen = []
-        for (bug,) in rows:
+        for bug in rows:
             if bug not in seen:
                 seen.append(bug)
         return seen

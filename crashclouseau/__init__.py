@@ -214,6 +214,13 @@ def human_gap(seconds):
     return "{:.1f}d".format(s / 86400)
 
 
+@app.template_filter("mailmap")
+def mailmap_author(text, email=""):
+    from crashclouseau import mailmap
+
+    return mailmap.author(text, email)
+
+
 @app.context_processor
 def _signin_context():
     from crashclouseau import auth

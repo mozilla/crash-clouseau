@@ -8,7 +8,7 @@ import json
 import re
 from libmozdata.hgmozilla import Mercurial
 from . import utils, models, population, report_bug, bugzilla_apply, config
-from . import api, disclosure, impact, sensitive
+from . import api, disclosure, impact, mailmap, sensitive
 from .logger import logger
 from .pushlog import pushlog_for_buildid_url, pushlog_for_rev_url
 
@@ -922,7 +922,7 @@ def _draft_evidence(uuid, changeset):
         lines.append("{}: {}".format(head, mech))
 
     node = cand.get("node") or ""
-    author = (cand.get("author") or "").strip()
+    author = mailmap.author(cand.get("author"), cand.get("author_email"))
     if node:
         detail = "Suspected regressor: {}".format(node)
         if cand.get("bug"):

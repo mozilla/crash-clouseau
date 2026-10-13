@@ -27,7 +27,7 @@ from pydantic import Field
 
 from libmozdata.hgmozilla import Annotate, FileInfo, Revision
 
-from crashclouseau import inspector
+from crashclouseau import inspector, mailmap
 from crashclouseau.agent.tools import pin_node
 from crashclouseau.vendor.agent_tools.registry import tool, tools_in
 
@@ -76,8 +76,8 @@ def _date(ts) -> str:
 
 
 def _author(user) -> str:
-    # "Name <email>" -> "Name"; a bare email -> its local part.
-    user = user or ""
+    # Map first, then show the name or email local part.
+    user = mailmap.author(user)
     if "<" in user:
         return user.split("<", 1)[0].strip() or user
     return user.split("@", 1)[0] if "@" in user else user

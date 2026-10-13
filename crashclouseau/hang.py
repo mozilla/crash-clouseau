@@ -702,9 +702,10 @@ def _annotate_line(path, channel, node, line):
 
 
 def origin_from_row(row, frame, stackpos=None):
-    """A blame row as the ORIGIN record the seed carries: the changeset that last touched the
-    awaited work's line, its bug, its author (hg's ``Name <email>``) and the frame it came from."""
-    author = str((row or {}).get("author") or "").strip()
+    """Build an origin record with the blamed changeset, mapped author and frame."""
+    from crashclouseau import mailmap
+
+    author = mailmap.author(str((row or {}).get("author") or ""))
     m = _EMAIL_RE.search(author)
     desc = str((row or {}).get("desc") or "")
     bug = _BUG_RE.search(desc)

@@ -7,7 +7,7 @@ from libmozdata.hgmozilla import Mercurial, Revision
 from libmozdata import utils as lmdutils
 import re
 from . import net
-from . import buildsource, hgauthors, models, utils
+from . import buildsource, hgauthors, mailmap, models, utils
 from .logger import logger
 
 
@@ -144,7 +144,7 @@ def collect(data, file_filter, channel=None, drop_merge_files=False):
                     "files": files,
                     "merge": len(chgset["parents"]) > 1,
                     "bug": get_bug(desc),
-                    "author": hgauthors.analyze_author(author),
+                    "author": hgauthors.analyze_author(mailmap.author(author)),
                     # The changeset description (commit message). Kept because it is the
                     # primary triage signal for the P1 off-stack path, where a candidate
                     # has NO line-proximity score — the agent picks what to diff by desc

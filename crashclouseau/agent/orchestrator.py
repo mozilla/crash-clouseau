@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 from rq import Retry
 
-from crashclouseau import app, config, db, models, sensitive, utils, worker
+from crashclouseau import app, config, db, mailmap, models, sensitive, utils, worker
 from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
@@ -518,7 +518,7 @@ def _crashing_area_experts(frames, channel, node, *, max_experts=3, max_files=4)
         if not 0 < line <= len(ann):
             continue
         entry = ann[line - 1]
-        author = (entry.get("author") or "").strip()
+        author = mailmap.author(entry.get("author"))
         m = _AREA_EMAIL_RE.search(author)
         email = m.group(1) if m else ""
         name = author.split("<", 1)[0].strip()
