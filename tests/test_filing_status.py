@@ -171,5 +171,41 @@ class TestFilingStatus(unittest.TestCase):
         self.assertEqual(out["open_bugs"], [])
 
 
+class TestConfirmation(unittest.TestCase):
+    RECORD = {"effort": "high", "kept": True, "floor_waiver": "disagreed", "cost_usd": 0.92,
+              "would_publish": "new_bug", "planned_confidence": 70,
+              "plan": {"filed": False, "dry_run": True, "would_publish": "new_bug"},
+              "first_pass": {"effort": "medium", "verdict": "actionable", "confidence": 50,
+                             "candidate": "0cb7d640b527", "mechanism": "The Renderer panics",
+                             "cost_usd": 0.39, "num_turns": 10}}
+
+    def test_the_summary_drops_the_plan_and_the_mechanism(self):
+        self.assertEqual(models._confirmation_summary(self.RECORD), {
+            "effort": "high", "kept": True, "failed": False, "skipped": None,
+            "floor_waiver": "disagreed",
+            "first_pass": {"effort": "medium", "verdict": "actionable", "confidence": 50,
+                           "candidate": "0cb7d640b527"}})
+        self.assertIsNone(models._confirmation_summary(None))
+        self.assertTrue(models._confirmation_summary({"error": "boom"})["failed"])
+
+    def test_the_page_pairs_both_passes(self):
+        ev = {"verdict": "actionable", "confidence": 70,
+              "dossier": {"candidate": {"node": "6f16d0ac376a"}},
+              "confirmation": models._confirmation_summary(self.RECORD)}
+        out = html._confirmation(ev)
+        self.assertEqual(out["first_pass"]["candidate"], "0cb7d640b527")
+        self.assertEqual(out["shown"], {"verdict": "actionable", "confidence": 70,
+                                        "candidate": "6f16d0ac376a"})
+
+    def test_no_pass_ran_is_none(self):
+        plan_only = models._confirmation_summary({"effort": "high", "first_pass": {}})
+        self.assertIsNone(html._confirmation({"confirmation": plan_only}))
+        self.assertIsNone(html._confirmation({}))
+        skipped = models._confirmation_summary({"skipped": "1700s of the 1800s job timeout "
+                                                           "already used"})
+        self.assertEqual(html._confirmation({"confirmation": skipped})["skipped"],
+                         "1700s of the 1800s job timeout already used")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3599,6 +3599,21 @@ class Dossier(db.Model):
         return out
 
 
+def _confirmation_summary(confirmation):
+    """Summarize ``publish_confirmation`` without its plan or mechanism text."""
+    if not isinstance(confirmation, dict):
+        return None
+    first = confirmation.get("first_pass") or {}
+    return {
+        "effort": confirmation.get("effort"),
+        "kept": bool(confirmation.get("kept")),
+        "failed": bool(confirmation.get("error")),
+        "skipped": confirmation.get("skipped"),
+        "floor_waiver": confirmation.get("floor_waiver"),
+        "first_pass": {k: first.get(k) for k in ("effort", "verdict", "confidence", "candidate")},
+    }
+
+
 class Verdict(db.Model):
     __tablename__ = "verdicts"
 
@@ -3744,6 +3759,7 @@ class Verdict(db.Model):
             "filed_bug": payload.get("filed_bug"),
             "filing_declined": payload.get("filing_declined"),
             "filing_error": payload.get("filing_error"),
+            "confirmation": _confirmation_summary(payload.get("publish_confirmation")),
             "status": d.status if d is not None else None,
             "cost_usd": (
                 float(d.cost_usd)

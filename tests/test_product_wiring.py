@@ -347,6 +347,60 @@ class TestCrashstackPanel(unittest.TestCase):
                       "human comment from 2026-09-30.", html)
         self.assertNotIn("Stale bug, shadow mode", html)
 
+    def test_a_disagreeing_confirming_pass_says_what_each_pass_found(self):
+        ev = _evidence(verdict="actionable", confidence=70)
+        ev["filing_declined"] = {
+            "skipped": "1 installation on this signature, below the actionable floor of 3; the "
+                       "confirming pass did not reach the same actionable verdict and origin"}
+        ev["confirmation"] = {"effort": "high", "kept": True, "failed": False, "skipped": None,
+                              "floor_waiver": "disagreed",
+                              "first_pass": {"effort": "medium", "verdict": "actionable",
+                                             "confidence": 50, "candidate": "0cb7d640b527"}}
+        html = self._get(ev).get_data(as_text=True)
+        self.assertEqual(html.count("The confirming pass disagreed."), 1)
+        self.assertIn('<p class="filing-status declined"><strong>The confirming pass '
+                      "disagreed.</strong> First pass (medium effort): actionable at 50%, origin "
+                      "<code>0cb7d640b527</code>. Confirming pass (high effort, shown on this "
+                      "page): actionable at 70%, origin <code>culpritnode1</code>. The "
+                      "installation floor is waived only when both passes are actionable with "
+                      "the same origin.</p>", html)
+
+    def test_an_agreeing_or_absent_confirming_pass(self):
+        ev = _evidence(verdict="actionable", confidence=70)
+        ev["filed_bug"] = {"filed": True, "bug": 2072700, "mode": "new_bug"}
+        ev["confirmation"] = {"effort": "high", "kept": True, "floor_waiver": "agreed",
+                              "first_pass": {"effort": "medium", "verdict": "actionable",
+                                             "confidence": 70, "candidate": "culpritnode1"}}
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn("The confirming pass agreed. First pass (medium effort)", html)
+        self.assertNotIn("is waived only when", html)
+        del ev["confirmation"]
+        self.assertNotIn("confirming pass", self._get(ev).get_data(as_text=True))
+
+    _ABSTAINED = {"effort": "high", "kept": True, "floor_waiver": "disagreed",
+                  "first_pass": {"effort": "medium", "verdict": "actionable", "confidence": 70,
+                                 "candidate": "0cb7d640b527"}}
+
+    def test_a_confirming_pass_that_abstains_is_shown_without_the_panel(self):
+        # No area experts: show_abstain=False hides the panel.
+        ev = _evidence(verdict="abstain", confidence=25, show_abstain=False)
+        ev["dossier"] = dict(ev["dossier"], area_experts=[])
+        ev["confirmation"] = dict(self._ABSTAINED)
+        html = self._get(ev).get_data(as_text=True)
+        self.assertNotIn('<div class="evidence-panel">', html)
+        self.assertIn("<strong>The confirming pass disagreed.</strong> First pass (medium "
+                      "effort): actionable at 70%, origin <code>0cb7d640b527</code>. Confirming "
+                      "pass (high effort): abstain, origin <code>culpritnode1</code>.</p>", html)
+
+    def test_a_confirming_pass_that_abstains_is_shown_once_with_the_panel(self):
+        ev = _evidence(verdict="abstain", confidence=25, show_abstain=True)
+        ev["confirmation"] = dict(self._ABSTAINED)
+        html = self._get(ev).get_data(as_text=True)
+        self.assertIn('<div class="evidence-panel">', html)
+        self.assertEqual(html.count("The confirming pass disagreed."), 1)
+        self.assertIn("Confirming pass (high effort, shown on this page): abstain", html)
+        self.assertNotIn("is waived only when", html)
+
     def test_a_filed_bug_is_shown_as_filed_and_not_listed_twice(self):
         ev = _evidence()
         ev["filed_bug"] = {"filed": True, "bug": 2072700, "mode": "new_bug",

@@ -138,6 +138,21 @@
         {%- endif %}
       {% endif -%}
     {%- endmacro %}
+    {% macro pass_result(verdict, confidence, candidate) -%}
+      {{ verdict|e }}{% if verdict != 'abstain' and confidence is not none %} at {{ confidence|e }}%{% endif %}{% if candidate %}, origin <code>{{ candidate[:12]|e }}</code>{% endif %}
+    {%- endmacro %}
+    {% macro confirmation_line(cf, shown_here) -%}
+      {%- set fp = cf.get('first_pass') or {} -%}
+      {%- set shown = cf.get('shown') or {} -%}
+      {%- set disagreed = cf.get('floor_waiver') == 'disagreed' -%}
+      {%- if cf.get('kept') -%}
+      <p class="filing-status{% if disagreed %} declined{% endif %}">{% if disagreed %}<strong>The confirming pass disagreed.</strong>{% elif cf.get('floor_waiver') == 'agreed' %}The confirming pass agreed.{% else %}A confirming pass replaced the first pass.{% endif %} First pass ({{ fp.get('effort')|e }} effort): {{ pass_result(fp.get('verdict'), fp.get('confidence'), fp.get('candidate')) }}. Confirming pass ({{ cf.get('effort')|e }} effort{% if shown_here %}, shown on this page{% endif %}): {{ pass_result(shown.get('verdict'), shown.get('confidence'), shown.get('candidate')) }}.{% if disagreed and shown.get('verdict') == 'actionable' %} The installation floor is waived only when both passes are actionable with the same origin.{% endif %}</p>
+      {%- elif cf.get('failed') -%}
+      <p class="muted">The confirming pass ({{ cf.get('effort')|e }} effort) failed; this page shows the first pass.</p>
+      {%- elif cf.get('skipped') -%}
+      <p class="muted">No confirming pass: {{ cf['skipped']|e }}; this page shows the first pass.</p>
+      {%- endif -%}
+    {%- endmacro %}
     {# WITHHELD: say so, loudly. A withheld dossier renders as an empty evidence panel, which is
        indistinguishable from "the agent abstained" -- and silently looking like no analysis ran
        is how a security hole becomes invisible instead of merely closed. #}
@@ -415,6 +430,9 @@
         {%- else -%}
         <h3>Bug we&rsquo;ll file <span class="muted">(preview)</span></h3>
         {%- endif -%}
+        {%- if confirmation %}
+        {{ confirmation_line(confirmation, true) }}
+        {%- endif -%}
         {#- THE BUGS ALREADY THERE, whatever this run did. `open_bugs` is None when BMO could
             not be asked -- said out loud, because a silent "no bug" is the misreading this
             block exists to prevent. `own_prior` is Clouseau's own filing from another crash,
@@ -581,6 +599,12 @@
         </ul>
       </div>
       {% endif -%}
+    </div>
+    {% endif -%}
+    {#- Keep confirmation visible when the bug block is absent. -#}
+    {% if confirmation and not (show_evidence and (bug_preview or filing)) -%}
+    <div class="evidence-section">
+      {{ confirmation_line(confirmation, show_evidence) }}
     </div>
     {% endif -%}
     {% if stack -%}

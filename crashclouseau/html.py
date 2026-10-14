@@ -99,6 +99,7 @@ def crashstack():
             show_evidence=show_evidence,
             bug_preview=bug_preview,
             filing=filing,
+            confirmation=_confirmation(evidence or {}),
             population=pop,
         )
     abort(404)
@@ -194,6 +195,16 @@ def _declined_bug(bug, reason):
         return str(bug)
     m = _BUG_IN_REASON.search(reason or "")
     return m.group(1) if m else None
+
+
+def _confirmation(evidence):
+    """Pair a kept, failed, or skipped confirmation with the current verdict."""
+    conf = evidence.get("confirmation") or {}
+    if not (conf.get("kept") or conf.get("failed") or conf.get("skipped")):
+        return None
+    candidate = ((evidence.get("dossier") or {}).get("candidate") or {}).get("node")
+    return dict(conf, shown={"verdict": evidence.get("verdict"),
+                             "confidence": evidence.get("confidence"), "candidate": candidate})
 
 
 def _filing_status(uuid, uuid_info, evidence):
