@@ -34,7 +34,7 @@ class _WakeBase(_Base):
     def setUp(self):
         super().setUp()
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865)]
-        self.activity = {1961865: {"last_human": _ago(529), "ours": False}}
+        self.activity = {1961865: {"last_human": _ago(529), "ours": False, "discussion": 0}}
         for p in (
             mock.patch.object(report_bug, "fetch_signature_stats",
                               return_value=(True, {"count": 160, "installs": 22})),
@@ -138,7 +138,7 @@ class TestTheConditions(_WakeBase):
 
     def test_every_open_bug_must_be_stale(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865), _bug(2000000)]
-        self.activity[2000000] = {"last_human": _ago(3), "ours": False}
+        self.activity[2000000] = {"last_human": _ago(3), "ours": False, "discussion": 0}
         self.assertIn("bug 2000000 has a human comment", self._reason(self._wake()))
 
     def test_a_bug_with_our_comment(self):
@@ -175,6 +175,29 @@ class TestTheConditions(_WakeBase):
                         return_value={"text": "x", "withdrawn": [], "left": [7]}):
             self.assertEqual(self._reason(self._wake()),
                              "the analysis names a bug that is not public")
+
+
+class TestTheVenue(_WakeBase):
+    """Bug 1854901 c2: the bare crash-stats bug was chosen over its discussed duplicate."""
+
+    def setUp(self):
+        super().setUp()
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865), _bug(2000000)]
+        self.activity[2000000] = {"last_human": _ago(300), "ours": False, "discussion": 8}
+
+    def test_the_most_discussed_bug_is_the_venue(self):
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["bug"]), (True, 2000000))
+        self.assertEqual(res["wake_stale"]["since"], _ago(300).date().isoformat())
+        self.assertEqual([b for b, _ in self.puts], [2000000])
+        bugzilla_apply._triage_owner.assert_called_once_with(2000000)
+        bugzilla_apply._existing_needinfos.assert_called_once_with(2000000, mock.ANY)
+
+    def test_a_tie_keeps_the_oldest(self):
+        self.activity[1961865]["discussion"] = 8
+        res = self._wake()
+        self.assertEqual(res["wake_stale"]["bug"], 1961865)
+        self.assertEqual(res["wake_stale"]["since"], _ago(529).date().isoformat())
 
 
 class TestTheTriageOwnerLookup(_WakeBase):
@@ -236,7 +259,16 @@ class TestTheReads(unittest.TestCase):
              "creation_time": "2025-05-15T12:17:28Z", "text": "topcrash"},
         ])
         self.assertEqual(out, {"last_human": datetime(2025, 4, 22, 16, 51, tzinfo=timezone.utc),
-                               "ours": False})
+                               "ours": False, "discussion": 0})
+
+    def test_discussion_counts_people_after_comment_0(self):
+        out = self._activity([
+            {"creator": "fuzzer@mozilla.com", "creation_time": "2024-07-12T01:42:33Z"},
+            {"creator": "dev@mozilla.com", "creation_time": "2024-07-12T03:08:33Z"},
+            {"creator": "bugmon@mozilla.tld", "creation_time": "2024-07-12T08:45:14Z"},
+            {"creator": "fuzzer@mozilla.com", "creation_time": "2024-07-22T20:51:11Z"},
+        ])
+        self.assertEqual(out["discussion"], 2)
 
     def test_a_bot_filed_bug_falls_back_to_comment_0(self):
         out = self._activity([{"creator": "bot@mozilla.tld",

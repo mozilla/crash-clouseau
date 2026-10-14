@@ -2243,10 +2243,11 @@ def _is_ours(comment):
 
 
 def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
-    """Return ``{last_human, ours}``; ``None`` if comments are unreadable or empty.
+    """Return ``{last_human, ours, discussion}``; ``None`` if comments are unreadable or empty.
 
     ``last_human`` uses the last comment not matched by ``_is_automation``, falling back to
     comment 0; an unparseable date is ``None``. ``ours`` means any comment matches ``_is_ours``.
+    ``discussion`` counts the comments after comment 0 not matched by ``_is_automation``.
     Only anonymously visible comments are read."""
     from crashclouseau import sigage
 
@@ -2261,7 +2262,9 @@ def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
         return None
     human = [c for c in comments if not _is_automation(c.get("creator"))] or comments[:1]
     ours = any(_is_ours(c) for c in comments)
-    return {"last_human": sigage.to_datetime(human[-1].get("creation_time")), "ours": ours}
+    discussion = sum(1 for c in comments[1:] if not _is_automation(c.get("creator")))
+    return {"last_human": sigage.to_datetime(human[-1].get("creation_time")), "ours": ours,
+            "discussion": discussion}
 
 
 def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
@@ -2279,10 +2282,11 @@ def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
 
 
 def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, declined, family):
-    """Comment on the first open bug if eligible, or return the actionable filing decline.
+    """Comment on the most discussed open bug if eligible, or return the actionable decline.
 
     All *existing* bugs (same application, non-meta) must pass the activity and prior-comment
-    checks. Require no memory-safety signal, a public origin bug if known, a screened comment,
+    checks. The venue has the most human comments after comment 0; ties keep the oldest.
+    Require no memory-safety signal, a public origin bug if known, a screened comment,
     and a verified, askable triage owner. Failed eligibility reads decline.
 
     ``shadow`` records the preview under ``wake_stale`` without writing to Bugzilla.
@@ -2300,7 +2304,7 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
         return no("the crash report shows a memory-safety signal")
     days = cfg.get("wake_stale_days") or 180
     now = datetime.now(timezone.utc)
-    since = None
+    activities = {}
     for bug in existing:
         activity = _bug_activity(bug["id"])
         if activity is None or activity["last_human"] is None:
@@ -2310,8 +2314,10 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
         if now - activity["last_human"] < timedelta(days=days):
             return no("bug {} has a human comment from {}".format(
                 bug["id"], activity["last_human"].date().isoformat()))
-        if bug is venue:
-            since = activity["last_human"].date().isoformat()
+        activities[bug["id"]] = activity
+    # A bare crash-stats bug next to a discussed one is its duplicate, not the place to post.
+    venue = max(existing, key=lambda b: activities[b["id"]]["discussion"])
+    since = activities[venue["id"]]["last_human"].date().isoformat()
     origin = ((dossier or {}).get("candidate") or {}).get("bug")
     if origin:
         hidden = disclosure.nonpublic([origin])
