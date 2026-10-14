@@ -378,6 +378,11 @@
             "max_bugs": 2,
             "max_facts": 8
         },
+        "comment_novelty":
+        {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+        },
         "same_site":
         {
             "enabled": true

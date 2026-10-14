@@ -128,6 +128,18 @@ def included(bugs):
     return out
 
 
+def comment_lines(bug, kept):
+    """Format selected comments, marking omitted earlier comments."""
+    lines = []
+    omitted = len(bug["comments"]) - len(kept)
+    for i, c in enumerate(kept):
+        if omitted and c["count"] != 0 and (i == 0 or kept[i - 1]["count"] == 0):
+            lines.append("--- [{} earlier comment{} omitted]".format(
+                omitted, "" if omitted == 1 else "s"))
+        lines.append(_block(c))
+    return lines
+
+
 def user_prompt(signature, bugs):
     """Format bug metadata and the comments selected by ``included`` for the reader."""
     lines = ["Crash signature: {}".format(signature), ""]
@@ -136,13 +148,7 @@ def user_prompt(signature, bugs):
         lines.append("BUG {} ({} :: {}, {})".format(b["id"], b.get("product") or "?",
                                                     b.get("component") or "?",
                                                     b.get("status") or "?"))
-        kept = shown[b["id"]]
-        omitted = len(b["comments"]) - len(kept)
-        for i, c in enumerate(kept):
-            if omitted and c["count"] != 0 and (i == 0 or kept[i - 1]["count"] == 0):
-                lines.append("--- [{} earlier comment{} omitted]".format(
-                    omitted, "" if omitted == 1 else "s"))
-            lines.append(_block(c))
+        lines += comment_lines(b, shown[b["id"]])
         lines.append("")
     lines.append("Extract the facts these comments establish about the crash.")
     return "\n".join(lines)

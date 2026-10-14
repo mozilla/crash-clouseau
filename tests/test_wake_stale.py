@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, config, report_bug  # noqa: E402
+from crashclouseau.agent import comment_novelty  # noqa: E402
 from tests.test_autofile import _INFO, _PREVIEW, _Base, _bug  # noqa: E402
 
 _DECLINE = "open bug 1961865 exists; an actionable crash is filed only where no bug is"
@@ -24,6 +25,7 @@ _REAL_BUGZILLA_USER = report_bug._bugzilla_user
 _STALE_PREVIEW = dict(_PREVIEW, comment="the stale-bug comment",
                       needinfo=":segun, as triage owner, can you have a look please?",
                       needinfo_email="owner@moz.example")
+_NEW = {"new_information": True, "reason": "It names a second caller.", "cost_usd": 0.02}
 
 
 def _ago(days):
@@ -44,6 +46,7 @@ class _WakeBase(_Base):
             mock.patch.object(report_bug, "_bugzilla_user", return_value={
                 "exists": True, "nick": "segun", "real": "Segun", "askable": True}),
             mock.patch.object(report_bug, "_person_for_account", return_value=dict(_OWNER)),
+            mock.patch.object(comment_novelty, "check", return_value=dict(_NEW)),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -97,6 +100,34 @@ class TestTheModes(_WakeBase):
         res = self._wake(mode="comment")
         self.assertEqual(res["needinfo_already_set"], "owner@moz.example")
         self.assertEqual(self.puts, [(1961865, {"comment": {"body": "the stale-bug comment"}})])
+        self.assertEqual(res["wake_stale"]["novelty"], _NEW)
+        comment_novelty.check.assert_called_once_with(1961865, "the stale-bug comment")
+
+    def test_a_new_needinfo_needs_no_novelty_check(self):
+        res = self._wake(mode="comment")
+        self.assertEqual(res["needinfo"], "owner@moz.example")
+        self.assertNotIn("novelty", res["wake_stale"])
+        comment_novelty.check.assert_not_called()
+
+    def test_without_a_new_needinfo_nothing_new_is_not_posted(self):
+        bugzilla_apply._existing_needinfos.return_value = {"owner@moz.example"}
+        comment_novelty.check.return_value = {
+            "new_information": False, "reason": "Comment 2 already gives the cause.",
+            "cost_usd": 0.02}
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["skipped"]), (False, _DECLINE))
+        self.assertEqual(res["wake_stale"]["skipped"],
+                         "the comment adds nothing to bug 1961865: Comment 2 already gives "
+                         "the cause")
+        self.assertFalse(res["wake_stale"]["novelty"]["new_information"])
+        self.assertEqual((self.puts, self.comments, self.filed), ([], [], []))
+
+    def test_needinfo_disabled_is_checked_too(self):
+        comment_novelty.check.return_value = None
+        res = self._wake(mode="comment", needinfo=False)
+        self.assertEqual(res["wake_stale"]["skipped"],
+                         "could not check whether the comment adds to bug 1961865")
+        self.assertEqual((self.puts, self.filed), ([], []))
 
     def test_unreadable_flags_write_nothing(self):
         bugzilla_apply._existing_needinfos.return_value = None

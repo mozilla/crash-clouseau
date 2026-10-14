@@ -2291,6 +2291,7 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
 
     ``shadow`` records the preview under ``wake_stale`` without writing to Bugzilla.
     ``comment`` sends one update, adding needinfo only when enabled and not already pending.
+    Without a new needinfo, require a positive novelty verdict.
     """
     mode = config.wake_mode(cfg.get("wake_stale"))
     if mode == "off":
@@ -2360,6 +2361,17 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
     if pending is None:
         return no("could not read the flags on bug {}".format(venue["id"]))
     ask = bool(email) and email.lower() not in pending
+    if not ask:
+        from crashclouseau.agent import comment_novelty
+
+        novelty = comment_novelty.check(venue["id"], text)
+        if novelty is None:
+            return no("could not check whether the comment adds to bug {}".format(venue["id"]))
+        wake["novelty"] = novelty
+        if not novelty["new_information"]:
+            reason = "the comment adds nothing to bug {}: {}".format(
+                venue["id"], novelty["reason"].rstrip("."))
+            return dict(declined, wake_stale=dict(wake, skipped=reason))
     if mode == "shadow":
         return dict(declined, wake_stale=dict(wake, comment=text, needinfo=email or None))
     changes = {"comment": {"body": text}}

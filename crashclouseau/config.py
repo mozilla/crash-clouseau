@@ -1370,6 +1370,12 @@ def get_agent_bug_comments():
     }
 
 
+def get_agent_comment_novelty():
+    """Read agent.comment_novelty model and effort settings."""
+    o = get_agent().get("comment_novelty", {})
+    return {"model": o.get("model", "opus"), "effort": o.get("effort", "medium")}
+
+
 def get_agent_same_site():
     """Same-site recording settings; ``SAME_SITE_ENABLED`` overrides ``enabled``."""
     o = get_agent().get("same_site", {})
