@@ -2281,8 +2281,16 @@ def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
     return ((row or {}).get("triage_owner") or "").strip()
 
 
-def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, declined, family):
-    """Comment on the most discussed open bug if eligible, or return the actionable decline.
+def _actionable_decline(venue):
+    """Build an actionable decline for the open venue."""
+    return {"filed": False, "bug": venue["id"],
+            "skipped": "open bug {}{} exists; an actionable crash is filed only where no bug "
+                       "is".format(venue["id"], _via_clause(venue)),
+            **_via_fields(venue)}
+
+
+def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family):
+    """Comment on a stale bug if eligible, or decline about the venue.
 
     All *existing* bugs (same application, non-meta) must pass the activity and prior-comment
     checks. The venue has the most human comments after comment 0; ties keep the oldest.
@@ -2294,12 +2302,13 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
     Without a new needinfo, require a positive novelty verdict.
     """
     mode = config.wake_mode(cfg.get("wake_stale"))
-    if mode == "off":
-        return declined
     venue = existing[0]
+    if mode == "off":
+        return _actionable_decline(venue)
 
     def no(reason):
-        return dict(declined, wake_stale={"mode": mode, "bug": venue["id"], "skipped": reason})
+        return dict(_actionable_decline(venue),
+                    wake_stale={"mode": mode, "bug": venue["id"], "skipped": reason})
 
     if sensitive.is_withheld((dossier or {}).get("corroborations")):
         return no("the crash report shows a memory-safety signal")
@@ -2371,9 +2380,10 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, decli
         if not novelty["new_information"]:
             reason = "the comment adds nothing to bug {}: {}".format(
                 venue["id"], novelty["reason"].rstrip("."))
-            return dict(declined, wake_stale=dict(wake, skipped=reason))
+            return dict(_actionable_decline(venue), wake_stale=dict(wake, skipped=reason))
     if mode == "shadow":
-        return dict(declined, wake_stale=dict(wake, comment=text, needinfo=email or None))
+        return dict(_actionable_decline(venue),
+                    wake_stale=dict(wake, comment=text, needinfo=email or None))
     changes = {"comment": {"body": text}}
     if ask:
         changes.update(_needinfo_changes(email))
@@ -2866,11 +2876,7 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     # Actionable crashes with an open venue use `wake_stale` or decline, regardless of
     # `comment_on_existing`. Other applications and meta bugs have already been excluded.
     if actionable and existing:
-        return _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, {
-            "filed": False, "bug": existing[0]["id"],
-            "skipped": "open bug {}{} exists; an actionable crash is filed only where no bug "
-                       "is".format(existing[0]["id"], _via_clause(existing[0])),
-            **_via_fields(existing[0])}, family)
+        return _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family)
     # `skip` writes nothing past an open public bug; `file_new` files separately and
     # references it. Restricted filings bypass these policies below.
     mode = config.comment_mode(cfg["comment_on_existing"])

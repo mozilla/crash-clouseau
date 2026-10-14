@@ -230,6 +230,27 @@ class TestTheVenue(_WakeBase):
         self.assertEqual(res["wake_stale"]["bug"], 1961865)
         self.assertEqual(res["wake_stale"]["since"], _ago(529).date().isoformat())
 
+    def test_the_decline_names_the_venue(self):
+        _DECLINE_VENUE = _DECLINE.replace("1961865", "2000000")
+        res = self._wake()
+        self.assertEqual((res["bug"], res["skipped"], res["wake_stale"]["bug"]),
+                         (2000000, _DECLINE_VENUE, 2000000))
+        bugzilla_apply._triage_owner.return_value = None
+        res = self._wake()
+        self.assertEqual((res["bug"], res["skipped"]), (2000000, _DECLINE_VENUE))
+        self.assertEqual(res["wake_stale"]["skipped"],
+                         "could not read the triage owner of bug 2000000")
+
+    def test_a_venue_reached_by_another_name_says_so(self):
+        sibling = dict(_bug(2000000), via_signature="Foo::Bar", via_relation="sibling")
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865), sibling]
+        bugzilla_apply._triage_owner.return_value = None
+        res = self._wake()
+        self.assertEqual(res["skipped"], "open bug 2000000 (on this crash's sibling spelling "
+                         "`Foo::Bar`) exists; an actionable crash is filed only where no bug is")
+        self.assertEqual((res["venue_via_signature"], res["venue_via_relation"]),
+                         ("Foo::Bar", "sibling"))
+
 
 class TestTheTriageOwnerLookup(_WakeBase):
     """Exercise both account helpers with mocked HTTP responses."""
