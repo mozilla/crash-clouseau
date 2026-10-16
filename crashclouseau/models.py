@@ -1427,21 +1427,27 @@ class Selection(db.Model):
 
     @staticmethod
     def escalation_candidates(product, channel, days):
-        """The pairs the spike escalation sweep judges: every pair the pipeline ANALYSED on a
-        build-day within the last ``days`` -- ``ever_selected`` (sticky, so a pair the maturity
-        rule later re-decided still counts, and its ``number`` is the latest, fullest count) or
-        a rate-path pick. Declined pairs are never candidates: nothing of theirs was ingested.
-        Never raises; a log that cannot be read escalates nothing."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        """Return spike-sweep candidates for this product/channel.
+
+        Include ``ever_selected`` or rate-path pairs with build-days within ``days``,
+        plus pairs whose latest outcome is ``selected`` and whose run is within ``days``,
+        regardless of build-day. Return an empty list if the query fails.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).date()
         try:
             rows = (
                 db.session.query(Selection)
                 .filter(
                     Selection.product == product,
                     Selection.channel == channel,
-                    Selection.build_day >= cutoff,
-                    or_(Selection.ever_selected.is_(True),
-                        Selection.outcome == utils.RISING_RATE),
+                    or_(
+                        and_(Selection.build_day >= cutoff,
+                             or_(Selection.ever_selected.is_(True),
+                                 Selection.outcome == utils.RISING_RATE)),
+                        and_(Selection.outcome == utils.SELECTED,
+                             Selection.run_date >= now - timedelta(days=days)),
+                    ),
                 )
                 .order_by(Selection.build_day.desc(), Selection.number.desc())
                 .all()

@@ -14,7 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from libmozdata import utils as lmdutils  # noqa: E402
@@ -579,6 +579,29 @@ class TestRoundTrip(unittest.TestCase):
         rows = models.Selection.for_signature(self.SIGNATURE)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["build_day"], keep["day"].date().isoformat())
+
+    def test_escalation_candidates_keep_a_build_still_selected(self):
+        now = datetime.now(timezone.utc)
+        old_day = datetime.combine((now - timedelta(days=10)).date(), datetime.min.time())
+        selected = dict(self._record(), day=old_day)
+        models.Selection.record_many([selected], "Firefox", "release", now - timedelta(hours=1))
+        rows = models.Selection.escalation_candidates("Firefox", "release", 5)
+        self.assertEqual([r["signature"] for r in rows if r["signature"] == self.SIGNATURE],
+                         [self.SIGNATURE])
+
+        # A downgrade excludes the old pair despite its sticky ever_selected flag.
+        models.Selection.record_many([dict(self._record(outcome=utils.IMMATURE), day=old_day)],
+                                     "Firefox", "release", now)
+        rows = models.Selection.escalation_candidates("Firefox", "release", 5)
+        self.assertEqual([r for r in rows if r["signature"] == self.SIGNATURE], [])
+
+    def test_escalation_candidates_skip_an_old_selection(self):
+        now = datetime.now(timezone.utc)
+        old_day = datetime.combine((now - timedelta(days=10)).date(), datetime.min.time())
+        models.Selection.record_many([dict(self._record(), day=old_day)], "Firefox", "release",
+                                     now - timedelta(days=6))
+        rows = models.Selection.escalation_candidates("Firefox", "release", 5)
+        self.assertEqual([r for r in rows if r["signature"] == self.SIGNATURE], [])
 
     def test_summary_counts_by_outcome(self):
         run = datetime(2026, 8, 7, tzinfo=timezone.utc)

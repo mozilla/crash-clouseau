@@ -15,9 +15,10 @@ predicate runs before the investigator.
 
 THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
 
-1. ``sweep_real_spikes`` reads the selection log for the pairs the selector ANALYSED in the last
-   ``lookback_days`` and judges each (``spikes.judge_selection``; a lambda's two demanglings are
-   judged as one). A real spike is escalated once per ``once_per_days`` per signature family,
+1. ``sweep_real_spikes`` reads analysed pairs on build-days within ``lookback_days``,
+   plus older pairs still selected by a run within that window. It merges lambda demanglings
+   before calling ``spikes.judge_selection``. A real spike is escalated once per
+   ``once_per_days`` per signature family,
    only after ``grace_s`` since it was first selected and only once no ordinary run on its
    build is still pending or running -- "the classic pushlog stuff failed" has to be true before
    it is acted on. A spike the ordinary path DID file is recorded and left alone.
