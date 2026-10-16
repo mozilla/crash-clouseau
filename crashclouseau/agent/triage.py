@@ -970,7 +970,8 @@ def _hardware_noise_lines(crash: dict) -> list[str]:
     bits = []
     if flip is not None:
         bits.append("{:.0f}% carry a Socorro bit-flip annotation{}{}".format(
-            100 * flip, sigage.flip_discount_phrase(noise.get("bit_flip_aligned")),
+            100 * flip, sigage.flip_discount_phrase(noise.get("bit_flip_aligned"),
+                                                     noise.get("bit_flip_shared")),
             "" if pop_flip is None else
             " ({} population: {:.0f}%)".format(pop_name, 100 * pop_flip)))
     if cpu is not None:

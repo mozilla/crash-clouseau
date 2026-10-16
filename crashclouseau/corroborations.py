@@ -277,6 +277,10 @@ REGISTRY = {
         "evidence", ("report_bug.py",),
         "Flip annotations excluded for page-aligned fault addresses; "
         "`signature_bit_flip_rate` still uses all reports as its denominator."),
+    "signature_bit_flip_shared": (
+        "evidence", ("report_bug.py",),
+        "Count of flip annotations excluded by the shared-address cutoff; "
+        "`signature_bit_flip_rate` still uses all reports."),
     "possible_bit_flip_page_aligned": (
         "diagnostic", (),
         "Records a flip annotation on a page-aligned fault address. "

@@ -53,7 +53,7 @@ from claude_agent_sdk import (
 )
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from crashclouseau import config
+from crashclouseau import coloaded, config
 from crashclouseau.agent import roles, triage
 from crashclouseau.agent.schema import _extract_last_json_block
 from crashclouseau.agent.tools import bugzilla as bugzilla_tools
@@ -451,6 +451,7 @@ def _user_prompt(brief: dict) -> str:
     facts = brief.get("facts") or []
     if facts:
         lines += ["", "Crash facts (the representative report, then the signature):", *facts]
+    lines += coloaded.lines(brief.get("coloaded"))
     stacks = brief.get("stacks") or []
     for i, st in enumerate(stacks):
         if i == 0:

@@ -34,6 +34,7 @@ One Socorro lookup answers it. Four gotchas, all learned the hard way and all en
 Window truncation can only make first-seen look NEWER than it really is, so an age computed here
 is a LOWER bound and the resulting downweight is conservative.
 """
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -529,6 +530,7 @@ POPULATION_TOP_CPU_SHARE_MIN_REPORTS = 5
 NO_HARDWARE_NOISE = {
     "reports": None, "bit_flip_reports": None, "broken_cpu_reports": None,
     "bit_flip_rate": None, "broken_cpu_rate": None, "bit_flip_aligned": None,
+    "bit_flip_shared": None,
     "cpu_reports": None, "cpu_terms": None, "top_cpu_term": None, "top_cpu_share": None,
 }
 
@@ -541,11 +543,46 @@ def page_aligned(address):
     return text.startswith("0x") and text.endswith("000")
 
 
-def flip_discount_phrase(aligned):
-    """Describe excluded flip annotations, or return an empty string if none were excluded."""
-    if not aligned:
-        return ""
-    return ", not counting {} on a page-aligned fault address".format(aligned)
+def flip_discount_phrase(aligned, shared=None):
+    """Describe excluded annotations; return an empty string if none were excluded."""
+    parts = []
+    if aligned:
+        parts.append("{} on a page-aligned fault address".format(aligned))
+    if shared:
+        parts.append("{} on a fault address shared by many installations".format(shared))
+    return ", not counting {}".format(" and ".join(parts)) if parts else ""
+
+
+_FLIP_BIT_POSITIONS = 32
+_FLIP_SHARED_ALPHA = 0.001
+
+
+def shared_address_floor(flips, bins=_FLIP_BIT_POSITIONS, alpha=_FLIP_SHARED_ALPHA):
+    """Return a shared-address cutoff under a uniform, independent-flip model.
+
+    Treat each annotated report as a trial over ``bins`` equally likely addresses.
+    Find the smallest m >= 2 with bins * P(Binomial(max(flips, 1), 1/bins) >= m) <= alpha.
+    """
+    n = max(int(flips or 0), 1)
+    p = 1.0 / bins
+
+    def pmf(k):
+        return math.exp(math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+                        + k * math.log(p) + (n - k) * math.log1p(-p))
+
+    m = max(2, math.ceil(n * p))
+    while m <= n:
+        term = pmf(m)
+        tail = term
+        k = m
+        while k < n and term > tail * 1e-12:
+            term *= (n - k) / (k + 1) * p / (1 - p)
+            tail += term
+            k += 1
+        if bins * tail <= alpha:
+            return m
+        m += 1
+    return n + 1
 
 
 # Reports per day per VERSION on one channel. Written for crash 0027161c-203a-4bc5-bb1d-efa910260905
@@ -921,16 +958,31 @@ def affected_trains(signature, product="Firefox", days=VERSION_RATES_DAYS):
     return trains_from_versions(observed, live)
 
 
+def _shared_address_flips(rows, flips):
+    """Count annotations on addresses meeting the install_time cardinality cutoff."""
+    if not isinstance(rows, list) or not flips:
+        return 0
+    floor = shared_address_floor(flips)
+    shared = 0
+    for row in rows:
+        aggs = (row.get("facets") or {}) if isinstance(row, dict) else {}
+        installs = (aggs.get("cardinality_install_time") or {}).get("value") or 0
+        if installs >= floor:
+            shared += sum(r.get("count") or 0
+                          for r in aggs.get("possible_bit_flips_max_confidence") or []
+                          if isinstance(r, dict))
+    return min(shared, flips)
+
+
 def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
-    """Measure hardware indicators for one signature, product, and channel.
+    """Measure flip, broken-CPU and CPU-concentration statistics for a signature.
 
-    Flip annotations on page-aligned fault addresses are excluded; both hardware rates
-    use all reports as their denominator. CPU concentration uses reports with known CPU
-    strings and is descriptive only. An empty flip facet means zero; an empty CPU facet
-    means unknown.
+    Exclude flips on page-aligned addresses and those meeting ``shared_address_floor``.
+    Both rates use all reports; CPU concentration uses reports with known CPU strings.
+    Empty flip and CPU facets mean zero and unknown, respectively.
 
-    Query the full sample, then the non-aligned addresses. A failed initial lookup returns
-    ``NO_HARDWARE_NOISE``; a failed or incomplete split preserves the original flip count.
+    Initial lookup failures return ``NO_HARDWARE_NOISE``. Missing split facets leave the
+    corresponding exclusions unapplied.
     """
     empty = dict(NO_HARDWARE_NOISE)
     if not signature:
@@ -999,14 +1051,15 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
                    if isinstance(r, dict) and (keep is None or keep(r.get("term"))))
 
     flips = _sum("possible_bit_flips_max_confidence")
-    aligned = 0
-    # Exclude page-aligned flip annotations, but keep all reports in the denominator.
-    # A failed or incomplete split preserves the unfiltered count.
+    aligned = shared = 0
+    # Apply exclusions to the numerator only; keep all reports in the denominator.
     informative = {}
     try:
         socorro.SuperSearch(
             params={**params, "address": "!$000",
-                    "_facets": ["possible_bit_flips_max_confidence"]},
+                    "_facets": ["possible_bit_flips_max_confidence", "address"],
+                    "_aggs.address": ["possible_bit_flips_max_confidence",
+                                      "_cardinality.install_time"]},
             handler=handler, handlerdata=informative).wait()
     except Exception as exc:  # pragma: no cover - network; never break a seed
         logger.warning("sigage: page-aligned split failed for %r: %s", signature, exc)
@@ -1016,6 +1069,8 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         kept = sum(r.get("count") or 0 for r in rows if isinstance(r, dict))
         aligned = max(0, flips - kept)
         flips = flips - aligned
+        shared = _shared_address_flips((rest.get("facets") or {}).get("address"), flips)
+        flips = flips - shared
     broken = _sum("cpu_info", keep=lambda t: cpu_model(t) in BROKEN_CPU_MODELS, if_empty=None)
     # The rows the Raptor Lake sum throws away. Already paid for, and they answer the question
     # `broken_cpu_rate` cannot: WHICH processor, and how many different ones.
@@ -1042,6 +1097,7 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         "broken_cpu_reports": broken,
         "bit_flip_rate": None if flips is None else flips / total,
         "bit_flip_aligned": aligned if flips is not None else None,
+        "bit_flip_shared": shared if flips is not None else None,
         "broken_cpu_rate": None if broken is None else broken / total,
         "cpu_reports": cpu_reports or None,
         "cpu_terms": len(grouped) or None,

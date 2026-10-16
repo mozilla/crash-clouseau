@@ -859,7 +859,19 @@ def build_spike_brief(esc, light=False):
     brief["classic_runs"] = classic_runs(siblings, esc.buildid, esc.channel)
     brief["stacks"] = _stacks(uuid, siblings, esc, seed)
     brief["daily"] = _daily_by_channel(esc.product, siblings)
+    brief["coloaded"] = _coloaded(esc, siblings, seed)
     return brief
+
+
+def _coloaded(esc, siblings, seed):
+    """Compare loaded modules using the representative crash's scope."""
+    from crashclouseau import coloaded
+
+    raw = seed.get("raw_crash") or {}
+    names = [esc.signature] + [s for s in siblings if s != esc.signature]
+    return coloaded.for_signature(names, esc.product, esc.channel,
+                                  raw.get("version") or seed.get("version"),
+                                  raw.get("process_type"), raw.get("os_name"))
 
 
 _DAILY_DAYS = 28
@@ -988,6 +1000,7 @@ def _public_brief(brief):
         "window_extent": cands.get("window_extent"),
         "is_hang": brief.get("is_hang"),
         "daily": brief.get("daily"),
+        "coloaded": brief.get("coloaded"),
         "trend_sentence": brief.get("trend_sentence"),
         "version_step": brief.get("version_step"),
         "first_seen_ever": brief.get("first_seen_ever"),

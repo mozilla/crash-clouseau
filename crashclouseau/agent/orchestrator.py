@@ -3695,6 +3695,7 @@ def _apply_bit_flip_gate(dossier, seed, before_run=False):
     sample = noise.get("reports")
     flip_rate = noise.get("bit_flip_rate")
     flip_aligned = noise.get("bit_flip_aligned")
+    flip_shared = noise.get("bit_flip_shared")
     cpu_rate = noise.get("broken_cpu_rate")
     # Apply the same page-alignment exclusion as the signature-level count.
     address = raw.get("address") or ((raw.get("json_dump") or {}).get("crash_info") or {}).get(
@@ -3724,6 +3725,8 @@ def _apply_bit_flip_gate(dossier, seed, before_run=False):
         flags["signature_bit_flip_rate"] = round(flip_rate, 3)
     if flip_aligned:
         flags["signature_bit_flip_aligned"] = flip_aligned
+    if flip_shared:
+        flags["signature_bit_flip_shared"] = flip_shared
     if confidence is not None and aligned:
         flags["possible_bit_flip_page_aligned"] = True
     if cpu_rate is not None:
@@ -3834,7 +3837,7 @@ def _apply_bit_flip_gate(dossier, seed, before_run=False):
         bits = [
             b for b in (
                 _share(flip_rate, "carry a Socorro bit-flip annotation{}".format(
-                    sigage.flip_discount_phrase(flip_aligned)), pop_flip),
+                    sigage.flip_discount_phrase(flip_aligned, flip_shared)), pop_flip),
                 _share(cpu_rate, "come from a known-defective Raptor Lake CPU", pop_cpu,
                        extra="meta bug 1975808"),
             ) if b is not None

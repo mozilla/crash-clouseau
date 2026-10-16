@@ -622,7 +622,7 @@ class TestPageAlignedFlipsSayNothing(unittest.TestCase):
         self.assertEqual(out["bit_flip_rate"], 0.0)
         self.assertEqual(out["bit_flip_aligned"], 124)
         self.assertEqual(calls[1]["address"], "!$000")
-        self.assertEqual(calls[1]["_facets"], ["possible_bit_flips_max_confidence"])
+        self.assertEqual(calls[1]["_facets"], ["possible_bit_flips_max_confidence", "address"])
         self.assertEqual(calls[1]["release_channel"], calls[0]["release_channel"])
 
     def test_the_share_stays_over_every_report(self):
@@ -660,6 +660,61 @@ class TestPageAlignedFlipsSayNothing(unittest.TestCase):
             "signature_hardware_sample": 124, "signature_bit_flip_rate": 0.5,
             "signature_bit_flip_aligned": 40}, "nightly", "Firefox")
         self.assertIn("annotation, not counting 40 on a page-aligned fault address", note)
+
+    @staticmethod
+    def _by_address(total, flips, *addresses):
+        rows = [{"term": a, "count": n, "facets": {
+            "cardinality_install_time": {"value": installs},
+            "possible_bit_flips_max_confidence": [{"term": 25, "count": f}] if f else []}}
+            for a, n, installs, f in addresses]
+        return {"total": total, "facets": {
+            "possible_bit_flips_max_confidence": [{"term": 25, "count": flips}],
+            "address": rows}}
+
+    def test_shared_address_floor(self):
+        self.assertEqual(sigage.shared_address_floor(0), 2)
+        self.assertEqual(sigage.shared_address_floor(1), 2)
+        floors = [sigage.shared_address_floor(n) for n in (2, 10, 100, 1000, 100000)]
+        self.assertEqual(floors, sorted(floors))
+        for n in (10, 100, 1000):
+            self.assertGreater(sigage.shared_address_floor(n), n / 32)
+
+    def test_flips_on_a_widely_shared_address_are_not_counted(self):
+        out, _ = self._lookup(self._flips(200, 80), self._by_address(
+            200, 80, ("0xb4", 150, 140, 76), ("0x7ff6fb034c43", 1, 1, 1),
+            ("0x7ff6fb0349a1", 3, 1, 3)))
+        self.assertEqual(out["bit_flip_shared"], 76)
+        self.assertEqual(out["bit_flip_reports"], 4)
+        self.assertAlmostEqual(out["bit_flip_rate"], 4 / 200)
+        self.assertFalse(orch._signature_is_mostly_hardware(
+            out["reports"], out["bit_flip_rate"], 0.0, _cfg()))
+
+    def test_flips_scattered_over_a_few_installs_are_counted(self):
+        out, _ = self._lookup(self._flips(100, 60), self._by_address(
+            100, 60, ("0x100000008", 12, 4, 12), ("0x800000008", 10, 3, 10),
+            ("0x8", 30, 25, 0)))
+        self.assertEqual(out["bit_flip_shared"], 0)
+        self.assertAlmostEqual(out["bit_flip_rate"], 0.6)
+
+    def test_the_cpu_arm_ignores_shared_addresses(self):
+        noise = dict(_noise(reports=900, flip=0.0, cpu=0.99), bit_flip_shared=850)
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=900, hardware_noise=noise))
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+        self.assertEqual(d.corroborations["signature_bit_flip_shared"], 850)
+
+    def test_the_reason_says_shared_flips_were_not_counted(self):
+        noise = dict(_noise(reports=124, flip=0.5, cpu=0.0), bit_flip_shared=30)
+        d = _lead()
+        orch._apply_bit_flip_gate(d, _seed(confidence=None, reports=124, hardware_noise=noise))
+        phrase = "not counting 30 on a fault address shared by many installations"
+        self.assertIn(phrase, d.verdict.abstain_reason)
+        self.assertIn(phrase, "\n".join(triage._hardware_noise_lines(
+            {"hardware_noise": noise, "channel": "nightly", "product": "Firefox"})))
+        note = report_bug.build_hardware_note({
+            "signature_hardware_sample": 124, "signature_bit_flip_rate": 0.5,
+            "signature_bit_flip_shared": 30}, "nightly", "Firefox")
+        self.assertIn(phrase, note)
 
     def test_a_page_aligned_singleton_is_not_suppressed_on_its_flip(self):
         seed = _seed()
