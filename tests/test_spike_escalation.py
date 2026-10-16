@@ -341,6 +341,8 @@ class TestComponent(unittest.TestCase):
                 mock.patch.object(se, "_component_from_signature_bugs",
                                   return_value=(None, None)):
             self.assertEqual(se.resolve_component(f, "sig", "Firefox"),
+                             ("Core", "General", "the investigator's product"))
+            self.assertEqual(se.resolve_component(None, "sig", "Firefox"),
                              ("Core", "General", "fallback"))
 
     def test_another_applications_product_is_never_used(self):
@@ -354,6 +356,86 @@ class TestComponent(unittest.TestCase):
         f = SpikeFindings(summary="S", product="Core", component="Graphics")
         with mock.patch.object(se, "_components_of", return_value=None):
             self.assertEqual(se.resolve_component(f, "sig", "Firefox")[:2], ("Core", "Graphics"))
+
+    _RULES = {
+        "third_party/application-services/": ["Application Services", "General"],
+        "toolkit/components/uniffi-bindgen-gecko-js/": ["Toolkit", "UniFFI Bindings"],
+        "comm/": ["MailNews Core", "Database"],
+        "image/": ["Core", "Graphics: ImageLib"],
+    }
+    _ACTIVE = {"Application Services": {"General", "Sync"}, "Toolkit": {"UniFFI Bindings"},
+               "Core": {"General", "Graphics: ImageLib"}, "Firefox for Android": {"General"}}
+
+    def _resolve(self, findings, crash_product="Fenix", frames=(), rules=None):
+        stack = {"frames": [{"filename": f} for f in frames]}
+        with mock.patch.object(se, "_components_of", side_effect=self._ACTIVE.get), \
+                mock.patch.object(se, "_component_from_signature_bugs",
+                                  return_value=(None, None)), \
+                mock.patch.object(se.bugcomponents, "_load",
+                                  return_value=self._RULES if rules is None else rules) as load:
+            out = se.resolve_component(findings, "sig", crash_product, stack)
+        self.assertLessEqual(load.call_count, 1)
+        return out
+
+    def _viaduct(self, sources=()):
+        return SpikeFindings(summary="S", product="Application Services", component="Viaduct",
+                             evidence=[{"claim": "c", "source": s} for s in sources])
+
+    def test_the_cited_files_moz_build_names_the_component(self):
+        f = self._viaduct([
+            "third_party/application-services/components/viaduct/FetchBackend.kt@98fd4e220ec9:54",
+            "facets install_time, nightly, 30d"])
+        self.assertEqual(self._resolve(f, frames=["toolkit/components/uniffi-bindgen-gecko-js/"
+                                                  "viaduct.kt"] * 4),
+                         ("Application Services", "General", "moz.build of the cited files"))
+
+    def test_the_investigators_product_outranks_another_products_stack(self):
+        frames = ["toolkit/components/uniffi-bindgen-gecko-js/viaduct.kt"] * 4
+        self.assertEqual(self._resolve(self._viaduct(), frames=frames),
+                         ("Application Services", "General", "the investigator's product"))
+        self.assertEqual(self._resolve(None, frames=frames),
+                         ("Toolkit", "UniFFI Bindings", "moz.build of the stack"))
+
+    def test_the_stack_names_the_component_without_findings(self):
+        frames = ["mfbt/Assertions.h", "image/Image.cpp", "image/test/gtest/T.cpp"]
+        self.assertEqual(self._resolve(None, "Firefox", frames),
+                         ("Core", "Graphics: ImageLib", "moz.build of the stack"))
+
+    def test_another_applications_code_component_is_never_used(self):
+        frames = ["comm/mailnews/base/nsMsgDB.cpp"]
+        self.assertEqual(self._resolve(None, "Firefox", frames), ("Core", "General", "fallback"))
+
+    def test_an_inactive_code_component_is_never_used(self):
+        self._ACTIVE = dict(self._ACTIVE, Core={"General"})
+        self.assertEqual(self._resolve(None, "Firefox", ["image/Image.cpp"]),
+                         ("Core", "General", "fallback"))
+
+    def test_an_unavailable_component_map_is_loaded_once(self):
+        frames = ["image/Image.cpp"] * 50
+        with mock.patch.object(se.bugcomponents, "component_for") as lookup:
+            self.assertEqual(self._resolve(None, "Firefox", frames, rules={}),
+                             ("Core", "General", "fallback"))
+        lookup.assert_not_called()
+
+    def test_the_stack_window_counts_resolvable_frames(self):
+        frames = ["image/Image.cpp"] + ["toolkit/components/uniffi-bindgen-gecko-js/viaduct.kt"] * 20
+        with mock.patch.object(se.bugcomponents, "STACK_WINDOW", 1):
+            self.assertEqual(self._resolve(None, "Firefox", frames),
+                             ("Core", "Graphics: ImageLib", "moz.build of the stack"))
+
+    def test_the_fallback_follows_the_crash_product(self):
+        self.assertEqual(self._resolve(None, "Fenix"), ("Firefox for Android", "General", "fallback"))
+        self.assertEqual(self._resolve(None, "Firefox"), ("Core", "General", "fallback"))
+
+    def test_cited_paths(self):
+        f = self._viaduct([
+            "https://searchfox.org/mozilla-central/source/image/Image.cpp#120",
+            "https://hg.mozilla.org/mozilla-central/file/abcdef012345/netwerk/base/nsIO.cpp",
+            "hg 0123456789ab + `dom/base/Document.cpp`; image/Image.cpp@abc:3",
+            "file_history FetchBackend.kt (nightly)", "facets version 157.0/157.0.1", "bug 1"])
+        self.assertEqual(se._cited_paths(f),
+                         ["image/Image.cpp", "netwerk/base/nsIO.cpp", "dom/base/Document.cpp"])
+        self.assertEqual(se._cited_paths(None), [])
 
     def test_the_signature_bugs_vote(self):
         bugs = [

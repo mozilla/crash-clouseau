@@ -39,8 +39,8 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    gets no comment if it already names a regressor. ``_repeat_decline`` checks filings across
    signatures and channels: after an analysis, another comment requires a new grounded
    medium-or-higher culprit; after volume-only filings, it requires the first analysis.
-   Unreadable filing history requests a retry. For new bugs, ``resolve_component`` tries the
-   investigator's product::component, the signature's existing bugs, then ``Core :: General``.
+   Unreadable filing history requests a retry. New-bug components fall back to source
+   ownership and product defaults; see ``resolve_component``.
    New bugs note rejected venues. Memory-safety signals and nonpublic references remaining
    after list-item removal require a restricted venue; a missing security group prevents
    a new restricted filing.
@@ -63,12 +63,13 @@ daily-cap key, and a spike bug is a different kind of bug with its own table
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 from crashclouseau import (
-    app, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug, samesite,
-    sensitive, sigage, sigtrend, spike_report, spikes, utils, worker,
+    app, bugcomponents, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug,
+    samesite, sensitive, sigage, sigtrend, spike_report, spikes, utils, worker,
 )
 from crashclouseau.logger import logger
 
@@ -86,6 +87,11 @@ _MIN_NODE = 7
 # product -> {component name} of the ACTIVE components, memoised for the process. A missing
 # product reads as unknown (None), never as "no components".
 _COMPONENTS_CACHE: dict = {}
+# Overrides for the default Core :: General fallback.
+_FALLBACK_COMPONENT = {"Fenix": ("Firefox for Android", "General")}
+# Strip Searchfox/hg URL prefixes; extract paths without revision or line suffixes.
+_SOURCE_URL = re.compile(r"https?://\S*?/(?:source|(?:rev|file|raw-file)/[0-9a-fA-F]+)/")
+_SOURCE_PATH = re.compile(r"(?<![\w./+-])([A-Za-z_][\w.+-]*/(?:[\w.+-]+/)*[\w+-]+(?:\.[\w+-]+)+)")
 
 
 # --------------------------------------------------------------------------- #
@@ -1110,7 +1116,6 @@ def _components_of(product):
         return _COMPONENTS_CACHE[product]
     names = None
     try:
-        import re
         base = re.sub(r"/bug/?$", "", bugzilla_apply._bz_rest())
         r = net.get("{}/product".format(base),
                     params={"names": product,
@@ -1159,10 +1164,49 @@ def _component_from_signature_bugs(signature, crash_product):
     return pair
 
 
-def resolve_component(findings, signature, crash_product):
-    """``(product, component, how)``: the investigator's pair when Bugzilla knows it, else the
-    signature's existing bugs' pair, else ``Core :: General``. A spike is filed somewhere a human
-    can move it from, never left unfiled over a component."""
+def _cited_paths(findings):
+    """Extract unique file paths from evidence sources, in citation order."""
+    paths = []
+    for ev in (findings.evidence if findings is not None else ()):
+        for path in _SOURCE_PATH.findall(_SOURCE_URL.sub("", ev.source or "")):
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def _code_components(paths, foreign, rules, limit=None):
+    """Map paths outside tests and STACK_SKIP; limit resolved pairs before filtering.
+    Exclude foreign products and check Bugzilla's active list when available."""
+    pcs = [tuple(pc) for pc in (
+        bugcomponents.component_for(p, rules) for p in paths
+        if p and not p.startswith(bugcomponents.STACK_SKIP) and not bugcomponents.is_test(p))
+        if pc][:limit]
+    out = []
+    for pc in pcs:
+        if pc[0] in foreign:
+            continue
+        components = _components_of(pc[0])
+        if components is None or pc[1] in components:
+            out.append(pc)
+    return out
+
+
+def _most_common(pcs):
+    """Most frequent pair; ties favor the first occurrence."""
+    if not pcs:
+        return None
+    counts = Counter(pcs)
+    best = max(counts.values())
+    return next(pc for pc in pcs if counts[pc] == best)
+
+
+def resolve_component(findings, signature, crash_product, stack=None):
+    """Return ``(product, component, how)`` for a new bug.
+
+    Prefer the investigator's pair, then signature bugs. Next try cited files and stack
+    frames within the investigator's product, then its General component. Otherwise try
+    cited files, stack frames, then the crash-product default.
+    """
     foreign = config.get_other_app_products(crash_product)
     if findings is not None and findings.product and findings.component:
         if findings.product in foreign:
@@ -1182,7 +1226,26 @@ def resolve_component(findings, signature, crash_product):
     product, component = _component_from_signature_bugs(signature, crash_product)
     if product and component:
         return product, component, "the signature's existing bugs"
-    return "Core", "General", "fallback"
+    named = findings.product if findings is not None and findings.product not in foreign else None
+    cited = _cited_paths(findings)
+    frames = [f.get("filename") for f in (stack or {}).get("frames") or []]
+    # Load once: failed fetches are not cached.
+    rules = bugcomponents._load() if cited or frames else {}
+    code = ((_code_components(cited, foreign, rules), "moz.build of the cited files"),
+            (_code_components(frames, foreign, rules, bugcomponents.STACK_WINDOW),
+             "moz.build of the stack")) if rules else ()
+    for pcs, how in code:
+        pc = _most_common([pc for pc in pcs if pc[0] == named])
+        if pc:
+            return pc[0], pc[1], how
+    if named and "General" in (_components_of(named) or ()):
+        return named, "General", "the investigator's product"
+    for pcs, how in code:
+        pc = _most_common(pcs)
+        if pc:
+            return pc[0], pc[1], how
+    product, component = _FALLBACK_COMPONENT.get(crash_product, ("Core", "General"))
+    return product, component, "fallback"
 
 
 def _pick_venue(existing, build_day):
@@ -1556,7 +1619,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         except Exception:  # pragma: no cover - a BMO read inside the ladder
             person = {}
     if venue is None:
-        bz_product, component, how = resolve_component(findings, signature, product)
+        bz_product, component, how = resolve_component(findings, signature, product, stack)
     else:
         bz_product, component, how = None, None, "existing bug"
     email = ""
