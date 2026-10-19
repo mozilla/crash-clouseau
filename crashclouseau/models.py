@@ -71,10 +71,10 @@ DOSSIER_SCHEMA_VERSION = 1
 # is equally true of every report in the cluster, so it closes the cluster exactly as the backout
 # gate does. Re-deriving that answer costs ~$3 a report and cannot come out differently.
 #
-# Cooldown decisions must keep the cluster open so later crashes can be reconsidered.
+# Keep cooldown and hot-engine clusters open so later crashes can recheck the rate.
 _INSTANCE_SUPPRESSED = (
     "bad_machine_suppressed", "possible_bit_flip_suppressed", "broken_cpu_suppressed",
-    "repeat_cooldown_suppressed",
+    "repeat_cooldown_suppressed", "hot_engine_suppressed",
 )
 
 # ``abstain_reason`` prefixes meaning CLOUSEAU broke — the agent's handoff had no readable
@@ -4653,13 +4653,11 @@ class SignatureDaily(db.Model):
             return 0
 
     @staticmethod
-    def series(product, channel, signature, start, end):
+    def series(product, channel, signature, start, end, strict=False):
         """``{day: (reports, installs)}`` for one signature over an inclusive day range.
 
-        A day with no row is a day with no crash, and the caller must read it as zero rather
-        than as missing — which is only sound because the collector writes a ChannelDaily row
-        for every day it visits, so "no signature row" and "never collected" are told apart
-        there rather than here."""
+        Use ChannelDaily coverage to distinguish zero crashes from uncollected days.
+        A failed read returns ``{}``, or re-raises when ``strict``."""
         try:
             rows = (
                 db.session.query(SignatureDaily.day, SignatureDaily.reports,
@@ -4674,6 +4672,8 @@ class SignatureDaily(db.Model):
         except Exception:
             logger.error("Cannot read the signature daily series", exc_info=True)
             db.session.rollback()
+            if strict:
+                raise
             return {}
 
     @staticmethod
@@ -4701,11 +4701,12 @@ class SignatureDaily(db.Model):
         return out
 
     @staticmethod
-    def first_day(product, channel, signature):
-        """The earliest day the rollup has a row of this signature on the channel, or ``None``
-        (no row, or the table could not be read). The rate statistic starts a signature's
-        baseline here when it is later than the nominal baseline start: a rate over days the
-        signature did not exist is not its rate (``sigtrend._facts_from_series``)."""
+    def first_day(product, channel, signature, strict=False):
+        """Earliest stored day for this signature on the channel, or ``None``.
+
+        Used to exclude days before the first recorded crash from the rate baseline.
+        Failed reads return ``None``, or re-raise when ``strict``.
+        """
         try:
             return (
                 db.session.query(func.min(SignatureDaily.day))
@@ -4717,6 +4718,8 @@ class SignatureDaily(db.Model):
         except Exception:
             logger.error("Cannot read the signature's first rollup day", exc_info=True)
             db.session.rollback()
+            if strict:
+                raise
             return None
 
     @staticmethod

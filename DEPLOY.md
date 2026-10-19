@@ -629,6 +629,27 @@ the deterministic awaited-work title, not model-authored claim text.
 The gate is unconditional. Monitor `oom_not_actionable` corroborations and the log message
 `actionable verdict with unsupported OOM evidence` after deployment.
 
+## Old signatures in engine code (2026-10-19)
+
+The hot-engine gate suppresses a crash when:
+
+- the first frame with a source file matches `agent.hot_engine.paths` (default `js/src/`);
+- the signature predates the crash build by more than `sigage.NEW_SIGNATURE_DAYS`;
+- the crash is not an OOM and `_frequency_regression_reasons` is empty;
+- `sigtrend.rate_unchanged` returns true and `_spike_reopens` finds no spike.
+
+Unknown rates or spike lookups leave the crash unsuppressed. Rate checks require channel
+coverage; release and ESR are unsupported. At least `sigtrend.MIN_INSTALLS` installations
+after a silent baseline count as a change.
+
+Before triage, eligible crashes receive a zero-cost abstain unless an incomplete fix may file.
+Forced runs bypass this shortcut; the same suppression predicate also runs after triage.
+`hot_engine_suppressed` blocks filing and is excluded from cluster deduplication so later
+crashes can recheck the rate. The verdict uses `abstain_kind: hardware` as a policy classification.
+
+Set `HOT_ENGINE_GATE_ENABLED=0` to disable the gate. Pre-run decisions record
+`decided_before_run: hot_engine_gate`.
+
 ## Affected versions on a bug we file (2026-09-18)
 
 Relman feedback, relayed by Calixte: "Could clouseau set the affected versions automatically?

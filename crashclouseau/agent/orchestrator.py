@@ -3237,6 +3237,89 @@ def _apply_bad_machine_gate(dossier, seed):
     )
 
 
+def _hot_engine_suppression(seed):
+    """Return ``(path, age_days)`` for an old engine signature eligible for suppression.
+
+    Require a measured non-rising rate, no frequency-regression reason, no OOM,
+    and no spike. Unknown rate or spike data leaves the crash unsuppressed.
+    """
+    cfg = config.get_agent_hot_engine()
+    if not cfg["enabled"]:
+        return None
+    seed = seed or {}
+    from crashclouseau import sigage, sigtrend
+
+    age = sigage.signature_age_days(seed.get("signature_first_seen_ever"), seed.get("buildid"))
+    if age is None or age <= sigage.NEW_SIGNATURE_DAYS:
+        return None
+    path = next((str(f.get("filename")).strip() for f in seed.get("frames") or []
+                 if str(f.get("filename") or "").strip()), "")
+    if not path.startswith(cfg["paths"]):
+        return None
+    if utils.is_oom_crash(seed.get("signature"), seed.get("raw_crash")):
+        return None
+    if _frequency_regression_reasons(seed):
+        return None
+    try:
+        unchanged = sigtrend.rate_unchanged(seed.get("product"), seed.get("channel"),
+                                            seed.get("signature") or "")
+    except Exception:
+        logger.warning("agent: rate lookup failed for %s; not suppressed", seed.get("uuid"),
+                       exc_info=True)
+        _rollback_quietly()
+        return None
+    if unchanged is not True or _spike_reopens(seed):
+        return None
+    return path, int(age)
+
+
+def _hot_engine_verdict(path, age, prior=None):
+    """The hot-engine abstain, keeping ``prior``'s claims and title."""
+    return Verdict(
+        decision=Decision.abstain,
+        confidence=Confidence.low,
+        abstain_reason=(
+            "this crash is in {}, code that runs constantly, on a signature first seen {} days "
+            "before this build whose rate has not changed: a steady low rate there is the "
+            "profile of failing hardware, not of a code defect; suppressed rather than "
+            "reported".format(path, age)),
+        abstain_kind=AbstainKind.hardware,
+        mechanism=getattr(prior, "mechanism", None),
+        consistency=getattr(prior, "consistency", None),
+        title=getattr(prior, "title", "") or "",
+    )
+
+
+def _apply_hot_engine_gate(dossier, seed):
+    """Suppress a reported verdict when ``_hot_engine_suppression`` holds."""
+    v = dossier.verdict if dossier is not None else None
+    if v is None or v.decision == Decision.abstain:
+        return
+    found = _hot_engine_suppression(seed)
+    if found is None:
+        return
+    dossier.verdict = _hot_engine_verdict(*found, prior=v)
+    dossier.corroborations = {**(dossier.corroborations or {}), "hot_engine_suppressed": True}
+    logger.info("agent: %s in %s, %d days old, no rate change -> %s/%s suppressed for %s",
+                (seed or {}).get("signature"), found[0], found[1], v.decision.value,
+                v.confidence.value, (seed or {}).get("uuid"))
+
+
+def _hot_engine_decided_before_run(seed):
+    """Return a zero-cost hot-engine abstain, or ``None`` to run triage.
+
+    Run triage when an incomplete fix could make an abstain fileable."""
+    from crashclouseau.agent.result import CrashTriageResult
+    from crashclouseau.agent.schema import Dossier
+
+    found = _hot_engine_suppression(seed)
+    if found is None or _incomplete_fix_may_file(seed):
+        return None
+    probe = Dossier(verdict=_hot_engine_verdict(*found))
+    probe.corroborations = {**probe.corroborations, "hot_engine_suppressed": True}
+    return CrashTriageResult(dossier=probe, num_turns=0, total_cost_usd=0.0)
+
+
 def _candidate_window_membership(dossier, seed):
     """Was the chosen candidate in the build's pushlog window? ``True`` / ``False``, or ``None``
     when there is no candidate or no window to consult. The one computation behind
@@ -4736,6 +4819,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # are DISJOINT on real filings — the ones carrying a flip score have a clean machine, and
         # the scattering ones have no flip score at all.
         _apply_bad_machine_gate(result.dossier, seed)
+        _apply_hot_engine_gate(result.dossier, seed)
         # The mechanism runs through a thread this process never had (bug 2064436). After the
         # hardware gates because it is a weaker instrument than they are — it reads the verdict's
         # prose rather than a Socorro field — and so it is a clamp, not a suppression.
@@ -5399,6 +5483,8 @@ def run_evidence_agent(uuid, force=False):
         decided, decided_by = None, None
         if not force:
             decided, decided_by = _hardware_decided_before_run(seed), "bit_flip_gate"
+            if decided is None:
+                decided, decided_by = _hot_engine_decided_before_run(seed), "hot_engine_gate"
             if decided is None:
                 decided, decided_by = _cooldown_decided_before_run(seed), "repeat_cooldown"
         if decided is not None:

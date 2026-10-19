@@ -1614,6 +1614,17 @@ def get_agent_bad_machine():
     }
 
 
+def get_agent_hot_engine():
+    """Hot-engine suppression settings; HOT_ENGINE_GATE_ENABLED overrides the enabled flag.
+
+    ``paths`` matches the first stack frame with a source file."""
+    a = get_agent().get("hot_engine", {})
+    return {
+        "enabled": _env_bool("HOT_ENGINE_GATE_ENABLED", a.get("enabled", True)),
+        "paths": tuple(a.get("paths", ("js/src/",))),
+    }
+
+
 def _normalize_calibration_table(raw):
     """Coerce a rung -> P map to ``{int rung score: float P}``; drop non-numeric entries.
     Accepts either the flat map or ``eval.calibrate``'s wrapper (a ``calibration_table`` key)."""

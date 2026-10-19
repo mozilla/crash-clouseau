@@ -265,6 +265,9 @@ REGISTRY = {
         "Deliberately NOT instance-scoped and deliberately not in `_INSTANCE_SUPPRESSED`: it "
         "says the SIGNATURE is mostly hardware error, which is equally true of every report in "
         "the cluster, and re-deriving it per crash costs ~$3 for an answer that cannot differ."),
+    "hot_engine_suppressed": (
+        "suppression", ("policy:_INSTANCE_SUPPRESSED",),
+        "Holds only while the rate is unchanged, so later crashes of the cluster are re-checked."),
     "repeat_cooldown_suppressed": (
         "suppression", ("policy:_INSTANCE_SUPPRESSED",),
         "Pre-run cooldown decision; excluded from cluster dedup so later crashes can reopen triage."),

@@ -417,6 +417,59 @@ def rising_candidates(product, channel, asof=None, exclude=()):
     return out
 
 
+def _bounds(asof, window, baseline, first_day=None):
+    """``(win_start, win_end, base_start, base_end)``; the baseline starts no earlier than
+    ``first_day``."""
+    win_start = asof - timedelta(days=window - 1)
+    base_end = win_start - timedelta(days=1)
+    base_start = base_end - timedelta(days=baseline - 1)
+    if first_day is not None and first_day > base_start:
+        base_start = first_day
+    return win_start, asof, base_start, base_end
+
+
+def rate_unchanged(product, channel, signature, asof=None,
+                   window=WINDOW_DAYS, baseline=BASELINE_DAYS):
+    """Return whether the rollup measured the signature's rate as not rising, or ``None``.
+
+    ``None`` means unmeasured: an uncollected channel, missing exposure, thin coverage or a
+    failed read. ``MIN_INSTALLS`` installations after a silent baseline are a change."""
+    if channel not in SUPPORTED_CHANNELS:
+        return None
+    asof = asof or date.today()
+    _ws, win_end, base_start, _be = _bounds(asof, window, baseline)
+    exposure = models.ChannelDaily.series(product, channel, base_start, win_end)
+    if not exposure:
+        return None
+    try:
+        series = models.SignatureDaily.series(product, channel, signature, base_start, win_end,
+                                              strict=True)
+        first_day = models.SignatureDaily.first_day(product, channel, signature, strict=True)
+    except Exception:
+        return None
+    return _unchanged_from_series(series, exposure, asof, window=window, baseline=baseline,
+                                  first_day=first_day)
+
+
+def _unchanged_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASELINE_DAYS,
+                           first_day=None):
+    """``rate_unchanged``'s arithmetic over an already-fetched series and exposure."""
+    facts = _facts_from_series(series, exposure, asof, window=window, baseline=baseline,
+                               first_day=first_day)
+    if facts:
+        # No ratio means a silent baseline: these installations are a reappearance.
+        if "signature_trend_ratio" not in facts:
+            return False
+        return not is_rising(facts)
+    win_start, win_end, base_start, base_end = _bounds(asof, window, baseline, first_day)
+    w_ins, _wr, w_exp, w_days = _window_sums(series, exposure, win_start, win_end)
+    _bi, _br, b_exp, b_days = _window_sums(series, exposure, base_start, base_end)
+    if b_days < MIN_BASELINE_COVERAGE or w_days < MIN_WINDOW_COVERAGE or not w_exp or not b_exp:
+        return None
+    # Below MIN_INSTALLS, facts are empty even when both periods have coverage.
+    return True if w_ins < WORDING_MIN_INSTALLS else None
+
+
 def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASELINE_DAYS,
                        first_day=None):
     """``trend_facts``' arithmetic over an already-fetched ``{day: (reports, installs)}`` series
@@ -430,13 +483,7 @@ def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASE
     signature younger than ``MIN_BASELINE_COVERAGE`` days before the window has no facts at
     all -- a novelty is not a rate change, and it has its own instruments. ``None`` (unknown, or
     a signature older than the rollup) leaves the nominal baseline."""
-    win_end = asof
-    win_start = asof - timedelta(days=window - 1)
-    base_end = win_start - timedelta(days=1)
-    base_start = base_end - timedelta(days=baseline - 1)
-    if first_day is not None and first_day > base_start:
-        base_start = first_day
-
+    win_start, win_end, base_start, base_end = _bounds(asof, window, baseline, first_day)
     w_ins, w_rep, w_exp, w_days = _window_sums(series, exposure, win_start, win_end)
     b_ins, b_rep, b_exp, b_days = _window_sums(series, exposure, base_start, base_end)
     if b_days < MIN_BASELINE_COVERAGE or w_days < MIN_WINDOW_COVERAGE:

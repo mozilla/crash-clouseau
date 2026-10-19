@@ -1591,6 +1591,25 @@ class TestRunEvidenceAgent(unittest.TestCase):
         autofile.assert_called_once()
         self.assertNotIn("reap_attempts", payload)
 
+    def test_a_flat_hot_engine_signature_is_decided_without_a_run(self):
+        seed = dict(_SEED, product="Firefox", buildid="20261019073400",
+                    signature_first_seen_ever="20190619235516",
+                    frames=[{"filename": "js/src/vm/BytecodeUtil.cpp"}])
+        with mock.patch.object(orch.config, "get_agent_hot_engine",
+                               return_value={"enabled": True, "paths": ("js/src/",)}), \
+                mock.patch("crashclouseau.sigtrend.rate_unchanged", return_value=True), \
+                mock.patch.object(orch, "_spike_reopens", return_value=False), \
+                mock.patch.object(orch, "_hardware_decided_before_run", return_value=None):
+            triage_run, MDoss, MVerd, autofile = self._hardware_run(seed)
+        triage_run.assert_not_called()
+        done = self._done_upsert(MDoss)
+        self.assertEqual(done.kwargs["cost_usd"], 0.0)
+        payload = done.kwargs["payload"]
+        self.assertEqual(payload["decided_before_run"], "hot_engine_gate")
+        self.assertIs(payload["dossier"]["corroborations"]["hot_engine_suppressed"], True)
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
+        autofile.assert_called_once()
+
     def test_a_signature_a_fixed_bug_owns_still_runs(self):
         # Preserve the filer's incomplete-fix path for abstains.
         fix = {"id": 2062219, "node": "abcdef123456", "pushdate": "2026-09-01"}

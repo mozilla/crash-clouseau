@@ -291,6 +291,75 @@ class TestTheBaselineIsTheSignaturesLifetime(unittest.TestCase):
             self.assertEqual(facts["signature_trend_baseline_days"], 56, first)
 
 
+class TestRateUnchanged(unittest.TestCase):
+    """Distinguish non-rising, rising, and unmeasured rates."""
+
+    ASOF = date(2026, 10, 19)
+
+    def _exposure(self, days=66):
+        return {self.ASOF - timedelta(days=i): (1000, 500) for i in range(days)}
+
+    def _unchanged(self, series, exposure=None, first_offset=None):
+        first = None if first_offset is None else self.ASOF - timedelta(days=first_offset)
+        return sigtrend._unchanged_from_series(series, exposure or self._exposure(), self.ASOF,
+                                               first_day=first)
+
+    def test_too_few_installs_to_rise_is_a_measurement(self):
+        series = {self.ASOF - timedelta(days=i): (1, 1) for i in (59, 56, 35, 29, 26, 17, 15, 0)}
+        self.assertEqual(sigtrend._facts_from_series(series, self._exposure(), self.ASOF,
+                                                     first_day=self.ASOF - timedelta(days=59)), {})
+        self.assertIs(self._unchanged(series, first_offset=59), True)
+
+    def test_a_measured_rate_is_judged_by_is_rising(self):
+        flat = {self.ASOF - timedelta(days=i): (1, 1) for i in range(63)}
+        self.assertIs(self._unchanged(flat, first_offset=62), True)
+        rising = {**flat, **{self.ASOF - timedelta(days=i): (5, 5) for i in range(7)}}
+        self.assertIs(self._unchanged(rising, first_offset=62), False)
+
+    def test_a_reappearance_after_a_silent_baseline_is_a_change(self):
+        # Earlier crashes fall outside the baseline; recent crashes are a reappearance.
+        dormant = {self.ASOF - timedelta(days=i): (1, 1) for i in (63, 64, 65)}
+        back = {**dormant, **{self.ASOF - timedelta(days=i): (1, 1) for i in range(5)}}
+        self.assertNotIn("signature_trend_ratio",
+                         sigtrend._facts_from_series(back, self._exposure(), self.ASOF,
+                                                     first_day=self.ASOF - timedelta(days=65)))
+        self.assertIs(self._unchanged(back, first_offset=65), False)
+        three = {**dormant, **{self.ASOF - timedelta(days=i): (1, 1) for i in range(3)}}
+        self.assertIs(self._unchanged(three, first_offset=65), False)
+        # One installation is below MIN_INSTALLS.
+        one = {**dormant, self.ASOF: (1, 1)}
+        self.assertIs(self._unchanged(one, first_offset=65), True)
+
+    def test_an_unmeasured_rate_is_none(self):
+        series = {self.ASOF: (1, 1)}
+        self.assertIsNone(self._unchanged(series, exposure=self._exposure(days=10)),
+                          "a thin baseline is not a flat one")
+        self.assertIsNone(self._unchanged(series, first_offset=4), "too young to have a rate")
+        no_window = {d: v for d, v in self._exposure().items() if (self.ASOF - d).days >= 7}
+        self.assertIsNone(self._unchanged(series, exposure=no_window))
+
+    def test_a_failed_rollup_read_is_unmeasured(self):
+        with mock.patch.object(models.ChannelDaily, "series", return_value=self._exposure()), \
+                mock.patch.object(models.db.session, "query", side_effect=RuntimeError("db")), \
+                mock.patch.object(models.db.session, "rollback"):
+            self.assertIsNone(sigtrend.rate_unchanged("Firefox", "nightly", _SIG, self.ASOF))
+            # Other callers keep their lenient reads.
+            self.assertEqual(models.SignatureDaily.series("Firefox", "nightly", _SIG,
+                                                          self.ASOF, self.ASOF), {})
+            self.assertIsNone(models.SignatureDaily.first_day("Firefox", "nightly", _SIG))
+            # A failed first-day lookup must also leave the rate unmeasured.
+            with mock.patch.object(models.SignatureDaily, "series",
+                                   return_value={self.ASOF: (1, 1)}):
+                self.assertIsNone(sigtrend.rate_unchanged("Firefox", "nightly", _SIG, self.ASOF))
+
+    def test_uncollected_channels_and_missing_exposure_are_none(self):
+        with mock.patch.object(models.ChannelDaily, "series", return_value={}) as exposure:
+            self.assertIsNone(sigtrend.rate_unchanged("Firefox", "release", _SIG, self.ASOF))
+            exposure.assert_not_called()
+            self.assertIsNone(sigtrend.rate_unchanged("Firefox", "nightly", _SIG, self.ASOF))
+            exposure.assert_called_once()
+
+
 @unittest.skipUnless(_is_postgres(), "the rollup round-trip needs a disposable Postgres backend")
 class TestTrendFactsAgainstARealRollup(unittest.TestCase):
     """The four ways `trend_facts` could lie, each with a row set that would make it."""
