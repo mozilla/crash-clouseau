@@ -271,6 +271,33 @@ def judge_selection(row, product, channel, trend_facts=None, strict=False):
     )
 
 
+def crash_spike(signature, product, channel, buildid, trend):
+    """Return spike facts for the signature's rate or the crash's build day, or None.
+
+    Use ``sigtrend.trend_facts`` for the rate and recorded counts for other picks.
+    Raise ``LookupError`` for a missing selection row, a rate pick without a trend,
+    or unavailable build history.
+    """
+    from . import models
+
+    spike = judge_rate(trend or {}, product, channel)
+    if spike:
+        return spike
+    day = utils.get_build_date(str(buildid)).date().isoformat()
+    # Match the truncation in Selection._row.
+    rows = models.Selection.for_signature(signature[:512], product, channel, limit=30)
+    row = next((r for r in rows if r.get("build_day") == day), None)
+    if row is None:
+        raise LookupError("no selection row for {} on {}".format(signature, day))
+    if row.get("outcome") == utils.RISING_RATE:
+        # Rate picks have no build-day baseline.
+        if not trend:
+            raise LookupError("no trend for the rate pick of {}".format(signature))
+        return None
+    pick = dict(row, outcome=utils.SELECTED, picked=row.get("picked") or buildid)
+    return judge_selection(pick, product, channel, strict=True)
+
+
 def describe(spike, channel=None, build_day=None, buildid=None):
     """One sentence with the numbers, for the prompt and the bug -- the same arithmetic both
     ways, so a model and a human are never shown two different spikes."""

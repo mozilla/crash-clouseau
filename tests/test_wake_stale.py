@@ -47,6 +47,7 @@ class _WakeBase(_Base):
                 "exists": True, "nick": "segun", "real": "Segun", "askable": True}),
             mock.patch.object(report_bug, "_person_for_account", return_value=dict(_OWNER)),
             mock.patch.object(comment_novelty, "check", return_value=dict(_NEW)),
+            mock.patch.object(bugzilla_apply, "_crash_spike", return_value=None),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -103,11 +104,31 @@ class TestTheModes(_WakeBase):
         self.assertEqual(res["wake_stale"]["novelty"], _NEW)
         comment_novelty.check.assert_called_once_with(1961865, "the stale-bug comment")
 
-    def test_a_new_needinfo_needs_no_novelty_check(self):
+    def test_a_new_needinfo_is_checked_too(self):
         res = self._wake(mode="comment")
         self.assertEqual(res["needinfo"], "owner@moz.example")
+        self.assertEqual(res["wake_stale"]["novelty"], _NEW)
+        comment_novelty.check.assert_called_once_with(1961865, "the stale-bug comment")
+
+    def test_nothing_new_is_not_posted_with_a_new_needinfo(self):
+        comment_novelty.check.return_value = {
+            "new_information": False, "reason": "Comments 6, 12 and 13 give both causes.",
+            "cost_usd": 0.09}
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["skipped"]), (False, _DECLINE))
+        self.assertEqual(res["wake_stale"]["skipped"],
+                         "the comment adds nothing to bug 1961865: Comments 6, 12 and 13 give "
+                         "both causes")
+        self.assertEqual((self.puts, self.comments, self.filed), ([], [], []))
+
+    def test_a_spike_needs_no_novelty_check(self):
+        spike = {"kind": "build_day", "count": 2116, "baseline": [360]}
+        bugzilla_apply._crash_spike.return_value = spike
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["wake_stale"]["spike"]), (True, spike))
         self.assertNotIn("novelty", res["wake_stale"])
         comment_novelty.check.assert_not_called()
+        bugzilla_apply._crash_spike.assert_called_once_with(_INFO)
 
     def test_without_a_new_needinfo_nothing_new_is_not_posted(self):
         bugzilla_apply._existing_needinfos.return_value = {"owner@moz.example"}
@@ -434,6 +455,38 @@ class TestTheDeclineRecord(unittest.TestCase):
             orchestrator._autofile("u-1", {"dossier": {}},
                                    {"verdict": "actionable", "confidence": 70})
         self.assertEqual(seen[0]["wake_stale"], wake)
+
+
+class TestTheSpikeLookup(unittest.TestCase):
+    INFO = dict(_INFO, buildid="20261007201254")
+
+    def _spike(self, info=None, judged=None, raises=None):
+        from crashclouseau import sigtrend, spikes
+
+        judge = mock.Mock(return_value=judged, side_effect=raises)
+        with mock.patch.object(sigtrend, "trend_facts", return_value={"t": 1}), \
+                mock.patch.object(spikes, "crash_spike", judge), \
+                mock.patch.object(bugzilla_apply.models.db.session, "rollback") as rollback:
+            return bugzilla_apply._crash_spike(info or self.INFO), judge, rollback
+
+    def test_the_judgment_is_passed_through(self):
+        got, judge, _r = self._spike(judged={"kind": "rate"})
+        self.assertEqual(got, {"kind": "rate"})
+        judge.assert_called_once_with("Foo::Bar", "Firefox", "nightly", "20261007201254",
+                                      {"t": 1})
+
+    def test_an_unjudgeable_crash_is_not_a_spike(self):
+        got, _j, rollback = self._spike(raises=LookupError("no selection row"))
+        self.assertIsNone(got)
+        rollback.assert_not_called()
+        got, _j, rollback = self._spike(raises=RuntimeError("db"))
+        self.assertIsNone(got)
+        rollback.assert_called_once_with()
+
+    def test_missing_crash_fields_are_not_looked_up(self):
+        got, judge, _r = self._spike(info=dict(self.INFO, buildid=None))
+        self.assertIsNone(got)
+        judge.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -545,7 +545,8 @@ Tests: `tests/test_orchestrator.py`, `tests/test_second_opinion_fold.py` and
 The normal filing gates still apply; this setting overrides `comment_on_existing`, including
 `skip`, only on the actionable path.
 
-`bugzilla_apply._wake_stale_bug` targets the first open same-application, non-meta bug when:
+`bugzilla_apply._wake_stale_bug` targets the most discussed open same-application, non-meta bug
+when:
 
 - all such bugs pass the `wake_stale_days` threshold (default 180). Activity is the last
   anonymously visible comment whose creator does not match `_is_automation` (`bot@` or a
@@ -558,6 +559,11 @@ The normal filing gates still apply; this setting overrides `comment_on_existing
 The comment includes the activity date, actionable analysis, and triage-owner ask, without
 requests to resolve the bug. When `needinfo` is enabled, pending flags must be readable; an
 existing request to the owner is preserved. A new flag, when needed, shares the comment's PUT.
+
+Every wake requires a positive `agent.comment_novelty` verdict, including when adding needinfo.
+A confirmed rate or build-day spike bypasses the check, which excludes crash statistics,
+and is recorded as `wake_stale.spike`. An unavailable spike lookup falls back to the novelty
+check; a failed novelty check declines the wake.
 
 Success records `filed_bug` with `mode: comment_on_existing` and `wake_stale` for deduplication.
 Eligibility failures and shadow previews appear in `filing_declined.wake_stale` and on

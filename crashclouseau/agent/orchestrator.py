@@ -4002,23 +4002,12 @@ def _spike_reopens(seed):
     from crashclouseau import spikes
 
     signature, product, channel = seed.get("signature"), seed.get("product"), seed.get("channel")
-    trend = seed.get("signature_trend") or {}
     try:
-        if spikes.judge_rate(trend, product, channel):
-            return True
-        day = utils.get_build_date(str(seed.get("buildid"))).date().isoformat()
-        # Match the truncation in Selection._row.
-        rows = models.Selection.for_signature(signature[:512], product, channel, limit=30)
-        row = next((r for r in rows if r.get("build_day") == day), None)
-        if row is None:
-            logger.warning("agent: no selection row for %s on %s; running",
-                           seed.get("uuid"), day)
-            return True
-        if row.get("outcome") == utils.RISING_RATE:
-            # Rate picks have no baseline; allow triage if the trend is unavailable.
-            return not trend
-        pick = dict(row, outcome=utils.SELECTED, picked=row.get("picked") or seed.get("buildid"))
-        return spikes.judge_selection(pick, product, channel, strict=True) is not None
+        return spikes.crash_spike(signature, product, channel, seed.get("buildid"),
+                                  seed.get("signature_trend") or {}) is not None
+    except LookupError as exc:
+        logger.warning("agent: %s for %s; running", exc, seed.get("uuid"))
+        return True
     except Exception:
         logger.warning("agent: spike lookup failed for %s; running", seed.get("uuid"),
                        exc_info=True)

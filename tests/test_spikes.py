@@ -222,6 +222,42 @@ class TestThePredicate(unittest.TestCase):
         self.assertIn("none of the preceding 3 build-days had any", text)
 
 
+class TestCrashSpike(unittest.TestCase):
+    """Check rate and build-day spikes, including relabelled selections."""
+
+    STRONG = {"signature_trend_ratio": 18.0, "signature_trend_installs": 45,
+              "signature_trend_expected_installs": 2.5, "signature_trend_window_days": 7,
+              "signature_trend_baseline_days": 56}
+
+    def _spike(self, rows, trend=None, product="Firefox", channel="nightly"):
+        with mock.patch.object(models.Selection, "for_signature", return_value=rows), \
+             mock.patch.object(spikes, "build_history", return_value=[]):
+            return spikes.crash_spike("mozilla::Foo::Bar", product, channel, "20260903093145",
+                                      trend or {})
+
+    def test_one_crash_after_quiet_days_is_not_a_spike(self):
+        self.assertIsNone(self._spike([_row(1, [0, 0, 0], 1)]))
+
+    def test_a_build_day_spike(self):
+        row = dict(_row(2116, [360], 1500), channel="release")
+        self.assertEqual(self._spike([row], channel="release")["kind"], "build_day")
+
+    def test_the_label_does_not_matter(self):
+        row = _row(32, [1, 0, 2], 21, outcome=utils.NOT_SPIKING)
+        self.assertIsNotNone(self._spike([row]))
+
+    def test_a_rising_rate_needs_no_row(self):
+        self.assertEqual(self._spike([], trend=self.STRONG)["kind"], "rate")
+
+    def test_what_cannot_be_judged_raises(self):
+        with self.assertRaises(LookupError):
+            self._spike([_row(32, [1, 0, 2], 21, build_day="2026-09-02")])
+        rising = _row(6, [], 6, outcome=utils.RISING_RATE)
+        with self.assertRaises(LookupError):
+            self._spike([rising])
+        self.assertIsNone(self._spike([rising], trend={"signature_trend_installs": 9}))
+
+
 def _versions(counts):
     return {"facets": {"version": [{"term": v, "count": n} for v, n in counts.items()]}}
 

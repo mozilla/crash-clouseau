@@ -2289,6 +2289,31 @@ def _actionable_decline(venue):
             **_via_fields(venue)}
 
 
+def _crash_spike(uuid_info):
+    """Return spike facts for the crash's signature rate or build day, or ``None``.
+
+    Return ``None`` for missing fields or unavailable spike data."""
+    from crashclouseau import sigtrend, spikes
+
+    signature = (uuid_info.get("signature") or "").strip()
+    product, channel = uuid_info.get("product"), uuid_info.get("channel")
+    buildid = utils.get_buildid(uuid_info.get("buildid"))
+    if not (signature and product and channel and buildid):
+        return None
+    try:
+        trend = sigtrend.trend_facts(product, channel, signature)
+        return spikes.crash_spike(signature, product, channel, buildid, trend)
+    except LookupError as exc:
+        logger.info("autofile: %s; not judged a spike", exc)
+    except Exception:
+        logger.warning("autofile: spike lookup failed for %s", signature, exc_info=True)
+        try:
+            models.db.session.rollback()
+        except Exception:                                  # pragma: no cover - defensive
+            pass
+    return None
+
+
 def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family):
     """Comment on a stale bug if eligible, or decline about the venue.
 
@@ -2299,7 +2324,7 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
 
     ``shadow`` records the preview under ``wake_stale`` without writing to Bugzilla.
     ``comment`` sends one update, adding needinfo only when enabled and not already pending.
-    Without a new needinfo, require a positive novelty verdict.
+    Require a positive novelty verdict unless the crash's rate or build day is a spike.
     """
     mode = config.wake_mode(cfg.get("wake_stale"))
     venue = existing[0]
@@ -2370,7 +2395,11 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
     if pending is None:
         return no("could not read the flags on bug {}".format(venue["id"]))
     ask = bool(email) and email.lower() not in pending
-    if not ask:
+    # The novelty check excludes crash statistics; spikes bypass it.
+    spike = _crash_spike(uuid_info)
+    if spike:
+        wake["spike"] = spike
+    else:
         from crashclouseau.agent import comment_novelty
 
         novelty = comment_novelty.check(venue["id"], text)
