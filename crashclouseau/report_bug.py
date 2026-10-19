@@ -1356,7 +1356,8 @@ def build_bucket_opener(meta_bugs, signature):
 def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None, first=True,
                              version=None, needinfo=None, author_display=None,
                              max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None,
-                             fresh_limit=None, stale_since=None, recent_note=None):
+                             fresh_limit=None, stale_since=None, stale_bug=None,
+                             recent_note=None):
     """Build the opening comment for an ``actionable`` bug, with no regressor claim.
 
     1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
@@ -1366,6 +1367,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
     4. the mechanism's code references, the ask, the provenance footer.
 
     ``stale_since`` adds the activity date from ``_bug_activity`` and uses the comment footer.
+    ``stale_bug`` identifies the current bug for origin wording.
 
     The mechanism is copied whole. Consistency stays in the dossier because age and volume are
     rendered from deterministic data and free-form prose cannot be filtered safely. Skeptic,
@@ -1382,7 +1384,8 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
     facts = [_list_item(mechanism)] if mechanism else []
     if candidate.get("node"):
         link = changeset_links(candidate["node"], channel, candidate.get("git_commit") or "")
-        if candidate.get("bug"):
+        own = bool(stale_bug) and str(candidate.get("bug") or "") == str(stale_bug)
+        if candidate.get("bug") and not own:
             link += " (bug {})".format(candidate["bug"])
         who = author_display or _candidate_author(candidate)
         origin = ((dossier or {}).get("corroborations") or {}).get("hang_awaited_origin") or {}
@@ -1398,6 +1401,10 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
                        else "The work the main thread waits for")
             facts.append("- {} -- {} -- was last changed by {}{}."
                          .format(subject, where, link, " by {}".format(who) if who else ""))
+        elif own:
+            facts.append("- The failing code was added in this bug: {}{}{}.".format(
+                link, " by {}".format(who) if who else "",
+                _fresh_origin_clause((dossier or {}).get("corroborations"), fresh_limit)))
         else:
             facts.append("- The failing code comes from {}{}{}.".format(
                 link, " by {}".format(who) if who else "",
@@ -3082,7 +3089,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             first=first, version=version, needinfo=ask,
             author_display=_person_display(person), bucket_opener=opener,
             fresh_limit=policy.get("fresh_origin_days"),
-            stale_since=(stale or {}).get("since"), recent_note=recent_note,
+            stale_since=(stale or {}).get("since"), stale_bug=(stale or {}).get("bug"),
+            recent_note=recent_note,
         ) if actionable else build_bug_comment(
             uuid_info,
             stack,

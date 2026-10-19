@@ -83,7 +83,7 @@ class TestTheModes(_WakeBase):
         self.assertEqual(wake["comment"], "the stale-bug comment")
         self.assertEqual((self.comments, self.puts, self.created, self.filed), ([], [], [], []))
         stale = report_bug.build_bug_preview.call_args.kwargs["stale"]
-        self.assertEqual(stale, {"since": wake["since"], "person": _OWNER})
+        self.assertEqual(stale, {"since": wake["since"], "person": _OWNER, "bug": 1961865})
 
     def test_comment_and_needinfo_are_one_update(self):
         res = self._wake(mode="comment")
@@ -392,6 +392,22 @@ class TestTheComment(unittest.TestCase):
                                       "human._"))
         self.assertNotIn("INVALID", text)
         self.assertNotIn("resolve THIS bug", text)
+
+    def test_an_origin_from_the_bug_itself_is_not_its_source(self):
+        dossier = dict(self._DOSSIER, candidate=dict(self._DOSSIER["candidate"], bug=1670481))
+        with mock.patch.object(report_bug, "build_stats_sentence", return_value=None), \
+                mock.patch.object(report_bug, "changeset_links", return_value="8cde5fbfa29f"):
+            own = report_bug.build_actionable_comment(
+                dict(_INFO, uuid="u-1"), {}, dossier, stale_since="2022-10-24",
+                stale_bug=1670481)
+            other = report_bug.build_actionable_comment(
+                dict(_INFO, uuid="u-1"), {}, dossier, stale_since="2022-10-24", stale_bug=1)
+        self.assertIn("- The failing code was added in this bug: 8cde5fbfa29f by Grisha "
+                      "Kruglov.", own)
+        self.assertNotIn("comes from", own)
+        self.assertNotIn("(bug 1670481)", own)
+        self.assertIn("- The failing code comes from 8cde5fbfa29f (bug 1670481) by Grisha "
+                      "Kruglov.", other)
 
     def test_without_stale_the_filed_bug_footer_stays(self):
         with mock.patch.object(report_bug, "build_stats_sentence", return_value=None), \

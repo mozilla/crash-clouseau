@@ -2374,7 +2374,8 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
         return no("bug {} has no triage owner who can be asked".format(venue["id"]))
     try:
         preview = report_bug.build_bug_preview(uuid_info, stack, dossier,
-                                               stale={"since": since, "person": person})
+                                               stale={"since": since, "person": person,
+                                                      "bug": venue["id"]})
     except Exception as exc:
         logger.error("autofile: stale-bug comment failed for %s", uuid, exc_info=True)
         return no("comment build failed: {}".format(exc))
