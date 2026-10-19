@@ -1269,6 +1269,59 @@ def _sibling_lines(crash: dict) -> list[str]:
     return out
 
 
+_FAULT_ADDRESS_GUIDANCE = (
+    "A failing state read off this report's address (a null field at that offset, a poisoned "
+    "pointer) accounts only for the reports that fault the same way. When many fault elsewhere, "
+    "say in the mechanism what share it explains and what the other addresses point to (a bad "
+    "base pointer, a corrupted structure, another path). The spread describes the population; on "
+    "its own it is not a reason to lower confidence or to abstain."
+)
+
+
+def _address_split(counts: dict, address: str) -> str:
+    n = counts.get("reports") or 0
+    parts = ["{} at {}".format(counts.get("at_address") or 0, address)]
+    if counts.get("near_null"):
+        parts.append("{} more below 0x10000 (a null or near-null pointer)".format(
+            counts["near_null"]))
+    if counts.get("elsewhere"):
+        parts.append("{} elsewhere".format(counts["elsewhere"]))
+    distinct = counts.get("distinct") or 0
+    return "{} report{}: {}; {}{} distinct address{}".format(
+        n, "" if n == 1 else "s", ", ".join(parts),
+        "" if counts.get("complete", True) else "at least ", distinct,
+        "" if distinct == 1 else "es")
+
+
+def _fault_address_lines(crash: dict) -> list[str]:
+    """Format the fault-address counts, or return [] when absent."""
+    facts = crash.get("fault_address_population") or {}
+    own = facts.get("signature")
+    address = facts.get("address")
+    if not own or not address:
+        return []
+    scope = " ".join(str(v) for v in (facts.get("product"), facts.get("cpu_arch")) if v)
+    here = ("{}, which crash-stats records as {}".format(facts["fault_address"], address)
+            if facts.get("fault_address") else address)
+    out = ["", ("FAULT ADDRESSES ACROSS REPORTS: {} memory-access reports without a "
+                "MOZ_CRASH_REASON, all channels, last {} days{}. This report faults at {}.").format(
+        scope, facts.get("days"), " (from {})".format(facts["since"]) if facts.get("since") else "",
+        here)]
+    out.append("  this signature: " + _address_split(own, address))
+    family = facts.get("family")
+    if family:
+        names = family.get("names") or 0
+        out.append("  with its {} other name{} for the same crash: {}".format(
+            names, "" if names == 1 else "s", _address_split(family, address)))
+    listed = facts.get("addresses") or []
+    if listed:
+        bound = "" if (family or own).get("complete", True) else " (counts are lower bounds)"
+        out.append("  most frequent{}: {}".format(
+            bound, ", ".join("{} ({})".format(a, n) for a, n in listed)))
+    out.append(_FAULT_ADDRESS_GUIDANCE)
+    return out
+
+
 def _bug_comment_lines(crash: dict) -> list[str]:
     """Format bug-comment facts as unverified leads; return [] when there are none."""
     data = crash.get("bug_comment_facts") or {}
@@ -1858,6 +1911,7 @@ def _crash_facts(crash: dict) -> list[str]:
     # of the block below is that the report can look clean while the signature does not.
     lines += _signature_age_lines(crash)
     lines += _sibling_lines(crash)
+    lines += _fault_address_lines(crash)
     lines += _hardware_noise_lines(crash)
     # Last of the signature-level block: how old the signature is says whether the crash is new,
     # and this says whether it got WORSE -- the two answers are independent and a rise on an old

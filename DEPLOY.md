@@ -728,6 +728,23 @@ do not include this section.
 The dossier stores reader output and cost in `bug_comment_facts`; that cost is excluded from
 the run's `cost_usd`. Reader errors are caught before triage.
 
+## Fault addresses across reports in the triage brief (2026-10-19)
+
+For memory-access reports without a MOZ_CRASH reason, seed building batches three SuperSearch
+queries over the signature and its frame variants or spellings. Queries filter by product,
+CPU architecture when known, and `agent.signature_family.days`, across all channels.
+
+Separate queries count reports at the indexed address and below 0x10000; a facet lists up to
+100 addresses per name. Both briefs show the split and up to 16 addresses, marking incomplete
+facet counts as lower bounds. If the indexed and stackwalker addresses differ, both are shown.
+The guidance asks what share of reports the mechanism explains; spread alone does not lower
+confidence or require abstention.
+
+Counts are diagnostic only, stored in `corroborations.fault_address_population`.
+`SIGNATURE_FAMILY_ENABLED=0` disables these queries. Reports without a padded indexed address
+or populations with fewer than two reports produce no brief section.
+Tests: `tests/test_fault_address_population.py`.
+
 ## Links in Bugzilla writes (2026-10-04)
 
 `bugzilla_apply._post_comment`, `_put_bug` and `_create_bug` screen links against

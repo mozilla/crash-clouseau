@@ -118,6 +118,7 @@ def _no_network():
         mock.patch.object(orch, "_signature_trend", return_value={}),
         mock.patch.object(orch, "_hardware_noise", return_value=dict(sigage.NO_HARDWARE_NOISE)),
         mock.patch.object(orch, "_version_rates", return_value={}),
+        mock.patch.object(orch, "_fault_address_population", return_value=None),
         mock.patch.object(orch, "_install_history", return_value={
             "distinct_signatures": None, "distinct_cpus": None, "crashes": None,
             "span_seconds": None}),

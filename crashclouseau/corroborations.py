@@ -538,6 +538,10 @@ REGISTRY = {
         "diagnostic", (),
         "Stores all sibling facts used by the brief, which displays at most five rows, for "
         "later comparison with the verdict. No gate or filer reads this diagnostic."),
+    "fault_address_population": (
+        "diagnostic", (),
+        "Fault-address counts shown in the brief, retained for comparison with "
+        "`fault_address_offset_match`. No gate reads them."),
     "stale_signature_family_clock": (
         "evidence", ("report_bug.py",),
         "The age gate measured the candidate's lateness from the PREDECESSOR's first build, not "

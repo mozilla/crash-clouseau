@@ -871,6 +871,7 @@ def build_seed(uuid):
     except Exception as exc:  # pragma: no cover - defensive; never break a seed
         logger.warning("agent: sibling report counts failed for %s: %s", uuid, exc)
         sibling_reports = None
+    fault_address_population = _fault_address_population(info, uuid_info, raw_crash, family_facts)
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
     # runs — so hand it the map for every seeded candidate. Both candidate builders already
     # carry `pushdate` (DB datetime on-stack, hg [epoch, tz] off-stack), so this costs nothing.
@@ -953,6 +954,8 @@ def build_seed(uuid):
         **family_facts,
         # Counts for `triage._sibling_lines`; None if no live siblings or an unexpected error.
         "signature_sibling_reports": sibling_reports,
+        # Fault-address counts for the brief, or None when unavailable or ineligible.
+        "fault_address_population": fault_address_population,
         "candidate_pushdates": candidate_pushdates,
         # Learned crash archetypes that match this crash (`models.Archetype`): a recurring
         # shape plus what a reviewer told us to check when we see it. Handed to the agent as a
@@ -3480,6 +3483,68 @@ def _sibling_report_facts(family_facts, raw_crash, product):
             "rows": out}
 
 
+_MAX_LISTED_ADDRESSES = 16
+
+
+def _fault_address_population(info, uuid_info, raw_crash, family_facts):
+    """Build fault-address counts for the signature and its frame variants or spellings.
+
+    Filter by product and, when known, CPU architecture. Return None for ineligible reports,
+    unavailable counts, or populations with fewer than two reports.
+    """
+    raw = raw_crash or {}
+    analysed = _fault_address(raw)
+    signature = (info or {}).get("signature") or ""
+    if analysed is None or not signature or not utils.is_access_fault(raw):
+        return None
+    if not config.get_agent_signature_family()["enabled"]:
+        return None
+    from crashclouseau import sigfamily
+
+    # Compare the indexed address; retain the stackwalker's address separately if it differs.
+    indexed = str(raw.get("address") or "").strip()
+    address = sigfamily.parse_address(indexed)
+    if address is None:
+        return None
+    try:
+        product = info.get("product") or (uuid_info or {}).get("product", "") or "Firefox"
+        sysinfo = (raw.get("json_dump") or {}).get("system_info") or {}
+        arch = raw.get("cpu_arch") or sysinfo.get("cpu_arch") or None
+        names = [n for n in sigfamily.same_crash_names(sigfamily.family_from_seed(family_facts))
+                 if n != signature]
+        got = sigfamily.fault_addresses(signature, indexed, names, product, arch)
+        if not got:
+            return None
+        rows = got["rows"]
+        own, _ = sigfamily.address_counts([rows[signature]] if signature in rows else [], address)
+        others = [n for n in names if n in rows]
+        family, merged = sigfamily.address_counts(
+            [rows[s] for s in [signature, *others] if s in rows], address)
+        if family["reports"] <= 1:
+            return None
+        listed = sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAX_LISTED_ADDRESSES]
+        return {
+            "address": hex(address),
+            "fault_address": hex(analysed) if analysed != address else None,
+            "product": product, "cpu_arch": arch,
+            "since": got["since"], "days": config.get_agent_signature_family()["days"],
+            "signature": own,
+            "family": dict(family, names=len(others)) if others else None,
+            "addresses": [[hex(a), n] for a, n in listed],
+        }
+    except Exception as exc:  # pragma: no cover - defensive; never break a seed
+        logger.warning("agent: fault address counts failed for %s: %s", signature, exc)
+        return None
+
+
+def _record_fault_address_population(dossier, seed):
+    """Store the brief's fault-address counts as diagnostics."""
+    data = (seed or {}).get("fault_address_population")
+    if dossier is None or not data:
+        return
+    dossier.corroborations = {**(dossier.corroborations or {}), "fault_address_population": data}
+
+
 def _record_offstack_seed_facts(dossier, seed):
     """Record that this run went off-stack ONLY because every scored seed was noise. Moves no rung.
 
@@ -4702,6 +4767,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # depends on it.
         _record_signature_age_facts(result.dossier, seed)
         _record_bug_comment_facts(result.dossier, seed)
+        _record_fault_address_population(result.dossier, seed)
         # Nor a gate: whether this signature's install-normalised rate had already changed. The
         # statistic the selector structurally cannot compute, and the one a human triager used to
         # file bug 2063336 off a signature we had selected twenty times.

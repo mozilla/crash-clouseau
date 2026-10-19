@@ -382,6 +382,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "signature_sibling_reports",
         # Retain reader output as diagnostic data.
         "bug_comment_facts",
+        # Retain the brief's fault-address counts as diagnostics.
+        "fault_address_population",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

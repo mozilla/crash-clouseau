@@ -870,6 +870,120 @@ def sibling_reports(signatures, reason, product="Firefox", until=None):
     return {"since": _day(since), "reason_counted": counted, "rows": rows}
 
 
+# Threshold used to group near-null addresses.
+NULL_PAGE = 0x10000
+_ADDRESS_FACETS = 100
+# Exclude pushed-down relations, which need not identify the same crash site.
+_SAME_CRASH = ("frame-variant", "spelling")
+
+
+def same_crash_names(family):
+    """Return family names classified as frame variants or spellings."""
+    out = []
+    fam = family or {}
+    for row in [*(fam.get("predecessors") or []), *(fam.get("siblings") or [])]:
+        if not isinstance(row, dict):
+            continue
+        sig = row.get("signature")
+        if sig and sig not in out and row.get("relation") in _SAME_CRASH:
+            out.append(sig)
+    return out
+
+
+def parse_address(term):
+    """Parse a hex address string, or return ``None``."""
+    try:
+        return int(str(term).strip(), 16)
+    except (TypeError, ValueError):
+        return None
+
+
+def _near_null_prefix(address):
+    """Build a near-null prefix at the supplied address width, or return None."""
+    text = str(address or "").strip().lower()
+    free = len("{:x}".format(NULL_PAGE - 1))
+    if not text.startswith("0x") or len(text) - 2 <= free:
+        return None
+    return "0x" + "0" * (len(text) - 2 - free)
+
+
+def fault_addresses(signature, address, names=(), product="Firefox", cpu_arch=None, until=None):
+    """Query memory-access reports without a MOZ_CRASH reason, across all channels.
+
+    Batch the capped address facet with separate counts at the indexed *address* and below
+    ``NULL_PAGE``. Return ``{since, rows}``, or None on invalid input or lookup failure.
+    Each row contains ``reports``, ``at``, ``near_null`` (including ``at`` when near-null),
+    and ``addresses`` mapping integer addresses to counts.
+    """
+    prefix = _near_null_prefix(address)
+    if not signature or prefix is None:
+        return None
+    sigs = list(dict.fromkeys(s for s in [signature, *(names or ())] if s))
+    until = until or datetime.now(timezone.utc)
+    since = until - timedelta(days=int(config.get_agent_signature_family()["days"]))
+    common = {
+        "signature": ["=" + s for s in sigs],
+        "product": product or "Firefox",
+        "moz_crash_reason": "__null__",
+        "reason": ["^" + r for r in utils.ACCESS_FAULT_REASONS],
+        "date": _date_range(since, until),
+        "_results_number": 0,
+        "_facets": "signature",
+        "_facets_size": _ADDRESS_FACETS,
+    }
+    if cpu_arch:
+        common["cpu_arch"] = cpu_arch
+    got = {}
+    queries = [_query({**common, "_aggs.signature": "address"}, got, "addresses"),
+               _query({**common, "address": str(address).strip()}, got, "at"),
+               _query({**common, "address": "^" + prefix}, got, "near_null")]
+    try:
+        _run(queries)
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("sigfamily: fault address counts failed: %s", exc)
+        return None
+    if not all(_usable(got.get(k)) for k in ("addresses", "at", "near_null")):
+        return None
+    at = _facet_terms(got["at"], "signature")
+    near = _facet_terms(got["near_null"], "signature")
+    rows = {}
+    for row in got["addresses"]["facets"].get("signature") or []:
+        sig, n = row.get("term"), int(row.get("count") or 0)
+        if sig not in sigs or n <= 0:
+            continue
+        counts = {}
+        for t in (row.get("facets") or {}).get("address") or []:
+            a = parse_address(t.get("term"))
+            if a is not None:
+                counts[a] = counts.get(a, 0) + int(t.get("count") or 0)
+        rows[sig] = {"reports": n, "at": at.get(sig, 0), "near_null": near.get(sig, 0),
+                     "addresses": counts}
+    return {"since": _day(since), "rows": rows}
+
+
+def address_counts(rows, address):
+    """Return ``(counts, merged)`` with disjoint at-address, near-null and elsewhere counts.
+
+    Incomplete facets make ``distinct`` and merged address counts lower bounds.
+    """
+    merged = {}
+    complete = True
+    for row in rows:
+        listed = 0
+        for a, n in (row.get("addresses") or {}).items():
+            merged[a] = merged.get(a, 0) + n
+            listed += n
+        complete = complete and listed >= int(row.get("reports") or 0)
+    reports = sum(int(row.get("reports") or 0) for row in rows)
+    at = sum(int(row.get("at") or 0) for row in rows)
+    near = sum(int(row.get("near_null") or 0) for row in rows)
+    if address < NULL_PAGE:
+        near = max(near - at, 0)
+    return {"reports": reports, "at_address": at, "near_null": near,
+            "elsewhere": max(reports - at - near, 0), "distinct": len(merged),
+            "complete": complete}, merged
+
+
 def handoff_for_spike(signature, proto, product, channel, buildid, until=None):
     """The predecessor this SPIKE is the re-bucketing of, or ``None``: S first appears on the
     channel on the spiking build's own day and a handoff predecessor lost what S gained. The

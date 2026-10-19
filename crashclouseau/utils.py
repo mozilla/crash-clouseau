@@ -640,6 +640,21 @@ def is_oom_crash(signature, raw):
     return raw.get("js_large_allocation_failure") == "Reporting"
 
 
+# Reason prefixes used to identify memory-access faults.
+ACCESS_FAULT_REASONS = ("SIGSEGV", "SIGBUS", "EXCEPTION_ACCESS_VIOLATION", "EXC_BAD_ACCESS",
+                        "EXCEPTION_IN_PAGE_ERROR")
+
+
+def is_access_fault(raw):
+    """Whether the processed crash is a memory-access fault with no MOZ_CRASH reason."""
+    raw = raw or {}
+    dump = raw.get("json_dump") or {}
+    if raw.get("moz_crash_reason") or dump.get("moz_crash_reason"):
+        return False
+    reason = str(raw.get("reason") or (dump.get("crash_info") or {}).get("type") or "")
+    return reason.startswith(ACCESS_FAULT_REASONS)
+
+
 def oom_size_not_request(signature):
     """Return ``(caller, note)`` for a listed ``NS_ABORT_OOM`` caller, else ``None``."""
     parts = [p.strip() for p in str(signature or "").split("|")]
