@@ -51,8 +51,10 @@ def _our_own_claims():
     REPLACES our value the field is a human's again, and that is the most valuable prior there is.
     """
     claims = set()
-    for row in models.Dossier.filed_bug_rows():
-        filed = row.get("filed_bug") or {}
+    filings = [row.get("filed_bug") or {} for row in models.Dossier.filed_bug_rows()]
+    # Spike filings are not independent corroboration either.
+    filings += [row.get("filing") or {} for row in models.SpikeEscalation.filed_rows()]
+    for filed in filings:
         bug = filed.get("bug")
         if not bug:
             continue

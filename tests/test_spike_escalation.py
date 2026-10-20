@@ -1466,6 +1466,9 @@ class TestTheBugText(unittest.TestCase):
         medium = SpikeFindings(summary="S", culprit={"node": "abcdef0", "bug": 5, "confidence": "medium"})
         p = spike_report.build_spike_preview(self._BRIEF, medium, product="Core",
                                              component="General", link_regressor=True)
+        self.assertEqual((p["keywords"], p["regressed_by"]), (["crash", "regression"], [5]))
+        p = spike_report.build_spike_preview(self._BRIEF, medium, product="Core",
+                                             component="General", link_regressor=False)
         self.assertEqual((p["keywords"], p["regressed_by"]), (["crash", "regression"], []))
         high = SpikeFindings(summary="S", culprit={"node": "abcdef0", "bug": 5, "confidence": "high"})
         p = spike_report.build_spike_preview(self._BRIEF, high, product="Core",

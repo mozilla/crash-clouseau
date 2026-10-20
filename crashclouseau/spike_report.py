@@ -385,10 +385,9 @@ def build_spike_preview(brief, findings, *, product, component, person=None,
     regression = bool(culprit and culprit.node and grounded and culprit.confidence != "low")
     group = report_bug.security_group(product) if withhold else None
     account = (person or {}).get("account") or ""
-    # The structured causal claim only at HIGH confidence, on a candidate that is in the window:
-    # the ordinary filer earned this field at rung 70 with 11 of 12 human-confirmed.
+    # Link grounded, in-window culprits at medium confidence or better.
     regressed_by = []
-    if culprit and culprit.bug and link_regressor and culprit.confidence == "high":
+    if culprit and culprit.bug and link_regressor and culprit.confidence != "low":
         regressed_by = [culprit.bug]
     # The channel's mark (release: "[new in release]") when the spike IS an appearance -- an
     # all-zero baseline and no earlier report on the channel -- and no prefix when an old

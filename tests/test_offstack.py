@@ -919,6 +919,15 @@ class TestPriorSig(unittest.TestCase):
             hints = P.prior_regressor_hints(["SIG"])
         self.assertEqual(sorted(h["regressor_bug"] for h in hints), [555, 2011326])
 
+    def test_our_own_claims_include_the_spike_filer(self):
+        from crashclouseau import priorsig as P
+        dossiers = [{"filed_bug": {"filed": True, "bug": 100, "regressed_by": [2011326]}}]
+        spikes = [{"filing": {"filed": True, "bug": 2084323, "regressed_by": [2068665]}},
+                  {"filing": {"filed": True, "bug": 2084321}}]
+        with mock.patch.object(P.models.Dossier, "filed_bug_rows", return_value=dossiers), \
+                mock.patch.object(P.models.SpikeEscalation, "filed_rows", return_value=spikes):
+            self.assertEqual(P._our_own_claims(), {(100, 2011326), (2084323, 2068665)})
+
     def test_empty_and_failure_are_graceful(self):
         from crashclouseau import priorsig as P
         self.assertEqual(P.prior_regressor_hints([]), [])

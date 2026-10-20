@@ -90,8 +90,8 @@ fetch uuids from Socorro itself.
    (`spike_report.is_new_signature`; a failed lookup cannot make an appearance look old) — and
    no prefix when an old signature got loud; product::component = the investigator's pair if
    Bugzilla has it → the signature's existing bugs' most common pair → `Core :: General`; keywords
-   `crash` + `regression` iff a grounded culprit at medium+; `regressed_by` iff high AND in the
-   window; needinfo = the culprit's author (`_needinfo_person`, hg `user` fallback); `blocks`
+   `crash` + `regression` iff a grounded culprit at medium+; `regressed_by` iff medium+ AND in
+   the window; needinfo = the culprit's author (`_needinfo_person`, hg `user` fallback); `blocks`
    clouseau; release nominates tracking. Memory-safety crashes: restricted group or not filed;
    a public venue is declined and a restricted new bug names it. A decline for a reason that may
    clear (venue lookup failed, cap) is retried from the sweep without re-running the model
