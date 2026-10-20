@@ -18,11 +18,9 @@ the family's filing policy (`channels.esr`: `skip`, cap 2, `[new in esr]`,
 `cf_tracking_firefox_esr<major>` nominated) -- **and only runs where the two env vars name it**
 (see "Turning the ESR channel on"). A
 channel can still be held with `agent.autofile.channels.<ch>.enabled: false`, which beats the
-global arm. Since 2026-09-15 the deployment also ingests, triages **and files** **Fenix nightly**
--- a second PRODUCT on the `nightly` label, not a channel -- at cap 2 with `skip`
-(`agent.autofile.products.Fenix`; shipped held that afternoon, armed the same evening on the
-first tick's first culprit; see "Turning Fenix on"). Read "Cost controls" below as what bounds
-the spend, not as evidence that there is none.
+global arm. Fenix uses the same `nightly`, `beta` and `release` channel labels, with its own
+product filing policy (`agent.autofile.products.Fenix`): skip existing bugs, no daily cap.
+See "Turning Fenix on" and "Fenix beta and release" below for configuration.
 
 Several things are automated by the repo now; the rest are one-time app setup.
 
@@ -265,16 +263,11 @@ What to watch on the first ESR days:
 
 ## Turning Fenix on (plan #16)
 
-Fenix (Firefox for Android) nightly is a second PRODUCT on the channel label `nightly`, not a
-channel: `config.products` and `ingest_products` are `["Firefox", "Fenix"]`, `product_channels`
-pins Fenix to `["nightly"]`, `agent.products` triages both, and filing is ARMED for Fenix at
-`skip` / cap 2 (`agent.autofile.products.Fenix`; step 3). Its builds come from the TaskCluster index
-(`crashclouseau/buildsource.py` -> `tcindex`, the `mobile.fenix-nightly` leaf; Buildhub-as-firefox
-missed 1 of 15 recent Fenix builds and only cross-checks), its Java/Kotlin stacks are read
-(`java_stack_trace`, frames in `java.packages`) with the R8-remapped line numbers IGNORED behind
-a pref (step 5), its native stacks as before. Unlike beta and ESR there is NO ingest-only canary
-step: the product levers default ON in the config, so the deploy that carries the code is the
-deploy that starts it -- the order below is what makes that safe.
+Fenix (Firefox for Android) is included in `products`, `ingest_products` and `agent.products`.
+`product_channels.Fenix` enables nightly, beta and release. Builds come from the TaskCluster
+index through `buildsource` and `tcindex`. Java/Kotlin stacks use `java.packages` and ignore
+reported line numbers by default (step 5); native stacks use the existing path. The Fenix
+filing policy is enabled with `skip` and no daily cap, subject to `AUTOFILE_BUGS` (step 3).
 
 1. **Deploy first, and check the enum.** The release phase runs
    `ALTER TYPE "PRODUCT_TYPE" ADD VALUE IF NOT EXISTS 'Fenix'` (`models._ENUM_ADDITIONS`);
@@ -356,6 +349,28 @@ deploy that starts it -- the order below is what makes that safe.
    packages are `java.packages` (`org.mozilla.`, `mozilla.components.`, `mozilla.appservices.`,
    `mozilla.telemetry.`); a crash whose frames are all the framework's is `no usable stack` to
    the trigger, exactly like a native crash without a `json_dump`.
+
+## Fenix beta and release (2026-10-20)
+
+`product_channels.Fenix` includes `nightly`, `beta` and `release`. `tcindex` reads the
+`mobile.fenix-beta` and `mobile.fenix-release` leaves on `mozilla-beta` and `mozilla-release`.
+
+- **Selector.** Beta uses Fenix nightly's settings except `min_build_installs: 3`.
+  Release sets `installs`, `floor`, `real_installs` and `protos` to 20, `history_days` to 42,
+  and `min_build_installs` to 15.
+- **Rate.** `sigtrend` collects beta, but excludes release. Rate-based selection is disabled
+  on both (`rising_per_day: 0`).
+- **Filing.** The Fenix overlay sets `comment_on_existing: skip` on both channels.
+  Release inherits `[new in release]` and tracking nomination; actionable filings omit both.
+  Filing requires `AUTOFILE_BUGS=1`.
+- **Index scans.** A cold builds table uses the configured 30-day lookback. Later ticks start
+  at the later of that bound and one day before the newest stored build.
+- **Controls.** `AGENT_PRODUCTS=Firefox` excludes Fenix from automatic triage and spike sweeps.
+  Remove beta or release from `product_channels.Fenix` and deploy to stop new ingestion for
+  that Fenix channel.
+
+Watch the worker log for `Update builds for beta/Fenix` and `release/Fenix`, and
+`selection.html?product=Fenix` for beta and release rows.
 
 ## Actionable filings (a crash worth filing, no regressor claimed; 2026-09-17)
 

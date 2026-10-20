@@ -86,14 +86,7 @@ class TestUpdateRefusesAChannelTheDeploymentDoesNotIngest(unittest.TestCase):
 
 
 class TestUpdateAllPairsEachProductWithItsChannels(unittest.TestCase):
-    """The PRODUCT half of the same lever (Fenix nightly, plans/16 §13.1 D1/D2). `products` is
-    a cross-product source -- `update_all` used to enqueue every configured product on every
-    ingested channel -- so `"Fenix"` in `config.products` with `INGEST_CHANNELS="nightly beta
-    release esr153"` would have run `put_filelog` + `sigtrend.backfill` + the selector against
-    Socorro for Fenix beta/release/esr on the first tick, channels on which Fenix has no build
-    source. `product_channels` pairs a product with the channels it exists on; the products
-    come from `get_ingest_products` (JSON default, `INGEST_PRODUCTS` override), NOT from the
-    enum-defining `config.products`."""
+    """Use ingestion products and filter channels through ``product_channels``."""
 
     def _pairs_used(self, channels, products=None):
         pairs = []
@@ -109,21 +102,20 @@ class TestUpdateAllPairsEachProductWithItsChannels(unittest.TestCase):
             update.update_all()
         return pairs
 
-    def test_fenix_is_paired_with_nightly_only(self):
+    def test_fenix_is_paired_with_every_channel_but_esr(self):
         pairs = self._pairs_used("nightly beta release esr153")
         self.assertEqual(pairs, [("Firefox", "nightly"), ("Firefox", "beta"),
                                  ("Firefox", "release"), ("Firefox", "esr153"),
-                                 ("Fenix", "nightly")])
+                                 ("Fenix", "nightly"), ("Fenix", "beta"), ("Fenix", "release")])
 
-    def test_a_deployment_without_nightly_ingests_no_fenix_at_all(self):
-        self.assertEqual(self._pairs_used("beta release"),
-                         [("Firefox", "beta"), ("Firefox", "release")])
+    def test_an_esr_only_deployment_ingests_no_fenix_at_all(self):
+        self.assertEqual(self._pairs_used("esr153"), [("Firefox", "esr153")])
 
     def test_ingest_products_restricts_and_an_empty_value_ingests_nothing(self):
         self.assertEqual(self._pairs_used("nightly beta", products="Firefox"),
                          [("Firefox", "nightly"), ("Firefox", "beta")])
         self.assertEqual(self._pairs_used("nightly beta", products="Fenix"),
-                         [("Fenix", "nightly")])
+                         [("Fenix", "nightly"), ("Fenix", "beta")])
         # Set-but-empty is a real kill switch (unset falls back to the config's list).
         self.assertEqual(self._pairs_used("nightly beta", products=""), [])
         # A product the enum does not know cannot be ingested, whatever the variable says.
@@ -132,13 +124,12 @@ class TestUpdateAllPairsEachProductWithItsChannels(unittest.TestCase):
     def test_the_unset_default_is_the_configs_list_not_the_enum(self):
         # The lever exists in the config file: both products, and Fenix's pairing.
         self.assertEqual(update.config.get_ingest_products(), ["Firefox", "Fenix"])
-        self.assertEqual(update.config.get_product_channels("Fenix"), ["nightly"])
+        self.assertEqual(update.config.get_product_channels("Fenix"),
+                         ["nightly", "beta", "release"])
 
 
 class TestUpdateRefusesAProductOrPairingTheDeploymentDoesNotIngest(unittest.TestCase):
-    """The per-job mirror of the pairing: a queued or RQ-re-run `update(None, "beta", "Fenix")`
-    job -- or one for a product just dropped from `INGEST_PRODUCTS` -- must be a no-op rather
-    than a Socorro sweep, exactly as a dropped channel is (the esr115/esr140 lesson above)."""
+    """Queued jobs must respect the current ingestion products and channels."""
 
     def _run(self, channel, product, channels="nightly beta", products=None):
         calls = []
@@ -159,8 +150,14 @@ class TestUpdateRefusesAProductOrPairingTheDeploymentDoesNotIngest(unittest.Test
                          ["put_filelog", "update_builds", "put_crashes", "analyze_reports"])
 
     def test_fenix_on_an_unpaired_channel_does_nothing(self):
-        self.assertIn("beta", update.config.get_ingest_channels() or ["beta"])
-        self.assertEqual(self._run("beta", "Fenix"), [])
+        self.assertEqual(self._run("esr153", "Fenix", channels="nightly beta esr153"), [])
+
+    def test_fenix_beta_and_release_run_every_step(self):
+        for channel in ("beta", "release"):
+            with self.subTest(channel=channel):
+                self.assertEqual(self._run(channel, "Fenix", channels="nightly beta release"),
+                                 ["put_filelog", "update_builds", "put_crashes",
+                                  "analyze_reports"])
 
     def test_a_product_outside_ingest_products_does_nothing(self):
         self.assertEqual(self._run("nightly", "Fenix", products="Firefox"), [])

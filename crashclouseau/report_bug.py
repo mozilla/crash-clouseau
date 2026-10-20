@@ -311,10 +311,11 @@ def build_stats_sentence(first, stats, uuid_info):
     # narrower population than it measured, so say both.
     channel = (uuid_info or {}).get("channel") or ""
     version = (uuid_info or {}).get("version") or ""
+    beta = "beta/DevEdition" if (uuid_info or {}).get("product", "Firefox") == "Firefox" else "beta"
     if channel == "nightly":
         where = "nightly {}".format(utils.get_major(version)) if version else "nightly"
     elif channel == "beta":
-        where = "beta/DevEdition {}".format(version) if version else "beta/DevEdition"
+        where = "{} {}".format(beta, version) if version else beta
     else:
         where = version or channel
     buildid = utils.get_buildid((uuid_info or {}).get("buildid"))

@@ -2,38 +2,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""Fenix builds from the TaskCluster index -- ``buildhub``'s interface for a product Buildhub
-does not carry (plan 16 §2, §13 D5/D6).
+"""Fenix builds from the TaskCluster index, using ``buildhub``'s interface.
 
-THE SET AND THE REVISION COME FROM DIFFERENT PLACES, and that split is the whole design.
+Enumerate each channel's APK leaves from ``LEAVES`` rather than using desktop's build list.
+Resolve revisions from the task's source URL and Treeherder route, falling back to an hg
+push at the buildid timestamp. Read versions from Buildhub queried as Firefox, or from
+``mobile/android/version.txt`` at the resolved revision.
 
-* The build SET is the ``mobile.fenix-nightly`` leaves under ``gecko.v2.mozilla-central.pushdate
-  .<Y>.<M>.<D>.<buildid>``. Only the index knows which pushes shipped an APK: Fenix does not
-  build on every push desktop does (46 fenix-nightly builds against 47 firefox-nightly buildids
-  over 23 days), and borrowing Firefox's ordering for "the previous build" collapsed one
-  changeset window from 173 changesets to 2 (plan 16 §2.5). Measured 2026-09-10: 9 children,
-  2 with the leaf. A 404 on the leaf is a real answer -- that push built no shipped APK (or the
-  buildid is a local/emulator build: 1 of 972 Socorro buildids, 20260202034059, is not a child
-  of its day at all) -- so it yields NO row and the crash abstains at ``Build.get_id``.
-* The REVISION is the leaf's task ``metadata.source`` (``/file/<40 hex>``), cross-checked
-  against its ``tc-treeherder.v2.<repo>.<rev>`` route. Buildhub queried AS firefox at the
-  Fenix buildid agrees where it has the build (14 of 14 on 2026-09-15) but it is not total:
-  20260910002721 is a Fenix-only push with no firefox document. It still supplies
-  ``target.version`` in the same POST, so it is the version source; ``mobile/android/
-  version.txt`` at the revision is the fallback (``158.0a1`` at 8590488daa5e).
-* The buildid IS the push timestamp (46 of 46), so hg ``json-pushes`` over the two-second
-  window around it is the total-function fallback for the revision -- ISO strings only, both
-  bounds EXCLUSIVE, bare string read as UTC (numeric seconds return ``pushes: {}``).
-
-The index has no range query and its responses are ``no-store``, so the ``builds`` table IS the
-cache: ``update.update_builds`` starts a day before the newest stored build (a leaf attaches
-~18 minutes after its push, so the children newer than that build are re-probed each tick
-until they resolve), and a cold table pays the 30-day lookback once (~30 POST + ~150 GET).
-
-Every entry point mirrors ``buildhub``'s signature and return shape so ``buildsource.
-for_product`` can hand either module to the same caller. HTTP goes through ``net.get`` /
-``net.post`` (allowlisted UA, bounded timeout) or ``hgedge._get`` for hg; this module never
-imports ``pushlog`` (which imports the dispatcher).
+``update.update_builds`` uses the builds table to limit index scans: start one day before
+the newest stored build, or use the configured lookback when no builds are stored.
 """
 
 from datetime import datetime, timedelta
@@ -53,21 +30,13 @@ QUEUE = "https://firefox-ci-tc.services.mozilla.com/api/queue/v1"
 # Socorro product names this module serves (see `buildsource.TC_PRODUCTS`).
 PRODUCTS = frozenset({"Fenix"})
 
-# channel -> (TC namespace repo, mobile leaf). The repo is the namespace segment, NOT the hg
-# `releases/mozilla-beta` path; the leaf is the signing-apk task, i.e. the SHIPPED APK
-# (`fenix-nightly-simulation` is a rehearsal, `fenix-debug` is not what users run). Beta and
-# release leaves verified live 2026-09-15 (gecko.v2.mozilla-beta.pushdate.2026.09.14.
-# 20260914090352.mobile.fenix-beta, gecko.v2.mozilla-release.pushdate.2026.09.09.
-# 20260909172920.mobile.fenix-release) but NOT served yet: Fenix beta/release are separate
-# ship-it releases, so Buildhub-as-firefox is not expected to be total there and the
-# json-pushes route on a `releases/` repo is unverified. The table stays so the day the
-# channel is switched on is a one-line change here plus D1's `product_channels`.
+# Channel -> (TaskCluster namespace repo, signing APK leaf).
 LEAVES = {
     "nightly": ("mozilla-central", "fenix-nightly"),
     "beta": ("mozilla-beta", "fenix-beta"),
     "release": ("mozilla-release", "fenix-release"),
 }
-SERVED_CHANNELS = frozenset({"nightly"})
+SERVED_CHANNELS = frozenset(LEAVES)
 
 # Day children are the 14-digit pushdate buildids. `latest` is a REAL child (resolves to the
 # newest leaf) and sorts after every digit string, so `!= "latest"` or `max()` over raw names

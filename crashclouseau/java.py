@@ -4,26 +4,13 @@
 
 """JVM (Java/Kotlin) crash stacks: from Socorro's report to scored frames.
 
-Fenix nightly is the only JVM product ingested and its APKs are R8-minified, so the line
-numbers Socorro reports are the REMAPPED ones: at the build revision of crash 3c426d92
-(2026-09-11) ``Keystore.generateKey(Keystore.kt:269)`` points inside ``encryptBytes`` while
-``fun generateKey`` is line 221, and ``Keystore.<init>(Keystore.kt:51)`` is a blank KDoc line
-inside another class. The FILE and the METHOD are right, the LINE is not, and the mapping
-drifts per build (plan 16 measured 269 = a KDoc ``*/`` at dc7f12a8cbce). Under
-``config.java_trust_line_numbers()`` false every frame carries ``line_trusted: False``, the
-scorer falls back to file/method matching (``models.Changeset._fuzzy_score``) and the method
-span is located HERE, in the source at the build revision (``method_span``).
+Line numbers can be R8-remapped. With ``java_trust_line_numbers`` false, frames carry
+``line_trusted: False`` and scoring uses file/method matches. Method spans are located in
+source at the build revision.
 
-FRAME ORDER. Socorro's structured ``java_exception.exception.values`` lists the causes ROOT
-FIRST and the outer exception LAST: on 3c426d92 ``values[0]`` is the 23-frame
-``KeyStoreException`` the platform threw and ``values[1]`` the 20-frame ``ProviderException``
-whose frames are exactly the ``java_stack_trace`` text and whose type + top frame is the
-Socorro signature. We store the OUTER exception's frames first (stackpos 0..) because that is
-the stack the signature, the text and the bug comment show, then each cause block in order
-``values[-2], ..., values[0]`` (root cause last), skipping a frame identical in (module,
-function, filename, lineno) to one already kept -- a cause shares its tail with the exception
-that wrapped it, so on 3c426d92 the 23-frame cause contributes 4 new frames (its own platform
-frames plus ``engineGenerateKey`` at a different line), not 23.
+Read structured exceptions in reverse order: outer exception first, then causes.
+Preserve the outer stack, including repeated frames; deduplicate cause frames by
+(module, function, filename, lineno) against frames already kept.
 """
 
 import bisect

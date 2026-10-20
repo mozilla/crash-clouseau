@@ -176,8 +176,8 @@ class FakeHTTP:
         self.posts["{}/namespaces/{}".format(INDEX, day_ns)] = _resp(
             200, _namespaces(day_ns, names, token))
 
-    def leaf(self, day_ns, bid, task_id=None, status=None):
-        url = "{}/task/{}.{}.mobile.fenix-nightly".format(INDEX, day_ns, bid)
+    def leaf(self, day_ns, bid, task_id=None, status=None, leaf="fenix-nightly"):
+        url = "{}/task/{}.{}.mobile.{}".format(INDEX, day_ns, bid, leaf)
         if task_id:
             rank = int(utils.get_build_date(bid).timestamp())
             self.gets[url] = _resp(200, _leaf_200(task_id, rank))
@@ -413,13 +413,36 @@ class TestGet(unittest.TestCase):
     def test_an_unserved_channel_or_product_returns_nothing_without_a_request(self):
         http = FakeHTTP()
         with _patched(http):
-            self.assertEqual(tcindex.get("20260910000000", "beta", prods="Fenix",
+            self.assertEqual(tcindex.get("20260910000000", "esr153", prods="Fenix",
                                          max_buildid="20260910235959"), {})
             self.assertEqual(tcindex.get("20260910000000", "nightly", prods="Firefox",
                                          max_buildid="20260910235959"), {})
-            self.assertIsNone(tcindex.get_rev_from("20260910214118", "beta", "Fenix"))
-            self.assertIsNone(tcindex.get_two_last("20260910214118", "release", "Fenix"))
+            self.assertIsNone(tcindex.get_rev_from("20260910214118", "esr153", "Fenix"))
+            self.assertIsNone(tcindex.get_two_last("20260910214118", "esr153", "Fenix"))
         self.assertEqual(http.calls, [])
+
+
+class TestBetaAndRelease(unittest.TestCase):
+    def test_each_channel_reads_its_own_repo_and_leaf(self):
+        """Use synthetic leaves and task sources with the ``releases/`` path prefix."""
+        for channel, repo, version in (("beta", "mozilla-beta", "159.0b3"),
+                                       ("release", "mozilla-release", "158.0")):
+            with self.subTest(channel=channel):
+                bid = "20261016090327"
+                day_ns = "gecko.v2.{}.pushdate.2026.10.16".format(repo)
+                source = BETA_SOURCE.replace("mozilla-beta", repo).format(REV_BETA)
+                http = FakeHTTP()
+                http.day(day_ns, ["20261016011500", bid, "latest"])
+                http.leaf(day_ns, "20261016011500", leaf="fenix-" + channel)
+                http.leaf(day_ns, bid, "T", leaf="fenix-" + channel)
+                http.task("T", _task(repo, REV_BETA, "c" * 40, bid, source))
+                http.buildhub({bid: {"revisions": [{"key": REV_BETA, "doc_count": 3}],
+                                     "versions": [{"key": version, "doc_count": 3}]}})
+                with _patched(http), self.assertNoLogs(level="WARNING"):
+                    got = tcindex.get("20261016000000", channel, prods="Fenix",
+                                      max_buildid="20261016235959")
+                self.assertEqual(got, {"Fenix": {channel: {
+                    _bid(bid): {"revision": REV_BETA[:12], "version": version}}}})
 
 
 class TestGetRevFrom(unittest.TestCase):
@@ -650,6 +673,15 @@ class TestLiveIndex(unittest.TestCase):
                           max_buildid="20260910214118")
         self.assertEqual(got, {"Fenix": {"nightly": {
             _bid("20260910214118"): {"revision": "8590488daa5e", "version": "158.0a1"}}}})
+
+    def test_beta_and_release_builds_resolve(self):
+        for channel, bid, rev, version in (
+                ("beta", "20261016090327", "c87b810aa1f3", "159.0b3"),
+                ("release", "20261007201254", "eb9a6e3a7368", "158.0")):
+            with self.subTest(channel=channel):
+                got = tcindex.get(bid, channel, prods="Fenix", max_buildid=bid)
+                self.assertEqual(got, {"Fenix": {channel: {
+                    _bid(bid): {"revision": rev, "version": version}}}})
 
     def test_the_day_has_two_shipped_builds_of_nine_children(self):
         got = tcindex.get("20260910000000", "nightly", max_buildid="20260910235959")

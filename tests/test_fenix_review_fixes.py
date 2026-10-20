@@ -80,15 +80,14 @@ class TestTcindexNeverRaises(unittest.TestCase):
 
 
 class TestTriggerProductChannels(unittest.TestCase):
-    def test_a_fenix_uuid_off_nightly_is_refused_for_the_right_reason(self):
-        """D1: Fenix is nightly-only. A Fenix release report has a configured channel label
-        and no builds row, and the old message blamed the ingestion window for a pair that
-        never has one."""
-        processed = {"product": "Fenix", "release_channel": "release", "version": "157.0",
+    def test_a_fenix_uuid_off_its_channels_is_refused_for_the_right_reason(self):
+        """Reject an unsupported product/channel before looking up its build."""
+        processed = {"product": "Fenix", "release_channel": "esr", "version": "153.0esr",
                      "build": "20260909172920", "signature": "java.lang.Foo: at a.B.c(B.kt:1)"}
         with mock.patch.object(trigger.inspector, "get_crash_data", return_value=processed), \
                 mock.patch.object(models.Build, "get_id") as get_id:
-            with self.assertRaisesRegex(trigger.TriggerError, "ingested on nightly only"):
+            with self.assertRaisesRegex(trigger.TriggerError,
+                                        "ingested on nightly/beta/release only"):
                 trigger.ingest("u-1")
         get_id.assert_not_called()
 
@@ -177,8 +176,8 @@ class TestNoProtosReadRollsBack(unittest.TestCase):
 
 
 class TestConfigStillShipsTheDecisions(unittest.TestCase):
-    def test_fenix_is_nightly_only(self):
-        self.assertEqual(config.get_product_channels("Fenix"), ["nightly"])
+    def test_fenix_has_no_esr(self):
+        self.assertEqual(config.get_product_channels("Fenix"), ["nightly", "beta", "release"])
 
 
 if __name__ == "__main__":

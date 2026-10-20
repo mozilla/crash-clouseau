@@ -1801,6 +1801,11 @@ class TestBugPreview(unittest.TestCase):
         self.assertIn(" in 154.0.1 with", report_bug.build_stats_sentence(
             True, {"count": 2, "installs": 2},
             {"channel": "release", "version": "154.0.1", "buildid": "2026"}))
+        beta = {"channel": "beta", "version": "159.0b3", "buildid": "2026"}
+        self.assertIn(" in beta/DevEdition 159.0b3 with", report_bug.build_stats_sentence(
+            True, {"count": 2, "installs": 2}, beta))
+        self.assertIn(" in beta 159.0b3 with", report_bug.build_stats_sentence(
+            True, {"count": 2, "installs": 2}, dict(beta, product="Fenix")))
 
     def test_build_stats_sentence_none_without_counts(self):
         self.assertIsNone(report_bug.build_stats_sentence(True, None, {}))

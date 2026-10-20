@@ -232,13 +232,9 @@ def get_ingest_products():
 
 
 def get_product_channels(product):
-    """The channels *product* exists on: ``product_channels.<product>`` in ``config/global.json``,
-    else every configured channel.
+    """Read ``product_channels.<product>``, defaulting to all configured channels.
 
-    Fenix is nightly-only for now (``{"Fenix": ["nightly"]}``): its build source
-    (``tcindex``) serves one leaf, and pairing it with beta/release/esr153 would run
-    ``put_filelog`` + ``sigtrend.backfill`` + the selector against Socorro for channels that
-    can never yield a build row. Firefox has no entry and keeps every channel."""
+    Fenix excludes ESR; Firefox uses all configured channels."""
     table = _get_global().get("product_channels") or {}
     chans = table.get(product)
     return list(chans) if chans is not None else list(get_channels())

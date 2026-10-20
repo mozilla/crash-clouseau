@@ -470,7 +470,7 @@ class TestGetChangesetSpeaksGit(unittest.TestCase):
         git2hg.assert_not_called()
 
 
-class TestCollectAllPairsFenixWithNightlyOnly(unittest.TestCase):
+class TestCollectAllPairsFenixWithItsChannels(unittest.TestCase):
     def _run(self, **kw):
         backfill = mock.Mock(return_value=1)
         with mock.patch.object(sigtrend, "backfill", backfill), \
@@ -484,18 +484,18 @@ class TestCollectAllPairsFenixWithNightlyOnly(unittest.TestCase):
         return total, [c.args[:2] for c in backfill.call_args_list]
 
     def test_the_shipped_pairing(self):
-        self.assertEqual(config.get_product_channels("Fenix"), ["nightly"])
+        self.assertEqual(config.get_product_channels("Fenix"), ["nightly", "beta", "release"])
         self.assertEqual(config.get_product_channels("Firefox"), config.get_channels())
 
-    def test_fenix_is_rolled_up_on_nightly_and_nowhere_else(self):
+    def test_fenix_is_rolled_up_on_its_channels_only(self):
         total, pairs = self._run()
         self.assertEqual(pairs, [("Firefox", "nightly"), ("Firefox", "beta"),
                                  ("Firefox", "release"), ("Firefox", "esr153"),
-                                 ("Fenix", "nightly")])
-        self.assertEqual(total, 5)
+                                 ("Fenix", "nightly"), ("Fenix", "beta"), ("Fenix", "release")])
+        self.assertEqual(total, 7)
 
     def test_an_explicit_pair_outside_the_product_is_refused(self):
-        total, pairs = self._run(products=["Fenix"], channels=["beta"])
+        total, pairs = self._run(products=["Fenix"], channels=["esr153"])
         self.assertEqual((total, pairs), (0, []))
 
 

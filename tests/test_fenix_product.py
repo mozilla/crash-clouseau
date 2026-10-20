@@ -56,6 +56,15 @@ _FENIX_NIGHTLY = {
     ("spike", "real_installs"): 3,
     ("spike", "real_alert_rate"): 0.00015,
 }
+_FENIX_BETA = {**_FENIX_NIGHTLY, ("spike", "min_build_installs"): 3}
+_FENIX_RELEASE = {**_FENIX_NIGHTLY, **{
+    ("thresholds", "installs"): 20,
+    ("thresholds", "protos"): 20,
+    ("spike", "floor"): 20,
+    ("spike", "history_days"): 42,
+    ("spike", "min_build_installs"): 15,
+    ("spike", "real_installs"): 20,
+}}
 
 
 def _knob(block, typ, product, channel):
@@ -109,9 +118,9 @@ class TestTheConfiguredProduct(unittest.TestCase):
     already has, because a list that defines an enum is the wrong list to default an action
     to (tests/test_shipped_channels.py::test_ingest_channels_must_always_be_set_explicitly)."""
 
-    def test_fenix_is_a_configured_product_and_nightly_only(self):
+    def test_fenix_is_a_configured_product_without_esr(self):
         self.assertEqual(config.get_products(), ["Firefox", "Fenix"])
-        self.assertEqual(config.get_product_channels("Fenix"), ["nightly"])
+        self.assertEqual(config.get_product_channels("Fenix"), ["nightly", "beta", "release"])
         # Firefox has no `product_channels` entry and keeps every channel -- the lever restricts
         # only what it names, so adding it changed nothing for desktop.
         self.assertEqual(config.get_product_channels("Firefox"), config.get_channels())
@@ -182,9 +191,7 @@ class TestTheShippedFenixNightlyKnobs(unittest.TestCase):
             with self.subTest(block=block, typ=typ):
                 entry = g[block][typ]
                 self.assertIn("Fenix", entry)
-                # Nightly ONLY: the pairing lever keeps Fenix off beta/release/esr153, and an
-                # entry there would be a number nobody measured.
-                self.assertEqual(set(entry["Fenix"]), {"nightly"})
+                self.assertEqual(set(entry["Fenix"]), set(config.get_product_channels("Fenix")))
 
     def test_the_shipped_values(self):
         """Firefox nightly's numbers, with three DELIBERATE departures.
@@ -230,6 +237,21 @@ class TestTheShippedFenixNightlyKnobs(unittest.TestCase):
         self.assertEqual(config.get_threshold("protos", "Firefox", "nightly"), 50)
         self.assertEqual(config.get_threshold("installs", "Firefox", "beta"), 6)
 
+    def test_the_shipped_beta_and_release_values(self):
+        for channel, shipped in (("beta", _FENIX_BETA), ("release", _FENIX_RELEASE)):
+            for (block, typ), value in shipped.items():
+                with self.subTest(channel=channel, block=block, typ=typ):
+                    self.assertEqual(_knob(block, typ, "Fenix", channel), value)
+            for block, typ in (("thresholds", "installs"), ("spike", "floor"),
+                               ("spike", "real_installs"), ("spike", "min_build_installs")):
+                with self.subTest(channel=channel, typ=typ):
+                    self.assertLessEqual(_knob(block, typ, "Fenix", channel),
+                                         _knob(block, typ, "Firefox", channel))
+        self.assertGreater(config.get_spike("floor", "Fenix", "beta"),
+                           config.get_threshold("installs", "Fenix", "beta"))
+        self.assertEqual(config.get_spike("history_days", "Fenix", "release"),
+                         config.get_spike("history_days", "Firefox", "release"))
+
     def test_the_channel_branching_consumers_treat_fenix_nightly_as_a_nightly(self):
         """``get_maturity_bar`` and ``get_no_user_build_floor`` branch on ``channel ==
         "nightly"`` only, so Fenix nightly reads the maturity bar and floor 0 exactly as
@@ -245,10 +267,10 @@ class TestTheShippedFenixNightlyKnobs(unittest.TestCase):
                            config.get_threshold("installs", "Fenix", "nightly"))
 
     def test_an_unpaired_channel_falls_to_the_code_default(self):
-        """No Fenix beta entry, by design: what a stray ``get_spike("floor", "Fenix", "beta")``
-        would read is the quiet code default, not Firefox beta's number."""
-        self.assertEqual(config.get_spike("floor", "Fenix", "beta"), config._SPIKE_DEFAULTS["floor"])
-        self.assertEqual(config.get_threshold("protos", "Fenix", "beta"), 1)
+        """An unconfigured Fenix channel uses code defaults."""
+        self.assertEqual(config.get_spike("floor", "Fenix", "esr153"),
+                         config._SPIKE_DEFAULTS["floor"])
+        self.assertEqual(config.get_threshold("protos", "Fenix", "esr153"), 1)
 
 
 class TestFenixFilingPolicy(unittest.TestCase):
@@ -745,14 +767,10 @@ class TestTheProductClauses(unittest.TestCase):
         self.assertIn("builds.channel AS channel", str(compiled))
 
 
-class TestUpdatePairsFenixWithNightly(unittest.TestCase):
-    """D5 / D6 and the ingestion path: ``update_all`` pairs Fenix with nightly only,
-    ``update_builds`` dispatches through ``buildsource`` (the TaskCluster index for Fenix, the
-    same ``buildhub`` object for everything else) and ``put_report`` marks a report with no
-    stack analysed. The pairing/guard cases on ``update()`` itself are in
-    tests/test_update.py beside their channel analogs."""
+class TestUpdatePairsFenixWithItsChannels(unittest.TestCase):
+    """Check product/channel pairing, build-source dispatch and reports without stacks."""
 
-    def test_the_tick_pairs_fenix_with_nightly_only(self):
+    def test_the_tick_pairs_fenix_with_its_channels(self):
         pairs = []
         with mock.patch.object(update, "update_in_queue",
                                side_effect=lambda channel, product: pairs.append((product, channel))), \
@@ -761,8 +779,8 @@ class TestUpdatePairsFenixWithNightly(unittest.TestCase):
             update.update_all()
         self.assertEqual([c for p, c in pairs if p == "Firefox"],
                          ["nightly", "beta", "release", "esr153"])
-        self.assertEqual([c for p, c in pairs if p == "Fenix"], ["nightly"])
-        self.assertEqual(len(pairs), 5)
+        self.assertEqual([c for p, c in pairs if p == "Fenix"], ["nightly", "beta", "release"])
+        self.assertEqual(len(pairs), 7)
 
     def test_buildsource_dispatch(self):
         """``for_product("Firefox") is buildhub``: the desktop path is the identical function

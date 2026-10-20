@@ -110,10 +110,7 @@ def sweep_real_spikes():
             channels = config.get_agent_channels()
             room = cfg["max_per_tick"]
             enqueued = 0
-            # The products the agent TRIAGES, not every product the enum knows
-            # (`get_products` also defines `PRODUCT_TYPE`, so Fenix had to enter it before it
-            # could be ingested at all), and only their own channels: Fenix is nightly-only
-            # and a beta/release/esr153 sweep for it would read an empty selection log.
+            # Use the triage product list, filtered to each product's channels.
             for product in config.get_agent_products():
                 if _filing_held(product):
                     continue

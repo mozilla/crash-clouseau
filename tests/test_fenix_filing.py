@@ -296,11 +296,12 @@ class TestTheSweepSkipsAHeldProduct(unittest.TestCase):
                             for line in logs.output), logs.output)
 
     def test_the_armed_fenix_is_swept_on_its_own_channels_only(self):
-        # Shipped: Fenix is nightly-only (`product_channels`), so a beta sweep for it would
-        # read an empty selection log.
-        se.sweep_real_spikes()
-        self.assertEqual(self.swept,
-                         [("Firefox", "nightly"), ("Firefox", "beta"), ("Fenix", "nightly")])
+        with mock.patch.object(config, "get_agent_channels",
+                               return_value=["nightly", "beta", "esr153"]):
+            se.sweep_real_spikes()
+        self.assertEqual(self.swept, [("Firefox", "nightly"), ("Firefox", "beta"),
+                                      ("Firefox", "esr153"), ("Fenix", "nightly"),
+                                      ("Fenix", "beta")])
 
     def test_the_sweep_reads_the_agents_products_not_the_enum(self):
         # `get_products` also defines `PRODUCT_TYPE`, so Fenix entered it before it could be

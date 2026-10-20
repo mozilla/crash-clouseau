@@ -85,9 +85,7 @@ def ingest(uuid):
             data.get("release_channel"), data.get("version")))
     allowed = config.get_product_channels(product)
     if channel not in allowed:
-        # Fenix is nightly-only (`product_channels`): there is no build source for the pair,
-        # so "not in the ingested window" would blame the window for a channel that never has
-        # one. Same refusal `update.update` gives a queued job for the pair.
+        # Distinguish an unsupported product/channel from a missing build in the window.
         raise TriggerError("{} is ingested on {} only; {!r} is not one of its channels".format(
             product, "/".join(allowed), channel))
     buildid = str(data["build"])

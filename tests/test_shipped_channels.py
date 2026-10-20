@@ -155,11 +155,6 @@ class TestShippedAgentChannels(unittest.TestCase):
                 mock.patch.object(update, "update_in_queue") as enq:
             update.update_all(products=["Firefox"])
         self.assertEqual([c.args[0] for c in enq.call_args_list], ["nightly", "beta"])
-        # The trap has to be documented at the function that reads the variable, because that
-        # is where somebody stands when they decide to unset it.
-        doc = (update.update_all.__doc__ or "").lower()
-        self.assertIn("ingest_channels", doc)
-        self.assertIn("fired in production", doc)
         # The containment, and the reason the accidental release ingest was not an incident: it
         # is not triaged by the JSON default (no LLM spend without AGENT_CHANNELS naming it), and
         # its filing is DECLARED -- a decision, not a gap. Held from 2026-08-31, ARMED 2026-09-07

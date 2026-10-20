@@ -11,7 +11,7 @@
     ],
     "product_channels":
     {
-        "Fenix": ["nightly"]
+        "Fenix": ["nightly", "beta", "release"]
     },
     "channels":
     [
@@ -65,7 +65,9 @@
             },
             "Fenix":
             {
-                "nightly": 1
+                "nightly": 1,
+                "beta": 1,
+                "release": 20
             }
         },
         "protos":
@@ -79,7 +81,9 @@
             },
             "Fenix":
             {
-                "nightly": 5
+                "nightly": 5,
+                "beta": 5,
+                "release": 20
             }
         }
     },
@@ -96,7 +100,9 @@
             },
             "Fenix":
             {
-                "nightly": 3
+                "nightly": 3,
+                "beta": 3,
+                "release": 20
             }
         },
         "ratio":
@@ -110,7 +116,9 @@
             },
             "Fenix":
             {
-                "nightly": 3
+                "nightly": 3,
+                "beta": 3,
+                "release": 3
             }
         },
         "mature_after_days":
@@ -124,7 +132,9 @@
             },
             "Fenix":
             {
-                "nightly": 5
+                "nightly": 5,
+                "beta": 5,
+                "release": 5
             }
         },
         "history_days":
@@ -138,7 +148,9 @@
             },
             "Fenix":
             {
-                "nightly": 21
+                "nightly": 21,
+                "beta": 21,
+                "release": 42
             }
         },
         "mature_installs":
@@ -152,7 +164,9 @@
             },
             "Fenix":
             {
-                "nightly": 4
+                "nightly": 4,
+                "beta": 4,
+                "release": 4
             }
         },
         "min_build_installs":
@@ -166,7 +180,9 @@
             },
             "Fenix":
             {
-                "nightly": 0
+                "nightly": 0,
+                "beta": 3,
+                "release": 15
             }
         },
         "rising_per_day":
@@ -180,7 +196,9 @@
             },
             "Fenix":
             {
-                "nightly": 0
+                "nightly": 0,
+                "beta": 0,
+                "release": 0
             }
         },
         "rising_protos":
@@ -194,7 +212,9 @@
             },
             "Fenix":
             {
-                "nightly": 3
+                "nightly": 3,
+                "beta": 3,
+                "release": 3
             }
         },
         "real_installs":
@@ -208,7 +228,9 @@
             },
             "Fenix":
             {
-                "nightly": 3
+                "nightly": 3,
+                "beta": 3,
+                "release": 20
             }
         },
         "real_alert_rate":
@@ -222,7 +244,9 @@
             },
             "Fenix":
             {
-                "nightly": 0.00015
+                "nightly": 0.00015,
+                "beta": 0.00015,
+                "release": 0.00015
             }
         }
     },

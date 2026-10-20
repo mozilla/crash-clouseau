@@ -426,9 +426,7 @@ def update(date, channel, product, analyze=True):
     if channel not in config.get_ingest_channels():
         logger.warning("update: channel %r is not in INGEST_CHANNELS; ignoring the job", channel)
         return
-    # The product half of the same guard (`INGEST_PRODUCTS` / `ingest_products`), and the
-    # (product, channel) pairing: Fenix is nightly-only, and a queued Fenix/beta job must be a
-    # no-op rather than a Socorro sweep for a channel with no Fenix build source.
+    # Recheck queued jobs against the current product and channel configuration.
     if product not in config.get_ingest_products():
         logger.warning("update: product %r is not ingested; ignoring the job", product)
         return
@@ -459,33 +457,12 @@ def update_in_queue(channel, product, date=None):
 
 
 def update_all(products=None, channels=None, date=None):
-    """Update all. Channels come from $INGEST_CHANNELS (space-separated).
+    """Enqueue ingestion for each configured product/channel pair.
 
-    THE EMPTY DEFAULT FAILED OPEN, AND IT FIRED IN PRODUCTION. This used to read
-    ``os.getenv("INGEST_CHANNELS", "").split() or config.get_channels()`` — so an ABSENT or EMPTY
-    variable meant *every configured channel*, i.e. nightly + beta + RELEASE. The variable was
-    first set at Heroku release v9; before that, one tick ingested release, and the residue is
-    still there: 7,267 ``nodes`` rows on a perfectly contiguous id block (12936..20202, so
-    exactly one ``Changeset.add`` batch, ever), 20,320 ``changesets`` rows = 61.3% of that table,
-    and a ``lastdate`` row for ``release`` frozen at 2026-07-06. 19,527 of those changesets are
-    ``analyzed=true``, meaning the serial patch chain fetched and parsed 2,628 mozilla-release
-    raw-revs off hg for a channel nobody had turned on.
-
-    So the default is now CLOSED: an absent or empty variable ingests NOTHING and says so. That
-    inverts the usual reflex — ``heroku config:unset INGEST_CHANNELS`` used to be the most
-    dangerous command in the deployment and is now merely a full stop — and it costs nothing,
-    because every environment that wants ingestion already sets the variable (prod at v9/v122,
-    ``docker-compose`` through ``bin/init.py``, and the tests pass ``channels=`` explicitly).
-
-    Still not a kill switch for SPEND: ``INGEST_CHANNELS`` decides what is ingested (free);
-    ``AGENT_CHANNELS`` decides what is analysed (~$1-3 a crash). See
-    ``config.get_agent_channels``.
-
-    THE PRODUCT AXIS (2026-09-15): products come from ``config.get_ingest_products``
-    (``INGEST_PRODUCTS``, else the config's ``ingest_products``, default both -- a JSON default
-    on purpose, so introducing the lever cannot stop desktop for a tick), and each product is
-    paired only with the channels ``config.get_product_channels`` allows (Fenix: nightly). The
-    spend half is ``AGENT_PRODUCTS`` / ``config.get_agent_products``."""
+    Products default to ``get_ingest_products``; channels to ``INGEST_CHANNELS``.
+    An unset or empty ``INGEST_CHANNELS`` enqueues nothing. ``product_channels``
+    restricts each product's channels. Agent triage has separate product/channel settings.
+    """
     if products is None:
         # NOT `config.get_products()`: that list defines the PRODUCT_TYPE enum, the same way
         # `config.get_channels()` defines CHANNEL_TYPE, and is the wrong list to default an
@@ -510,7 +487,5 @@ def update_all(products=None, channels=None, date=None):
         allowed = config.get_product_channels(product)
         for channel in channels:
             if channel not in allowed:
-                # Fenix x beta/release/esr153: no build source, so no job (and no second
-                # `put_filelog` + `sigtrend.backfill` + selector sweep per tick for nothing).
                 continue
             update_in_queue(channel, product)
