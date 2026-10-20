@@ -669,8 +669,15 @@ class TestAMergeMemberIsNotARegressor(unittest.TestCase):
         comment = _preview(MERGE_MEMBER, d.corroborations)["comment"]
         self.assertNotIn("did not land in this build's pushlog window", comment)
         # ...and it says the true thing instead, rather than merely omitting the false one.
-        self.assertIn("reached this branch with the cycle merge", comment)
+        self.assertIn("reached this branch with the cycle merge from mozilla-central", comment)
         self.assertIn("not evidence", comment)
+
+    def test_a_release_merge_comes_from_beta(self):
+        d = _lead(MERGE_MEMBER)
+        orch._record_window_membership(d, {"candidates": [
+            {"node": MERGE_MEMBER, "via_merge": True, "pushdate": [MERGE_TS, 0]}]})
+        comment = _preview(MERGE_MEMBER, d.corroborations, channel="release")["comment"]
+        self.assertIn("reached this branch with the cycle merge from mozilla-beta", comment)
 
 
 if __name__ == "__main__":

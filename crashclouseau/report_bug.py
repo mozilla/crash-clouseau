@@ -2095,6 +2095,9 @@ def build_skeptic_block(dossier, max_items=_MAX_SKEPTIC_ITEMS):
             "for the conclusion):\n" + "\n".join(lines) + "\n\n</details>")
 
 
+_MERGE_UPSTREAM = {"beta": "mozilla-central", "release": "mozilla-beta"}
+
+
 def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
                          author_display=None):
     """The Clouseau analysis comment we'd post to the filed bug: the crash mechanism (and,
@@ -2136,20 +2139,17 @@ def _explanation_comment(verdict, candidate, channel=None, corroborations=None,
         if is_suspected_regression(corroborations):
             lines.append("Suspected regressor: {}.".format(link))
         elif (corroborations or {}).get("candidate_arrived_by_merge"):
-            # TWO REASONS, TWO SENTENCES. `is_suspected_regression` is False here for the OTHER
-            # reason -- the changeset IS in this build's pushlog window, and the window is why it
-            # was seeded at all -- so the out-of-window prose below would state the opposite of
-            # the truth on a bug whose whole purpose is to invite correction, and a reader could
-            # falsify it from the pushlog link in the same comment.
+            # Merge members are in the pushlog window but are not suspected regressors.
+            upstream = _MERGE_UPSTREAM.get(config.channel_family(channel or ""))
             lines.append(
                 "Starting point — NOT a suspected cause: {}.\n\nThis changeset reached this "
-                "branch with the cycle merge from mozilla-central, so it IS in this build's "
+                "branch with the cycle merge{}, so it IS in this build's "
                 "pushlog window — but that window is one push carrying a whole development "
                 "cycle (thousands of changesets at a single push date), which is not evidence "
                 "that the crash is a recent regression from this one. It was written on trunk "
                 "earlier and shipped here now. If you know where this actually comes from, that "
                 "correction is the most useful thing you could leave on this "
-                "bug.".format(link))
+                "bug.".format(link, " from {}".format(upstream) if upstream else ""))
         else:
             # Everything the pipeline has here is "this code is on the crash path", which is a
             # starting point and not an origin. Ask for the correction outright -- it is the
