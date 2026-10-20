@@ -17,6 +17,7 @@ import inspect  # noqa: E402
 import pathlib  # noqa: E402
 import unittest  # noqa: E402
 
+from crashclouseau import utils  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 from crashclouseau.agent.schema import (  # noqa: E402
     AbstainKind,
@@ -84,6 +85,57 @@ def _dossier(decision=Decision.actionable, paths=("js/src/irregexp/util/ZoneShim
         candidate=Candidate(node="6e6fbe10aa30", bug=1690142, author="Iain Ireland"),
         verdict=Verdict(**fields),
     )
+
+
+_JAVA_OOM_SIG = ("java.lang.OutOfMemoryError: at android.hardware.SystemSensorManager"
+                 "$SensorEventQueue.dispatchSensorEvent(SystemSensorManager.java)")
+
+
+def _java_raw(signature=_JAVA_OOM_SIG, kind="OutOfMemoryError", module="java.lang"):
+    """Build a synthetic Fenix Java exception."""
+    return {"signature": signature, "product": "Fenix", "release_channel": "release",
+            "java_exception": {"exception": {"values": [{"stacktrace": {
+                "type": kind, "module": module, "value": None, "frames": []}}]}}}
+
+
+class TestJavaOutOfMemoryError(unittest.TestCase):
+    def test_the_signature_or_the_exception_names_it(self):
+        self.assertTrue(utils.is_java_oom(_JAVA_OOM_SIG, None))
+        self.assertTrue(utils.is_oom_crash(_JAVA_OOM_SIG, None))
+        # An outer exception's signature must not hide an OOM cause.
+        wrapped = _java_raw("java.lang.RuntimeException: at a.B.c(B.kt)")
+        wrapped["java_exception"]["exception"]["values"].insert(
+            0, {"stacktrace": {"type": "RuntimeException", "module": "java.lang"}})
+        self.assertTrue(utils.is_oom_crash(wrapped["signature"], wrapped))
+
+    def test_other_names_are_not_one(self):
+        self.assertFalse(utils.is_oom_crash("java.lang.OutOfMemoryErrorX: at a.B.c(B.kt)", None))
+        sig = "java.lang.IllegalStateException: at a.B.c(B.kt)"
+        self.assertFalse(utils.is_oom_crash(sig, _java_raw(sig, kind="IllegalStateException")))
+        self.assertFalse(utils.is_java_oom("x", _java_raw("x", module="com.example")))
+
+    def test_an_actionable_java_oom_is_resource_exhaustion(self):
+        d = _dossier(paths=("mobile/android/geckoview/src/main/java/org/mozilla/geckoview/"
+                            "GeckoSession.java",))
+        orch._apply_oom_gate(d, _seed(_java_raw()))
+        self.assertEqual((d.verdict.decision, d.verdict.abstain_kind),
+                         (Decision.abstain, AbstainKind.resource_exhaustion))
+        self.assertIn("the Java `OutOfMemoryError` is treated as an unknown-size OOM",
+                      d.verdict.abstain_reason)
+        self.assertEqual(d.corroborations["oom_not_actionable"],
+                         {"kind": "unknown", "reason": None, "memory": None,
+                          "exception": "java.lang.OutOfMemoryError"})
+        self.assertEqual(d.verdict.mechanism.statement, _MECH)
+
+    def test_a_lead_or_another_java_exception_stands(self):
+        d = _dossier(decision=Decision.lead)
+        orch._apply_oom_gate(d, _seed(_java_raw()))
+        self.assertEqual(d.verdict.decision, Decision.lead)
+        sig = "java.lang.IllegalStateException: at a.B.c(B.kt)"
+        d = _dossier()
+        orch._apply_oom_gate(d, _seed(_java_raw(sig, kind="IllegalStateException")))
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        self.assertNotIn("oom_not_actionable", d.corroborations)
 
 
 class TestTheSizeClass(unittest.TestCase):

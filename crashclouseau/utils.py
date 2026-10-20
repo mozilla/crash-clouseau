@@ -623,11 +623,28 @@ OOM_SIZE_NOT_REQUEST = {
 }
 
 
+JAVA_OOM = "java.lang.OutOfMemoryError"
+
+
+def is_java_oom(signature, raw):
+    """Identify Java OOMs by signature or exception chain."""
+    raw = raw or {}
+    signature = str(signature or raw.get("signature") or "")
+    if signature == JAVA_OOM or signature.startswith(JAVA_OOM + ":"):
+        return True
+    values = (((raw.get("java_exception") or {}).get("exception") or {}).get("values"))
+    for value in values if isinstance(values, list) else ():
+        st = (value or {}).get("stacktrace") or {}
+        if st.get("type") == "OutOfMemoryError" and st.get("module") in (None, "", "java.lang"):
+            return True
+    return False
+
+
 def is_oom_crash(signature, raw):
     """Whether the signature or processed-crash annotations identify an OOM."""
     raw = raw or {}
     signature = str(signature or raw.get("signature") or "")
-    if signature.startswith("OOM | "):
+    if signature.startswith("OOM | ") or is_java_oom(signature, raw):
         return True
     dump = raw.get("json_dump") or {}
     reason = str(raw.get("moz_crash_reason") or dump.get("moz_crash_reason") or "")

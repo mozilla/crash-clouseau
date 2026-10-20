@@ -3084,9 +3084,8 @@ _memory_picture = utils.memory_picture
 def _apply_oom_gate(dossier, seed):
     """Downgrade unsupported ``actionable`` OOM verdicts to ``resource_exhaustion``.
 
-    Covers unknown/small OOMs, ``[unhandlable oom]``, size-less ``Reporting`` large OOMs,
-    and large OOMs at ``utils.OOM_SIZE_NOT_REQUEST`` callers. Preserves the title,
-    mechanism and consistency claims."""
+    Covers unknown/small, unhandlable and Java OOMs, plus large OOMs with size-less
+    ``Reporting`` or ``OOM_SIZE_NOT_REQUEST`` callers. Keep the title and claims."""
     v = dossier.verdict if dossier is not None else None
     if v is None or v.decision != Decision.actionable:
         return
@@ -3126,6 +3125,12 @@ def _apply_oom_gate(dossier, seed):
         why = ("the recorded {} is not the failed request: `NS_ABORT_OOM` at `{}` {}"
                .format("{:,} bytes".format(int(size)) if size else "size", site[0], site[1]))
         extra = {"site": site[0]}
+    elif kind is None and utils.is_java_oom(signature, raw):
+        # Apply the unknown-size OOM policy to Java OOMs.
+        kind = "unknown"
+        trigger = utils.JAVA_OOM
+        why = "the Java `OutOfMemoryError` is treated as an unknown-size OOM"
+        extra = {"exception": utils.JAVA_OOM}
     else:
         return
     picture = _memory_picture(raw)
