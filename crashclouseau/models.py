@@ -1889,6 +1889,31 @@ class UUID(db.Model):
         return False
 
     @staticmethod
+    def unanalysed_signature(uuid):
+        """Return uuid's (signatureid, product) if that pair has no dossiers, else None.
+
+        Any dossier for that pair counts, regardless of status or channel.
+        """
+        row = (
+            db.session.query(UUID.signatureid, Build.product)
+            .select_from(UUID)
+            .join(Build, Build.id == UUID.buildid)
+            .filter(UUID.uuid == uuid)
+            .first()
+        )
+        if not row or row.signatureid is None:
+            return None
+        analysed = (
+            db.session.query(Dossier.id)
+            .join(UUID, UUID.id == Dossier.uuidid)
+            .join(Build, Build.id == UUID.buildid)
+            .filter(UUID.signatureid == row.signatureid, Build.product == row.product)
+        )
+        if db.session.query(analysed.exists()).scalar():
+            return None
+        return row.signatureid, row.product
+
+    @staticmethod
     def untriaged(after_id, min_age_s, max_age_s, limit, channels=None, products=None):
         """Ingested crashes that have NO dossier at all and whose proto-signature cluster has
         never been usably triaged — i.e. the ones the pipeline would analyse if it were offered

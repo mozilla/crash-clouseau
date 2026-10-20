@@ -5710,6 +5710,23 @@ def _proto_already_triaged(uuid):
         return False
 
 
+_FRONT_KEY = "clouseau:agent:front:{}:{}"
+_FRONT_CLAIM_S = 86400
+
+
+def _goes_to_front(uuid, conn):
+    """Claim front priority for a signature/product with no dossier; False on error."""
+    try:
+        sig = models.UUID.unanalysed_signature(uuid)
+        if sig is None:
+            return False
+        # NX prevents sibling promotions while the 24-hour claim exists.
+        return bool(conn.set(_FRONT_KEY.format(*sig), uuid, nx=True, ex=_FRONT_CLAIM_S))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("agent: new-signature check failed for %s: %s", uuid, exc)
+        return False
+
+
 def _live_job_uuids(queue):
     """UUIDs that already have a live job on the agent queue — waiting for a free worker,
     started, parked in the scheduler for a retry, or deferred.
@@ -5873,7 +5890,9 @@ def enqueue_agent(uuid, channel=None, force=False, product=None):
     channel)`` only); a lookup failure filters nothing, as an unknown channel filters nothing.
 
     ``force`` (a tasks-view retrigger of one explicit uuid) bypasses the channel, product and
-    proto-dedup gates and tells ``run_evidence_agent`` to re-run past its own guards."""
+    proto-dedup gates and tells ``run_evidence_agent`` to re-run past its own guards.
+
+    ``_goes_to_front`` gives signatures without dossiers front priority."""
     if not config.get_agent_enabled():
         return
     if not force:
@@ -5903,6 +5922,9 @@ def enqueue_agent(uuid, channel=None, force=False, product=None):
             logger.info("agent: proto-signature already triaged for %s; not enqueuing", uuid)
             return
     queue = worker.get_queue(config.get_agent_queue())
+    front = _goes_to_front(uuid, queue.connection)
+    if front:
+        logger.info("agent: prioritizing %s (no dossier for its signature/product)", uuid)
     queue.enqueue_call(
         func=run_evidence_agent,
         args=(uuid,),
@@ -5917,6 +5939,7 @@ def enqueue_agent(uuid, channel=None, force=False, product=None):
         # provider/searchfox outage doesn't turn into a retry-storm. run_evidence_agent
         # re-raises only transient failures; a real error fails on the first attempt.
         retry=Retry(max=2, interval=[60, 300]),
+        at_front=front,
     )
 
 
