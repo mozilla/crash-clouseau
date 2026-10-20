@@ -384,8 +384,7 @@ class TestTheSpikeBriefKnowsAJavaStack(unittest.TestCase):
         self.assertFalse(seed["line_numbers_trusted"])
         self.assertEqual(seed["frames"][0]["filename"], "AndroidKeyStoreKeyGeneratorSpi.java")
         self.assertEqual(seed["stack"], "rendered")
-        # The orchestrator's renderer is told the lines are R8-remapped (its Fenix contract).
-        self.assertEqual(calls, [{"line_numbers_trusted": False}])
+        self.assertEqual(calls, [{"line_numbers_trusted": False, "java": True}])
 
     def test_a_desktop_seed_is_byte_identical(self):
         calls = []

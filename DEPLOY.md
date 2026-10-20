@@ -347,8 +347,8 @@ filing policy is enabled with `skip` and no daily cap, subject to `AUTOFILE_BUGS
    restores line-proximity scoring, line citations and the anchors everywhere -- a config edit
    and a deploy; the flag is derived at read time, so history is relabelled consistently. Our
    packages are `java.packages` (`org.mozilla.`, `mozilla.components.`, `mozilla.appservices.`,
-   `mozilla.telemetry.`); a crash whose frames are all the framework's is `no usable stack` to
-   the trigger, exactly like a native crash without a `json_dump`.
+   `mozilla.telemetry.`). Without a `json_dump`, Java stacks with no frames in these packages
+   are retained only when off-stack analysis is enabled.
 
 ## Fenix beta and release (2026-10-20)
 
@@ -643,6 +643,16 @@ the deterministic awaited-work title, not model-authored claim text.
 
 The gate is unconditional. Monitor `oom_not_actionable` corroborations and the log message
 `actionable verdict with unsupported OOM evidence` after deployment.
+
+## Java OOMs and framework-only Java stacks (2026-10-20)
+
+`OFFSTACK_ENABLED=1` retains Java stacks with no frame in `java.packages` when `json_dump` is
+absent. Java prompts include class and method names; Java stack hashes include them even when
+line numbers are trusted, since framework frames have no resolved filename.
+
+`utils.is_oom_crash` recognizes Java `OutOfMemoryError` by signature or `java_exception`.
+The Java OOM branch of `_apply_oom_gate` changes `actionable` to `abstain` /
+`resource_exhaustion`, recording kind `unknown` in `oom_not_actionable`.
 
 ## Old signatures in engine code (2026-10-19)
 

@@ -131,10 +131,10 @@ def rising_rate_mindate(mindate, buildid, channel, product, signature):
 
 def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=True,
                force=False, source_reads=True):
-    """Put a report in the database. Returns ``True`` when a stack was stored for it (the run
-    has something to read), ``False`` when every stack was already known on this build, and
-    ``None`` when Socorro has neither a ``json_dump`` nor a Java stack with a frame of ours
-    (the report is then marked analysed, so the chain moves on).
+    """Store and score a report, returning ``True`` if a stack was stored.
+
+    Return ``None`` without a dump or retainable Java stack; otherwise return ``False`` if
+    no stack was stored. Mark the report analysed in each case.
 
     *signature* is what ``rising_rate_mindate`` reads the rate of; ``None`` scores the report
     inside the deployed window exactly as before. ``enqueue=False`` scores without firing the

@@ -198,29 +198,25 @@ _PROLOGUE_PATTERNS = (
 )
 
 
-def _stack_text(frames, line_numbers_trusted=True):
-    """Render the crash stack for the AGENT's prompt. PRESENTATION ONLY — it does NOT touch
-    the stored ``frames`` that feed candidate scoring and the stackpos-keyed dedup hash, so
-    nothing mechanical changes. It strips the LEADING run of generic abort/panic machinery
-    frames (rust_begin_unwind / panic_fmt / MOZ_Crash / ... — the same for every assertion/
-    panic crash) so the REAL crashing frame sits on top of what the model reads, keeping the
-    original stackpos numbers (a leading ``#3`` still tells the agent how deep it was). Never
-    strips so far that the stack goes empty.
+def _stack_text(frames, line_numbers_trusted=True, java=False):
+    """Render prompt frames without changing the stored stack.
 
-    ``line_numbers_trusted=False`` (a Java/Kotlin stack under ``java.trust_line_numbers``
-    false) renders the frame WITHOUT ``file:line``: the reported line is R8-remapped, and on the
-    2026-09-15 example it named a KDoc comment (``Keystore.kt:269`` for a method at line 221) and
-    a licence header (``FxaAccountManager.kt:3``). Printed as ``file:line`` it is the number the
-    model copies into ``stack_frame`` citations and blames, so it is shown as what it is -- a
-    reported, unreliable value -- and separated from the file. The default path is
-    byte-identical."""
+    Elide leading abort/panic frames unless that would empty the stack; keep stack positions.
+    Label untrusted lines separately from filenames. Qualify Java methods with their classes,
+    since framework frames have no resolved filename."""
+    def name(f):
+        fn, mod = f.get("function"), f.get("module") or ""
+        if java and mod and fn and not str(fn).startswith(mod + "."):
+            return "{}.{}".format(mod, fn)
+        return fn
+
     def line(f):
         if not line_numbers_trusted:
             return "#{} {}  {}  (reported line {}: R8-remapped, unreliable)".format(
-                f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
+                f.get("stackpos"), name(f), f.get("filename"), f.get("line")
             ) + ("  [inlined: {}]".format(", ".join(f["inlines"])) if f.get("inlines") else "")
         base = "#{} {}  {}:{}".format(
-            f.get("stackpos"), f.get("function"), f.get("filename"), f.get("line")
+            f.get("stackpos"), name(f), f.get("filename"), f.get("line")
         )
         fi = f.get("inlines")
         if fi:
@@ -663,7 +659,7 @@ def build_seed(uuid):
     # is the prompt's caveat, not this flag's.
     java = bool(uuid_info.get("java"))
     line_numbers_trusted = (not java) or config.java_trust_line_numbers()
-    stack_text = _stack_text(frames, line_numbers_trusted=line_numbers_trusted)
+    stack_text = _stack_text(frames, line_numbers_trusted=line_numbers_trusted, java=java)
     channel = info.get("channel") or uuid_info.get("channel") or "nightly"
     # Read the rate BEFORE the candidate window is built, because it now decides how wide that
     # window is (`_offstack_window`). Two indexed reads of a rolling table, no Socorro call, and

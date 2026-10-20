@@ -118,14 +118,19 @@ def get_crash_info(
         if interesting or config.get_agent_offstack()["enabled"]:
             res["java"] = {
                 "frames": jframes,
-                "hash": get_simplified_hash(jframes),
+                "hash": get_simplified_hash(jframes, java=True),
                 "offstack": not interesting,
             }
     else:
-        # No JVM frame of ours: a platform-only Java stack (or none) -- read the native
-        # stack when there is one, otherwise there is nothing to score and `put_report`
-        # marks the report analysed.
+        # Prefer the native stack when no Java frame belongs to our packages.
         if "json_dump" not in data:
+            if jframes and config.get_agent_offstack()["enabled"]:
+                res["java"] = {
+                    "frames": jframes,
+                    "hash": get_simplified_hash(jframes, java=True),
+                    "offstack": True,
+                }
+                return res
             if jframes:
                 logger.info("%s: %d Java frames, none in our packages, no json_dump: "
                             "nothing to score", uuid, len(jframes))
@@ -151,21 +156,21 @@ def get_crash_info(
     return res
 
 
-def get_simplified_hash(frames):
-    """Get a hash from the frames we have in the crash stack.
+def get_simplified_hash(frames, java=False):
+    """Hash frame locations, skipping frames with line -1.
 
-    A frame whose line cannot be trusted (a JVM frame under `java.trust_line_numbers`
-    false: R8 renumbers per build) is hashed by what IS stable -- its file, class and method
-    -- instead of the line; every other frame hashes exactly as before."""
+    Include Java class and method names to distinguish frames without filenames.
+    Omit untrusted line numbers."""
     res = ""
     for frame in frames:
         if frame["line"] != -1:
             res += str(frame["stackpos"]) + "\n"
             res += frame["filename"] + "\n"
-            if frame.get("line_trusted", True) is False:
+            untrusted = frame.get("line_trusted", True) is False
+            if java or untrusted:
                 res += frame["module"] + "\n"
                 res += frame["function"] + "\n"
-            else:
+            if not untrusted:
                 res += str(frame["line"]) + "\n"
     if res != "":
         return utils.hash(res)

@@ -110,9 +110,6 @@ def ingest(uuid):
                                # refinement; the forced run still gets the stack and its files).
                                source_reads=False)
     if not scored:
-        # Both stack shapes, since plans/16: a native `json_dump`, or a `java_stack_trace` with
-        # a frame in one of our packages (`config.java_packages`) -- a Java-only crash whose
-        # frames are all framework's is as unreadable to us as a dump-less native one.
         raise TriggerError(
             "no usable stack for {} (Socorro has neither a json_dump nor a java_stack_trace "
             "we can read for it)".format(uuid))

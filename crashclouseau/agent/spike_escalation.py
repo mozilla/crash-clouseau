@@ -684,18 +684,18 @@ def _is_java_report(raw):
         "json_dump")
 
 
-def _stack_text_for(frames, line_numbers_trusted=True):
-    """``orchestrator._stack_text`` with the line-trust flag passed ONLY when it is off, so the
-    desktop call stays byte-identical to what it always was (the flag is the orchestrator's
-    Fenix contract, plans/16 §13.3: untrusted lines are rendered as R8-remapped, not as the
-    source line the model may cite)."""
+def _stack_text_for(frames, line_numbers_trusted=True, java=False):
+    """Render spike stacks, passing only non-default flags to the shared formatter."""
     from crashclouseau.agent import orchestrator
 
     if not frames:
         return ""
-    if line_numbers_trusted:
-        return orchestrator._stack_text(frames)
-    return orchestrator._stack_text(frames, line_numbers_trusted=False)
+    kw = {}
+    if not line_numbers_trusted:
+        kw["line_numbers_trusted"] = False
+    if java:
+        kw["java"] = True
+    return orchestrator._stack_text(frames, **kw)
 
 
 def _minimal_seed(uuid, uuid_info, esc):
@@ -726,7 +726,7 @@ def _minimal_seed(uuid, uuid_info, esc):
         "uuid": uuid, "signature": esc.signature, "channel": esc.channel,
         "product": esc.product, "buildid": esc.buildid,
         "version": (raw or {}).get("version"), "frames": frames,
-        "stack": _stack_text_for(frames, line_numbers_trusted), "candidates": [],
+        "stack": _stack_text_for(frames, line_numbers_trusted, java), "candidates": [],
         "experts": [], "raw_crash": raw, "is_offstack": True, "offstack_reason": None,
         "build_node": (uuid_info or {}).get("node", ""), "pin_rev": (uuid_info or {}).get("node", ""),
         "prior_regressor_bugs": [], "prior_hints": [], "candidate_pushdates": {},
@@ -914,7 +914,7 @@ def _stacks(uuid, siblings, esc, seed):
         other = next((u for u in uuids if _has_frames(u)), None)
         if other is None:
             continue
-        res, _info = models.CrashStack.get_by_uuid(other)
+        res, other_info = models.CrashStack.get_by_uuid(other)
         frames = ((res or {}).get("frames") or [])[: config.get_agent_max_seed_frames()]
         facts = []
         try:
@@ -926,9 +926,9 @@ def _stacks(uuid, siblings, esc, seed):
             logger.warning("spike: could not fetch %s for the brief: %s", other, exc)
         stacks.append({
             "uuid": other, "protohash": proto, "facts": facts,
-            # `CrashStack.get_by_uuid` stamps `line_trusted` per frame; one untrusted frame
-            # makes the whole stack a Java one.
-            "stack": _stack_text_for(frames, all(f.get("line_trusted", True) for f in frames)),
+            # Mark every line untrusted if any frame is untrusted.
+            "stack": _stack_text_for(frames, all(f.get("line_trusted", True) for f in frames),
+                                     bool((other_info or {}).get("java"))),
             "share": "{} of the {} ingested reports share this stack".format(len(uuids), total),
         })
     return stacks

@@ -42,6 +42,18 @@ _JAVA_FRAMES = [
      "filename": _KT, "line": 51, "line_trusted": False, "changesets": {}},
 ]
 
+# Framework-only frames have class and method names but no resolved source file.
+_FRAMEWORK_FRAMES = [
+    {"stackpos": 0, "module": "android.hardware.SystemSensorManager$SensorEventQueue",
+     "function": "dispatchSensorEvent", "filename": "", "line": 860, "line_trusted": False,
+     "internal": False, "changesets": {}},
+    {"stackpos": 1, "module": "android.os.MessageQueue", "function": "nativePollOnce",
+     "filename": "", "line": -2, "line_trusted": False, "internal": False, "changesets": {}},
+    {"stackpos": 2, "module": "com.android.internal.os.RuntimeInit$MethodAndArgsCaller",
+     "function": "run", "filename": "", "line": 548, "line_trusted": False, "internal": False,
+     "changesets": {}},
+]
+
 # The native frames of a desktop seed, and how HEAD rendered them (captured 2026-09-15).
 _NATIVE_FRAMES = [
     {"stackpos": 0, "function": "mozilla::dom::Foo::Bar", "filename": "dom/base/Foo.cpp",
@@ -170,6 +182,34 @@ class TestSeedFlags(unittest.TestCase):
         self.assertIs(seed["java"], False)
         self.assertIs(seed["line_numbers_trusted"], True)
         self.assertEqual(seed["stack"], _NATIVE_STACK_HEAD)
+
+    def test_a_framework_only_java_seed_names_each_class(self):
+        cfg = dict(orch.config.get_agent_offstack(), enabled=True, prior_signature=False)
+        for p in (mock.patch.object(orch.config, "get_agent_offstack", return_value=cfg),
+                  mock.patch.object(orch, "_offstack_window", return_value=None),
+                  mock.patch.object(orch, "_offstack_candidates", return_value=[
+                      {"node": "abc", "score": None, "bug": 1, "backedout": False,
+                       "pushdate": None, "noise": False}])):
+            p.start()
+            self.addCleanup(p.stop)
+        seed = self._seed(_FRAMEWORK_FRAMES, _fenix_info(java=True), "Fenix")
+        self.assertTrue(seed["is_offstack"])
+        lines = seed["stack"].splitlines()
+        self.assertTrue(lines[0].startswith(
+            "#0 android.hardware.SystemSensorManager$SensorEventQueue.dispatchSensorEvent  "))
+        self.assertTrue(lines[2].startswith(
+            "#2 com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run  "))
+
+    def test_a_qualified_java_function_is_not_qualified_twice(self):
+        frames = [dict(_JAVA_FRAMES[0], module="mozilla.components.lib.dataprotect.Keystore")]
+        self.assertEqual(orch._stack_text(frames, line_numbers_trusted=False, java=True),
+                         orch._stack_text(_JAVA_FRAMES[:1], line_numbers_trusted=False))
+
+    def test_the_spike_brief_names_each_class_too(self):
+        from crashclouseau.agent import spike_escalation
+        text = spike_escalation._stack_text_for(_FRAMEWORK_FRAMES, False, True)
+        self.assertIn("#1 android.os.MessageQueue.nativePollOnce  ", text)
+        self.assertEqual(spike_escalation._stack_text_for(_NATIVE_FRAMES), _NATIVE_STACK_HEAD)
 
     def test_stack_text_default_path_is_byte_identical(self):
         self.assertEqual(orch._stack_text(_NATIVE_FRAMES), _NATIVE_STACK_HEAD)

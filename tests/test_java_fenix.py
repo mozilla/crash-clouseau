@@ -373,6 +373,26 @@ class TestHash(unittest.TestCase):
         java_untrusted = [dict(native[0], module="m", function="f", line_trusted=False)]
         self.assertEqual(inspector.get_simplified_hash(java_untrusted),
                          utils.hash("0\ndom/foo.cpp\nm\nf\n"))
+        # Trusted Java hashes include the class and method as well as the line.
+        self.assertEqual(inspector.get_simplified_hash(java_trusted, java=True),
+                         utils.hash("0\ndom/foo.cpp\nm\nf\n12\n"))
+        self.assertEqual(inspector.get_simplified_hash(java_untrusted, java=True),
+                         utils.hash("0\ndom/foo.cpp\nm\nf\n"))
+
+    def test_framework_only_stacks_do_not_collide(self):
+        a = ("java.lang.OutOfMemoryError\n"
+             "\tat android.os.MessageQueue.nativePollOnce(Native Method)\n"
+             "\tat android.os.Looper.loop(Looper.java:392)\n")
+        b = ("java.lang.OutOfMemoryError\n"
+             "\tat android.os.BinderProxy.transactNative(Native Method)\n"
+             "\tat android.os.Binder.execTransact(Binder.java:392)\n")
+        for trust in (False, True):
+            with self.subTest(trust_line_numbers=trust), \
+                    mock.patch.object(config, "java_trust_line_numbers", return_value=trust):
+                ha, hb = (inspector.get_simplified_hash(
+                    java.inspect_java_stacktrace(st, _NODE, locate_methods=False)[0], java=True)
+                    for st in (a, b))
+                self.assertNotEqual(ha, hb)
 
 
 class TestMethodSpan(unittest.TestCase):
@@ -568,7 +588,7 @@ class TestGetCrashInfo(unittest.TestCase):
         self.assertTrue(res["java"]["hash"])
         frames = res["java"]["frames"]
         self.assertEqual(len(frames), 24)
-        self.assertEqual(res["java"]["hash"], inspector.get_simplified_hash(frames))
+        self.assertEqual(res["java"]["hash"], inspector.get_simplified_hash(frames, java=True))
         # the real resolver, on a real table: the borrow and the Kt facade both landed
         self.assertEqual(_by(frames, LAMBDA0, "invoke")["filename"], SECURE_PREFS)
         self.assertEqual(_by(frames, ICON_KT_LAMBDA, "invoke")["filename"], ICON_BUTTON)
@@ -622,12 +642,49 @@ class TestGetCrashInfo(unittest.TestCase):
                                 models.Changeset.find, set())
             self.assertEqual(info.call_args.kwargs, {"source_reads": True})
 
-    def test_no_internal_frame_and_no_json_dump_is_none(self):
+    def test_no_internal_frame_and_no_json_dump_is_kept_off_stack(self):
         platform = {"java_stack_trace": ("java.lang.OutOfMemoryError\n"
                                          "\tat java.util.Arrays.copyOf(Arrays.java:3161)\n"
                                          "\tat java.lang.Thread.run(Thread.java:1012)\n")}
         with self._offstack(True):
+            res = self._run(platform, lambda *a, **k: {})
+        self.assertEqual(set(res), {"java"})
+        self.assertIs(res["java"]["offstack"], True)
+        self.assertEqual([f["module"] for f in res["java"]["frames"]],
+                         ["java.util.Arrays", "java.lang.Thread"])
+        self.assertFalse(any(f["internal"] for f in res["java"]["frames"]))
+        self.assertTrue(res["java"]["hash"])
+        with self._offstack(False):
             self.assertIsNone(self._run(platform, lambda *a, **k: {}))
+
+    def test_framework_only_java_report_is_stored_and_enqueued(self):
+        from crashclouseau import update
+        data = {"product": "Fenix", "release_channel": "release", "build": "20261005135250",
+                "java_stack_trace": (
+                    "java.lang.OutOfMemoryError\n"
+                    "\tat android.hardware.SystemSensorManager$SensorEventQueue"
+                    ".dispatchSensorEvent(SystemSensorManager.java:1051)\n"
+                    "\tat android.os.MessageQueue.nativePollOnce(Native Method)\n"
+                    "\tat android.os.Looper.loop(Looper.java:392)\n")}
+        buildid = utils.get_build_date(data["build"])
+        with self._offstack(True), \
+                mock.patch.object(inspector, "get_crash_data", return_value=data), \
+                mock.patch.object(update.models.Build, "get_pushdate_before",
+                                  return_value=self.mindate), \
+                mock.patch.object(update, "rising_rate_mindate", side_effect=lambda m, *a: m), \
+                mock.patch.object(update.models.Changeset, "to_analyze", return_value=[]), \
+                mock.patch.object(update.models.UUID, "is_stackhash_existing",
+                                  return_value=False), \
+                mock.patch.object(update.models.CrashStack, "put_frames") as put, \
+                mock.patch.object(update.models.UUID, "add_stack_hash"), \
+                mock.patch.object(update.models.UUID, "set_analyzed") as mark, \
+                mock.patch("crashclouseau.agent.orchestrator.enqueue_agent") as enqueue:
+            self.assertTrue(update.put_report("u-1", buildid, "release", "Fenix", _NODE))
+        (uuid, frames, is_java), _kw = put.call_args
+        self.assertEqual((uuid, is_java, frames["offstack"], len(frames["frames"])),
+                         ("u-1", True, True, 3))
+        mark.assert_called_once_with("u-1", False)
+        enqueue.assert_called_once_with("u-1", "release", product="Fenix")
 
     def test_no_internal_frame_with_a_json_dump_falls_through_to_the_native_stack(self):
         data = {
