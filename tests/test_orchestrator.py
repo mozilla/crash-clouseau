@@ -1599,9 +1599,11 @@ class TestRunEvidenceAgent(unittest.TestCase):
                                return_value={"enabled": True, "paths": ("js/src/",)}), \
                 mock.patch("crashclouseau.sigtrend.rate_unchanged", return_value=True), \
                 mock.patch.object(orch, "_spike_reopens", return_value=False), \
-                mock.patch.object(orch, "_hardware_decided_before_run", return_value=None):
+                mock.patch.object(orch, "_hardware_decided_before_run", return_value=None), \
+                mock.patch.object(orch.models.HotEngineAudit, "record") as record:
             triage_run, MDoss, MVerd, autofile = self._hardware_run(seed)
         triage_run.assert_not_called()
+        self.assertFalse(record.call_args.args[0]["holdout"])
         done = self._done_upsert(MDoss)
         self.assertEqual(done.kwargs["cost_usd"], 0.0)
         payload = done.kwargs["payload"]
@@ -1609,6 +1611,41 @@ class TestRunEvidenceAgent(unittest.TestCase):
         self.assertIs(payload["dossier"]["corroborations"]["hot_engine_suppressed"], True)
         self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
         autofile.assert_called_once()
+
+    def test_a_held_out_hot_engine_crash_is_analysed_and_never_filed(self):
+        seed = dict(_SEED, product="Firefox", buildid="20261019073400",
+                    signature_first_seen_ever="20190619235516",
+                    frames=[{"filename": "js/src/vm/BytecodeUtil.cpp"}])
+        with mock.patch.object(orch.config, "get_agent_hot_engine",
+                               return_value={"enabled": True, "paths": ("js/src/",),
+                                             "holdout_percent": 100}), \
+                mock.patch("crashclouseau.sigtrend.rate_unchanged", return_value=True), \
+                mock.patch.object(orch, "_spike_reopens", return_value=False), \
+                mock.patch.object(orch, "_hardware_decided_before_run", return_value=None), \
+                mock.patch.object(orch, "_cooldown_decided_before_run", return_value=None), \
+                mock.patch.object(orch.models.HotEngineAudit, "record") as record, \
+                mock.patch.object(orch.models.CrashStack, "get_by_uuid",
+                                  return_value=([], {"uuid": "u-1"})), \
+                mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                           return_value={"filed": False, "dry_run": True,
+                                         "would_publish": "new_bug"}) as plan:
+            triage_run, MDoss, MVerd, autofile = self._hardware_run(seed)
+        triage_run.assert_called_once()
+        self.assertEqual([c.kwargs.get("dry_run") for c in plan.call_args_list], [True])
+        self.assertEqual(plan.call_args.args[4], "lead")
+        self.assertEqual(triage_run.call_args.kwargs["crash"]["hot_engine_holdout"],
+                         {"path": "js/src/vm/BytecodeUtil.cpp", "age_days": 2678})
+        payload = self._done_upsert(MDoss).kwargs["payload"]
+        self.assertNotIn("decided_before_run", payload)
+        corr = payload["dossier"]["corroborations"]
+        self.assertEqual((corr["hot_engine_holdout"]["decision"],
+                          corr["hot_engine_holdout"]["confidence"],
+                          corr["hot_engine_holdout"]["would_publish"]), ("lead", "medium", "new_bug"))
+        self.assertIs(corr["hot_engine_suppressed"], True)
+        self.assertEqual(payload["dossier"]["verdict"]["decision"], "abstain")
+        self.assertEqual(MVerd.set.call_args.kwargs["verdict"], "abstain")
+        self.assertEqual(autofile.call_args.args[2]["verdict"], "abstain")
+        self.assertTrue(record.call_args.args[0]["holdout"])
 
     def test_a_signature_a_fixed_bug_owns_still_runs(self):
         # Preserve the filer's incomplete-fix path for abstains.

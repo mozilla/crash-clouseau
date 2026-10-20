@@ -17,6 +17,7 @@ enqueue path / web dyno never pull ``claude-agent-sdk`` or spawn the bundled CLI
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import threading
 import time
@@ -3253,8 +3254,7 @@ def _hot_engine_suppression(seed):
     age = sigage.signature_age_days(seed.get("signature_first_seen_ever"), seed.get("buildid"))
     if age is None or age <= sigage.NEW_SIGNATURE_DAYS:
         return None
-    path = next((str(f.get("filename")).strip() for f in seed.get("frames") or []
-                 if str(f.get("filename") or "").strip()), "")
+    path = _first_source_path(seed)
     if not path.startswith(cfg["paths"]):
         return None
     if utils.is_oom_crash(seed.get("signature"), seed.get("raw_crash")):
@@ -3291,10 +3291,17 @@ def _hot_engine_verdict(path, age, prior=None):
     )
 
 
+def _first_source_path(seed):
+    return next((str(f.get("filename")).strip() for f in (seed or {}).get("frames") or []
+                 if str(f.get("filename") or "").strip()), "")
+
+
 def _apply_hot_engine_gate(dossier, seed):
-    """Suppress a reported verdict when ``_hot_engine_suppression`` holds."""
+    """Suppress a reported verdict when ``_hot_engine_suppression`` holds.
+
+    A hold-out run keeps its verdict until ``_close_hot_engine_holdout``."""
     v = dossier.verdict if dossier is not None else None
-    if v is None or v.decision == Decision.abstain:
+    if v is None or v.decision == Decision.abstain or (seed or {}).get("hot_engine_holdout"):
         return
     found = _hot_engine_suppression(seed)
     if found is None:
@@ -3316,9 +3323,97 @@ def _hot_engine_decided_before_run(seed):
     found = _hot_engine_suppression(seed)
     if found is None or _incomplete_fix_may_file(seed):
         return None
+    if _in_hot_engine_holdout(seed.get("uuid")):
+        seed["hot_engine_holdout"] = {"path": found[0], "age_days": found[1]}
+        logger.info("agent: %s is a hot-engine hold-out: analysed, never filed", seed.get("uuid"))
+        return None
     probe = Dossier(verdict=_hot_engine_verdict(*found))
     probe.corroborations = {**probe.corroborations, "hot_engine_suppressed": True}
+    _record_hot_engine_audit(seed, probe)
     return CrashTriageResult(dossier=probe, num_turns=0, total_cost_usd=0.0)
+
+
+def _in_hot_engine_holdout(uuid):
+    """Sample UUIDs deterministically at the configured percentage."""
+    percent = config.get_agent_hot_engine().get("holdout_percent") or 0
+    if not uuid or percent <= 0:
+        return False
+    return int(hashlib.sha256(str(uuid).encode()).hexdigest()[:8], 16) % 100 < percent
+
+
+def _close_hot_engine_holdout(result, seed, confirmation=None, started=None):
+    """Save the verdict summary, then abstain using the pre-run gate facts.
+
+    Mark even existing abstains as suppressed so cluster dedup allows later crashes."""
+    holdout = (seed or {}).get("hot_engine_holdout")
+    if not holdout or result.dossier is None:
+        return
+    dossier = result.dossier
+    v = dossier.verdict
+    own = {
+        "decision": v.decision.value if v is not None else None,
+        "confidence": v.confidence.value if v is not None else None,
+        "abstain_kind": (v.abstain_kind.value if v is not None and v.abstain_kind else None),
+        "title": (getattr(v, "title", "") or "")[:200],
+        "would_publish": _holdout_would_publish(seed.get("uuid"), result, confirmation, started),
+        "confirmed": bool((confirmation or {}).get("kept")),
+    }
+    dossier.verdict = _hot_engine_verdict(holdout.get("path"), holdout.get("age_days"), prior=v)
+    dossier.corroborations = {**(dossier.corroborations or {}), "hot_engine_holdout": own,
+                              "hot_engine_suppressed": True}
+    logger.info("agent: hot-engine hold-out %s concluded %s/%s (would publish: %s); suppressed",
+                seed.get("uuid"), own["decision"], own["confidence"], own["would_publish"])
+
+
+def _holdout_would_publish(uuid, result, confirmation=None, started=None):
+    """Return the dry-run publishing action, or ``None`` if declined or unavailable.
+
+    Recheck positive plans with the final floor waiver; a pending waiver may not be granted.
+    Reuse declines at the original confidence, as the filing path does."""
+    confirmation = confirmation or {}
+    row = _verdict_row(result)
+    if row["verdict"] == "abstain" or confirmation.get("withheld"):
+        return None
+    plan = confirmation.get("plan")
+    if (plan is not None and not plan.get("would_publish")
+            and "planned_confidence" not in confirmation):
+        return None
+    left = _job_time_left(started)
+    if left is not None and left < _PUBLISH_MARGIN_S:
+        logger.info("agent: hold-out %s not planned: %.0fs of job time left", uuid, left)
+        return None
+    from crashclouseau import bugzilla_apply
+
+    try:
+        stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
+        res = bugzilla_apply.autofile_bug(
+            uuid, uuid_info or {}, stack, result.dossier.model_dump(mode="json"),
+            row["verdict"], row["confidence"], dry_run=True,
+            floor_waiver=confirmation.get("floor_waiver"))
+    except Exception:
+        logger.error("agent: hold-out %s could not plan the filing", uuid, exc_info=True)
+        return None
+    return (res or {}).get("would_publish")
+
+
+def _record_hot_engine_audit(seed, dossier):
+    """Record hot-engine suppressions, including any hold-out verdict summary."""
+    from crashclouseau import sigage
+
+    corroborations = (dossier.corroborations or {}) if dossier is not None else {}
+    if corroborations.get("hot_engine_suppressed") is not True:
+        return
+    seed = seed or {}
+    age = sigage.signature_age_days(seed.get("signature_first_seen_ever"), seed.get("buildid"))
+    own = corroborations.get("hot_engine_holdout")
+    models.HotEngineAudit.record({
+        "uuid": seed.get("uuid"), "signature": seed.get("signature") or "",
+        "product": seed.get("product") or "", "channel": seed.get("channel") or "",
+        "buildid": str(seed.get("buildid") or "")[:14] or None,
+        "path": _first_source_path(seed)[:512] or None,
+        "age_days": int(age) if age is not None else None,
+        "holdout": own is not None, "verdict": own,
+    })
 
 
 def _candidate_window_membership(dossier, seed):
@@ -5558,6 +5653,10 @@ def run_evidence_agent(uuid, force=False):
                     "agent: %s over budget: a pass cost more than $%s (passes: %s)",
                     uuid, cap, ", ".join("$%.4f" % (c or 0) for c in pass_costs),
                 )
+
+            # Suppress hold-outs before serializing the payload used for filing.
+            _close_hot_engine_holdout(result, seed, confirmation, started=started)
+            _record_hot_engine_audit(seed, result.dossier)
 
             # ``result.actions`` is the single source of truth (build_result folds the
             # recorder's actions + the synthesized needinfo into it); model_dump already

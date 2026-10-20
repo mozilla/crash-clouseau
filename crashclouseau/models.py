@@ -4786,8 +4786,8 @@ def _prune_daily(model, days):
         return 0
 
 
-_ADDED_TABLES = ("archetypes", "chandaily", "feedback", "impact", "reviewnote",
-                 "selection", "sigdaily", "spike_escalations", "sweepmarks")
+_ADDED_TABLES = ("archetypes", "chandaily", "feedback", "hot_engine_audit", "impact",
+                 "reviewnote", "selection", "sigdaily", "spike_escalations", "sweepmarks")
 
 
 class SpikeEscalation(db.Model):
@@ -5223,6 +5223,58 @@ class Impact(db.Model):
             obj.checked_at = now
         db.session.commit()
         return len(rows)
+
+
+class HotEngineAudit(db.Model):
+    """Suppression records independent of dossier retention.
+
+    ``verdict`` holds the pre-suppression summary for analysed ``holdout`` rows."""
+
+    __tablename__ = "hot_engine_audit"
+
+    uuid = db.Column(db.String(36), primary_key=True)
+    signature = db.Column(db.String(512), nullable=False, index=True)
+    product = db.Column(db.String(32), nullable=False)
+    channel = db.Column(db.String(16), nullable=False)
+    buildid = db.Column(db.String(14), nullable=True)
+    path = db.Column(db.String(512), nullable=True)
+    age_days = db.Column(db.Integer, nullable=True)
+    holdout = db.Column(db.Boolean, nullable=False, default=False)
+    verdict = db.Column(pg.JSONB, nullable=True)
+    created = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
+    )
+
+    @staticmethod
+    def record(row):
+        """Insert or update a UUID; return False on a database error.
+
+        Non-hold-out updates preserve existing hold-out results."""
+        try:
+            obj = db.session.get(HotEngineAudit, row["uuid"])
+            if obj is None:
+                obj = HotEngineAudit(uuid=row["uuid"])
+                db.session.add(obj)
+            keys = ["signature", "product", "channel", "buildid", "path", "age_days"]
+            if row.get("holdout") or not obj.holdout:
+                keys += ["holdout", "verdict"]
+            for key in keys:
+                setattr(obj, key, row.get(key))
+            db.session.commit()
+            return True
+        except Exception:
+            logger.error("Cannot record the hot-engine audit row for %s", row.get("uuid"),
+                         exc_info=True)
+            db.session.rollback()
+            return False
+
+    @staticmethod
+    def rows():
+        return [{"uuid": r.uuid, "signature": r.signature, "product": r.product,
+                 "channel": r.channel, "buildid": r.buildid, "path": r.path,
+                 "age_days": r.age_days, "holdout": bool(r.holdout), "verdict": r.verdict,
+                 "created": r.created}
+                for r in db.session.query(HotEngineAudit).order_by(HotEngineAudit.created)]
 
 
 def _ensure_tables():

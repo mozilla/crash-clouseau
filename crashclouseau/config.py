@@ -1611,13 +1611,20 @@ def get_agent_bad_machine():
 
 
 def get_agent_hot_engine():
-    """Hot-engine suppression settings; HOT_ENGINE_GATE_ENABLED overrides the enabled flag.
+    """Hot-engine settings, overridden by HOT_ENGINE_GATE_ENABLED and HOT_ENGINE_HOLDOUT_PERCENT.
 
-    ``paths`` matches the first stack frame with a source file."""
+    ``paths`` matches the first frame with a source file; ``holdout_percent`` sets the sample
+    analysed without filing."""
     a = get_agent().get("hot_engine", {})
+    default = a.get("holdout_percent", 10)
+    try:
+        holdout = int(os.getenv("HOT_ENGINE_HOLDOUT_PERCENT", default))
+    except ValueError:
+        holdout = int(default)
     return {
         "enabled": _env_bool("HOT_ENGINE_GATE_ENABLED", a.get("enabled", True)),
         "paths": tuple(a.get("paths", ("js/src/",))),
+        "holdout_percent": max(0, min(100, holdout)),
     }
 
 

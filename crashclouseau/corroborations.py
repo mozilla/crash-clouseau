@@ -268,6 +268,9 @@ REGISTRY = {
     "hot_engine_suppressed": (
         "suppression", ("policy:_INSTANCE_SUPPRESSED",),
         "Holds only while the rate is unchanged, so later crashes of the cluster are re-checked."),
+    "hot_engine_holdout": (
+        "evidence", ("agent/orchestrator.py",),
+        "Pre-suppression verdict summary, also stored in `hot_engine_audit`."),
     "repeat_cooldown_suppressed": (
         "suppression", ("policy:_INSTANCE_SUPPRESSED",),
         "Pre-run cooldown decision; excluded from cluster dedup so later crashes can reopen triage."),

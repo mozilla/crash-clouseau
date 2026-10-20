@@ -1919,7 +1919,43 @@ def _crash_facts(crash: dict) -> list[str]:
     lines += _signature_trend_lines(crash)
     # The beta/release counterpart of the trend block: which VERSION the rate stepped up in.
     lines += _version_rate_lines(crash)
+    lines += _hot_engine_holdout_lines(crash)
     return lines
+
+
+def _hot_engine_holdout_lines(crash: dict) -> list[str]:
+    """Explain the pre-run gate decision for hold-outs."""
+    from crashclouseau import sigtrend
+
+    facts = crash.get("hot_engine_holdout") or {}
+    if not facts:
+        return []
+    # Missing trend data does not imply a low count.
+    trend = crash.get("signature_trend") or {}
+    counts = ""
+    if trend.get("signature_trend_ratio") is not None and not sigtrend.is_rising(trend):
+        counts = (" ({} installations in the last {} days against {} expected from the previous "
+                  "{} days, {}x)").format(
+            trend.get("signature_trend_installs"), trend.get("signature_trend_window_days"),
+            trend.get("signature_trend_expected_installs"),
+            trend.get("signature_trend_baseline_days"), trend["signature_trend_ratio"])
+    return [
+        "",
+        "OLD SIGNATURE IN HOT ENGINE CODE, STEADY RATE: crashes like this one are normally "
+        "skipped without analysis.",
+        "  The first frame with a source file is {}, code that runs constantly. The signature "
+        "was first seen {} days before this build. On {} its installation rate over the last {} "
+        "days is not rising against the previous {} weeks{}, and no spike.".format(
+            facts.get("path"), facts.get("age_days"), crash.get("channel"), sigtrend.WINDOW_DAYS,
+            sigtrend.BASELINE_DAYS // 7, counts),
+        "  A steady low crash rate in code this hot is what failing hardware (memory, CPU, "
+        "overheating) looks like across the user base, so that is the default explanation. A "
+        "code defect usually shows itself in another way: a rate that changed with a build, "
+        "reports concentrated on one site or configuration, a reproducible case, or a change in "
+        "the failing code inside this build's window.",
+        "  Report this crash only if you find evidence of that kind, and say what it is. "
+        "Otherwise abstain with abstain_kind hardware.",
+    ]
 
 
 def _version_rate_lines(crash: dict) -> list[str]:

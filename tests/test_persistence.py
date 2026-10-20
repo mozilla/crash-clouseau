@@ -45,7 +45,8 @@ class TestSchemaDefinition(unittest.TestCase):
         # `_ADDED_TABLES`, then add it here.
         known = {
             "archetypes", "builds", "changesets", "chandaily", "crashstack", "dossiers",
-            "feedback", "files", "hgauthors", "impact", "lastdate", "nodes", "reviewnote",
+            "feedback", "files", "hgauthors", "hot_engine_audit", "impact", "lastdate", "nodes",
+            "reviewnote",
             "scores",
             "selection", "sigdaily", "signatures", "spike_escalations", "stats", "sweepmarks",
             "uuids", "verdicts",

@@ -675,6 +675,25 @@ crashes can recheck the rate. The verdict uses `abstain_kind: hardware` as a pol
 Set `HOT_ENGINE_GATE_ENABLED=0` to disable the gate. Pre-run decisions record
 `decided_before_run: hot_engine_gate`.
 
+### Hold-out and review (2026-10-20)
+
+`agent.hot_engine.holdout_percent` (default 10, env `HOT_ENGINE_HOLDOUT_PERCENT`) selects a
+UUID-hashed sample of pre-run suppressions for analysis. The brief explains the gate decision;
+normal gates, confirmation eligibility and repeat cooldown still apply. Forced retriggers
+are excluded from sampling.
+
+Before filing, `hot_engine_holdout` saves the verdict summary and `would_publish` dry-run action
+(`null` for declines or unavailable plans). The pre-run gate's abstain then replaces the verdict,
+so hold-outs never file. Suppressions are recorded in `hot_engine_audit`, independently of dossier
+retention. For a monthly report:
+
+```
+heroku run -a crash-clouseau-augmented -- python bin/hot_engine_audit.py --days 31
+```
+
+The report lists non-abstain hold-out verdicts in the window and bugs fixed or filed in the
+window after their signature's first recorded suppression.
+
 ## Affected versions on a bug we file (2026-09-18)
 
 Relman feedback, relayed by Calixte: "Could clouseau set the affected versions automatically?
