@@ -11,6 +11,7 @@ from libmozdata import socorro, utils as lmdutils
 from libmozdata.connection import Connection, Query
 import pytz
 import re
+import requests
 from . import config, models, sigtrend, utils
 from .logger import logger
 
@@ -722,26 +723,65 @@ def get_proto_small(product, signatures, search_date, channel, proto_cap=None):
     for bid, all_signatures in sgns_by_bids.items():
         params = copy.deepcopy(base_params)
         params["build_id"] = utils.get_buildid(bid)
-        queries = []
         hdler = functools.partial(handler, bid, threshold)
-        for sgns in Connection.chunks(all_signatures, 5):
-            params = copy.deepcopy(params)
-            params["signature"] = ["=" + s for s in sgns]
-            queries.append(
-                Query(
-                    socorro.SuperSearch.URL,
-                    params=params,
-                    handler=hdler,
-                    handlerdata=signatures,
-                )
-            )
 
-        socorro.SuperSearch(queries=queries).wait()
+        def query(sgns, params=params, hdler=hdler):
+            p = copy.deepcopy(params)
+            p["signature"] = ["=" + s for s in sgns]
+            return Query(socorro.SuperSearch.URL, params=p, handler=hdler,
+                         handlerdata=signatures)
+
+        _search_each(bid, signatures, all_signatures,
+                     [query(sgns) for sgns in Connection.chunks(all_signatures, 5)],
+                     lambda sgn, query=query: query([sgn]))
 
     drop_unresolved(signatures, product, channel, "proto-signature")
     logger.info(
         "Get proto-signatures (small) for {}-{}: finished.".format(product, channel)
     )
+
+
+REFUSED_STATUSES = (406, 414)
+
+
+def _refused(exc):
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(exc, requests.HTTPError) and status in REFUSED_STATUSES
+
+
+def _search_each(bid, signatures, sgns, queries, single):
+    """Retry signatures individually after a 406 or 414 response."""
+    search = socorro.SuperSearch(queries=queries)
+    try:
+        search.wait()
+        return
+    except Exception as e:
+        if not _refused(e):
+            raise
+        # wait() can raise with callbacks pending. Drain them before resetting results.
+        for future in search.results:
+            try:
+                future.result()
+            except Exception:
+                pass
+        logger.warning("SuperSearch refused a batch on build {} ({}); querying each "
+                       "signature".format(bid, e.response.status_code))
+
+    def reset(sgn):
+        signatures[sgn]["protos"][bid] = []
+        signatures[sgn]["installs"][bid] = 0
+
+    for sgn in sgns:
+        reset(sgn)
+    for sgn in sgns:
+        try:
+            socorro.SuperSearch(queries=[single(sgn)]).wait()
+        except Exception as e:
+            if not _refused(e):
+                raise
+            reset(sgn)
+            logger.error("SuperSearch refused {} on build {} ({})".format(
+                sgn, bid, e.response.status_code))
 
 
 def get_proto_big(product, signatures, search_date, channel):
@@ -794,7 +834,8 @@ def get_proto_big(product, signatures, search_date, channel):
                 )
             )
 
-        socorro.SuperSearch(queries=queries).wait()
+        _search_each(bid, signatures, all_signatures, queries,
+                     dict(zip(all_signatures, queries)).get)
 
     drop_unresolved(signatures, product, channel, "proto-signature")
     logger.info(
@@ -913,7 +954,8 @@ def get_uuids_java(product, signatures, search_date, channel, cap):
                 )
             )
 
-        socorro.SuperSearch(queries=queries).wait()
+        _search_each(bid, signatures, all_signatures, queries,
+                     dict(zip(all_signatures, queries)).get)
 
     drop_unresolved(signatures, product, channel, "Java report")
     logger.info("Get uuids (java) for {}-{}: finished.".format(product, channel))
