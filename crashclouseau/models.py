@@ -2446,6 +2446,34 @@ class CrashStack(db.Model):
                 for p, f, fn, ln in rows]
 
     @staticmethod
+    def top_frames(uuids, depth):
+        """Return native and Java frames with ``stackpos < depth``, grouped by UUID.
+        Normalize filenames as in ``get_by_uuid``; return ``None`` on query failure.
+        """
+        uuids = sorted({u for u in uuids or [] if u})
+        if not uuids:
+            return {}
+        try:
+            rows = (
+                db.session.query(UUID.uuid, CrashStack.stackpos, CrashStack.function,
+                                 CrashStack.filename, CrashStack.node, CrashStack.line,
+                                 CrashStack.original)
+                .join(UUID, CrashStack.uuidid == UUID.id)
+                .filter(UUID.uuid.in_(uuids), CrashStack.stackpos < depth)
+                .order_by(UUID.uuid, CrashStack.stackpos)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read the top frames of %d reports", len(uuids), exc_info=True)
+            db.session.rollback()
+            return None
+        out = defaultdict(list)
+        for uuid, pos, function, filename, node, line, original in rows:
+            filename = utils.get_file_url(None, filename, node, line, original)[1]
+            out[uuid].append({"stackpos": pos, "function": function, "filename": filename})
+        return dict(out)
+
+    @staticmethod
     def get_by_uuid(uuid):
         uuid_info = UUID.get_bid_chan_by_uuid(uuid)
         if not uuid_info:
@@ -3542,6 +3570,27 @@ class Dossier(db.Model):
             return None
         return [{"uuid": u, "bug": int(b), "signature": s or "", "mode": m or ""}
                 for u, b, s, m in rows if str(b or "").isdigit()]
+
+    @staticmethod
+    def filing_records():
+        """List successful dossier filings in ID order; ``None`` on query failure."""
+        fb = Dossier.payload["filed_bug"]
+        try:
+            rows = (
+                db.session.query(UUID.uuid, fb["bug"].astext, fb["signature"].astext,
+                                 fb["mode"].astext, fb["at"].astext)
+                .select_from(Dossier)
+                .join(UUID, Dossier.uuidid == UUID.id)
+                .filter(fb["filed"].astext == "true")
+                .order_by(Dossier.id)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read our filings", exc_info=True)
+            db.session.rollback()
+            return None
+        return [{"uuid": u, "bug": int(b), "signature": s or "", "mode": m or "", "at": a or ""}
+                for u, b, s, m, a in rows if str(b or "").isdigit()]
 
     @staticmethod
     def runs_for_candidate(node):
@@ -4973,9 +5022,9 @@ class SpikeEscalation(db.Model):
 
     @staticmethod
     def filings_on_bug(bug_id, exclude_id=None):
-        """Successful spike filings on *bug_id*, across signatures and channels, ordered by
-        creation time then ID; ``None`` on query failure. Each row contains ``id``, ``at``,
-        ``grounded``, stored ``findings`` and the optional resolved public ``culprit_bug``."""
+        """List successful spike filings on *bug_id* in creation/ID order.
+        Include findings and filing mode; return ``None`` on query failure.
+        """
         filing = SpikeEscalation.payload["filing"]
         try:
             q = db.session.query(SpikeEscalation).filter(
@@ -4997,6 +5046,7 @@ class SpikeEscalation(db.Model):
                 "grounded": bool(p.get("grounded")),
                 "findings": p.get("findings") or None,
                 "culprit_bug": filed.get("culprit_bug"),
+                "mode": filed.get("mode"),
             })
         return out
 
@@ -5141,6 +5191,26 @@ class SpikeEscalation(db.Model):
                  "product": product, "uuid": uuid}
                 for signature, channel, product, uuid, filing in rows
                 if isinstance(filing, dict) and filing.get("filed") and filing.get("bug")]
+
+    @staticmethod
+    def filing_records():
+        """List successful spike filings in escalation ID order; ``None`` on query failure."""
+        filing = SpikeEscalation.payload["filing"]
+        try:
+            rows = (
+                db.session.query(SpikeEscalation.id, SpikeEscalation.uuid, SpikeEscalation.signature,
+                                 filing["bug"].astext, filing["mode"].astext, filing["at"].astext)
+                .filter(filing["filed"].astext == "true")
+                .order_by(SpikeEscalation.id)
+                .all()
+            )
+        except Exception:
+            logger.error("Cannot read our spike filings", exc_info=True)
+            db.session.rollback()
+            return None
+        return [{"uuid": u or "", "bug": int(b), "signature": s or "", "mode": m or "",
+                 "at": a or "", "escalation": i}
+                for i, u, s, b, m, a in rows if str(b or "").isdigit()]
 
     def to_dict(self):
         payload = self.payload or {}

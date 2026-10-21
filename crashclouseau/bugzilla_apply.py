@@ -2023,43 +2023,124 @@ def _bug_comments(bug_id, timeout=_HTTP_TIMEOUT, token=None):
     return first, later
 
 
-def _filing_analysis(filing):
-    """Our analysis behind *filing*, as ``same_defect`` prompt fields; ``{}`` when unreadable."""
+def _filing_analysis(filing, public=False):
+    """Load dossier or spike prompt fields; return ``{}`` if unavailable or
+    withheld for a public comparison.
+    """
     from crashclouseau import report_bug
     from crashclouseau.agent import same_defect
+    spike = filing.get("escalation")
     try:
-        d = models.Dossier.get_by_uuid(filing["uuid"])
-        dossier = ((d.payload or {}).get("dossier") if d is not None else None) or {}
+        if spike:
+            esc = models.SpikeEscalation.get(spike)
+            payload = (esc.payload if esc is not None else None) or {}
+            findings = payload.get("findings") or {}
+            withheld = not disclosure.public_findings(payload.get("filing"))
+        else:
+            d = models.Dossier.get_by_uuid(filing["uuid"])
+            payload = (d.payload if d is not None else None) or {}
+            dossier = payload.get("dossier") or {}
+            withheld = disclosure.withheld_filing(payload.get("filed_bug"))
+        if public and withheld:
+            return {}
         stack, _info = models.CrashStack.get_by_uuid(filing["uuid"])
     except Exception:
         logger.warning("autofile: cannot read the analysis of %s", filing.get("uuid"),
                        exc_info=True)
         return {}
-    if not dossier.get("verdict"):
+    if not (findings.get("summary") if spike else dossier.get("verdict")):
         return {}
-    ipc = report_bug.fetch_crash_reason(filing["uuid"]).get("ipc_fatal_error_msg")
-    crash = same_defect.crash_from_dossier(filing.get("signature"), dossier,
-                                           (stack or {}).get("frames"), ipc)
+    details = report_bug.fetch_crash_reason(filing["uuid"])
+    frames = (stack or {}).get("frames")
+    if spike:
+        crash = same_defect.crash_from_spike(filing.get("signature"), findings, frames, details)
+    else:
+        crash = same_defect.crash_from_dossier(filing.get("signature"), dossier, frames,
+                                               details.get("ipc_fatal_error_msg"))
     return {k: crash[k] for k in ("title", "mechanism", "data_flow", "crash_reason",
                                   "ipc_fatal_error_msg", "frames")}
 
 
-def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None, token=None):
-    """Select up to *max_bugs* candidates, newest first, from our filings and ``regressions``.
+def _own_filing_records():
+    """Return our successful dossier and spike filings, or ``None`` on query failure."""
+    dossiers = models.Dossier.filing_records()
+    spikes = models.SpikeEscalation.filing_records()
+    return None if dossiers is None or spikes is None else dossiers + spikes
 
-    Follow one duplicate hop. Exclude other applications, metas and bugs without signatures
-    or already carrying *signature*. Accept unresolved bugs, or FIXED bugs resolved after
-    *buildid*. Resolution time is a proxy; this does not check the fix's landing or uplift.
-    Supply our stored analysis (otherwise comment 0) and filtered later comments.
-    Return ``None`` if a candidate lookup or comment request fails.
+
+def _own_filings_sharing_frames(frames, cfg, filings):
+    """Rank recent filings by shared top frames.
+
+    Return ``(score, function names, filing)`` tuples, best first, or ``None``
+    on query failure. Frame rarity uses all *filings*, not just recent ones.
     """
-    ours = models.Dossier.filings_for_regressor(regressor)
-    listed = _regression_ids(regressor)
-    if ours is None or listed is None:
+    from crashclouseau import sigage
+    from crashclouseau.agent import same_defect
+
+    depth = cfg["stack_depth"]
+    keys = same_defect.frame_keys(frames, depth)
+    if not keys:
+        return []
+    stacks = models.CrashStack.top_frames([f["uuid"] for f in filings], depth)
+    if stacks is None:
         return None
-    filings = {}
-    for f in ours:
-        filings.setdefault(f["bug"], f)
+    since = datetime.now(timezone.utc) - timedelta(days=cfg["lookback_days"])
+    corpus, recent, seen = [], [], set()
+    for f in filings:
+        f = dict(f, keys=same_defect.frame_keys(stacks.get(f["uuid"]), depth),
+                 at=sigage.to_datetime(f["at"]))
+        if not f["keys"]:
+            continue
+        # Count each crash once for frame rarity.
+        if f["uuid"] not in seen:
+            seen.add(f["uuid"])
+            corpus.append(f)
+        if f["at"] is not None and f["at"] >= since:
+            recent.append(f)
+    # Break score ties by recency.
+    recent.sort(key=lambda f: f["at"], reverse=True)
+    return [(score, [k[1] for k in shared], f)
+            for score, shared, f in same_defect.rank_by_shared_frames(keys, corpus, recent)]
+
+
+def _same_defect_candidates(regressor, signature, product, max_bugs, buildid=None, token=None,
+                            frames=None, cfg=None):
+    """Select regressor bugs by recency, then our filings by shared-frame score.
+
+    Follow one duplicate hop. Keep same-application, non-meta crash bugs that are
+    unresolved or were FIXED after *buildid*; this does not check fix landings.
+    Exclude bugs carrying *signature* or with prior filings for it.
+    Return up to *max_bugs* with analysis or description, comments and selection
+    reasons; return ``None`` on lookup failure.
+    """
+    filings, listed = {}, []
+    if not (regressor or (frames and cfg)):
+        return []
+    records = _own_filing_records()
+    if records is None:
+        return None
+    spellings = {s.lower() for s in utils.lambda_siblings(signature)}
+    family = utils.lambda_family(signature).lower()
+    # Prior filings for this signature; exclude them below if it is now absent.
+    removed = {f["bug"] for f in records
+               if utils.lambda_family(f["signature"] or "").lower() == family}
+    if regressor:
+        ours = models.Dossier.filings_for_regressor(regressor)
+        listed = _regression_ids(regressor)
+        if ours is None or listed is None:
+            return None
+        for f in ours:
+            filings.setdefault(f["bug"], f)
+    attributed = set(filings) | set(listed)
+    shared = {}
+    if frames and cfg:
+        ranked = _own_filings_sharing_frames(frames, cfg, records)
+        if ranked is None:
+            return None
+        for _score, names, f in ranked:
+            if f["bug"] not in shared:
+                shared[f["bug"]] = names
+                filings.setdefault(f["bug"], f)
     rows = _crash_bug_rows(sorted(set(filings) | set(listed)))
     if rows is None:
         return None
@@ -2080,29 +2161,44 @@ def _same_regressor_bugs(regressor, signature, product, max_bugs, buildid=None, 
     from crashclouseau import sigage
 
     build_dt = sigage.to_datetime(buildid if isinstance(buildid, datetime) else str(buildid or ""))
-    own = {s.lower() for s in utils.lambda_siblings(signature)}
-    picked = {}
+    picked, sources = {}, {}
     for b in rows:
+        source = b["id"]
         if b.get("resolution") == "DUPLICATE":
             b = by_id.get(b.get("dupe_of"))
             if b is None:
                 continue
         sigs = {s.lower() for s in _signature_field_entries(b.get("cf_crash_signature"))}
+        if b["id"] in removed and not spellings & sigs:
+            logger.info("autofile: bug %s no longer carries %r, which we wrote on it for; "
+                        "not a same-defect candidate", b["id"], signature)
+            continue
         resolved = sigage.to_datetime(b.get("cf_last_resolved"))
         if b.get("resolution") == "FIXED":
             usable = bool(build_dt and resolved and resolved > build_dt)
         else:
             usable = not b.get("resolution")
-        if usable and "meta" not in (b.get("keywords") or []) and sigs and not own & sigs:
+        if usable and "meta" not in (b.get("keywords") or []) and sigs and not spellings & sigs:
             picked[b["id"]] = b
+            sources.setdefault(b["id"], []).append(source)
     kept = _split_by_application(list(picked.values()), product)[0]
     kept.sort(key=lambda b: b.get("creation_time") or "", reverse=True)
+    rank = {bug: i for i, bug in enumerate(shared)}
+    regressed = {b["id"] for b in kept if attributed & set(sources[b["id"]])}
+    by_stack = sorted((b for b in kept if b["id"] not in regressed),
+                      key=lambda b: min(rank.get(s, len(rank)) for s in sources[b["id"]]))
     out = []
-    for b in kept[:max_bugs]:
+    for b in ([b for b in kept if b["id"] in regressed] + by_stack)[:max_bugs]:
         entry = {"bug": b["id"], "summary": b.get("summary") or "",
                  "status": "RESOLVED FIXED" if b.get("resolution") else (b.get("status") or ""),
                  "signatures": _signature_field_entries(b.get("cf_crash_signature"))}
-        analysis = _filing_analysis(filings[b["id"]]) if b["id"] in filings else {}
+        if b["id"] in regressed:
+            entry["by_regressor"] = True
+        names = next((shared[s] for s in sources[b["id"]] if s in shared), None)
+        if names:
+            entry["shared_frames"] = names
+        analysis = (_filing_analysis(filings[b["id"]], public=b["id"] not in hidden)
+                    if b["id"] in filings else {})
         comments = _bug_comments(b["id"], token=token if b["id"] in hidden else None)
         if comments is None:
             return None
@@ -2121,114 +2217,135 @@ _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
 def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg, token=None):
-    """Compare bugs attributed to the regressor in separate public and restricted runs.
-    Return ``(matching bug, check record)``, or ``(None, None)`` without a regressor
-    or candidates.
-    """
-    import asyncio
+    """Run ``_match_same_defect`` for a crash with a dossier."""
     from crashclouseau import report_bug
     from crashclouseau.agent import same_defect
 
     candidate = (dossier or {}).get("candidate") or {}
-    regressor = candidate.get("bug")
-    if not regressor:
-        return None, None
-    bugs = _same_regressor_bugs(regressor, signature, uuid_info.get("product"), cfg["max_bugs"],
-                                buildid=uuid_info.get("buildid"), token=token)
+    frames = (stack or {}).get("frames") or ((dossier or {}).get("crash") or {}).get("frames")
+
+    def describe():
+        return same_defect.crash_from_dossier(
+            signature, dossier, (stack or {}).get("frames"),
+            report_bug.fetch_crash_reason(uuid).get("ipc_fatal_error_msg"))
+
+    return _match_same_defect(signature, frames, candidate, uuid_info, cfg, describe, token=token)
+
+
+def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=None):
+    """Compare public and restricted candidates separately.
+
+    *describe()* supplies prompt fields. Matches selected only by shared frames use
+    ``min_confidence_by_stack``. Return ``(bug or None, check record or None)``.
+    """
+    import asyncio
+    from crashclouseau.agent import same_defect
+
+    reg = (regressor or {}).get("bug") or None
+    bugs = _same_defect_candidates(reg, signature, info.get("product"), cfg["max_bugs"],
+                                   buildid=info.get("buildid"), token=token, frames=frames,
+                                   cfg=cfg)
     if bugs is None:
-        return None, {"regressor": regressor, "error": "bug lookup failed"}
+        return None, {"regressor": reg, "error": "bug lookup failed"}
     if not bugs:
         return None, None
     public = [b for b in bugs if not b.get("restricted")]
     hidden = [b for b in bugs if b.get("restricted")]
-    crash = same_defect.crash_from_dossier(
-        signature, dossier, (stack or {}).get("frames"),
-        report_bug.fetch_crash_reason(uuid).get("ipc_fatal_error_msg"))
-    floor = _CONFIDENCE_RANK.get(cfg["min_confidence"], 2)
+    crash = describe()
 
     def compare(group):
         try:
             return asyncio.run(same_defect.run_same_defect(
-                crash, {"bug": regressor, "node": candidate.get("node")}, group,
-                channel=uuid_info.get("channel") or "nightly",
-                build_rev=uuid_info.get("node") or "", product=uuid_info.get("product")))
+                crash, {"bug": reg, "node": regressor.get("node")} if reg else None, group,
+                channel=info.get("channel") or "nightly",
+                build_rev=info.get("node") or "", product=info.get("product")))
         except Exception:
             logger.warning("autofile: same-defect check raised for %r", signature, exc_info=True)
             return None
 
-    def accepted(answer):
-        return answer.bug is not None and _CONFIDENCE_RANK.get(answer.confidence, 0) >= floor
+    def accepted(answer, group):
+        entry = next((b for b in group if b["bug"] == answer.bug), None)
+        if entry is None:
+            return False
+        floor = cfg["min_confidence"] if entry.get("by_regressor") else \
+            cfg["min_confidence_by_stack"]
+        return _CONFIDENCE_RANK.get(answer.confidence, 0) >= _CONFIDENCE_RANK.get(floor, 2)
+
+    def listed(group):
+        out = {"regressor": reg, "bugs": [b["bug"] for b in group]}
+        by_stack = [b["bug"] for b in group if not b.get("by_regressor")]
+        if by_stack:
+            out["by_stack"] = by_stack
+        return out
 
     check = None
     if public:
-        check = {"regressor": regressor, "bugs": [b["bug"] for b in public]}
+        check = listed(public)
         answer = compare(public)
         if answer is None:
             check["error"] = "no usable answer"
         else:
             check.update(answer.model_dump())
-            if accepted(answer):
+            if accepted(answer, public):
                 return answer.bug, check
-    # Keep restricted reasoning out of public comments and unmatched check records.
+    # Discard unmatched restricted reasoning.
     if hidden:
         answer = compare(hidden)
-        if answer is not None and accepted(answer):
-            return answer.bug, dict(answer.model_dump(), regressor=regressor, restricted=True,
-                                    bugs=[b["bug"] for b in hidden])
+        if answer is not None and accepted(answer, hidden):
+            return answer.bug, dict(answer.model_dump(), restricted=True, **listed(hidden))
         logger.info("autofile: no same-defect match among restricted bugs %s for %r",
                     [b["bug"] for b in hidden], signature)
     return None, check
 
 
-def _same_defect_comment(uuid, uuid_info, signature, check):
-    return "\n".join([
-        "Adding `[@ {}]` to this bug. This crash was attributed to the same regressor (bug {}), "
-        "and an automated comparison with this bug found the same defect:".format(
-            signature, check["regressor"]),
-        "",
-        check.get("reason") or "",
-        "",
-        "Build: {} ({})".format(utils.get_buildid(uuid_info.get("buildid")),
-                                uuid_info.get("channel") or "?"),
-        "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
-    ])
+def _same_defect_clause(bug, check):
+    if check.get("regressor") and bug not in (check.get("by_stack") or []):
+        return "bug {} is the same defect, with the same regressor (bug {})".format(
+            bug, check["regressor"])
+    return "bug {} is the same defect".format(bug)
+
+
+def _add_to_same_defect_bug(bug, signature, check, mode, token, why=None):
+    """Add the signature without a comment in comment mode; otherwise decline.
+
+    Return filing fields, including ``error`` on write failure. Restricted matches
+    use authenticated reads and set ``findings_withheld``. *why* overrides the skip suffix.
+    """
+    restricted = bool(check.get("restricted"))
+    out = {"filed": False, "bug": bug, "same_defect": check}
+    if restricted:
+        out["findings_withheld"] = True
+    if mode != "comment":
+        return dict(out, skipped=_same_defect_clause(bug, check) + (
+            why or "; this channel does not write on existing bugs"))
+    attached = _attach_signature(bug, signature, token, read_token=token if restricted else None)
+    if attached == "already":
+        return dict(out, skipped="bug {} already carries this signature".format(bug))
+    if attached != "attached":
+        return dict(out, error="adding the signature to bug {} failed".format(bug),
+                    skipped="bugzilla write failed: adding the signature to bug {}".format(bug))
+    return dict(out, filed=True, mode="same_defect", needinfo=None)
 
 
 def _file_on_same_defect(uuid, uuid_info, signature, bug, check, mode, token, why=None):
-    """Attach the signature and comparison in comment mode, without needinfo.
-    Restricted matches use authenticated reads and mark result records for redaction.
-    *why* overrides the default skip suffix.
-    """
-    restricted = bool(check.get("restricted"))
-    withheld = {"findings_withheld": True} if restricted else {}
-    if mode != "comment":
-        return {"filed": False, "bug": bug, "same_defect": check, **withheld,
-                "skipped": "bug {} is the same defect, with the same regressor (bug {}){}".format(
-                    bug, check["regressor"],
-                    why or "; this channel does not write on existing bugs")}
-    attached = _attach_signature(bug, signature, token,
-                                 comment=_same_defect_comment(uuid, uuid_info, signature, check),
-                                 read_token=token if restricted else None)
-    if attached == "already":
-        return {"filed": False, "bug": bug, "same_defect": check, **withheld,
-                "skipped": "bug {} already carries this signature".format(bug)}
-    if attached != "attached":
+    """Add the signature and record successful filings or write errors on the dossier."""
+    out = _add_to_same_defect_bug(bug, signature, check, mode, token, why=why)
+    withheld = {"findings_withheld": True} if out.get("findings_withheld") else {}
+    error = out.pop("error", None)
+    if error:
         noted = _note_filing_error(uuid, {
-            "at": datetime.now(timezone.utc).isoformat(),
-            "error": "adding the signature to bug {} failed".format(bug),
+            "at": datetime.now(timezone.utc).isoformat(), "error": error,
             "signature": signature, "mode": "same_defect", **withheld})
-        return {"filed": False, "bug": bug, "same_defect": check, **withheld,
-                "skipped": "bugzilla write failed: adding the signature to bug {}".format(bug),
-                **noted}
-    result = {"filed": True, "bug": bug, "mode": "same_defect", "uuid": uuid,
-              "signature": signature, "channel": uuid_info.get("channel"),
-              "product": uuid_info.get("product"),
-              "buildid": utils.get_buildid(uuid_info.get("buildid")),
-              "at": datetime.now(timezone.utc).isoformat(), "needinfo": None,
-              "same_defect": check, **withheld}
+        return dict(out, **noted)
+    if not out["filed"]:
+        return out
+    result = dict(out, uuid=uuid, signature=signature, channel=uuid_info.get("channel"),
+                  product=uuid_info.get("product"),
+                  buildid=utils.get_buildid(uuid_info.get("buildid")),
+                  at=datetime.now(timezone.utc).isoformat())
     models.Dossier.record_filed_bug(uuid, result)
     logger.info("autofile: %s -> bug %s (same defect, regressor bug %s)",
-                uuid, bug, check["regressor"])
+                uuid, bug, check.get("regressor") or "none")
     return result
 
 

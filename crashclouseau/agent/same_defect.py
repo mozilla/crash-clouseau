@@ -2,17 +2,16 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-"""Compare a crash with candidate bugs selected by ``bugzilla_apply._same_regressor_bugs``.
-
-The agent proposes a match; the filer applies the confidence and channel policies.
-Only patch, searchfox and source MCP tools are configured; built-in tools are disabled.
-"""
+"""Compare candidate bugs; the filer applies confidence and channel policies."""
 from __future__ import annotations
+
+import math
+from collections import Counter
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 from pydantic import BaseModel
 
-from crashclouseau import config
+from crashclouseau import config, utils
 from crashclouseau.agent import roles, triage
 from crashclouseau.agent.schema import _extract_last_json_block
 from crashclouseau.agent.tools import patch as patch_tools
@@ -29,22 +28,23 @@ from crashclouseau.vendor.hackbot_runtime.claude import Reporter
 
 _SYSTEM = (
     "You decide whether a Firefox crash that is about to be filed as a new bug is the same "
-    "defect as a bug that already exists. Candidates come from filings naming the same "
-    "regressor bug or that bug's regressions, with duplicates replaced by their targets. "
-    "This does not establish a shared changeset or defect. One defect can appear under "
-    "several crash signatures.\n\n"
+    "defect as a bug that already exists. Candidates are bugs attributed to the same regressor "
+    "(filings naming it and that bug's regressions) and bugs we filed or commented on whose "
+    "stacks share frames with this crash, with duplicates replaced by their targets. Neither "
+    "establishes a shared changeset or defect. One defect can appear under several crash "
+    "signatures.\n\n"
     "Same defect means that one code fix would stop both crashes: the same faulty code path or "
-    "state, reached through the same part of the change. Sharing the regressor, the component, "
-    "a changed file or a crash type does not establish it. When the two analyses rely on "
-    "different hunks of the change, different objects or different failure modes, require "
-    "evidence connecting them to one fault. An analysis can be wrong; check the stack and diff "
-    "rather than comparing the prose.\n\n"
+    "state, reached through the same part of the change when a regressor is named. Sharing the "
+    "regressor, stack frames, the component, a changed file or a crash type does not establish "
+    "it. When the two analyses rely on different hunks of the change, different objects or "
+    "different failure modes, require evidence connecting them to one fault. An analysis can be "
+    "wrong; check the stack and diff rather than comparing the prose.\n\n"
     "A wrong match can hide a defect. Name a bug only when you can "
     "state the shared fault concretely.\n\n"
-    "Tools (read-only): mcp__patch__diff (the regressor's diff; check which hunks each analysis "
-    "relies on), searchfox (mcp__searchfox__*: read code, walk the call graph between the "
-    "frames), mcp__source__raw_file (defaults to the build revision when available, otherwise "
-    "tip; check the returned revision).\n\n"
+    "Tools (read-only): mcp__patch__diff (the regressor's diff when one is named; check which "
+    "hunks each analysis relies on), searchfox (mcp__searchfox__*: read code, walk the call "
+    "graph between the frames), mcp__source__raw_file (defaults to the build revision when "
+    "available, otherwise tip; check the returned revision).\n\n"
     "End your reply with EXACTLY one fenced block:\n"
     "```json\n"
     '{"same_defect_bug": <bug number or null>, "confidence": "low|medium|high", '
@@ -62,6 +62,9 @@ _MAX_SIBLING_FRAMES = 60
 _MAX_DESCRIPTION = 4000
 _MAX_COMMENT = 1000
 _MAX_COMMENTS = 4000
+# A frame is generic only when its corpus count exceeds both thresholds.
+_GENERIC_SHARE = 0.05
+_GENERIC_MIN = 5
 
 
 class SameDefect(BaseModel):
@@ -96,6 +99,58 @@ def crash_from_dossier(signature: str, dossier: dict | None, frames: list | None
         "ipc_fatal_error_msg": ipc_fatal_error_msg or "",
         "frames": list(frames or brief.get("frames") or []),
     }
+
+
+def crash_from_spike(signature: str, findings, frames: list | None,
+                     details: dict | None = None) -> dict:
+    """Build prompt fields from spike findings (model or dict) and crash data."""
+    d = details or {}
+    f = findings if isinstance(findings, dict) else vars(findings) if findings is not None else {}
+    return {
+        "signature": signature or "",
+        "title": "",
+        "mechanism": f.get("summary") or "",
+        "data_flow": f.get("trigger_path") or "",
+        "crash_reason": d.get("moz_crash_reason") or d.get("reason") or "",
+        "ipc_fatal_error_msg": d.get("ipc_fatal_error_msg") or "",
+        "frames": list(frames or []),
+    }
+
+
+def frame_key(frame: dict) -> tuple[str, str]:
+    """Return ``(file, function)`` without arguments and with lambdas in the ``<T>`` form."""
+    fn = (frame.get("function") or "").strip()
+    start = fn.find("operator()")
+    paren = fn.find("(", start + len("operator()") if start >= 0 else 0)
+    if paren > 0:
+        fn = fn[:paren].strip()
+    return frame.get("filename") or "", utils.lambda_family(fn)
+
+
+def frame_keys(frames, depth: int) -> dict:
+    """Map frame keys to their first index within the first *depth* frames."""
+    out = {}
+    for i, f in enumerate((frames or [])[:depth]):
+        if f.get("function"):
+            out.setdefault(frame_key(f), i)
+    return out
+
+
+def rank_by_shared_frames(keys: dict, corpus: list[dict], candidates: list[dict]):
+    """Rank candidates by the rarity of shared non-generic frames in *corpus*.
+
+    Return ``(score, shared keys, candidate)`` tuples, highest score first.
+    """
+    n = len(corpus)
+    df = Counter(k for item in corpus for k in item["keys"])
+    generic = {k for k, c in df.items() if c > max(_GENERIC_SHARE * n, _GENERIC_MIN)}
+    out = []
+    for item in candidates:
+        shared = sorted((set(keys) & set(item["keys"])) - generic, key=keys.get)
+        if shared:
+            out.append((sum(math.log(n / df[k]) for k in shared if df[k]), shared, item))
+    out.sort(key=lambda x: -x[0])
+    return out
 
 
 def _frame_lines(frames: list, limit: int) -> list[str]:
@@ -140,15 +195,18 @@ def _comment_lines(comments) -> list[str]:
     return ["Later comments:", *reversed(blocks)] if blocks else []
 
 
-def user_prompt(crash: dict, regressor: dict, siblings: list[dict]) -> str:
-    """The prompt for one check. *siblings* are the bugs, each with ``bug``, ``summary``,
-    ``status``, ``signatures``, either our analysis (``title``/``mechanism``/``frames``) or the
-    bug's ``description``, and its filtered ``comments`` (``{"author", "text"}``)."""
-    node = regressor.get("node") or ""
-    lines = [
-        "Regressor: bug {}{}".format(regressor.get("bug"),
-                                     ", changeset {}".format(node) if node else ""),
-        "",
+def user_prompt(crash: dict, regressor: dict | None, siblings: list[dict]) -> str:
+    """Describe the crash and candidate bugs, including their selection reasons,
+    stored analyses or descriptions, and comments.
+    """
+    regressor = regressor or {}
+    node = (regressor.get("node") or "") if regressor.get("bug") else ""
+    lines = []
+    if regressor.get("bug"):
+        lines += ["Regressor: bug {}{}".format(regressor["bug"],
+                                               ", changeset {}".format(node) if node else ""),
+                  ""]
+    lines += [
         "THE CRASH ABOUT TO BE FILED",
         "Signature: {}".format(crash.get("signature") or ""),
         *_analysis_lines(crash),
@@ -163,9 +221,14 @@ def user_prompt(crash: dict, regressor: dict, siblings: list[dict]) -> str:
         sigs = sib.get("signatures") or []
         if sigs:
             lines.append("Crash signatures: {}".format(" ".join("[@ {}]".format(s) for s in sigs)))
+        if sib.get("by_regressor"):
+            lines.append("Listed because: attributed to the regressor")
+        if sib.get("shared_frames"):
+            lines.append("Listed because: our filing, whose stack shares these frames with the "
+                         "crash: {}".format("; ".join(sib["shared_frames"])))
         analysis = _analysis_lines(sib)
         if analysis:
-            lines += ["Our analysis of the crash this bug was filed for:", *analysis]
+            lines += ["Our analysis of a crash on this bug:", *analysis]
             frames = _frame_lines(sib.get("frames"), _MAX_SIBLING_FRAMES)
             if frames:
                 lines += ["Stack:", *frames]
@@ -175,11 +238,12 @@ def user_prompt(crash: dict, regressor: dict, siblings: list[dict]) -> str:
                 text = text[:_MAX_DESCRIPTION] + "\n[... truncated]"
             lines += ["Description (comment 0):", text]
         lines += _comment_lines(sib.get("comments"))
+    diff = ("the regressor's diff{} and ".format(
+        " (mcp__patch__diff {})".format(node) if node else "") if regressor.get("bug") else "")
     lines += [
         "",
-        "Is the crash about to be filed the same defect as one of these bugs? Inspect the "
-        "regressor's diff{} and the code the stacks go through before answering.".format(
-            " (mcp__patch__diff {})".format(node) if node else ""),
+        "Is the crash about to be filed the same defect as one of these bugs? Inspect {}the "
+        "code the stacks go through before answering.".format(diff),
     ]
     return "\n".join(lines)
 
@@ -238,7 +302,7 @@ def parse_same_defect(text: str | None, sibling_ids) -> SameDefect | None:
     return SameDefect(bug=bug, confidence=confidence, reason=str(obj.get("reason") or ""))
 
 
-async def run_same_defect(crash: dict, regressor: dict, siblings: list[dict], *,
+async def run_same_defect(crash: dict, regressor: dict | None, siblings: list[dict], *,
                           channel: str = "nightly", build_rev: str = "",
                           product: str | None = None) -> SameDefect | None:
     """Run one check; return ``None`` on query/result failure. Option setup may raise."""

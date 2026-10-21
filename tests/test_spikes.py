@@ -393,7 +393,7 @@ class TestFilingsOnBug(unittest.TestCase):
     def test_filed_rows_on_the_bug_oldest_first(self):
         a = self._esc("Sig::A", "nightly", date(2026, 9, 7), {
             "grounded": True, "filing": {"filed": True, "bug": 1716849, "at": "2026-09-09T00:50",
-                                         "culprit_bug": 7},
+                                         "culprit_bug": 7, "mode": "spike_comment"},
             "findings": {"summary": "s", "culprit": {"node": "ABC123", "bug": 5}}})
         b = self._esc("Sig::B", "beta", date(2026, 9, 18), {
             "grounded": False, "filing": {"filed": True, "bug": 1716849, "at": "2026-09-22T00:25"},
@@ -403,9 +403,10 @@ class TestFilingsOnBug(unittest.TestCase):
         self._esc("Sig::D", "beta", date(2026, 9, 20), {"filing": {"filed": True, "bug": 2}})
         self.assertEqual(models.SpikeEscalation.filings_on_bug(1716849), [
             {"id": a.id, "at": "2026-09-09", "grounded": True, "culprit_bug": 7,
-             "findings": {"summary": "s", "culprit": {"node": "ABC123", "bug": 5}}},
+             "findings": {"summary": "s", "culprit": {"node": "ABC123", "bug": 5}},
+             "mode": "spike_comment"},
             {"id": b.id, "at": "2026-09-22", "grounded": False, "culprit_bug": None,
-             "findings": None}])
+             "findings": None, "mode": None}])
         self.assertEqual([r["id"] for r in models.SpikeEscalation.filings_on_bug(
             1716849, exclude_id=a.id)], [b.id])
 

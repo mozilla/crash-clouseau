@@ -1604,6 +1604,13 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             for_spike = False
             logger.info("spike: %r is held by [meta] bug %s and the analysis names no bucket "
                         "-- the spike goes to the tracker as a comment", signature, venue["id"])
+    if venue is None and not meta_bugs and not withheld:
+        match, check = _same_defect_match(esc, brief, findings, grounded, details, stack,
+                                          screened, mode, token)
+        if match is not None:
+            return dict(result, **match)
+        if check:
+            result["same_defect_check"] = check
     if venue is not None:
         repeat = _repeat_decline(venue, findings, grounded, esc.id, screened["culprit_bug"])
         if repeat is not None:
@@ -1713,6 +1720,32 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     return result
 
 
+def _same_defect_match(esc, brief, findings, grounded, details, stack, screened, mode, token):
+    """Return ``(filing result, None)`` for a match, else ``(None, check or None)``.
+    Read restricted candidates only in comment mode.
+    """
+    from crashclouseau.agent import same_defect
+
+    cfg = config.get_agent_same_defect()
+    if not cfg["enabled"]:
+        return None, None
+    signature = (esc.signature or "").strip()
+    frames = (stack or {}).get("frames")
+    regressor = {}
+    if _names_a_regression(findings, grounded) and screened.get("culprit_bug"):
+        regressor = {"bug": screened["culprit_bug"], "node": findings.culprit.node}
+    info = {"product": esc.product, "buildid": esc.buildid, "channel": esc.channel,
+            "node": brief.get("pin_rev") or ""}
+    bug, check = bugzilla_apply._match_same_defect(
+        signature, frames, regressor, info, cfg,
+        lambda: same_defect.crash_from_spike(signature, findings, frames, details),
+        token=token if mode == "comment" else None)
+    if bug is None:
+        return None, check
+    logger.info("spike: escalation %s is the same defect as bug %s", esc.id, bug)
+    return bugzilla_apply._add_to_same_defect_bug(bug, signature, check, mode, token), None
+
+
 def _screen(brief, findings, grounded, details, stack, link_regressor):
     """Screen the rendered comment and stored findings with a shared visibility lookup.
 
@@ -1784,16 +1817,19 @@ def _names_a_regression(findings, grounded):
 
 
 def _repeat_decline(venue, findings, grounded, escalation_id, culprit_bug=None):
-    """Return skip/retry fields for repeat comments, or ``None`` to pass this gate.
+    """Return skip/retry fields, or ``None`` to allow a comment.
 
-    After recorded spike analysis, require a new grounded medium-or-higher culprit,
-    comparing nodes, culprit bugs and the venue's ``regressed_by``. After volume-only
-    filings, require analysis. Read failures request a retry; *culprit_bug* comes from ``_screen``."""
+    Ignore signature-only filings. After volume-only filings, require analysis;
+    after analysis, require a new grounded culprit at medium confidence or higher.
+    Compare culprit nodes, bug IDs and the venue's ``regressed_by``. Retry unreadable
+    history; *culprit_bug* is the ID resolved by ``_screen``.
+    """
     bug_id = venue["id"]
     prior = models.SpikeEscalation.filings_on_bug(bug_id, exclude_id=escalation_id)
     if prior is None:
         return {"retry": True, "skipped": "could not read our earlier filings on bug {}; not "
                                           "risking a repeated comment".format(bug_id)}
+    prior = [p for p in prior if p.get("mode") != "same_defect"]
     if not prior:
         return None
     published = [_published(p) for p in prior]

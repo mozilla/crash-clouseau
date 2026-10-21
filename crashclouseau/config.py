@@ -1339,8 +1339,9 @@ def get_agent_second_opinion():
 
 
 def get_agent_same_defect():
-    """Same-defect comparison settings; ``SAME_DEFECT_ENABLED`` overrides ``enabled``.
-    ``min_confidence`` sets the acceptance floor; ``max_bugs`` caps candidate bugs."""
+    """Same-defect settings; ``SAME_DEFECT_ENABLED`` overrides ``enabled``.
+    ``min_confidence_by_stack`` applies to bugs selected only by shared frames.
+    """
     o = get_agent().get("same_defect", {})
     return {
         "enabled": _env_bool("SAME_DEFECT_ENABLED", o.get("enabled", False)),
@@ -1348,7 +1349,10 @@ def get_agent_same_defect():
         "effort": o.get("effort", "medium"),
         "max_turns": o.get("max_turns", 20),
         "min_confidence": o.get("min_confidence", "medium"),
+        "min_confidence_by_stack": o.get("min_confidence_by_stack", "high"),
         "max_bugs": o.get("max_bugs", 5),
+        "lookback_days": o.get("lookback_days", 30),
+        "stack_depth": o.get("stack_depth", 15),
     }
 
 

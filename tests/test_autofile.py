@@ -112,6 +112,9 @@ class _Base(unittest.TestCase):
             mock.patch.object(bugzilla_apply.models.Dossier, "record_filed_bug",
                               side_effect=lambda u, i: self.filed.append((u, i)) or True),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
+            # Same-defect checks are covered in test_same_defect.py.
+            mock.patch.object(bugzilla_apply.config, "get_agent_same_defect",
+                              return_value=dict(cconfig.get_agent_same_defect(), enabled=False)),
             # Asked only on the file-a-new-bug branch, and it is a Bugzilla request: nothing on
             # this signature is already fixed unless a test says so.
             mock.patch.object(bugzilla_apply, "_fixed_after_build_bug", return_value=None),

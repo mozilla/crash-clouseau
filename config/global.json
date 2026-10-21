@@ -392,7 +392,10 @@
             "effort": "medium",
             "max_turns": 20,
             "min_confidence": "medium",
-            "max_bugs": 5
+            "min_confidence_by_stack": "high",
+            "max_bugs": 5,
+            "lookback_days": 30,
+            "stack_depth": 15
         },
         "bug_comments":
         {

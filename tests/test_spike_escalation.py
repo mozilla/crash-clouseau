@@ -497,6 +497,9 @@ class _FilerBase(unittest.TestCase):
         patches = [
             mock.patch.object(config, "autofile_globally_enabled", return_value=True),
             mock.patch.object(config, "get_bugzilla_token", return_value="tok"),
+            # Same-defect checks are covered in test_same_defect.py.
+            mock.patch.object(config, "get_agent_same_defect",
+                              return_value=dict(config.get_agent_same_defect(), enabled=False)),
             mock.patch.object(models.SpikeEscalation, "count_since", return_value=0),
             mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
             mock.patch.object(bugzilla_apply, "_post_comment",
@@ -1028,6 +1031,14 @@ class TestRepeatComments(_FilerBase):
         res, _ = self._file(self._no_culprit(), prior)
         self.assertFalse(res["filed"])
         self.assertTrue(res["skipped"].endswith("this one adds no new culprit"))
+
+    def test_a_signature_only_filing_is_not_an_earlier_analysis(self):
+        same_defect = [dict(self._prior()[0], id=4, mode="same_defect")]
+        res, _ = self._file(self._no_culprit(), same_defect)
+        self.assertEqual((res["filed"], res["mode"]), (True, "spike_comment"))
+        res, _ = self._file(self._no_culprit(), self._prior() + same_defect)
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["earlier_filings"], [3])
 
     def test_an_unreadable_history_is_retried(self):
         res, _ = self._file(self._no_culprit(), None)
