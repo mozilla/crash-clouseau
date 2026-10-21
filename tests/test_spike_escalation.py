@@ -992,6 +992,99 @@ class TestTheNoveltyCheck(_FilerBase):
         check.assert_not_called()
 
 
+class TestTheOneHostCheck(_FilerBase):
+    _OPEN = [{"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
+              "keywords": [], "regressed_by": []}]
+    _ONE = {"crashes": 38, "faceted_crashes": 38, "top_crashes": 36, "installs": 3,
+            "top_share": 36 / 38, "concentrated": True}
+
+    def _file(self, assessment, pop=None, open_bugs=True, grounded=True):
+        findings = self.findings.model_copy(update={"assessment": assessment})
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=self._OPEN if open_bugs else []), \
+                mock.patch.object(se, "_spike_population", return_value=pop) as read:
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=grounded)
+        return res, read
+
+    def test_one_host_and_an_external_cause_is_not_posted(self):
+        for assessment in ("external", "environment"):
+            res, read = self._file(assessment, dict(self._ONE))
+            self.assertFalse(res["filed"])
+            self.assertEqual(res["skipped"], "one installation supplied 95% of the spike's 38 "
+                                             "reports and the analysis finds an {} cause"
+                             .format(assessment))
+            self.assertEqual(res["population"], {"crashes": 38, "installs": 3, "top_share": 0.947})
+            read.assert_called_once_with(mock.ANY, "mozilla::Foo::Bar")
+        self.assertEqual(self.comments, [])
+
+    def test_what_still_posts(self):
+        spread = dict(self._ONE, top_crashes=8, top_share=8 / 38, concentrated=False)
+        # Truncation inflates the facet share to 56%; the full-population share is 25%.
+        capped = {"crashes": 1000, "faceted_crashes": 450, "top_crashes": 250, "installs": 200,
+                  "top_share": 250 / 450, "concentrated": True, "truncated": True}
+        few = dict(self._ONE, crashes=4, faceted_crashes=4, top_crashes=4, top_share=1.0)
+        for name, assessment, pop in (("our cause", "regression", dict(self._ONE)),
+                                      ("many hosts", "external", spread),
+                                      ("capped facets", "external", capped),
+                                      ("too few reports", "external", few),
+                                      ("unreadable", "external", None)):
+            with self.subTest(name):
+                res, _ = self._file(assessment, pop)
+                self.assertTrue(res["filed"])
+                self.assertEqual(res["mode"], "spike_comment")
+
+    def test_ungrounded_findings_are_not_used(self):
+        res, read = self._file("external", dict(self._ONE), grounded=False)
+        self.assertTrue(res["filed"])
+        read.assert_not_called()
+
+    def test_a_new_bug_is_not_checked(self):
+        res, read = self._file("external", dict(self._ONE), open_bugs=False)
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["mode"], "spike_new_bug")
+        read.assert_not_called()
+
+
+class TestTheSpikePopulation(unittest.TestCase):
+    def _read(self, esc, found):
+        with mock.patch.object(spikes, "_search", return_value=found) as search:
+            return se._spike_population(esc, "Foo::Bar"), search
+
+    def test_a_build_day_reads_that_days_builds(self):
+        esc = _esc(created=datetime(2026, 9, 5, tzinfo=timezone.utc))
+        facets = [{"term": "1700000000", "count": 36}, {"term": "1700000500", "count": 2}]
+        pop, search = self._read(esc, {"total": 38, "facets": {"install_time": facets}})
+        params = search.call_args.args[0]
+        self.assertEqual(params["signature"], ["=Foo::Bar"])
+        self.assertEqual(params["build_id"], [">=20260903000000", "<20260904000000"])
+        self.assertEqual(params["date"], [">=2026-09-03", "<2026-09-05T00:00:00+00:00"])
+        self.assertEqual(params["release_channel"], "nightly")
+        self.assertTrue(pop["concentrated"])
+        self.assertEqual((pop["crashes"], pop["installs"]), (38, 2))
+
+    def test_a_rate_spike_reads_its_recorded_window_and_siblings(self):
+        spike = {"kind": "rate", "window_days": 5, "window_start": "2026-09-02",
+                 "window_end": "2026-09-08"}
+        esc = _esc(created=datetime(2026, 9, 10, tzinfo=timezone.utc),
+                   payload={"spike": spike, "siblings": ["Foo::Bar", "Foo::Bar::{lambda}"]})
+        _, search = self._read(esc, {"total": 0, "facets": {"install_time": []}})
+        params = search.call_args.args[0]
+        self.assertNotIn("build_id", params)
+        self.assertEqual(params["signature"], ["=Foo::Bar", "=Foo::Bar::{lambda}"])
+        self.assertEqual(params["date"], [">=2026-09-02", "<2026-09-09"])
+
+    def test_an_older_rate_spike_reads_the_nominal_window(self):
+        esc = _esc(created=datetime(2026, 9, 10, 15, tzinfo=timezone.utc),
+                   payload={"spike": {"kind": "rate", "window_days": 5}})
+        _, search = self._read(esc, {"total": 0, "facets": {"install_time": []}})
+        self.assertEqual(search.call_args.args[0]["date"], [">=2026-09-04", "<2026-09-11"])
+
+    def test_an_unreadable_search_is_none(self):
+        with mock.patch.object(spikes, "_search", side_effect=RuntimeError("503")):
+            self.assertIsNone(se._spike_population(_esc(), "Foo::Bar"))
+        self.assertIsNone(self._read(_esc(), {"errors": ["x"]})[0])
+
+
 class TestRepeatComments(_FilerBase):
     """Repeat comments require new analysis or a new culprit, depending on prior filings."""
 
@@ -1159,6 +1252,15 @@ class TestTheSweep(unittest.TestCase):
     def _sweep(self, rows, room=2):
         with mock.patch.object(models.Selection, "escalation_candidates", return_value=rows):
             return se._sweep_channel("Firefox", "nightly", self.cfg, room)
+
+    def test_a_rate_spike_records_its_window(self):
+        rate = {"kind": "rate", "installs": 20, "expected_installs": 2.0, "window_days": 5}
+        with mock.patch.object(spikes, "judge_selection", return_value=dict(rate)):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21)]), 1)
+        spike = self.created[0].payload["spike"]
+        today = date.today()
+        self.assertEqual((spike["window_start"], spike["window_end"], spike["window_days"]),
+                         ((today - timedelta(days=6)).isoformat(), today.isoformat(), 5))
 
     def test_a_real_spike_the_pipeline_did_not_file_is_escalated(self):
         n = self._sweep([_row(32, [1, 0, 2], 21)])

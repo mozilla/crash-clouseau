@@ -243,6 +243,11 @@ def _sweep_channel(product, channel, cfg, room):
         spike = spikes.judge_selection(merged, product, channel, trend_facts=trend)
         if not spike:
             continue
+        if spike.get("kind") == "rate":
+            # window_days counts collected days, not the calendar span.
+            today = date.today()
+            spike = dict(spike, window_end=today.isoformat(), window_start=(
+                today - timedelta(days=sigtrend.WINDOW_DAYS - 1)).isoformat())
         day = _parse_day(build_day)
         if day is None:
             continue
@@ -1616,6 +1621,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         repeat = _repeat_decline(venue, findings, grounded, esc.id, screened["culprit_bug"])
         if repeat is not None:
             return dict(result, bug=venue["id"], venue_kind=venue_kind, **repeat)
+        one_host = _one_host_external(esc, signature, findings, grounded)
+        if one_host is not None:
+            return dict(result, bug=venue["id"], venue_kind=venue_kind, **one_host)
     person = _needinfo_person_for(findings, brief) if grounded and venue_kind != "meta" else {}
     if not person and venue is not None and venue.get("assigned_to"):
         # Nobody to ask about a culprit: the bug's own assignee is the human who knows the fix.
@@ -1866,6 +1874,67 @@ def _repeat_decline(venue, findings, grounded, escalation_id, culprit_bug=None):
                        "(escalation {}); this one adds no {}".format(
                            bug_id, len(prior), last["at"] or "?", last["id"],
                            "new culprit" if analysed else "analysis")}
+
+
+_NOT_OURS = ("external", "environment")
+
+
+def _spike_population(esc, signature):
+    """Summarize install_time counts across the spike's stored sibling signatures.
+
+    Use the build day or recorded rate window. Older rate spikes use the nominal window
+    ending on their creation date. Return None when no readable counts are available."""
+    from crashclouseau import population
+
+    payload = esc.payload or {}
+    spike = payload.get("spike") or {}
+    end = _aware(getattr(esc, "created", None)) or datetime.now(timezone.utc)
+    params = {"signature": ["=" + s for s in payload.get("siblings") or [signature]],
+              "product": esc.product, "release_channel": utils.get_search_channel(esc.channel),
+              "_results_number": 0, "_facets": "install_time", "_facets_size": 200}
+    if (spike.get("kind") or getattr(esc, "kind", None)) == "build_day":
+        day = esc.build_day
+        params["build_id"] = [">=" + day.strftime("%Y%m%d000000"),
+                              "<" + (day + timedelta(days=1)).strftime("%Y%m%d000000")]
+        params["date"] = [">=" + day.isoformat(), "<" + end.isoformat()]
+    else:
+        last = _parse_day(spike.get("window_end")) or end.date()
+        first = _parse_day(spike.get("window_start")) or last - timedelta(
+            days=sigtrend.WINDOW_DAYS - 1)
+        params["date"] = [">=" + first.isoformat(), "<" + (last + timedelta(days=1)).isoformat()]
+    try:
+        found = spikes._search(params)
+    except Exception:
+        logger.warning("spike: cannot read the installations of %s", signature, exc_info=True)
+        return None
+    if not isinstance(found, dict) or "facets" not in found:
+        return None
+    return population.summarize((found.get("facets") or {}).get("install_time") or [],
+                                total=found.get("total"), now=end,
+                                min_install_time=population._PRODUCT_MIN_INSTALL_TIME.get(
+                                    esc.product))
+
+
+def _one_host_external(esc, signature, findings, grounded):
+    """Decline concentrated spikes assessed as external/environment by a grounded run.
+
+    Compare against all reports, since install_time facets can be truncated."""
+    assessment = getattr(findings, "assessment", None)
+    if not grounded or assessment not in _NOT_OURS:
+        return None
+    pop = _spike_population(esc, signature)
+    crashes = (pop or {}).get("crashes") or 0
+    cfg = config.get_population()
+    if crashes < cfg["min_crashes"]:
+        return None
+    share = (pop.get("top_crashes") or 0) / crashes
+    if share < cfg["concentrated_share"]:
+        return None
+    reason = "one installation supplied {:.0%} of the spike's {} reports and the analysis " \
+             "finds an {} cause".format(share, crashes, assessment)
+    return {"population": {"crashes": crashes, "installs": pop.get("installs"),
+                           "top_share": round(share, 3)},
+            "skipped": reason}
 
 
 def _published(prior):

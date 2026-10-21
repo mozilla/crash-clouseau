@@ -14,10 +14,8 @@ loudest Firefox nightly signatures of 2026-08-05..12:
 * 13 of 59 had a single installation supplying half or more of the reports.
 * The median signature is the opposite: 0.18 top share, installations hours apart.
 
-So the page shows installations next to reports, and flags the two shapes that mean the report
-count is lying. Nothing here gates or scores anything -- ``_apply_bad_machine_gate`` is the gate,
-with its own (stricter, CPU-checked) predicate. This is the same question asked for the reader's
-benefit, one query cheaper, with no power to suppress a verdict.
+The page shows install_time counts alongside reports. The spike comment gate also uses these
+counts and thresholds when a grounded run assesses the cause as external or environmental.
 
 TWO THINGS ``install_time`` IS NOT, both of which shape what is computed here:
 

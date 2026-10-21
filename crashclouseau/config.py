@@ -555,12 +555,9 @@ _POPULATION_DEFAULTS = {
 
 
 def get_population():
-    """Crash-population knobs for the crashstack.html stats block (``population.for_crash``).
+    """Settings for population display and the spike comment concentration gate.
 
-    Reporting only — nothing here can gate, score or suppress anything, which is why the
-    thresholds are looser than ``get_agent_bad_machine``'s (that one suppresses a verdict, so it
-    also demands the single-CPU mechanism test). Returned as one normalized dict so callers never
-    re-derive a default."""
+    POPULATION_STATS controls the display; the gate uses min_crashes and concentrated_share."""
     cfg = dict(_POPULATION_DEFAULTS)
     cfg.update(_get_global().get("population", {}) or {})
     cfg["enabled"] = _env_bool("POPULATION_STATS", cfg["enabled"])
