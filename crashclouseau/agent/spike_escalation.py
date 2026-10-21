@@ -1507,12 +1507,17 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         return dict(result, retry=True, skipped=(
             "could not check whether the bugs the analysis names are public; not risking a "
             "disclosure"))
-    # The crash's other names ride along (`sigfamily`, on the brief): a bug open on the name
-    # this crash had before the rename is its venue, and gets this name attached.
+    # Search family names and the internal caller of an R8 helper.
     family = brief.get("signature_family") or {}
-    existing = (bugzilla_apply._open_bugs_for_signature(signature, family=family, product=product)
-                if bugzilla_apply._family_spelling_map(signature, family)
-                else bugzilla_apply._open_bugs_for_signature(signature))
+    outline = utils.outline_signature(signature, stack.get("frames"))
+    if outline:
+        existing = bugzilla_apply._open_bugs_for_signature(signature, family=family,
+                                                           product=product, extra=(outline,))
+    else:
+        existing = (bugzilla_apply._open_bugs_for_signature(signature, family=family,
+                                                            product=product)
+                    if bugzilla_apply._family_spelling_map(signature, family)
+                    else bugzilla_apply._open_bugs_for_signature(signature))
     if existing is None:
         return dict(result, retry=True, skipped="signature lookup failed; not risking a duplicate")
     existing, other_app = bugzilla_apply._split_by_application(existing, product)
@@ -1643,8 +1648,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 author_display=report_bug._person_display(person) if person else None,
                 link_regressor=link_regressor, grounded=grounded, as_comment=True)
             text = _without_withdrawn(text, withdrawn, screened)
-            # A venue reached through the crash's OTHER name says so, and gets this name
-            # attached in its own PUT after the comment (`bugzilla_apply._attach_signature`).
+            # Explain alternate-name matches; attachment depends on the match type.
             via_note = bugzilla_apply._venue_via_signature_note(signature, venue, family)
             if via_note:
                 text += "\n\n" + via_note
@@ -1666,8 +1670,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             if via_note:
                 result["venue_via_signature"] = venue.get("via_signature")
                 result["venue_via_relation"] = venue.get("via_relation")
-                result["signature_attached"] = bugzilla_apply._attach_signature(
-                    venue["id"], signature, token)
+                if bugzilla_apply._attaches_signature(venue, signature):
+                    result["signature_attached"] = bugzilla_apply._attach_signature(
+                        venue["id"], signature, token)
             email = (person or {}).get("account") or ""
             outcome = bugzilla_apply._set_needinfo(venue["id"], email, token) if email else None
             result.update({"filed": True, "bug": venue["id"], "mode": "spike_comment",

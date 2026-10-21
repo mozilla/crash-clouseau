@@ -71,6 +71,35 @@ _LAMBDA_COMPONENT = re.compile(
 _LAMBDA_T_COMPONENT = re.compile(r"(?<=::)<T>(?=::|$| \|)")
 
 
+# R8 outline and enum-unboxing helper names.
+_R8_MOVED = re.compile(r"\$\$ExternalSynthetic\w*Outline\d*\.|\$EnumUnboxing\w*\.")
+# Strip Java source line numbers from lookup spellings.
+_JAVA_LINE = re.compile(r"\.java:\d+\)$")
+# Match empty filenames: `(:30)` or `()`.
+_NO_FILE = re.compile(r"\((?=:\d+\)$|\)$)")
+
+
+def is_outline_signature(signature):
+    """Check whether a Java signature names an R8 outline or enum-unboxing helper."""
+    _exc, sep, top = (signature or "").strip().partition(": at ")
+    return bool(sep and _R8_MOVED.search(top))
+
+
+def outline_signature(signature, frames):
+    """Build an internal-frame lookup spelling for an R8 helper signature, or return ``None``.
+
+    Use the first non-helper internal Java frame, retaining the exception prefix."""
+    if not is_outline_signature(signature):
+        return None
+    exc = signature.strip().partition(": at ")[0]
+    for f in frames or []:
+        original = (f.get("original") or "").strip()
+        if f.get("internal") and original.startswith("at ") and not _R8_MOVED.search(original):
+            frame = _NO_FILE.sub("(Unknown Source", original[3:].strip())
+            return "{}: at {}".format(exc, _JAVA_LINE.sub(".java)", frame))
+    return None
+
+
 def lambda_family(signature):
     """The one spelling every demangling of *signature*'s lambdas shares (the ``<T>`` form).
 

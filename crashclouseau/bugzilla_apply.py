@@ -746,8 +746,13 @@ def _family_spelling_map(signature, family):
     return out
 
 
-def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, product=None):
+def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, product=None,
+                             extra=()):
     """Return public open venues for the signature and its family, sorted by bug ID.
+
+    *extra* contains internal-frame spellings for R8 helper signatures. Matches record
+    ``carries_frame`` and use ``outline`` unless a family relation already exists.
+    A frame match outside the foreign products drops own-signature rows lacking that frame.
 
     Recheck substring results against exact signature entries or bracketed signatures
     in summaries, including lambda variants. Direct family matches record ``via_signature``
@@ -767,6 +772,10 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
     # `j_top: OR`.
     own = sorted(utils.lambda_siblings(sig))
     others = _family_spelling_map(sig, family)
+    # Preserve family relations without losing internal-frame provenance.
+    frames = [s for s in extra or () if s and s not in own]
+    for spelling in frames:
+        others.setdefault(spelling, {"via": spelling, "relation": "outline", "since": None})
     spellings = own + sorted(others)
     params = {
         "include_fields": "id,summary,status,resolution,creation_time,product,keywords,"
@@ -797,7 +806,10 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
         if not b.get("id"):
             continue
         if any(_row_is_about(b, s) for s in own):
-            rows.append(_venue_row(b))
+            row = _venue_row(b)
+            if any(_row_is_about(b, s) for s in frames):
+                row["carries_frame"] = True
+            rows.append(row)
             continue
         via = next((s for s in sorted(others, key=lambda s: (_relation_rank(others[s]["relation"]), s))
                     if _row_is_about(b, s)), None)
@@ -806,13 +818,19 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
         row = _venue_row(b)
         row["via_signature"] = others[via]["via"]
         row["via_relation"] = others[via]["relation"]
+        if any(_row_is_about(b, s) for s in frames):
+            row["carries_frame"] = True
         if others[via]["since"]:
             row["venue_since"] = others[via]["since"]
         rows.append(row)
     relations = {s: v["relation"] for s, v in others.items()}
     merged = _merge_duplicate_targets(
         rows, _duplicate_targets_for_signature(sig, timeout=timeout, spellings=spellings,
-                                               relations=relations))
+                                               relations=relations, frames=frames))
+    # Foreign frame matches must not suppress eligible outline-only venues.
+    foreign = config.get_other_app_products(product)
+    if any(r.get("carries_frame") and (r.get("product") or "") not in foreign for r in merged):
+        merged = [r for r in merged if r.get("carries_frame") or r.get("via_relation")]
     return _prefer_own_signature(merged, product)
 
 
@@ -869,6 +887,8 @@ def _merge_duplicate_targets(rows, targets):
         via = {*(row.get("via_duplicates") or []), *(t.get("via_duplicates") or [])}
         if via:
             row["via_duplicates"] = sorted(via)
+        if t.get("carries_frame"):
+            row["carries_frame"] = True
     return [by_id[k] for k in sorted(by_id)]
 
 
@@ -877,16 +897,16 @@ _DUP_CHAIN_MAX_HOPS = 5
 
 
 def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings=None,
-                                     relations=None):
+                                     relations=None, frames=()):
     """Return public open targets of exact-signature duplicates, sorted by bug ID.
 
     Follow duplicate chains; omit closed or unavailable targets. Return ``[]`` on lookup
     failure. ``venue_since`` is the latest valid resolution timestamp across merged paths;
     ``via_duplicates`` records their duplicate IDs.
 
-    ``relations`` maps family spellings to ``handoff`` or ``sibling``. Preserve the strongest
-    relation when paths converge; own-signature matches omit ``via_relation``. These rows
-    omit ``via_signature``, so they do not request signature attachment."""
+    Preserve the strongest relation and internal-frame provenance across duplicate paths.
+    ``frames`` and ``outline`` relations set ``carries_frame``. Own-signature matches omit
+    ``via_relation``; all targets omit ``via_signature`` and do not request attachment."""
     sig = (signature or "").strip()
     if not sig:
         return []
@@ -933,9 +953,11 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
         matched = [s for s in spellings if _row_is_about(d, s)]
         if not matched:
             continue
-        rel = min((relations.get(s) for s in matched), key=_relation_rank)
+        rels = {relations.get(s) for s in matched}
+        if any(s in frames for s in matched):
+            rels.add("outline")
         tie(pending, d["dupe_of"], sigage.to_datetime(d.get("cf_last_resolved")), [d["id"]],
-            [rel])
+            rels)
     out = {}
     out_rels = {}
     hops = {}
@@ -991,6 +1013,8 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
         rel = min(out_rels[k], key=_relation_rank)
         if rel:
             row["via_relation"] = rel
+        if "outline" in out_rels[k]:
+            row["carries_frame"] = True
     return [out[k] for k in sorted(out)]
 
 
@@ -1085,8 +1109,18 @@ def _via_clause(venue):
     via = (venue or {}).get("via_signature")
     if not via:
         return ""
-    kind = "earlier name" if venue.get("via_relation") == "handoff" else "sibling spelling"
+    kind = {"handoff": "earlier name", "outline": "first internal frame"}.get(
+        venue.get("via_relation"), "sibling spelling")
     return " (on this crash's {} `{}`)".format(kind, via)
+
+
+def _attaches_signature(venue, signature):
+    """Check whether an alternate-name match permits signature attachment.
+
+    Exclude R8 helper signatures and internal-frame matches."""
+    venue = venue or {}
+    return (bool(venue.get("via_signature")) and venue.get("via_relation") != "outline"
+            and not venue.get("carries_frame") and not utils.is_outline_signature(signature))
 
 
 def _via_fields(venue):
@@ -1919,9 +1953,7 @@ def _attach_signature(bug_id, signature, token, comment=None, read_token=None):
 
 
 def _venue_via_signature_note(signature, venue, family):
-    """The one paragraph a comment posted through the crash's OTHER name carries: which name
-    this crash reports under now, since when, what changed, and that the name has been added
-    to the bug. ``""`` for a venue reached through the signature itself."""
+    """Explain an alternate-name match and its attachment policy; otherwise return ``""``."""
     from crashclouseau import sigage, sigfamily
 
     via = (venue or {}).get("via_signature")
@@ -1935,6 +1967,12 @@ def _venue_via_signature_note(signature, venue, family):
     if not change:
         change = sigfamily.describe_change(signature, via)
     build = fam.get("s_first_build")
+    if not _attaches_signature(venue, signature):
+        what = ("first internal frame" if venue.get("carries_frame")
+                or venue.get("via_relation") == "outline" else "other name")
+        return ("_Posted here because this crash's {} `{}` is on this bug. Its signature `{}` "
+                "is an R8 outline frame shared by unrelated crashes, so it was not added to "
+                "this bug._".format(what, via, signature))
     if (venue or {}).get("via_relation") == "handoff":
         since = (" since build {} ({})".format(build, sigage.buildid_day(build)) if build else "")
         return ("_Posted here because this crash reports under the signature `{}`{}: {}. This "
@@ -2593,7 +2631,8 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
         result["needinfo_already_set"] = email
     if via_note:
         result["venue_via_signature"] = venue.get("via_signature")
-        result["signature_attached"] = _attach_signature(venue["id"], signature, token)
+        if _attaches_signature(venue, signature):
+            result["signature_attached"] = _attach_signature(venue["id"], signature, token)
     if screened["withdrawn"]:
         result["withdrawn_refs"] = len(screened["withdrawn"])
     models.Dossier.record_filed_bug(uuid, result)
@@ -2974,18 +3013,21 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     # CHANNEL-BLIND, and that is the entire point: the 22.2% above is nightly-filed bugs that a
     # beta run would file a second time; scoping the lookup to the crash's own channel would
     # make it blind to exactly that population and leave it asserting nothing.
-    # THE CRASH'S OTHER NAMES (`sigfamily`, recorded by the run): the venue search asks for the
-    # bug under every one of them, the FIXED/known-on-train lookups too, and a venue reached
-    # through the old name gets the new one attached (`_attach_signature`).
+    # Include recorded family names in venue, FIXED and known-on-train lookups.
     family = _signature_family(dossier)
     spellings = _family_spellings(signature, family)
     own_count = len(utils.lambda_siblings(signature))
-    # Byte-identical calls when the crash has no other name, so the lookups' contracts (and
-    # the thirty-odd tests that pin them by name) do not move for the ordinary crash.
+    # Only pass extra lookup arguments when the search is widened.
     widened = {"spellings": spellings} if len(spellings) > own_count else {}
-    existing = (_open_bugs_for_signature(signature, family=family,
-                                         product=uuid_info.get("product")) if widened
-                else _open_bugs_for_signature(signature))
+    # Also search by the internal caller when the signature names an R8 helper.
+    outline = utils.outline_signature(signature, (stack or {}).get("frames"))
+    if outline:
+        existing = _open_bugs_for_signature(signature, family=family,
+                                            product=uuid_info.get("product"), extra=(outline,))
+    else:
+        existing = (_open_bugs_for_signature(signature, family=family,
+                                             product=uuid_info.get("product")) if widened
+                    else _open_bugs_for_signature(signature))
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
     # A BUCKET-HOLDER SIGNATURE -- one an open ``[meta]`` tracker carries -- takes one bug PER
@@ -3437,10 +3479,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
         }
     try:
         if bug_id is not None:
-            # A VENUE REACHED THROUGH THE CRASH'S OTHER NAME says so in the comment and gets
-            # this name attached (Calixte, bug 2063003: a dup must add its signature to the
-            # target). The attach is its own PUT after the comment, and a failure there is
-            # recorded, never raised: the comment is posted.
+            # Explain alternate-name matches; attach only when the match permits it.
+            # Attachment failures are recorded separately from the posted comment.
             via_note = _venue_via_signature_note(signature, venue, family)
             text = report_bug.existing_bug_comment(preview["comment"], uuid_info.get("channel"))
             text += "\n\n" + via_note if via_note else ""
@@ -3448,7 +3488,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
             if via_note:
                 result["venue_via_signature"] = venue.get("via_signature")
                 result["venue_via_relation"] = venue.get("via_relation")
-                result["signature_attached"] = _attach_signature(bug_id, signature, token)
+                if _attaches_signature(venue, signature):
+                    result["signature_attached"] = _attach_signature(bug_id, signature, token)
             # The comment is already posted, so a failing needinfo must not escape: it would
             # skip ``record_filed_bug`` below and the next run would comment a second time on
             # the same bug. Lose the flag, keep the filing.
