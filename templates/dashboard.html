@@ -201,14 +201,16 @@
 {%- macro tally_table(rows, first) -%}
   <table class="dash-table dash-sortable">
     <thead><tr><th>{{ first }}</th><th>New bugs</th><th>fixed</th><th>dup</th><th>open</th><th>closed</th>
-        <th>Comments</th><th>fixed since</th><th>Needinfos</th><th>answered</th></tr></thead>
+        <th>Comments</th><th>fixed since</th><th>Needinfos</th><th>answered</th>
+        <th title="No human action after our first write, among bugs written at least 7 days ago">silent after 7 d</th></tr></thead>
     <tbody>
     {%- for r in rows %}
     <tr><td>{{ r.name }}</td>
         <td>{{ r.filed or 0 }}</td><td>{{ r['filed:fixed'] or '' }}</td><td>{{ r['filed:duplicate'] or '' }}</td>
         <td>{{ (r['filed:open'] + r['filed:open_assigned']) or '' }}</td><td>{{ r['filed:closed'] or '' }}</td>
         <td>{{ r.commented or 0 }}</td><td>{{ r['commented:fixed'] or '' }}</td>
-        <td>{{ r.ni or '' }}</td><td>{{ r.ni_answered or '' }}</td></tr>
+        <td>{{ r.ni or '' }}</td><td>{{ r.ni_answered or '' }}</td>
+        <td data-sort="{{ (r.silent / r.aged) if r.aged else -1 }}">{% if r.aged %}{{ r.silent }} / {{ r.aged }}{% endif %}</td></tr>
     {%- endfor %}
     </tbody>
   </table>
@@ -269,6 +271,8 @@
           <span class="d">{{ t.ni_cancelled }} cancelled · {{ t.ni_pending }} pending</span></div>
         <div class="dash-tile"><span class="v">{{ t.engaged_pct }}%</span><span class="l">bugs a person reacted to</span>
           <span class="d">median first reaction after {{ hours(t.median_first_human_h) }}</span></div>
+        <div class="dash-tile"><span class="v">{{ t.silent_pct }}%</span><span class="l">silent a week after our write</span>
+          <span class="d">{{ t.silent }} of {{ t.silent_aged }} bugs at least 7 days old · {{ t.silent_open }} open and silent 14+ days</span></div>
         <div class="dash-tile"><span class="v">{{ t.landed }}</span><span class="l">bugs with a patch landed after us</span>
           <span class="d">{{ t.patch }} with a patch posted or landed</span></div>
       </div>
@@ -338,6 +342,25 @@
           {{ tally_table(view.by_mode, 'Kind') }}
         </section>
       </div>
+
+      {%- if view.by_requestee %}
+      <h3>Comments on stale bugs, by who we asked</h3>
+      {{ tally_table(view.by_requestee, 'Asked') }}
+      {%- endif %}
+
+      {%- if view.silent_open %}
+      <h3>Open bugs silent for 14+ days ({{ view.silent_open | length }})</h3>
+      <table class="dash-table dash-sortable">
+        <thead><tr><th>Bug</th><th aria-sort="descending">Days</th><th>What</th><th>Component</th><th>Needinfo</th></tr></thead>
+        <tbody>
+        {%- for b in view.silent_open %}
+        <tr><td data-sort="{{ b.id }}"><a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ b.id }}">{{ b.id }}</a>{% if b.restricted %} <span class="dash-note">(restricted)</span>{% endif %}</td>
+          <td>{{ b.silent_days }}</td><td>{{ b.mode_label }}</td><td>{{ b.component or '' }}</td>
+          <td>{% for n in b.needinfos %}{{ n.to or 'hidden' }} ({{ ni_labels.get(n.outcome, n.outcome) | lower }}){{ ', ' if not loop.last }}{% else %}none{% endfor %}</td></tr>
+        {%- endfor %}
+        </tbody>
+      </table>
+      {%- endif %}
 
       <h3>Components receiving our bugs</h3>
       <table class="dash-table dash-sortable">

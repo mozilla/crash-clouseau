@@ -132,6 +132,7 @@ def _write(info, source, **extra):
         "product": info.get("product"),
         "needinfo": info.get("needinfo"),
         "needinfo_missed": info.get("needinfo_dropped") or info.get("needinfo_failed"),
+        "asked_as": (info.get("wake_stale") or {}).get("asked_as"),
         "restricted": bool(info.get("restricted") or info.get("security_groups")
                            or info.get("findings_withheld")),
         "source": source,
@@ -479,6 +480,13 @@ def _mode(row):
     return next((m for m in modes if m not in _NEW_MODES), "comment_on_existing")
 
 
+# Minimum age since our first write for the silence rate.
+SILENT_AFTER = timedelta(days=7)
+# Minimum age for listing open, silent bugs.
+LIST_SILENT_AFTER = timedelta(days=14)
+# Before role tracking, stale-bug comments targeted the triage owner.
+_OLD_WAKE_ROLE = "triage owner (before v279)"
+
 # Remainder categories drawn in the neutral gray rather than a series hue.
 _GRAY = frozenset({"unreadable", "pending"})
 
@@ -525,7 +533,7 @@ def _week(dt):
     return day - timedelta(days=day.weekday())
 
 
-def _bug_row(row, attribution, public):
+def _bug_row(row, attribution, public, now):
     facts = row.get("facts") or {}
     channel, product = _origin(row)
     restricted = bool(facts.get("restricted")) or any(
@@ -534,6 +542,7 @@ def _bug_row(row, attribution, public):
     first = _ts(row.get("first_at") or facts.get("first_at"))
     ni = facts.get("needinfos") or []
     target = facts.get("dupe_target") or {}
+    aged = bool(facts.get("readable") and first and now - first >= SILENT_AFTER)
     return {
         "id": row["bug_id"],
         "kind": row.get("kind"),
@@ -565,6 +574,11 @@ def _bug_row(row, attribution, public):
         "triaged": (facts.get("severity") or "").startswith("S")
         or (facts.get("priority") or "").startswith("P"),
         "attribution": attribution.get(row["bug_id"]),
+        "asked_as": next((w["asked_as"] for w in row.get("writes") or [] if w.get("asked_as")),
+                         None),
+        "aged": aged,
+        "silent": aged and not facts.get("first_human_at"),
+        "silent_days": (now - first).days if first else None,
     }
 
 
@@ -575,6 +589,8 @@ def _tally(bugs):
         out[b["kind"]] += 1
         out["{}:{}".format(b["kind"], b["outcome"])] += 1
         asks = b["needinfos"]
+        out["aged"] += b["aged"]
+        out["silent"] += b["silent"]
         out["ni"] += len(asks)
         out["ni_answered"] += sum(n["outcome"] in ("answered", "answered_by_other", "redirected")
                                   for n in asks)
@@ -586,7 +602,7 @@ def summarize(rows, attribution=None, now=None, channel=None, product=None, days
     """The view model for dashboard.html, over the rows the filters keep."""
     now = now or datetime.now(timezone.utc)
     attribution = attribution or {}
-    every = [_bug_row(r, attribution, public) for r in rows]
+    every = [_bug_row(r, attribution, public, now) for r in rows]
     channels = sorted({b["channel"] for b in every})
     products = sorted({b["product"] for b in every})
     since = now - timedelta(days=days) if days else None
@@ -635,9 +651,9 @@ def summarize(rows, attribution=None, now=None, channel=None, product=None, days
     else:
         ticks = []
 
-    def table(key):
+    def table(key, among=None):
         groups = defaultdict(list)
-        for b in bugs:
+        for b in bugs if among is None else among:
             groups[key(b)].append(b)
         out = []
         for name, group in groups.items():
@@ -654,6 +670,13 @@ def summarize(rows, attribution=None, now=None, channel=None, product=None, days
           "outcomes": Counter(b["outcome"] for b in group)}
          for name, group in components.items()),
         key=lambda r: (-r["total"], r["name"]))[:15]
+
+    aged = [b for b in bugs if b["aged"]]
+    silent = [b for b in aged if b["silent"]]
+    silent_open = sorted((b for b in silent if b["outcome"] in ("open", "open_assigned")
+                          and now - b["first_at"] >= LIST_SILENT_AFTER),
+                         key=lambda b: b["first_at"])
+    wakes = [b for b in bugs if b["mode"] == "wake_stale"]
 
     attributions = Counter(b["attribution"] for b in filed if b["attribution"])
     filed_out = Counter(b["outcome"] for b in filed)
@@ -682,6 +705,10 @@ def summarize(rows, attribution=None, now=None, channel=None, product=None, days
             "ni_cancelled": sum(n["outcome"] == "cancelled" for n in asks),
             "ni_pending": sum(n["outcome"] == "pending" for n in asks),
             "ni_missed": sum(1 for b in bugs if b["needinfo_missed"]),
+            "silent": len(silent),
+            "silent_aged": len(aged),
+            "silent_pct": _pct(len(silent), len(aged)),
+            "silent_open": len(silent_open),
             "engaged": len(engaged),
             "engaged_pct": _pct(len(engaged), len(readable)),
             "landed": sum(1 for b in bugs if b["landed"]),
@@ -701,6 +728,8 @@ def summarize(rows, attribution=None, now=None, channel=None, product=None, days
         "weekly_ticks": ticks,
         "by_origin": table(lambda b: "{} / {}".format(b["product"], b["channel"])),
         "by_mode": table(lambda b: b["mode_label"]),
+        "by_requestee": table(lambda b: b["asked_as"] or _OLD_WAKE_ROLE, wakes),
+        "silent_open": silent_open,
         "components": top_components,
         "closed_resolutions": Counter(b["resolution"] for b in filed if b["outcome"] == "closed"),
         "attribution": attributions,

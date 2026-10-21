@@ -204,6 +204,12 @@ class TestWrites(unittest.TestCase):
         w = impact._write({"mode": "comment_on_existing", "wake_stale": {"bug": 1}}, "dossier")
         self.assertEqual(w["mode"], "wake_stale")
 
+    def test_the_stale_bug_requestee_role_is_kept(self):
+        w = impact._write({"mode": "comment_on_existing",
+                           "wake_stale": {"bug": 1, "asked_as": "assignee"}}, "dossier")
+        self.assertEqual(w["asked_as"], "assignee")
+        self.assertIsNone(impact._write({"mode": "new_bug"}, "dossier")["asked_as"])
+
 
 class TestBuild(unittest.TestCase):
 
@@ -318,6 +324,48 @@ class TestSummarize(unittest.TestCase):
         self.assertEqual(view["weekly"][2]["filed"]["total"], 3)
 
 
+def _silence_rows():
+    human = "2026-09-21T10:00:00+00:00"
+    wake = {"mode": "wake_stale", "channel": "nightly", "product": "Firefox"}
+    return [
+        _row(11, first_at="2026-09-20T10:00:00+00:00", first_human_at=human),
+        _row(12, first_at="2026-09-20T10:00:00+00:00",
+             needinfos=[{"to": "a@x", "at": "2026-09-20T10:00:00+00:00", "outcome": "pending"}]),
+        _row(13, first_at="2026-10-08T10:00:00+00:00"),
+        _row(14, kind="commented", first_at="2026-09-25T10:00:00+00:00",
+             writes=[dict(wake, asked_as="assignee")]),
+        _row(15, kind="commented", first_at="2026-09-25T10:00:00+00:00", first_human_at=human,
+             writes=[dict(wake)]),
+        _row(16, first_at="2026-09-01T10:00:00+00:00", readable=False),
+    ]
+
+
+class TestSilence(unittest.TestCase):
+
+    def test_only_bugs_a_week_old_count(self):
+        view = impact.summarize(_silence_rows(), now=NOW)
+        t = view["tiles"]
+        self.assertEqual((t["silent"], t["silent_aged"], t["silent_pct"]), (2, 4, 50))
+        self.assertEqual([b["id"] for b in view["silent_open"]], [12, 14])
+        self.assertEqual(view["silent_open"][0]["silent_days"], 22)
+
+    def test_the_tables_count_silence(self):
+        view = impact.summarize(_silence_rows(), now=NOW)
+        by_mode = {r["name"]: (r["silent"], r["aged"]) for r in view["by_mode"]}
+        self.assertEqual(by_mode["new bug"], (1, 2))
+        self.assertEqual(by_mode["comment on a stale bug"], (1, 2))
+        roles = {r["name"]: (r["silent"], r["aged"]) for r in view["by_requestee"]}
+        self.assertEqual(roles, {"assignee": (1, 1), "triage owner (before v279)": (0, 1)})
+
+    def test_a_fixed_or_recent_bug_is_not_listed(self):
+        rows = [_row(21, first_at="2026-09-20T10:00:00+00:00", status="RESOLVED",
+                     resolution="FIXED"),
+                _row(22, first_at="2026-10-01T10:00:00+00:00")]
+        view = impact.summarize(rows, now=NOW)
+        self.assertEqual(view["tiles"]["silent"], 2)
+        self.assertEqual(view["silent_open"], [])
+
+
 class TestPage(unittest.TestCase):
 
     def _get(self, rows, url="/dashboard.html"):
@@ -342,14 +390,27 @@ class TestPage(unittest.TestCase):
                                            "outcome": "answered"}]),
                           _row(4, kind="commented")])
         tables = re.findall(r"<table[^>]*>", body)
-        self.assertEqual(len(tables), 6)
+        # Six standard tables plus the silent-bug list.
+        self.assertEqual(len(tables), 7)
         self.assertTrue(all("dash-sortable" in t for t in tables))
-        self.assertEqual(body.count("<thead>"), 6)
-        self.assertEqual(body.count("<tbody>"), 6)
+        self.assertEqual(body.count("<thead>"), 7)
+        self.assertEqual(body.count("<tbody>"), 7)
         # Sort keys: the bug id, the outcome and first-needinfo order, the comment count.
         self.assertIn('<td data-sort="1"><a href', body)
         self.assertIn('<td data-sort="1"><span class="dash-pill">', body)   # fixed is first
         self.assertIn('<td data-sort="99">', body)                          # no needinfo: last
+
+    def test_the_silence_sections_render_and_sort(self):
+        import re
+        body = self._get(_silence_rows())
+        self.assertIn("silent a week after our write", body)
+        self.assertIn("Comments on stale bugs, by who we asked", body)
+        self.assertIn("triage owner (before v279)", body)
+        self.assertIn("Open bugs silent for 14+ days (2)", body)
+        self.assertIn("a@x (still pending)", body)
+        tables = re.findall(r"<table[^>]*>", body)
+        self.assertEqual(len(tables), 8)
+        self.assertTrue(all("dash-sortable" in t for t in tables))
 
     def test_an_empty_table_renders(self):
         self.assertIn("Nothing recorded yet", self._get([]))
