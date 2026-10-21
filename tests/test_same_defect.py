@@ -31,7 +31,7 @@ _STACK = {"frames": [{"stackpos": 0, "function": "Foo::Bar", "filename": "foo.cp
                      {"stackpos": 1, "function": "Foo::Layout", "filename": "foo.cpp",
                       "line": 40}]}
 _SD_CFG = {"enabled": True, "model": "claude-opus-5-5", "effort": "medium", "max_turns": 20,
-           "min_confidence": "medium", "min_confidence_by_stack": "high", "max_bugs": 5,
+           "min_confidence": "medium", "max_bugs": 5,
            "lookback_days": 30, "stack_depth": 15}
 
 
@@ -504,17 +504,15 @@ class TestSameDefectBug(unittest.TestCase):
         self.assertEqual(lookup.call_args.args[0], dossier.get("candidate", {}).get("bug"))
         return out, agent
 
-    def test_a_bug_listed_for_shared_frames_needs_a_high_match(self):
+    def test_a_bug_listed_for_shared_frames(self):
         (bug, check), _ = self._run(same_defect.SameDefect(bug=30, confidence="medium"),
                                     bugs=self._BY_STACK)
-        self.assertIsNone(bug)
-        self.assertEqual((check["bug"], check["by_stack"], check["bugs"]), (30, [30], [7, 30]))
-        (bug, check), _ = self._run(same_defect.SameDefect(bug=30, confidence="high"),
-                                    bugs=self._BY_STACK)
         self.assertEqual(bug, 30)
-        (bug, _check), _ = self._run(same_defect.SameDefect(bug=7, confidence="medium"),
-                                     bugs=self._BY_STACK)
-        self.assertEqual(bug, 7)
+        self.assertEqual((check["by_stack"], check["bugs"]), ([30], [7, 30]))
+        (bug, check), _ = self._run(same_defect.SameDefect(bug=30, confidence="low"),
+                                    bugs=self._BY_STACK)
+        self.assertIsNone(bug)
+        self.assertEqual(check["bug"], 30)
 
     def test_without_a_regressor_our_filings_are_still_compared(self):
         dossier = dict(_DOSSIER, candidate={})

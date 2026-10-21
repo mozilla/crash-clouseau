@@ -2235,8 +2235,7 @@ def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg, token=None
 def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=None):
     """Compare public and restricted candidates separately.
 
-    *describe()* supplies prompt fields. Matches selected only by shared frames use
-    ``min_confidence_by_stack``. Return ``(bug or None, check record or None)``.
+    *describe()* supplies prompt fields. Return ``(bug or None, check record or None)``.
     """
     import asyncio
     from crashclouseau.agent import same_defect
@@ -2252,6 +2251,7 @@ def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=
     public = [b for b in bugs if not b.get("restricted")]
     hidden = [b for b in bugs if b.get("restricted")]
     crash = describe()
+    floor = _CONFIDENCE_RANK.get(cfg["min_confidence"], 2)
 
     def compare(group):
         try:
@@ -2263,13 +2263,8 @@ def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=
             logger.warning("autofile: same-defect check raised for %r", signature, exc_info=True)
             return None
 
-    def accepted(answer, group):
-        entry = next((b for b in group if b["bug"] == answer.bug), None)
-        if entry is None:
-            return False
-        floor = cfg["min_confidence"] if entry.get("by_regressor") else \
-            cfg["min_confidence_by_stack"]
-        return _CONFIDENCE_RANK.get(answer.confidence, 0) >= _CONFIDENCE_RANK.get(floor, 2)
+    def accepted(answer):
+        return answer.bug is not None and _CONFIDENCE_RANK.get(answer.confidence, 0) >= floor
 
     def listed(group):
         out = {"regressor": reg, "bugs": [b["bug"] for b in group]}
@@ -2286,12 +2281,12 @@ def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=
             check["error"] = "no usable answer"
         else:
             check.update(answer.model_dump())
-            if accepted(answer, public):
+            if accepted(answer):
                 return answer.bug, check
     # Discard unmatched restricted reasoning.
     if hidden:
         answer = compare(hidden)
-        if answer is not None and accepted(answer, hidden):
+        if answer is not None and accepted(answer):
             return answer.bug, dict(answer.model_dump(), restricted=True, **listed(hidden))
         logger.info("autofile: no same-defect match among restricted bugs %s for %r",
                     [b["bug"] for b in hidden], signature)
