@@ -540,6 +540,8 @@ class _FilerBase(unittest.TestCase):
             mock.patch("crashclouseau.sigage.pushdate_for_node", return_value=[1788350400, 0]),
             mock.patch.object(bugzilla_apply, "_last_reopened", return_value=None),
             mock.patch.object(bugzilla_apply, "_signature_attached", return_value=None),
+            mock.patch("crashclouseau.agent.comment_novelty.check",
+                       return_value={"new_information": True, "reason": "r", "cost_usd": 0.03}),
         ]
         for p in patches:
             p.start()
@@ -943,6 +945,51 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
             self.assertEqual((res["filed"], res["bug"], res["skipped"]),
                              (False, 71, "open bug 71 exists"))
         self.assertEqual(self.comments, [])
+
+
+class TestTheNoveltyCheck(_FilerBase):
+    _OPEN = [{"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
+              "keywords": [], "regressed_by": []}]
+    _KEEP = object()
+
+    def _file(self, answer=_KEEP, below=None):
+        from crashclouseau.agent import comment_novelty
+
+        if answer is not self._KEEP:
+            comment_novelty.check.return_value = answer
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                               return_value=[] if below else self._OPEN), \
+                mock.patch.object(se, "resolve_venue_below_public", return_value=below):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        return res, comment_novelty.check
+
+    def test_a_comment_with_something_new_is_posted_and_the_answer_kept(self):
+        res, check = self._file()
+        self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
+        self.assertTrue(res["novelty"]["new_information"])
+        check.assert_called_once_with(55, self.comments[0][1], spike=True)
+
+    def test_a_comment_with_nothing_new_is_not_posted(self):
+        res, _ = self._file({"new_information": False, "cost_usd": 0.03,
+                             "reason": "Comment 75 already names bug 2074047 as the cause."})
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["skipped"], "the comment adds nothing to bug 55: Comment 75 already "
+                                         "names bug 2074047 as the cause")
+        self.assertNotIn("retry", res)
+        self.assertEqual(self.comments, [])
+        bugzilla_apply._set_needinfo.assert_not_called()
+
+    def test_an_unanswered_check_is_retried_later(self):
+        res, _ = self._file(None)
+        self.assertEqual((res["filed"], res["retry"]), (False, True))
+        self.assertEqual(res["skipped"], "could not check whether the comment adds to bug 55")
+        self.assertEqual(self.comments, [])
+
+    def test_a_restricted_venue_is_posted_unchecked(self):
+        res, check = self._file(below={"id": 91, "kind": "own_restricted", "assigned_to": ""})
+        self.assertEqual((res["filed"], res["bug"], res["venue_kind"]),
+                         (True, 91, "own_restricted"))
+        check.assert_not_called()
 
 
 class TestRepeatComments(_FilerBase):

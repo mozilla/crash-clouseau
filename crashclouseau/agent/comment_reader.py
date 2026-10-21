@@ -68,10 +68,21 @@ def _keep(comment):
     return creator == _PUSH_BOT or not bugzilla_apply._is_automation(creator)
 
 
-def bug_comments(bug_id, timeout=_HTTP_TIMEOUT):
-    """Return comments passing ``_keep`` in API order, or ``None`` on a request/JSON error.
+def keep_analyses(comment):
+    """Keep default comments plus Clouseau and known agent comments."""
+    from crashclouseau import bugzilla_apply, models
 
-    Rows contain count, author, text, the full timestamp (time) and its date (when)."""
+    if _keep(comment) or bugzilla_apply._is_ours(comment):
+        return True
+    return models.ReviewNote.classify_author(comment.get("creator"), comment.get("text")) == "agent"
+
+
+def bug_comments(bug_id, timeout=_HTTP_TIMEOUT, keep=None):
+    """Read comments in API order, filtered by ``keep`` (default ``_keep``).
+
+    Return ``None`` on request/JSON errors. Rows have count, author, text,
+    time (timestamp) and when (date)."""
+    keep = keep or _keep
     try:
         r = net.get("{}/{}/comment".format(_bz_rest(), bug_id), timeout=timeout)
         r.raise_for_status()
@@ -82,7 +93,7 @@ def bug_comments(bug_id, timeout=_HTTP_TIMEOUT):
     return [{"count": c.get("count"), "author": c.get("creator") or "",
              "when": str(c.get("creation_time") or "")[:10],
              "time": str(c.get("creation_time") or ""), "text": c.get("text") or ""}
-            for c in comments or [] if _keep(c)]
+            for c in comments or [] if keep(c)]
 
 
 def _bug_rows(ids, timeout=_HTTP_TIMEOUT):

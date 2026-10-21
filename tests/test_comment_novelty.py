@@ -51,6 +51,13 @@ class TestThePrompt(unittest.TestCase):
         self.assertEqual((opts.tools, opts.allowed_tools, opts.mcp_servers), ([], [], {}))
         self.assertIn("untrusted", opts.system_prompt)
 
+    def test_the_spike_prompt_counts_reach(self):
+        self.assertEqual(cn.build_options(_CFG).system_prompt, cn._SYSTEM)
+        spike = cn.build_options(_CFG, spike=True).system_prompt
+        self.assertEqual(spike, cn._SPIKE_SYSTEM)
+        self.assertIn("untrusted", spike)
+        self.assertIn("a rise in volume that the comments neither report nor explain", spike)
+
 
 class TestTheAnswer(unittest.TestCase):
     def test_a_boolean_is_required(self):
@@ -72,6 +79,17 @@ class TestTheCheck(unittest.TestCase):
         with mock.patch.object(cn.comment_reader, "bug_comments", return_value=comments), \
                 mock.patch.object(cn, "_ask", ask):
             return cn.check(5, "draft", _CFG), ask
+
+    def test_the_spike_prompt_is_passed_through(self):
+        ask = mock.AsyncMock(return_value=_result(_answer(True)))
+        with mock.patch.object(cn.comment_reader, "bug_comments",
+                               return_value=_COMMENTS) as read, \
+                mock.patch.object(cn, "_ask", ask):
+            cn.check(5, "draft", _CFG, spike=True)
+            cn.check(5, "draft", _CFG)
+        self.assertIs(ask.call_args_list[0].args[2], True)
+        self.assertEqual([c.kwargs["keep"] for c in read.call_args_list],
+                         [cn.comment_reader.keep_analyses, None])
 
     def test_the_answer_and_its_cost(self):
         out, ask = self._check(result=_result(_answer(False)))

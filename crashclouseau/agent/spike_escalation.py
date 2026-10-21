@@ -1572,7 +1572,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 public_venue_declined = below["id"]
             below = None
         if below is not None:
-            venue = {"id": below["id"], "assigned_to": below.get("assigned_to") or ""}
+            venue = {"id": below["id"], "assigned_to": below.get("assigned_to") or "",
+                     "public": below["kind"] != "own_restricted" and below.get("public", True)}
             venue_kind = below["kind"]
             for_spike = False
     # A BUCKET-HOLDER SIGNATURE (an open [meta] tracker carries it): no bug titled by the
@@ -1639,6 +1640,20 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             via_note = bugzilla_apply._venue_via_signature_note(signature, venue, family)
             if via_note:
                 text += "\n\n" + via_note
+            # Anonymous reads cannot check restricted comments for novelty.
+            if venue.get("public", True):
+                from crashclouseau.agent import comment_novelty
+
+                novelty = comment_novelty.check(venue["id"], text, spike=True)
+                if novelty is None:
+                    return dict(result, bug=venue["id"], venue_kind=venue_kind, retry=True,
+                                skipped="could not check whether the comment adds to bug "
+                                        "{}".format(venue["id"]))
+                result["novelty"] = novelty
+                if not novelty["new_information"]:
+                    return dict(result, bug=venue["id"], venue_kind=venue_kind,
+                                skipped="the comment adds nothing to bug {}: {}".format(
+                                    venue["id"], novelty["reason"].rstrip(".")))
             bugzilla_apply._post_comment(venue["id"], text, False, token)
             if via_note:
                 result["venue_via_signature"] = venue.get("via_signature")

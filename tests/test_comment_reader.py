@@ -52,6 +52,18 @@ class TestTheComments(unittest.TestCase):
         self.assertEqual(out[1], {"count": 3, "author": "pulsebot@bmo.tld", "when": "2025-05-01",
                                   "time": "2025-05-01T00:00:00Z", "text": "Pushed by x"})
 
+    def test_the_novelty_selection_keeps_our_and_agent_analyses(self):
+        comments = [
+            {"count": 0, "creator": "clouseau-bot@mozilla.tld", "text": "opener"},
+            {"count": 1, "creator": "release-mgmt-account-bot@mozilla.tld", "text": "topcrash"},
+            {"count": 2, "creator": "hackbot@mozilla.tld", "text": "patch attached"},
+            {"count": 3, "creator": "dev@mozilla.com", "text": "looking"},
+        ]
+        with mock.patch.object(cr.net, "get", return_value=_Resp({"bugs": {"5": {
+                "comments": comments}}})):
+            out = cr.bug_comments(5, keep=cr.keep_analyses)
+        self.assertEqual([c["count"] for c in out], [0, 2, 3])
+
     def test_a_bug_with_only_comment_0_is_not_read(self):
         with mock.patch.object(cr, "_bug_rows", return_value={5: {}, 6: {}}), \
                 mock.patch.object(cr, "bug_comments",
