@@ -2379,18 +2379,54 @@ def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
             "discussion": discussion}
 
 
-def _triage_owner(bug_id, timeout=_HTTP_TIMEOUT):
-    """Return the component's triage owner login, ``""`` if absent, or ``None`` on read error."""
+def _bug_owners(bug_id, timeout=_HTTP_TIMEOUT):
+    """Return bug owners and component; absent fields are ``""``, read errors ``None``."""
+    fields = ("triage_owner", "assigned_to", "product", "component")
     try:
-        r = net.get(_bz_rest(), params={"id": str(bug_id), "include_fields": "id,triage_owner"},
+        r = net.get(_bz_rest(), params={"id": str(bug_id),
+                                        "include_fields": ",".join(("id",) + fields)},
                     timeout=timeout)
         r.raise_for_status()
         bugs = (r.json() or {}).get("bugs") or []
     except Exception as exc:                                   # pragma: no cover - network
-        logger.warning("autofile: triage owner read failed for bug %s: %s", bug_id, exc)
+        logger.warning("autofile: owner read failed for bug %s: %s", bug_id, exc)
         return None
-    row = next((b for b in bugs if str(b.get("id")) == str(bug_id)), None)
-    return ((row or {}).get("triage_owner") or "").strip()
+    row = next((b for b in bugs if str(b.get("id")) == str(bug_id)), None) or {}
+    return {f: (row.get(f) or "").strip() for f in fields}
+
+
+def _stale_bug_requestee(owners, dossier, channel, cfg):
+    """Return ``(person, role)`` for an eligible assignee, then origin author, else ``(None, None)``.
+
+    Authors must also pass the configured component-activity and FIXED-count checks."""
+    from crashclouseau import report_bug
+
+    away = cfg.get("needinfo_away_days")
+
+    def usable(person):
+        account = (person or {}).get("account")
+        if not account or report_bug._is_bot(account):
+            return False
+        # Failed lookups retain the address without caching it; recheck askability.
+        user = report_bug._bugzilla_user(account)
+        return not user.get("unverified") and report_bug._askable(user) \
+            and not report_bug._away(person, away)
+
+    assignee = owners.get("assigned_to") or ""
+    if assignee and not assignee.startswith("nobody@"):
+        person = report_bug._person_for_account(assignee)
+        if usable(person):
+            return person, "assignee"
+    author = report_bug._needinfo_person((dossier or {}).get("candidate"), channel)
+    if not usable(author) or report_bug._inactive_author(
+            author, cfg.get("author_fixed_days"), cfg.get("author_fixed_min")):
+        return None, None
+    days = cfg.get("author_active_days")
+    product, component = owners.get("product"), owners.get("component")
+    if days and not (product and component and report_bug._component_activity(
+            author["account"], product, component, days)):
+        return None, None
+    return author, "author"
 
 
 def _actionable_decline(venue):
@@ -2427,16 +2463,14 @@ def _crash_spike(uuid_info):
 
 
 def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family):
-    """Comment on a stale bug if eligible, or decline about the venue.
+    """Comment on an eligible stale bug, or return a decline.
 
-    All *existing* bugs (same application, non-meta) must pass the activity and prior-comment
-    checks. The venue has the most human comments after comment 0; ties keep the oldest.
-    Require no memory-safety signal, a public origin bug if known, a screened comment,
-    and a verified, askable triage owner. Failed eligibility reads decline.
+    Every matching bug must be stale and have no Clouseau comment. Choose the most-discussed
+    venue, oldest on ties. Require a public origin if known, a screened comment and no
+    memory-safety signal. Ask an eligible assignee, origin author, then triage owner.
 
-    ``shadow`` records the preview under ``wake_stale`` without writing to Bugzilla.
-    ``comment`` sends one update, adding needinfo only when enabled and not already pending.
-    Require a positive novelty verdict unless the crash's rate or build day is a spike.
+    ``shadow`` records a preview; ``comment`` posts one update with any new needinfo.
+    Require novelty unless the crash's rate or build day is a spike.
     """
     mode = config.wake_mode(cfg.get("wake_stale"))
     venue = existing[0]
@@ -2474,20 +2508,29 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
             return no("the origin bug is not public")
     from crashclouseau import report_bug
 
-    owner = _triage_owner(venue["id"])
-    if owner is None:
-        return no("could not read the triage owner of bug {}".format(venue["id"]))
-    # Reject the helper's askable-but-unverified fallback on lookup failure.
-    if owner and report_bug._bugzilla_user(owner).get("unverified"):
-        return no("could not check whether the triage owner of bug {} can be asked".format(
-            venue["id"]))
-    person = report_bug._person_for_account(owner)
-    if not person.get("account"):
-        return no("bug {} has no triage owner who can be asked".format(venue["id"]))
+    owners = _bug_owners(venue["id"])
+    if owners is None:
+        return no("could not read the owners of bug {}".format(venue["id"]))
+    owner = owners["triage_owner"]
     try:
-        preview = report_bug.build_bug_preview(uuid_info, stack, dossier,
-                                               stale={"since": since, "person": person,
-                                                      "bug": venue["id"]})
+        person, role = _stale_bug_requestee(owners, dossier, uuid_info.get("channel"), cfg)
+    except Exception:
+        logger.warning("autofile: stale-bug requestee lookup failed for %s", uuid, exc_info=True)
+        person, role = None, None
+    if person is None:
+        # _person_for_account retains addresses on lookup failure.
+        if owner and report_bug._bugzilla_user(owner).get("unverified"):
+            return no("could not check whether the triage owner of bug {} can be asked".format(
+                venue["id"]))
+        # Keep an away triage owner as the final fallback.
+        person, role = report_bug._person_for_account(owner), "triage owner"
+        if not person.get("account"):
+            return no("bug {} has no triage owner who can be asked".format(venue["id"]))
+    try:
+        preview = report_bug.build_bug_preview(
+            uuid_info, stack, dossier,
+            stale={"since": since, "person": person, "bug": venue["id"],
+                   "role": "triage owner" if role == "triage owner" else ""})
     except Exception as exc:
         logger.error("autofile: stale-bug comment failed for %s", uuid, exc_info=True)
         return no("comment build failed: {}".format(exc))
@@ -2502,7 +2545,10 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
     via_note = _venue_via_signature_note(signature, venue, family)
     text = screened["text"] + ("\n\n" + via_note if via_note else "")
     email = person["account"] if cfg["needinfo"] else ""
-    wake = {"mode": mode, "bug": venue["id"], "since": since, "triage_owner": person["account"]}
+    wake = {"mode": mode, "bug": venue["id"], "since": since, "triage_owner": owner,
+            "asked": person["account"], "asked_as": role}
+    if role == "triage owner" and report_bug._away(person, cfg.get("needinfo_away_days")):
+        wake["asked_away"] = True
     # One update prevents a rejected needinfo from leaving the comment behind.
     pending = _existing_needinfos(venue["id"], token) if email else set()
     if pending is None:

@@ -11,6 +11,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import config, report_bug  # noqa: E402
@@ -91,6 +92,44 @@ class TestInactiveAuthor(unittest.TestCase):
         self.assertEqual((policy["author_fixed_days"], policy["author_fixed_min"]), (182, 7))
 
 
+class TestAway(unittest.TestCase):
+    _BOB = {"nick": "bobowen", "account": "bob@x.com"}
+
+    def _away(self, seen, person=None, days=90):
+        user = {"exists": True, "askable": True, "last_seen": seen}
+        with mock.patch.object(report_bug, "_bugzilla_user", return_value=user):
+            return report_bug._away(self._BOB if person is None else person, days)
+
+    def _iso(self, days_ago, z="Z"):
+        dt = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S") + z
+
+    def test_an_account_unseen_past_the_window_is_away(self):
+        self.assertTrue(self._away(self._iso(200)))
+        self.assertTrue(self._away(self._iso(200, z="")))
+        self.assertFalse(self._away(self._iso(10)))
+
+    def test_unknown_or_off_is_not_away(self):
+        for name, over in (("no date", {"seen": None}), ("bad date", {"seen": "soon"}),
+                           ("no account", {"person": {"nick": "bob"}}),
+                           ("days off", {"days": 0}), ("days null", {"days": None})):
+            with self.subTest(name):
+                args = dict({"seen": self._iso(400)}, **over)
+                self.assertFalse(self._away(**args))
+
+    def test_the_lookup_reads_last_seen(self):
+        resp = _Response({"users": [{"name": "bob@x.com", "nick": "bobowen", "can_login": True,
+                                     "last_seen_date": "2026-10-20T00:00:00Z"}]})
+        with mock.patch.dict(report_bug._USER_CACHE, clear=True), \
+                mock.patch.object(report_bug.net, "get", return_value=resp) as get:
+            user = report_bug._bugzilla_user("bob@x.com")
+        self.assertEqual(user["last_seen"], "2026-10-20T00:00:00Z")
+        self.assertIn("last_seen_date", get.call_args.kwargs["params"]["include_fields"])
+
+    def test_the_default(self):
+        self.assertEqual(config.get_agent_autofile("nightly")["needinfo_away_days"], 90)
+
+
 class TestTheAsk(unittest.TestCase):
     def test_a_lead_by_an_inactive_author_asks_the_triage_owner(self):
         p = _preview(_lead(), fixes=0)
@@ -121,6 +160,18 @@ class TestTheAsk(unittest.TestCase):
                 p = _preview(_lead(), **over)
                 self.assertEqual(p["needinfo_email"], "bob@x.com")
                 self.assertEqual(p["needinfo"], _AUTHOR_ASK)
+
+    def test_an_away_author_asks_the_triage_owner(self):
+        with mock.patch.object(report_bug, "_away",
+                               side_effect=lambda p, d: p.get("account") == "bob@x.com"):
+            p = _preview(_lead(), fixes=50)
+        self.assertEqual((p["needinfo_email"], p["needinfo"]), ("owner@moz.example", _OWNER_ASK))
+
+    def test_an_away_owner_keeps_the_author(self):
+        for name, fixes in (("inactive author", 0), ("away author", 50)):
+            with self.subTest(name), mock.patch.object(report_bug, "_away", return_value=True):
+                p = _preview(_lead(), fixes=fixes)
+            self.assertEqual((p["needinfo_email"], p["needinfo"]), ("bob@x.com", _AUTHOR_ASK))
 
     def test_a_stale_wake_keeps_its_triage_owner_without_a_count(self):
         stale = {"since": "2025-04-24", "person": dict(_OWNER)}

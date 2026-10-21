@@ -1186,6 +1186,8 @@ def get_agent_autofile(channel=None, product=None):
         # Recent FIXED-bug window and minimum for triage-owner routing; 0/null disables it.
         "author_fixed_days": a.get("author_fixed_days", 182),
         "author_fixed_min": a.get("author_fixed_min", 7),
+        # Last-seen limit in days for requestee routing; 0/null disables it.
+        "needinfo_away_days": a.get("needinfo_away_days", 90),
         # Stale-bug eligibility is checked by `bugzilla_apply._wake_stale_bug`.
         "wake_stale": wake_mode(a.get("wake_stale")),
         "wake_stale_days": a.get("wake_stale_days") or 180,

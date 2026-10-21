@@ -334,6 +334,11 @@ class TestCrashstackPanel(unittest.TestCase):
                       "since 2025-04-22.", html)
         self.assertIn("needinfo the triage owner, owner@moz.example.", html)
         self.assertIn("This bug has had no comment &lt;b&gt;from a person&lt;/b&gt;", html)
+        ev["filing_declined"]["wake_stale"].update(asked_as="assignee",
+                                                   needinfo="karlt@moz.example")
+        html = self._get(ev, open_bugs=[self._HUMAN_BUG]).get_data(as_text=True)
+        self.assertIn("needinfo the assignee, karlt@moz.example.", html)
+        self.assertNotIn("needinfo the triage owner", html)
 
     def test_a_stale_bug_check_that_declined_says_why(self):
         ev = _evidence()
@@ -2358,7 +2363,7 @@ class TestBugPreview(unittest.TestCase):
         self.assertEqual(prev["needinfo"], ":bznick, can you have a look please?")
         # the flag needs an address, not a display nick
         self.assertEqual(prev["needinfo_email"], "dev@x.com")
-        bz.assert_called_once_with("dev@x.com")
+        self.assertEqual({c.args for c in bz.call_args_list}, {("dev@x.com",)})
         # Metadata a create_bug is REJECTED without, plus what a hand-filed crash bug carries.
         self.assertEqual(prev["version"], "Trunk")          # nightly
         self.assertEqual(prev["type"], "defect")
@@ -2485,7 +2490,7 @@ class TestBugPreview(unittest.TestCase):
             u = report_bug._bugzilla_user("stransky@x.com")
             u2 = report_bug._bugzilla_user("stransky@x.com")      # served from cache
         self.assertEqual(u, {"exists": True, "nick": "stransky", "real": "", "askable": True,
-                             "moved": False})
+                             "moved": False, "last_seen": None})
         self.assertEqual(u2, u)
         self.assertEqual(len(calls), 1)                           # cached: one lookup
         url, kw = calls[0]
@@ -2494,9 +2499,9 @@ class TestBugPreview(unittest.TestCase):
         # permissive => an unknown name arrives as a FAULT (200) instead of an exception, which
         # is what makes "no such account" distinguishable from "BMO hiccuped".
         self.assertEqual(kw["params"]["permissive"], 1)
-        for field in ("can_login", "requests"):
+        for field in ("can_login", "requests", "last_seen_date"):
             self.assertIn(field, kw["params"]["include_fields"])
-        # Anonymously BMO returns NEITHER field, so the key is load-bearing, not decoration.
+        # Include the API key for account fields hidden from anonymous requests.
         self.assertEqual(kw["headers"]["X-Bugzilla-API-Key"], "KEY")
         # ...and the page-view bound applies here too: net.DEFAULT_TIMEOUT's 60s read half is
         # what took crashstack.html down.
@@ -2508,7 +2513,7 @@ class TestBugPreview(unittest.TestCase):
         with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("farre@mozilla.com"),
                              {"exists": False, "nick": "", "real": "", "askable": False,
-                              "moved": False})
+                              "moved": False, "last_seen": None})
 
         # A real account with NO nick still exists -- the old lookup could not tell these
         # apart, and conflating them is what would drop a usable needinfo.
@@ -2516,7 +2521,7 @@ class TestBugPreview(unittest.TestCase):
         with mock.patch.object(report_bug.net, "get", fake_get):
             self.assertEqual(report_bug._bugzilla_user("nonick@x.com"),
                              {"exists": True, "nick": "", "real": "", "askable": True,
-                              "moved": False})
+                              "moved": False, "last_seen": None})
 
         # No token -> no header at all (a BOGUS key is a hard 400/code 306), and the fields it
         # would have carried are simply absent, which must read as "askable" -- see below.

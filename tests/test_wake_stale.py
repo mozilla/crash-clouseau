@@ -25,6 +25,8 @@ _REAL_BUGZILLA_USER = report_bug._bugzilla_user
 _STALE_PREVIEW = dict(_PREVIEW, comment="the stale-bug comment",
                       needinfo=":segun, as triage owner, can you have a look please?",
                       needinfo_email="owner@moz.example")
+_OWNERS = {"triage_owner": "owner@moz.example", "assigned_to": "nobody@mozilla.org",
+           "product": "Core", "component": "DOM"}
 _NEW = {"new_information": True, "reason": "It names a second caller.", "cost_usd": 0.02}
 
 
@@ -42,7 +44,8 @@ class _WakeBase(_Base):
                               return_value=(True, {"count": 160, "installs": 22})),
             mock.patch.object(bugzilla_apply, "_bug_activity",
                               side_effect=lambda b: self.activity.get(b)),
-            mock.patch.object(bugzilla_apply, "_triage_owner", return_value="owner@moz.example"),
+            mock.patch.object(bugzilla_apply, "_bug_owners", return_value=dict(_OWNERS)),
+            mock.patch.object(report_bug, "_needinfo_person", return_value={}),
             mock.patch.object(report_bug, "_bugzilla_user", return_value={
                 "exists": True, "nick": "segun", "real": "Segun", "askable": True}),
             mock.patch.object(report_bug, "_person_for_account", return_value=dict(_OWNER)),
@@ -83,7 +86,9 @@ class TestTheModes(_WakeBase):
         self.assertEqual(wake["comment"], "the stale-bug comment")
         self.assertEqual((self.comments, self.puts, self.created, self.filed), ([], [], [], []))
         stale = report_bug.build_bug_preview.call_args.kwargs["stale"]
-        self.assertEqual(stale, {"since": wake["since"], "person": _OWNER, "bug": 1961865})
+        self.assertEqual(stale, {"since": wake["since"], "person": _OWNER, "bug": 1961865,
+                                 "role": "triage owner"})
+        self.assertEqual((wake["asked"], wake["asked_as"]), ("owner@moz.example", "triage owner"))
 
     def test_comment_and_needinfo_are_one_update(self):
         res = self._wake(mode="comment")
@@ -217,10 +222,10 @@ class TestTheConditions(_WakeBase):
         self.assertEqual(self._reason(self._wake()),
                          "bug 1961865 has no triage owner who can be asked")
 
-    def test_a_failed_triage_owner_read(self):
-        bugzilla_apply._triage_owner.return_value = None
+    def test_a_failed_owner_read(self):
+        bugzilla_apply._bug_owners.return_value = None
         self.assertEqual(self._reason(self._wake()),
-                         "could not read the triage owner of bug 1961865")
+                         "could not read the owners of bug 1961865")
 
     def test_a_comment_naming_a_nonpublic_bug(self):
         with mock.patch("crashclouseau.disclosure.screen",
@@ -242,7 +247,7 @@ class TestTheVenue(_WakeBase):
         self.assertEqual((res["filed"], res["bug"]), (True, 2000000))
         self.assertEqual(res["wake_stale"]["since"], _ago(300).date().isoformat())
         self.assertEqual([b for b, _ in self.puts], [2000000])
-        bugzilla_apply._triage_owner.assert_called_once_with(2000000)
+        bugzilla_apply._bug_owners.assert_called_once_with(2000000)
         bugzilla_apply._existing_needinfos.assert_called_once_with(2000000, mock.ANY)
 
     def test_a_tie_keeps_the_oldest(self):
@@ -256,21 +261,120 @@ class TestTheVenue(_WakeBase):
         res = self._wake()
         self.assertEqual((res["bug"], res["skipped"], res["wake_stale"]["bug"]),
                          (2000000, _DECLINE_VENUE, 2000000))
-        bugzilla_apply._triage_owner.return_value = None
+        bugzilla_apply._bug_owners.return_value = None
         res = self._wake()
         self.assertEqual((res["bug"], res["skipped"]), (2000000, _DECLINE_VENUE))
         self.assertEqual(res["wake_stale"]["skipped"],
-                         "could not read the triage owner of bug 2000000")
+                         "could not read the owners of bug 2000000")
 
     def test_a_venue_reached_by_another_name_says_so(self):
         sibling = dict(_bug(2000000), via_signature="Foo::Bar", via_relation="sibling")
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865), sibling]
-        bugzilla_apply._triage_owner.return_value = None
+        bugzilla_apply._bug_owners.return_value = None
         res = self._wake()
         self.assertEqual(res["skipped"], "open bug 2000000 (on this crash's sibling spelling "
                          "`Foo::Bar`) exists; an actionable crash is filed only where no bug is")
         self.assertEqual((res["venue_via_signature"], res["venue_via_relation"]),
                          ("Foo::Bar", "sibling"))
+
+
+_ASSIGNEE = {"nick": "karlt", "name": "", "email": "karlt@moz.example",
+             "account": "karlt@moz.example", "account_name": "Karl"}
+_AUTHOR = {"nick": "nika", "name": "Nika", "email": "nika@moz.example",
+           "account": "nika@moz.example", "account_name": "Nika"}
+
+
+class TestTheRequestee(_WakeBase):
+    def setUp(self):
+        super().setUp()
+        self.users = {}
+        people = {"karlt@moz.example": _ASSIGNEE, "owner@moz.example": _OWNER}
+        report_bug._person_for_account.side_effect = lambda a: dict(people.get(a, {}))
+        report_bug._bugzilla_user.side_effect = (
+            lambda a: self.users.get(a, {"exists": True, "nick": "", "askable": True}))
+
+    def _asked(self, res):
+        stale = report_bug.build_bug_preview.call_args.kwargs["stale"]
+        return res["wake_stale"]["asked_as"], res["needinfo"], stale["role"]
+
+    def test_the_assignee_comes_first(self):
+        bugzilla_apply._bug_owners.return_value = dict(_OWNERS, assigned_to="karlt@moz.example")
+        res = self._wake(mode="comment")
+        self.assertEqual(self._asked(res), ("assignee", "karlt@moz.example", ""))
+        self.assertEqual(res["wake_stale"]["triage_owner"], "owner@moz.example")
+        self.assertEqual(self.puts[0][1], dict({"comment": {"body": "the stale-bug comment"}},
+                                               **bugzilla_apply._needinfo_changes(
+                                                   "karlt@moz.example")))
+
+    def test_an_assignee_needs_no_triage_owner(self):
+        bugzilla_apply._bug_owners.return_value = dict(_OWNERS, triage_owner="",
+                                                       assigned_to="karlt@moz.example")
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["needinfo"]), (True, "karlt@moz.example"))
+
+    def test_an_active_author_comes_next(self):
+        report_bug._needinfo_person.return_value = dict(_AUTHOR)
+        with mock.patch.object(report_bug, "_component_activity", return_value=True) as act:
+            res = self._wake(mode="comment", author_active_days=365)
+        self.assertEqual(self._asked(res), ("author", "nika@moz.example", ""))
+        act.assert_called_once_with("nika@moz.example", "Core", "DOM", 365)
+
+    def test_an_author_quiet_in_the_component_leaves_the_triage_owner(self):
+        report_bug._needinfo_person.return_value = dict(_AUTHOR)
+        for activity in (False, None):
+            with self.subTest(activity), \
+                    mock.patch.object(report_bug, "_component_activity", return_value=activity):
+                res = self._wake(mode="comment", author_active_days=365)
+            self.assertEqual(self._asked(res),
+                             ("triage owner", "owner@moz.example", "triage owner"))
+
+    def test_an_author_with_few_fixes_leaves_the_triage_owner(self):
+        report_bug._needinfo_person.return_value = dict(_AUTHOR)
+        with mock.patch.object(report_bug, "_recent_fixes", return_value=2), \
+                mock.patch.object(report_bug, "_component_activity", return_value=True):
+            res = self._wake(mode="comment", author_active_days=365, author_fixed_days=182,
+                             author_fixed_min=7)
+        self.assertEqual(res["wake_stale"]["asked_as"], "triage owner")
+
+    def test_unusable_accounts_are_skipped(self):
+        bugzilla_apply._bug_owners.return_value = dict(_OWNERS, assigned_to="karlt@moz.example")
+        report_bug._needinfo_person.return_value = dict(_AUTHOR)
+        cases = {
+            "not seen for months": {"exists": True, "askable": True,
+                                    "last_seen": "2025-11-26T00:00:00Z"},
+            "lookup failed": {"exists": True, "askable": True, "unverified": True},
+        }
+        for name, user in cases.items():
+            self.users = {"karlt@moz.example": user, "nika@moz.example": user}
+            with self.subTest(name):
+                res = self._wake(mode="comment", needinfo_away_days=90)
+                self.assertEqual(res["wake_stale"]["asked_as"], "triage owner")
+
+    def test_an_away_triage_owner_is_still_asked_and_recorded(self):
+        bugzilla_apply._bug_owners.return_value = dict(_OWNERS, assigned_to="owner@moz.example")
+        self.users = {"owner@moz.example": {"exists": True, "askable": True,
+                                            "last_seen": "2025-01-15T00:00:00Z"}}
+        res = self._wake(mode="comment", needinfo_away_days=90)
+        self.assertEqual((res["filed"], res["needinfo"]), (True, "owner@moz.example"))
+        self.assertEqual((res["wake_stale"]["asked_as"], res["wake_stale"]["asked_away"]),
+                         ("triage owner", True))
+
+    def test_a_seen_triage_owner_is_not_marked_away(self):
+        res = self._wake(mode="comment", needinfo_away_days=90)
+        self.assertNotIn("asked_away", res["wake_stale"])
+
+    def test_a_bot_assignee_is_skipped(self):
+        bot = "release-mgmt-account-bot@mozilla.tld"
+        bugzilla_apply._bug_owners.return_value = dict(_OWNERS, assigned_to=bot)
+        people = {bot: dict(_OWNER, account=bot), "owner@moz.example": _OWNER}
+        report_bug._person_for_account.side_effect = lambda a: dict(people.get(a, {}))
+        res = self._wake(mode="comment")
+        self.assertEqual(res["wake_stale"]["asked_as"], "triage owner")
+
+    def test_a_failed_lookup_falls_back_to_the_triage_owner(self):
+        report_bug._needinfo_person.side_effect = RuntimeError("hg down")
+        res = self._wake(mode="comment")
+        self.assertEqual(self._asked(res), ("triage owner", "owner@moz.example", "triage owner"))
 
 
 class TestTheTriageOwnerLookup(_WakeBase):
@@ -306,6 +410,30 @@ class TestTheTriageOwnerLookup(_WakeBase):
         self.assertEqual((res["filed"], res["needinfo"]), (True, "owner@moz.example"))
         stale = report_bug.build_bug_preview.call_args.kwargs["stale"]
         self.assertEqual(stale["person"]["nick"], "segun")
+
+    def test_a_timeout_then_a_disabled_assignee_is_skipped(self):
+        bugzilla_apply._bug_owners.return_value = dict(_OWNERS, assigned_to="karlt@moz.example")
+        tries = []
+
+        def get(url, **kw):
+            name = (kw.get("params") or {}).get("names")
+            user = {"name": "owner@moz.example", "nick": "segun", "real_name": "Segun",
+                    "can_login": True, "requests": {"needinfo": {"blocked": False}}}
+            if name == "karlt@moz.example":
+                tries.append(name)
+                if len(tries) == 1:
+                    raise TimeoutError("timed out")
+                user = {"name": name, "nick": "karlt", "can_login": False}
+            resp = mock.Mock()
+            resp.raise_for_status.return_value = None
+            resp.json.return_value = {"users": [user]}
+            return resp
+
+        with mock.patch.object(report_bug.net, "get", side_effect=get):
+            res = self._wake(mode="comment")
+        self.assertEqual(len(tries), 2)
+        self.assertEqual((res["needinfo"], res["wake_stale"]["asked_as"]),
+                         ("owner@moz.example", "triage owner"))
 
     def test_a_disabled_or_blocked_owner_declines(self):
         for fields in ({"can_login": False}, {"requests": {"needinfo": {"blocked": True}}}):
@@ -359,16 +487,23 @@ class TestTheReads(unittest.TestCase):
     def test_no_comments_is_a_failed_read(self):
         self.assertIsNone(self._activity([]))
 
-    def test_the_triage_owner(self):
+    def test_the_owners(self):
         resp = mock.Mock()
         resp.raise_for_status.return_value = None
-        resp.json.return_value = {"bugs": [{"id": 5, "triage_owner": "owner@moz.example"}]}
+        resp.json.return_value = {"bugs": [{"id": 5, "triage_owner": "owner@moz.example",
+                                            "assigned_to": "dev@moz.example", "product": "Core",
+                                            "component": "DOM"}]}
         with mock.patch.object(bugzilla_apply.net, "get", return_value=resp) as get:
-            self.assertEqual(bugzilla_apply._triage_owner(5), "owner@moz.example")
-        self.assertEqual(get.call_args.kwargs["params"]["include_fields"], "id,triage_owner")
+            self.assertEqual(bugzilla_apply._bug_owners(5), {
+                "triage_owner": "owner@moz.example", "assigned_to": "dev@moz.example",
+                "product": "Core", "component": "DOM"})
+        self.assertEqual(get.call_args.kwargs["params"]["include_fields"],
+                         "id,triage_owner,assigned_to,product,component")
         resp.json.return_value = {"bugs": [{"id": 5, "triage_owner": ""}]}
         with mock.patch.object(bugzilla_apply.net, "get", return_value=resp):
-            self.assertEqual(bugzilla_apply._triage_owner(5), "")
+            self.assertEqual(bugzilla_apply._bug_owners(5)["triage_owner"], "")
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=TimeoutError("t")):
+            self.assertIsNone(bugzilla_apply._bug_owners(5))
 
 
 class TestTheComment(unittest.TestCase):
@@ -440,6 +575,20 @@ class TestTheComment(unittest.TestCase):
                          ":segun, as triage owner, can you have a look please?")
         self.assertIn("comes from c065adeeac27 by :grisha.", preview["comment"])
         self.assertIn("no comment from a person since 2025-04-22", preview["comment"])
+
+    def test_the_preview_asks_an_assignee_without_a_role(self):
+        with mock.patch.object(report_bug, "_needinfo_person", return_value={}), \
+                mock.patch.object(report_bug, "resolve_product_component",
+                                  return_value=("Core", "DOM")), \
+                mock.patch.object(report_bug, "fetch_signature_stats", return_value=(True, None)), \
+                mock.patch.object(report_bug, "fetch_crash_reason", return_value={}), \
+                mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=None), \
+                mock.patch.object(report_bug, "changeset_links", return_value="c065adeeac27"):
+            preview = report_bug.build_bug_preview(
+                dict(_INFO, uuid="u-1", version="159.0a1"), {}, self._DOSSIER,
+                stale={"since": "2025-04-22", "person": _ASSIGNEE, "role": ""})
+        self.assertEqual(preview["needinfo_email"], "karlt@moz.example")
+        self.assertEqual(preview["needinfo"], ":karlt, can you have a look please?")
 
 
 class TestTheConfig(unittest.TestCase):

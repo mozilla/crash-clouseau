@@ -420,7 +420,7 @@
           {#- Stale-bug preview or eligibility failure. -#}
           {%- set wk = fl['declined'].get('wake_stale') or {} -%}
           {%- if wk.get('comment') %}
-        <p class="filing-status">Stale bug, shadow mode: bug {{ wk['bug']|e }} has had no comment from a person since {{ wk['since']|e }}. With <code>wake_stale: comment</code>, Clouseau would post the comment below there{% if wk.get('needinfo') %} and needinfo the triage owner, {{ wk['needinfo']|e }}{% endif %}.</p>
+        <p class="filing-status">Stale bug, shadow mode: bug {{ wk['bug']|e }} has had no comment from a person since {{ wk['since']|e }}. With <code>wake_stale: comment</code>, Clouseau would post the comment below there{% if wk.get('needinfo') %} and needinfo the {{ (wk.get('asked_as') or 'triage owner')|e }}, {{ wk['needinfo']|e }}{% endif %}.</p>
         <details><summary>Comment for bug {{ wk['bug']|e }}</summary><pre class="action-body">{{ wk['comment']|e }}</pre></details>
           {%- elif wk.get('skipped') %}
         <p class="muted">Stale-bug check: no comment on bug {{ wk['bug']|e }} &mdash; {{ wk['skipped']|e }}.</p>

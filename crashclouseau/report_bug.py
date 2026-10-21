@@ -2329,9 +2329,10 @@ def _askable(user):
 
 def _bugzilla_user(email):
     """What Bugzilla knows about the login ``email``:
-    ``{"exists": bool, "nick": str, "askable": bool, "moved": bool}``.
+    ``{"exists": bool, "nick": str, "askable": bool, "moved": bool, "last_seen": str|None}``.
 
     ``moved`` indicates a display-name match for ``_BZ_MOVED``, not a verified replacement.
+    ``last_seen`` is BMO's ``last_seen_date``, or ``None`` when absent.
 
     ``exists`` is the field the old nick-only lookup threw away. It is NOT ``bool(nick)`` --
     plenty of real accounts have no nick -- but whether ``/rest/user`` returned a user at all.
@@ -2393,7 +2394,7 @@ def _bugzilla_user(email):
             "{}/user".format(re.sub(r"/bug/?$", "", _bz_rest())),
             headers={"X-Bugzilla-API-Key": token} if token else None,
             params={"names": email, "permissive": 1,
-                    "include_fields": "name,nick,real_name,can_login,requests"},
+                    "include_fields": "name,nick,real_name,can_login,requests,last_seen_date"},
             timeout=net.SERVICE_TIMEOUT,
         )
         r.raise_for_status()
@@ -2412,7 +2413,8 @@ def _bugzilla_user(email):
            # pushed and can never be corrected; Bugzilla is the one they maintain.
            "real": real,
            "askable": bool(user) and user.get("can_login") is not False and blocked is not True,
-           "moved": bool(_BZ_MOVED.search(real))}
+           "moved": bool(_BZ_MOVED.search(real)),
+           "last_seen": (user or {}).get("last_seen_date")}
     _USER_CACHE[email] = out
     return out
 
@@ -2853,20 +2855,41 @@ def _inactive_author(person, days, minimum):
     return count is not None and count < minimum
 
 
-def _triage_owner_person(product, component, account=""):
-    """Return a verified, askable component triage owner other than ``account``.
+def _away(person, days):
+    """Return whether the account was last seen more than ``days`` days ago.
 
-    Return ``None`` if either lookup fails or no suitable owner is found."""
+    Return ``False`` if ``days`` is off, the account is missing, or the date is unknown/invalid."""
+    account = ((person or {}).get("account") or "").strip()
+    if not days or not account:
+        return False
+    seen = (_bugzilla_user(account) or {}).get("last_seen")
+    try:
+        seen = datetime.fromisoformat(str(seen).replace("Z", "+00:00")) if seen else None
+    except ValueError:
+        return False
+    if seen is None:
+        return False
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - seen > timedelta(days=int(days))
+
+
+def _triage_owner_person(product, component, account="", away_days=None):
+    """Return a verified, askable component owner other than ``account``, or ``None``.
+
+    Exclude accounts past ``away_days`` when their last-seen date is known."""
     owner = _component_triage_owner(product, component)
     if not owner or owner.casefold() == (account or "").casefold():
         return None
     if _bugzilla_user(owner).get("unverified"):
         return None
     found = _person_for_account(owner)
-    return found if found.get("account") else None
+    if not found.get("account") or _away(found, away_days):
+        return None
+    return found
 
 
-def _owner_for_old_origin(person, dossier, product, component, days):
+def _owner_for_old_origin(person, dossier, product, component, days, away_days=None):
     """Return a triage owner to ask, or ``None`` to keep the current requestee.
 
     With ``days`` enabled, require an origin age at build time above ``days`` or unknown,
@@ -2884,7 +2907,7 @@ def _owner_for_old_origin(person, dossier, product, component, days):
     account = ((person or {}).get("account") or "").strip()
     if account and _component_activity(account, product, component, days) is not False:
         return None
-    return _triage_owner_person(product, component, account)
+    return _triage_owner_person(product, component, account, away_days)
 
 
 def _person_display(person):
@@ -2977,11 +3000,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
     excludes.
 
-    For actionable verdicts, ``stale={"since", "person"}`` supplies the activity date and
-    requestee; otherwise ``_owner_for_old_origin`` may select a triage owner. Except for stale
-    wakeups, a low recent FIXED-bug count may redirect the author/fixer's ask to a verified,
-    askable triage owner. Attribution is retained. Actionable previews add recent counts when
-    ``_recent_adds`` finds another channel or higher counts than ``fetch_signature_stats``."""
+    For actionable verdicts, ``stale`` supplies ``since``, ``person``, ``bug`` and optional
+    ``role`` (default ``triage owner``). Other previews may redirect to a triage owner under
+    the origin-age, FIXED-count or last-seen rules, retaining author attribution.
+    Actionable previews add recent counts when ``_recent_adds`` finds additional channels or
+    higher counts than ``fetch_signature_stats``."""
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
@@ -3059,16 +3082,19 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     own_train = _status_flag(version, channel)
     stale = stale if actionable else None
     asked = (stale.get("person") or {}) if stale else person
+    away = policy.get("needinfo_away_days")
     owner = None
     if actionable and not stale and candidate and candidate.get("node"):
         owner = _owner_for_old_origin(person, dossier, product, component,
-                                      policy.get("author_active_days"))
-    if not stale and not owner and _inactive_author(person, policy.get("author_fixed_days"),
-                                                    policy.get("author_fixed_min")):
-        owner = _triage_owner_person(product, component, person.get("account"))
+                                      policy.get("author_active_days"), away)
+    if not stale and not owner and (
+            _inactive_author(person, policy.get("author_fixed_days"),
+                             policy.get("author_fixed_min")) or _away(person, away)):
+        owner = _triage_owner_person(product, component, person.get("account"), away)
     if owner:
         asked = owner
-    ask = _needinfo_line(asked, role="triage owner" if (stale or owner) else "")
+    role = stale.get("role", "triage owner") if stale else ("triage owner" if owner else "")
+    ask = _needinfo_line(asked, role=role)
     recent_note = None
     if actionable:
         days = policy.get("population_days")

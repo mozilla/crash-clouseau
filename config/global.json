@@ -342,6 +342,7 @@
             "author_active_days": 365,
             "author_fixed_days": 182,
             "author_fixed_min": 7,
+            "needinfo_away_days": 90,
             "skip_regressor_bugs": [2067007],
             "default_channel": "nightly",
             "default_product": "Firefox",
