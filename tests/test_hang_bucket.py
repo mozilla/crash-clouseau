@@ -440,6 +440,93 @@ class TestTheAwaitedOrigin(unittest.TestCase):
         self.assertIsNone(hang.awaited_origin(_hang([_SUGGEST], spin=""), "release"))
 
 
+def _t(frame, trust):
+    return dict(frame, trust=trust)
+
+
+# Synthetic libsecret stack with repeated scans and one intervening CFI frame.
+_LIBSECRET = {"thread_name": "BgIOThr~Pool #3", "frames": [
+    _t(_f("__syscall_cancel_arch", "libc.so.6"), "context"),
+    _t(_f("__internal_syscall_cancel", "libc.so.6"), "cfi"),
+    _t(_f("__GI_ppoll", "libc.so.6"), "cfi"),
+    _t(_f("g_main_context_iterate_unlocked", "libglib-2.0.so.0"), "cfi"),
+    _t(_f("g_main_loop_run", "libglib-2.0.so.0"), "cfi"),
+    _t({"module": "libsecret-1.so.0"}, "cfi"),
+    _t({"module": "libsecret-1.so.0"}, "scan"),
+    _t(_f("free", "firefox-bin"), "scan"),
+    _t(_f("LibSecret::StoreSecret(nsTSubstring<char> const&)", "libxul.so",
+          "security/manager/ssl/LibSecret.cpp", 187), "scan"),
+    _t(_f("mozilla::detail::MutexImpl::unlock()", "firefox-bin", "mozglue/misc/Mutex_posix.cpp",
+          100), "cfi"),
+    _t(_f("realloc", "firefox-bin", "memory/build/malloc_decls.h", 53), "scan"),
+    _t(_f("nsThreadPool::Run()", "libxul.so", "xpcom/threads/nsThreadPool.cpp", 442), "scan"),
+    _t(_f("_dl_catch_error", "ld-linux-x86-64.so.2", "elf/dl-catch.c", 20), "scan"),
+]}
+# Synthetic QuotaManager stack with one scan followed by CFI frames.
+_SQLITE = {"thread_name": "QuotaManager IO", "frames": [
+    _t(_f("fsync", "libc.so.6"), "context"),
+    _t(_f("unixSync", "libxul.so", "third_party/sqlite3/src/sqlite3.c", 41000), "scan"),
+    _t(_f("syncJournal", "libxul.so", "third_party/sqlite3/src/sqlite3.c", 58000), "cfi"),
+    _t(_f("mozilla::storage::Statement::Execute()", "libxul.so",
+          "storage/mozStorageStatement.cpp", 600), "cfi"),
+    _t(_f("mozilla::dom::quota::QuotaManager::UnloadQuota()", "libxul.so",
+          "dom/quota/ActorsParent.cpp", 4000), "cfi"),
+    _t(_f("nsThread::ThreadFunc(void*)", "libxul.so", "xpcom/threads/nsThread.cpp", 375), "cfi"),
+    _t(_f("start_thread", "libc.so.6"), "cfi"),
+]}
+
+
+class TestScannedFrames(unittest.TestCase):
+    def test_reliable_frames(self):
+        def keep(trusts):
+            frames = [{"function": "F{}".format(i), "trust": t} for i, t in enumerate(trusts)]
+            return [int(f["function"][1:]) for f in hang.reliable(frames)]
+        self.assertEqual(keep(["context", "scan", "cfi", "cfi"]), [0, 1, 2, 3])
+        # One non-scanned frame suffices at stack end; a final scan is dropped.
+        self.assertEqual(keep(["context", "scan", "cfi"]), [0, 1, 2])
+        self.assertEqual(keep(["context", "cfi", "scan"]), [0, 1])
+        # Drop the scans and intervening frame until frame 5 passes the lookahead check.
+        self.assertEqual(keep(["context", "cfi", "scan", "scan", "cfi", "scan", "cfi", "cfi",
+                               "frame_pointer"]), [0, 1, 5, 6, 7, 8])
+        frames = [{"function": "A"}, "junk", {"function": "B", "trust": "frame_pointer"}]
+        self.assertEqual(hang.reliable(frames), [frames[0], frames[2]])
+        self.assertEqual(hang.reliable(None), [])
+
+    def test_a_lost_walk_names_neither_the_bucket_nor_the_blame(self):
+        raw = _hang([_IDLE_POOL, _LIBSECRET])
+        s = hang.awaited_summary(raw)
+        self.assertEqual(s["thread"]["name"], "BgIOThr~Pool #3")
+        self.assertEqual(s["bucket"], "libsecret-1.so.0")
+        self.assertEqual(s["title"], "libsecret-1.so.0 blocks BgIOThreadPool shutdown")
+        self.assertEqual(s["files"], [])
+        # Keep scanned frames in the displayed stack.
+        self.assertEqual(s["thread"]["frames"][7]["function"], "free")
+        self.assertEqual(hang.work_frame_candidates(hang.reliable(_LIBSECRET["frames"])), [])
+        with mock.patch.object(hang, "_annotate_line") as ann:
+            self.assertIsNone(hang.awaited_origin(raw, "nightly"))
+        ann.assert_not_called()
+
+    def test_a_confirmed_scan_keeps_the_stack(self):
+        raw = _hang([_SQLITE], spin="default: QuotaManager::Observer::Observe")
+        s = hang.awaited_summary(raw)
+        self.assertEqual(s["bucket"], "mozilla::dom::quota::QuotaManager::UnloadQuota | unixSync")
+        untrusted = [{k: v for k, v in f.items() if k != "trust"} for f in _SQLITE["frames"]]
+        self.assertEqual(hang.bucket_key(untrusted), s["bucket"])
+        with mock.patch.object(hang, "_annotate_line", return_value=dict(_ROW, lineno=4000)):
+            origin = hang.awaited_origin(raw, "nightly")
+        self.assertEqual((origin["function"], origin["stackpos"]),
+                         ("mozilla::dom::quota::QuotaManager::UnloadQuota", 4))
+
+    def test_a_thread_whose_work_is_only_scanned_is_idle_in_the_census(self):
+        lost = {"thread_name": "WRScene~derLP#0", "frames": [
+            _t(_f("__GI___poll", "libc.so.6"), "context"),
+            _t(_f("mozilla::Foo::Bar()", "libxul.so"), "scan"),
+            _t(_f("realloc", "firefox-bin"), "scan")]}
+        census = hang.census(_hang([_SUGGEST, lost]))
+        self.assertIn((2, "WRScene~derLP#0"), census["idle"])
+        self.assertEqual([r["index"] for r in census["rows"]], [1])
+
+
 class TestThePromptFact(unittest.TestCase):
     def test_the_awaited_thread_reaches_the_crash_facts(self):
         facts = "\n".join(triage._crash_facts({"raw_crash": _hang([_IDLE_POOL, _SUGGEST])}))

@@ -203,6 +203,26 @@ _INSTANCE_RE = re.compile(r"\s*#?\d+$")
 # This signature identifies a watchdog sample rather than a main-thread fault.
 _SHUTDOWNHANG_PREFIX = "shutdownhang |"
 
+_SCANNED = frozenset({"scan", "cfi_scan"})
+_RESYNC_FRAMES = 2
+
+
+def reliable(frames):
+    """Filter scanned frames using a lookahead heuristic.
+
+    Keep a scanned frame followed by two non-scanned frames, or one at stack end.
+    Otherwise drop it and following frames until a scanned frame passes this check.
+    Missing ``trust`` counts as non-scanned."""
+    frames = [f for f in frames or [] if isinstance(f, dict)]
+    out, lost = [], False
+    for i, f in enumerate(frames):
+        if f.get("trust") in _SCANNED:
+            following = frames[i + 1:i + 1 + _RESYNC_FRAMES]
+            lost = not following or any(g.get("trust") in _SCANNED for g in following)
+        if not lost:
+            out.append(f)
+    return out
+
 
 def spin_entries(value):
     """The entries of an ``xpcom_spin_event_loop_stack`` value, outermost first, bare."""
@@ -377,14 +397,15 @@ def main_summary(raw):
     if not isinstance(threads[idx], dict):
         return None
     frames = threads[idx].get("frames") or []
-    found = main_work(frames)
+    kept = reliable(frames)
+    found = main_work(kept)
     if not found:
         return None
     work = found["frames"]
     outer = [f for f in work if not _GLUE_RE.search(_label(f))] or work
     what, call = clean_symbol(_label(outer[-1])), clean_symbol(_label(work[0]))
     machinery = clean_symbol(_label(found["machinery"]))
-    machinery_frames = [f for f in frames[:60] if isinstance(f, dict) and is_machinery(f)]
+    machinery_frames = [f for f in kept[:60] if is_machinery(f)]
     title = "{} during {}".format(what, machinery)
     if call and call != what:
         title += " inside {}".format(call)
@@ -446,7 +467,8 @@ def normalize_frames(frames, limit=MAX_FRAMES):
 
 def awaited_threads(raw):
     """The threads the main thread waits for, busy first then deepest first: ``[{"index",
-    "name", "frames", "idle"}]``. ``[]`` when the spin stack names nothing findable.
+    "name", "frames", "reliable", "idle", "exited"}]``. ``[]`` if no target threads match.
+    ``frames`` holds normalized display rows; ``reliable`` is the subset used to name work.
 
     For a pool the candidates are the threads named for it; a pool with no name (a build older
     than bug 1976556) yields every pool worker in the dump. A dump whose pool threads are ALL
@@ -467,8 +489,12 @@ def awaited_threads(raw):
                 continue
         elif not thread_matches(name, target["name"]):
             continue
-        out.append({"index": i, "name": name, "frames": normalize_frames(frames, limit=60),
-                    "idle": is_idle(frames), "exited": has_exited(frames)})
+        kept = reliable(frames)
+        ids = {id(f) for f in kept}
+        rows = normalize_frames(frames, limit=60)
+        out.append({"index": i, "name": name, "frames": rows,
+                    "reliable": [r for r in rows if id(frames[r["stackpos"]]) in ids],
+                    "idle": is_idle(kept), "exited": has_exited(kept)})
     # Busy first, then the Windows exit shape, then idle.
     out.sort(key=lambda d: (d["idle"], not d["exited"], -len(d["frames"]), d["index"]))
     return out
@@ -621,16 +647,16 @@ def awaited_summary(raw):
            "exited": len(exited)}
     if busy:
         head = busy[0]
-        frames = head["frames"]
+        frames = head["reliable"]
         out["thread"] = {"index": head["index"], "name": head["name"],
-                         "frames": frames[:MAX_FRAMES]}
+                         "frames": head["frames"][:MAX_FRAMES]}
         out["bucket"] = bucket_key(frames)
         # The WORK frames' files only: the thread-start and event-loop files under them are on
         # every thread in the process and say nothing about this one.
         out["files"] = sorted({f["filename"] for f in work_frames(frames) if f.get("filename")})
         out["title"] = bucket_title(frames, target)
         out["other_busy"] = [{"index": t["index"], "name": t["name"],
-                              "bucket": bucket_key(t["frames"])} for t in busy[1:4]]
+                              "bucket": bucket_key(t["reliable"])} for t in busy[1:4]]
         return out
     if exited:
         head = exited[0]
@@ -733,7 +759,7 @@ def awaited_origin(raw, channel):
         index = busy[0]["index"]
         all_frames = (((raw or {}).get("json_dump") or {}).get("threads") or [])[index].get(
             "frames") or []
-        origin = _origin_of(work_frame_candidates(all_frames), all_frames, channel)
+        origin = _origin_of(work_frame_candidates(reliable(all_frames)), all_frames, channel)
         return dict(origin, source="awaited") if origin else None
     # With no busy awaited thread, route by the extracted main-thread work when available.
     summary = awaited_summary(raw)
@@ -742,7 +768,7 @@ def awaited_origin(raw, channel):
         return None
     all_frames = (((raw or {}).get("json_dump") or {}).get("threads") or [])[main["index"]].get(
         "frames") or []
-    found = main_work(all_frames)
+    found = main_work(reliable(all_frames))
     if not found:
         return None
     origin = _origin_of(work_frame_candidates(found["frames"]), all_frames, channel)
@@ -920,12 +946,13 @@ def census(raw):
             continue
         frames = t.get("frames") or []
         name = str(t.get("thread_name") or "").strip()
+        kept = reliable(frames)
         if not frames:
             no_stack.append(i)
-        elif is_idle(frames):
+        elif is_idle(kept):
             idle.append((i, name))
         else:
-            work, call = work_and_call(frames)
+            work, call = work_and_call(kept)
             rows.append({"index": i, "name": name, "work": work, "call": call,
                          "kind": wait_kind(frames), "serving_com": serving_com(frames),
                          "common": state_key(frames) in common})
