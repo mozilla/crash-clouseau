@@ -369,9 +369,13 @@ class TestSilence(unittest.TestCase):
 class TestPage(unittest.TestCase):
 
     def _get(self, rows, url="/dashboard.html"):
+        summarize = impact.summarize
+        # The fixtures' ages are relative to NOW, not to the day the suite runs.
         with mock.patch("crashclouseau.auth.current_user", return_value={"email": "d@mozilla.com"}), \
                 mock.patch.object(html.models.Impact, "rows", return_value=rows), \
-                mock.patch.object(html.models.Feedback, "attributions", return_value={}):
+                mock.patch.object(html.models.Feedback, "attributions", return_value={}), \
+                mock.patch.object(html.impact, "summarize",
+                                  side_effect=lambda *a, **k: summarize(*a, **dict(k, now=NOW))):
             rv = app.test_client().get(url)
         self.assertEqual(rv.status_code, 200)
         return rv.get_data(as_text=True)
@@ -388,9 +392,9 @@ class TestPage(unittest.TestCase):
         body = self._get([_row(1, status="RESOLVED", resolution="FIXED",
                                needinfos=[{"to": "a@x", "at": "2026-10-01T10:00:00+00:00",
                                            "outcome": "answered"}]),
-                          _row(4, kind="commented")])
+                          _row(4, kind="commented", first_at="2026-09-20T10:00:00+00:00")])
         tables = re.findall(r"<table[^>]*>", body)
-        # Six standard tables plus the silent-bug list.
+        # Six standard tables plus the silent-bug list (bug 4, silent for 22 days).
         self.assertEqual(len(tables), 7)
         self.assertTrue(all("dash-sortable" in t for t in tables))
         self.assertEqual(body.count("<thead>"), 7)
