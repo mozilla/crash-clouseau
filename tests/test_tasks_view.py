@@ -776,6 +776,76 @@ class TestRetriggerEndpoint(unittest.TestCase):
         self.assertEqual(rv.status_code, 400)
 
 
+class TestBuckets(unittest.TestCase):
+    """Grouping, totals and rendering for finished runs."""
+
+    def _jit(self, i, **kw):
+        base = dict(uuid="jit{:05d}".format(i) + "0" * 28, signature="EnterJit",
+                    channel="nightly", product="Firefox", verdict="abstain", confidence=0.25,
+                    declined_reason="suppressed by hardware_noise_signature_suppressed",
+                    created=NOW - timedelta(minutes=30 - i))
+        base.update(kw)
+        return _row(**base)
+
+    def _groups(self, rows):
+        tasks, _ = html._task_view(rows, STALE, NOW)
+        return html._task_groups(tasks)
+
+    def test_matching_runs_share_a_bucket_at_the_first_member(self):
+        rows = [_row(uuid="a" * 36, signature="other"), self._jit(1),
+                _row(uuid="b" * 36, signature="other2"), self._jit(2), self._jit(3)]
+        groups = self._groups(rows)
+        self.assertEqual([(g["bucket"] is not None, [t["uuid"][:4] for t in g["rows"]])
+                          for g in groups],
+                         [(False, ["aaaa"]), (True, ["jit0", "jit0", "jit0"]),
+                          (False, ["bbbb"])])
+        self.assertEqual(groups[1]["bucket"]["count"], 3)
+
+    def test_a_single_run_is_not_a_bucket(self):
+        groups = self._groups([self._jit(1), _row(uuid="a" * 36)])
+        self.assertEqual(len(groups), 1)
+        self.assertIsNone(groups[0]["bucket"])
+
+    def test_live_failed_and_filed_runs_keep_their_own_row(self):
+        for kw in ({"status": "running"}, {"status": "error"}, {"status": "pending"},
+                   {"filed_bug": "2080000", "filed_mode": "comment_on_existing"}):
+            with self.subTest(**kw):
+                groups = self._groups([self._jit(1, **kw), self._jit(2, **kw)])
+                self.assertEqual([g["bucket"] for g in groups], [None])
+
+    def test_different_grouping_fields_split_the_bucket(self):
+        for kw in ({"confidence": 0.5}, {"verdict": "lead"}, {"channel": "beta"},
+                   {"product": "Fenix"}, {"declined_reason": "verdict abstain not fileable"},
+                   {"declined_bug": "2073887"}):
+            with self.subTest(**kw):
+                groups = self._groups([self._jit(1), self._jit(2), self._jit(3, **kw)])
+                self.assertEqual([len(g["rows"]) for g in groups], [2, 1])
+
+    def test_the_bucket_totals_its_runs(self):
+        rows = [self._jit(1, cost_usd=0.5, input_tokens=10, output_tokens=2,
+                          cache_read_tokens=100),
+                self._jit(2, cost_usd=0.25, input_tokens=5, output_tokens=1),
+                self._jit(3)]
+        b = self._groups(rows)[0]["bucket"]
+        self.assertEqual(b["cost_usd"], 0.75)
+        self.assertEqual((b["input_tokens"], b["output_tokens"], b["cache_read_tokens"]),
+                         (15, 3, 100))
+        self.assertEqual(b["newest"], NOW - timedelta(minutes=27))
+        self.assertEqual(b["oldest"], NOW - timedelta(minutes=29))
+
+    def test_the_page_shows_one_row_and_keeps_the_runs_under_it(self):
+        _sign_in(self)
+        rows = [self._jit(i) for i in range(1, 4)] + [_row(uuid="a" * 36)]
+        with mock.patch.object(html.models.Dossier, "list_tasks", return_value=rows):
+            body = app.test_client().get("/tasks.html").get_data(as_text=True)
+        self.assertIn("3&nbsp;runs</summary>", body)
+        self.assertEqual(body.count('class="task-member"'), 3)
+        self.assertIn('<tr data-key="{}" class="task-member">'.format(rows[0].uuid), body)
+        self.assertIn('<tr data-key="{}">'.format("a" * 36), body)
+        self.assertIn('<span class="tc-num">4</span>', body)  # Summary counts individual runs.
+        self.assertIn("from 2026-07-06&nbsp;11:31", body)
+
+
 class TestAutoRefresh(unittest.TestCase):
     """Check the refresh hook and row keys in the rendered HTML."""
 

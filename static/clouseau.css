@@ -584,6 +584,11 @@ a.dl.hl:hover { box-shadow: inset 4px 0 0 #d98a00; }
    the gate's exact reason. Muted: the bug link is still the thing worth clicking. */
 .task-bug-declined { color: #777; }
 .task-empty { text-align: center; color: #777; font-style: italic; }
+/* Hide bucket members until the count is expanded. */
+.task-bucket:not(:has(.task-bucket-toggle[open])) > .task-member { display: none; }
+.task-bucket-toggle summary { cursor: pointer; font-family: monospace; white-space: nowrap; }
+.task-member > td:first-child { padding-left: 1.2em; }
+.task-bucket-since { display: block; font-size: 0.85em; color: #777; }
 /* The product under the channel initial, for a product that is NOT Firefox (plans/16): Fenix
    nightly and Firefox nightly are both `N`, and at 3% the column has room for one letter and
    one small word, not for a twelfth column (the nth-child widths above). Firefox stays the bare

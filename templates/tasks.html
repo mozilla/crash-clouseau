@@ -6,10 +6,10 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="stylesheet" href="/clouseau.css?v=14">
+    <link rel="stylesheet" href="/clouseau.css?v=15">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Agent tasks</title>
-    <script src="/clouseau.js?v=3"></script>
+    <script src="/clouseau.js?v=4"></script>
     <script>autoRefresh(60 * 1000);</script>
   </head>
   <body>
@@ -179,55 +179,20 @@
 
     <h3 class="task-subtitle">Triage runs</h3>
     {%- endif %}
-    <table class="tasks">
-      <thead>
-        <tr>
-          <th>Crash</th>
-          <th>Ch.</th>
-          <th>Signature</th>
-          <th>Status</th>
-          <th>Verdict</th>
-          <th>Bug</th>
-          <th style="text-align:right;">Duration</th>
-          <th style="text-align:right;">Cost</th>
-          <th style="text-align:right;">Tokens&nbsp;(in&nbsp;/&nbsp;out&nbsp;/&nbsp;cache)</th>
-          <th>Started&nbsp;(UTC)</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in tasks -%}
-        <tr data-key="{{ t.uuid }}">
-          <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
-          {# Which channel this run is on. With one channel it was implicit; with two, "is that
-             stalled run beta or nightly?" is a question this view could not answer, and the two
-             have different costs and different filing policies. And WHICH PRODUCT (plans/16):
-             Fenix nightly and Firefox nightly are both `nightly`, so the initial alone read the
-             same for an Android run whose filing is held and a desktop run that may file. The
-             product leads the tooltip whenever the row knows it; a product that is not Firefox
-             also gets its name, small, under the initial -- the column is 3% wide, room for one
-             letter and one short word, not for a twelfth column. Firefox stays the bare letter
-             it always was, so nothing on a desktop-only page moves. #}
+    {% macro channel_cell(t) -%}
+          {# Label non-Firefox products to distinguish runs on the same channel. #}
           <td title="{% if t.product %}{{ t.product }} {% endif %}{{ t.channel or 'unknown' }}{% if t.version %} {{ t.version }}{% endif %}">{{ (t.channel or '?')[:1]|upper }}{% if t.product and t.product != 'Firefox' %}<span class="task-prod task-prod-{{ t.product|lower }}">{{ t.product|lower }}</span>{% endif %}</td>
-          <td class="task-sgn" title="{{ t.signature }}">{{ t.signature }}</td>
-          <td>
-            <span class="status-badge status-{{ t.status }}"{% if t.error %} title="{{ t.error }}"{% endif %}>{{ t.status }}</span>
-            {% if t.stalled -%}<span class="status-badge status-stalled">stalled</span>{%- endif %}
-            {% if t.error -%}<div class="task-err" title="{{ t.error }}">{{ t.error[:120] }}{% if t.error|length > 120 %}&hellip;{% endif %}</div>{%- endif %}
-          </td>
+    {%- endmacro %}
+    {% macro verdict_cell(t) -%}
           <td>
             {% if t.verdict -%}
             <span class="confidence-badge {{ t.verdict }}">{{ t.verdict }}</span>
             {% if t.confidence is not none %}<span class="task-conf">{{ '%.2f' | format(t.confidence) }}</span>{% endif %}
             {%- else -%}&mdash;{%- endif %}
           </td>
-          {#- What the automatic filer did. Empty for every run before filing was armed and
-              for a decline that names no bug (an abstain, a confidence below the rung), so an
-              em-dash here is the normal case, not a failure -- hover it for the reason. A
-              decline that IS about a bug (an open venue in `skip` mode, a bug that already
-              names its regressor, a fix that postdates the build) says "not filed (bug N)"
-              and links the bug. `comment_on_existing` is called out because the bug is
-              somebody else's — we added a comment to it rather than opening one. -#}
+    {%- endmacro %}
+    {% macro bug_cell(t) -%}
+          {#- Show the filing or decline; a dash can mean filing was skipped. -#}
           <td class="task-bug">
             {% if t.filed_bug -%}
             <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.filed_bug|e }}"
@@ -240,9 +205,7 @@
             {%- elif t.declined_bug -%}
             <span class="task-bug-declined" title="Not filed: {{ t.declined_reason|e }}">not&nbsp;filed (<a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.declined_bug|e }}"
                target="_blank" rel="noopener">bug&nbsp;{{ t.declined_bug|e }}</a>)</span>
-            {#- This run filed nothing, but the SPIKE escalation filed on this crash or on this
-                signature (see the section above). A dash here read as "nothing happened" while
-                bug 2070034 existed for exactly this uuid. Marked as the spike path's. -#}
+            {#- Fall back to the spike filing for this crash or signature. -#}
             {%- elif t.spike_bug -%}
             <a href="https://bugzilla.mozilla.org/show_bug.cgi?id={{ t.spike_bug|e }}"
                target="_blank" rel="noopener"
@@ -252,6 +215,19 @@
             <span class="task-bug-declined" title="Not filed: {{ t.declined_reason|e }}">&mdash;</span>
             {%- else -%}&mdash;{%- endif %}
           </td>
+    {%- endmacro %}
+    {% macro task_row(t, cls=none) -%}
+        <tr data-key="{{ t.uuid }}"{% if cls %} class="{{ cls }}"{% endif %}>
+          <td><a href="/crashstack.html?uuid={{ t.uuid }}" title="{{ t.uuid }}">{{ t.uuid[:8] }}</a></td>
+          {{ channel_cell(t) }}
+          <td class="task-sgn" title="{{ t.signature }}">{{ t.signature }}</td>
+          <td>
+            <span class="status-badge status-{{ t.status }}"{% if t.error %} title="{{ t.error }}"{% endif %}>{{ t.status }}</span>
+            {% if t.stalled -%}<span class="status-badge status-stalled">stalled</span>{%- endif %}
+            {% if t.error -%}<div class="task-err" title="{{ t.error }}">{{ t.error[:120] }}{% if t.error|length > 120 %}&hellip;{% endif %}</div>{%- endif %}
+          </td>
+          {{ verdict_cell(t) }}
+          {{ bug_cell(t) }}
           <td style="text-align:right;">{{ t.duration_str }}</td>
           <td style="text-align:right;">{% if t.cost_usd is not none %}${{ '%.4f' | format(t.cost_usd) }}{% else %}&mdash;{% endif %}</td>
           <td style="text-align:right;" class="task-tok"
@@ -268,11 +244,66 @@
             {%- else -%}&mdash;{%- endif -%}
           </td>
         </tr>
+    {%- endmacro %}
+    <table class="tasks">
+      <thead>
+        <tr>
+          <th>Crash</th>
+          <th>Ch.</th>
+          <th>Signature</th>
+          <th>Status</th>
+          <th>Verdict</th>
+          <th>Bug</th>
+          <th style="text-align:right;">Duration</th>
+          <th style="text-align:right;">Cost</th>
+          <th style="text-align:right;">Tokens&nbsp;(in&nbsp;/&nbsp;out&nbsp;/&nbsp;cache)</th>
+          <th>Started&nbsp;(UTC)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      {#- Each bucket has its own tbody so its details toggle controls member visibility. -#}
+      {% for g in tasks | task_groups -%}
+      {% if g.bucket -%}
+      {%- set b = g.bucket -%}
+      {%- set h = g.rows[0] -%}
+      <tbody class="task-bucket" data-key="{{ b.key }}">
+        <tr class="task-bucket-head" data-key="{{ b.key }}">
+          <td><details class="task-bucket-toggle"><summary title="{{ b.count }} runs with this signature, verdict and filing outcome; open to list them">{{ b.count }}&nbsp;runs</summary></details></td>
+          {{ channel_cell(h) }}
+          <td class="task-sgn" title="{{ h.signature }}">{{ h.signature }}</td>
+          <td><span class="status-badge status-{{ h.status }}">{{ h.status }}</span></td>
+          {{ verdict_cell(h) }}
+          {{ bug_cell(h) }}
+          <td style="text-align:right;" title="average over {{ b.count }} runs">{{ b.duration_str }}</td>
+          <td style="text-align:right;" title="total over {{ b.count }} runs">{% if b.cost_usd is not none %}${{ '%.4f' | format(b.cost_usd) }}{% else %}&mdash;{% endif %}</td>
+          <td style="text-align:right;" class="task-tok" title="input / output / cache-read tokens, total over {{ b.count }} runs">
+            {%- if b.input_tokens or b.output_tokens or b.cache_read_tokens -%}
+            {{ b.input_tokens }}&nbsp;/&nbsp;{{ b.output_tokens }}&nbsp;/&nbsp;{{ b.cache_read_tokens }}
+            {%- else -%}&mdash;{%- endif -%}
+          </td>
+          <td class="task-ts">
+            {%- if b.newest %}{{ b.newest.strftime('%Y-%m-%d&nbsp;%H:%M') | safe }}{% endif %}
+            {%- if b.oldest and b.oldest.strftime('%Y-%m-%d %H:%M') != b.newest.strftime('%Y-%m-%d %H:%M') %}<span class="task-bucket-since">from {{ b.oldest.strftime('%Y-%m-%d&nbsp;%H:%M') | safe }}</span>{% endif -%}
+          </td>
+          <td>&mdash;</td>
+        </tr>
+        {% for t in g.rows -%}
+        {{ task_row(t, "task-member") }}
         {% endfor -%}
-        {% if not tasks -%}
-        <tr><td colspan="11" class="task-empty">No triage runs yet.</td></tr>
-        {%- endif %}
       </tbody>
+      {%- else -%}
+      <tbody>
+        {% for t in g.rows -%}
+        {{ task_row(t) }}
+        {% endfor -%}
+      </tbody>
+      {%- endif %}
+      {% endfor -%}
+      {% if not tasks -%}
+      <tbody>
+        <tr><td colspan="11" class="task-empty">No triage runs yet.</td></tr>
+      </tbody>
+      {%- endif %}
     </table>
   </body>
 </html>

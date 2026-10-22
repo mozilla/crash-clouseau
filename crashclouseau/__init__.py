@@ -221,6 +221,13 @@ def mailmap_author(text, email=""):
     return mailmap.author(text, email)
 
 
+@app.template_filter("task_groups")
+def task_groups(tasks):
+    from crashclouseau import html
+
+    return html._task_groups(tasks)
+
+
 @app.context_processor
 def _signin_context():
     from crashclouseau import auth

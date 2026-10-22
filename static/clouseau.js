@@ -226,6 +226,8 @@ function morphNode(cur, next) {
         return;
     }
     Array.from(cur.attributes).forEach(function (a) {
+        // Preserve expanded details during refresh.
+        if (a.name === "open" && cur.nodeName === "DETAILS") { return; }
         if (!next.hasAttribute(a.name)) { cur.removeAttribute(a.name); }
     });
     Array.from(next.attributes).forEach(function (a) {

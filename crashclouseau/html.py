@@ -4,6 +4,7 @@
 
 from flask import request, render_template, abort, redirect
 from datetime import datetime, timezone
+import hashlib
 import json
 import re
 from libmozdata.hgmozilla import Mercurial
@@ -430,6 +431,56 @@ def _task_view(rows, stale_after_s, now, spike_filings=None, public=True):
         "duration_avg_s": avg_dur,
         "duration_avg_str": _fmt_duration(avg_dur),
     }
+
+
+def _bucket_key(t):
+    """Group by signature, channel, product, verdict, confidence and filing outcome.
+
+    Non-done runs and runs with an ordinary filing keep separate rows.
+    """
+    if t["status"] != "done" or t["filed_bug"]:
+        return None
+    return (t["signature"], t["channel"], t["product"], t["verdict"], t["confidence"],
+            t["declined_reason"], t["declined_bug"], t["spike_bug"], t["spike_mode"])
+
+
+def _bucket(key, members):
+    costs = [m["cost_usd"] for m in members if m["cost_usd"] is not None]
+    durations = [m["duration_s"] for m in members if m["duration_s"] is not None]
+    created = [m["created"] for m in members if m["created"]]
+    avg = sum(durations) / len(durations) if durations else None
+    return {
+        "key": "b-" + hashlib.sha1(repr(key).encode()).hexdigest()[:12],
+        "count": len(members),
+        "cost_usd": sum(costs) if costs else None,
+        "input_tokens": sum(m["input_tokens"] or 0 for m in members),
+        "output_tokens": sum(m["output_tokens"] or 0 for m in members),
+        "cache_read_tokens": sum(m["cache_read_tokens"] or 0 for m in members),
+        "duration_str": _fmt_duration(avg),
+        "newest": max(created) if created else None,
+        "oldest": min(created) if created else None,
+    }
+
+
+def _task_groups(tasks):
+    """Build table sections, placing each bucket at its first member in input order."""
+    members = {}
+    for t in tasks:
+        key = _bucket_key(t)
+        if key is not None:
+            members.setdefault(key, []).append(t)
+    groups = []
+    for t in tasks:
+        key = _bucket_key(t)
+        same = members.get(key, ()) if key is not None else ()
+        if len(same) > 1:
+            if same[0] is t:
+                groups.append({"bucket": _bucket(key, same), "rows": same})
+            continue
+        if not groups or groups[-1]["bucket"] is not None:
+            groups.append({"bucket": None, "rows": []})
+        groups[-1]["rows"].append(t)
+    return groups
 
 
 # Maximum number of recent spike escalations shown on the tasks page.
