@@ -1416,6 +1416,74 @@ class TestAFixThatPostdatesTheBuild(unittest.TestCase):
             got = bugzilla_apply._fixed_after_build_bug(self.SIG, self.BUILD, "Firefox")
         self.assertIsNone(got)
 
+    def _dup(self, bid, target, signature=None):
+        return dict(_closed(bid, "DUPLICATE", "2026-08-19T00:00:00Z", signature=signature),
+                    dupe_of=target)
+
+    def _ask_with_targets(self, rows, targets, **kw):
+        by_id = {t["id"]: t for t in targets}
+
+        def lookup(ids, timeout=None):
+            return [by_id[i] for i in ids if i in by_id]
+        with mock.patch.object(bugzilla_apply, "_bugs_by_id", side_effect=lookup) as hops:
+            got, _ = self._ask(*rows, **kw)
+        return got, hops
+
+    def test_a_duplicate_into_a_later_fix_is_this_crashs_fix(self):
+        # The FIXED target need not carry the source duplicate's signature.
+        got, hops = self._ask_with_targets(
+            [self._dup(2082807, 2082546)],
+            [{"id": 2082546, "resolution": "FIXED", "cf_last_resolved": "2026-08-17T13:31:26Z",
+              "product": "Application Services"}])
+        self.assertEqual(got, 2082546)
+        hops.assert_called_once_with([2082546])
+
+    def test_a_chain_of_duplicates_is_followed_to_its_end(self):
+        got, _ = self._ask_with_targets(
+            [self._dup(10, 11)],
+            [{"id": 11, "resolution": "DUPLICATE", "dupe_of": 12, "product": "Core"},
+             {"id": 12, "resolution": "FIXED", "cf_last_resolved": "2026-08-17T00:00:00Z",
+              "product": "Core"}])
+        self.assertEqual(got, 12)
+
+    def test_a_duplicate_suppresses_only_what_a_fix_would(self):
+        for target in (
+                {"id": 11, "resolution": "FIXED", "cf_last_resolved": "2026-08-01T00:00:00Z",
+                 "product": "Core"},
+                {"id": 11, "resolution": "", "product": "Core"},
+                {"id": 11, "resolution": "WORKSFORME", "cf_last_resolved": "2026-08-17T00:00:00Z",
+                 "product": "Core"},
+                {"id": 11, "resolution": "FIXED", "cf_last_resolved": "2026-08-17T00:00:00Z",
+                 "product": "Thunderbird"}):
+            got, _ = self._ask_with_targets([self._dup(10, 11)], [target])
+            self.assertIsNone(got, target)
+        # Reject prefix matches before fetching their duplicate targets.
+        got, hops = self._ask_with_targets([self._dup(10, 11, signature=self.SIG + "_X")], [])
+        self.assertIsNone(got)
+        hops.assert_not_called()
+
+    def test_an_unreadable_or_restricted_target_suppresses_nothing(self):
+        with mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=None):
+            got, _ = self._ask(self._dup(10, 11))
+        self.assertIsNone(got)
+        got, _ = self._ask_with_targets([self._dup(10, 11)], [])
+        self.assertIsNone(got)
+        bmo = _FakeBMO(self._dup(10, 11))
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=bmo.get), \
+                mock.patch.object(bugzilla_apply, "_bugs_by_id", return_value=None):
+            with self.assertRaises(bugzilla_apply.LookupFailed):
+                bugzilla_apply._fixed_bugs_about(self.SIG, "Firefox", strict=True,
+                                                 follow_duplicates=True)
+
+    def test_only_the_suppressing_lookups_follow_duplicates(self):
+        # `_incomplete_fix_bug` requires a direct signature match to report a failed fix.
+        bmo = _FakeBMO(self._dup(10, 11))
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=bmo.get), \
+                mock.patch.object(bugzilla_apply, "_bugs_by_id") as hops:
+            self.assertEqual(bugzilla_apply._fixed_bugs_about(self.SIG, "Firefox"), [])
+        hops.assert_not_called()
+        self.assertIn("dupe_of", bmo.params[0]["include_fields"])
+
 
 class TestAlreadyFixedIsNotFiledAgain(_Base):
     """The gate inside `autofile_bug`. It is the file-a-NEW-bug branch only."""

@@ -900,6 +900,10 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
         self.assertFalse(res["filed"])
         self.assertEqual((res["bug"], res["venue_kind"]), (88, "fixed"))
         self.assertEqual((self.comments, self.created), ([], []))
+        # The spike filer must opt into following duplicates to FIXED targets.
+        with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[]) as fixed:
+            se.file_spike_bug(esc, brief, self.findings, grounded=True)
+        self.assertTrue(fixed.call_args.kwargs.get("follow_duplicates"))
         # Our own prior filing, still open, outranks anybody's fixed bug: the volume is news there.
         with mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[
                 (row, datetime(2026, 9, 5, tzinfo=timezone.utc))]), \

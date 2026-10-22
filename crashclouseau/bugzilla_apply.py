@@ -1459,107 +1459,16 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None, sig
 
 
 def _fixed_after_build_bug(signature, buildid, product, spellings=None):
-    """The id of a bug on *signature* that was RESOLVED FIXED **after** *buildid* was produced,
-    or ``None``. In one line: is this crash a pre-fix report of a defect somebody has already
-    fixed?
+    """Return the lowest bug ID resolved FIXED after the build, or ``None``.
 
-    Asked only when we are about to file a NEW bug. ``_open_bugs_for_signature`` filters
-    ``resolution="---"`` and must keep doing so — a closed bug is not a comment venue — so this
-    is a SIBLING asking the other question, not a widening of that one, and the two param dicts
-    are deliberately duplicated (30+ tests mock that function by name and one pins the exact
-    three-key row it returns). Keep them in step by hand. (The one closed resolution that search
-    does follow is DUPLICATE, and only to reach the OPEN bug it points at —
-    ``_duplicate_targets_for_signature``; a dup into a FIXED bug is still this function's
-    question, and it does not follow dups.)
+    Checked before filing a new bug. Include signature/spelling matches and their duplicate
+    chains' FIXED targets, excluding other applications. Targets need not carry the signature.
+    Older resolutions do not suppress filing: a signature can be reused by a new defect.
 
-    (a) THE OBVIOUS PREDICATE is "a closed bug on this signature means the crash was already
-    reported", i.e. just drop the filter. (b) IT IS DEAD, measured over the 52 bugs the canary
-    has filed (BMO ``creator=cdenizet@mozilla.com``, ``creation_time>=2026-08-05``, summary
-    ``Crash in [@``), each one rewound through ``/rest/bug/<id>/history`` to its own filing
-    instant. Dropping the filter moves 4 of the 52 VENUES and 3 of the 4 are wrong: filing
-    2062119 would have commented into bug 1861423, open since 2023-10-26 and closed WORKSFORME
-    on 2025-03-24, instead of filing the bug a human then FIXED; 2063234 (still open today) into
-    1816975, FIXED in 2023; 2064066 into 2054485. Only 2064537 -> 2063862 is right. Using the
-    closed bugs to SUPPRESS rather than to comment is no better while it is ungated: "any closed
-    bug on the signature" suppresses 17 of the 52 and destroys 13 good filings (8 still open, 5
-    FIXED) to catch 3 duplicates, and "any FIXED bug" suppresses 14 and destroys 10.
-
-    (c) THE BUILD DATE IS THE WHOLE RULE, the same shape as the bad-machine denominator. A fix
-    that landed before this build existed is not this crash's fix, whatever the signature says.
-    Requiring ``cf_last_resolved`` to POSTDATE the build suppresses 1 of the 52, and that one is
-    bug 2064537, which a human closed as a duplicate of 2063862 — RESOLVED FIXED
-    2026-08-17T08:07:20, crash build 20260816083833, filed 2026-08-18T21:15. No threshold was
-    fitted: across the 33 FIXED bugs the unfiltered query surfaces over those 52 filings the one
-    firing margin is +1.0 d and the closest non-firing one is -22.4 d, so the test is the SIGN of
-    a 23-day gap, not a number read off the motivating case.
-
-    ``cf_last_resolved`` is the bug's RESOLUTION clock, not its patch's LANDING clock. They
-    agree to the second on the one firing case (2063862) and no plausible clock error is 22
-    days wide, which is the gap to the nearest competing margin — but a bug resolved long after
-    its patch merged reads as a fix postdating a build that already contains it, and that is
-    the one way this can eat a good filing with no signature reuse involved.
-
-    (d) WHAT IT MUST NOT EAT is a post-fix crash on a REUSED signature. Our 2064066 (build
-    20260812202037) carries bug 2054485 RESOLVED FIXED 22.4 days BEFORE that build, plus 2048851
-    at -43.9 d, 1823765 at -1238 d and 1809003 at -1310 d; 2063234, still open today, carries
-    1897201 at -808 d; 2060924 (FIXED) carries 1983101 at -334.7 d. An old signature acquiring a
-    new cause is the normal case — it is why ``_bug_for_this_regression`` exists — and all three
-    of those filings survive because the margin is negative.
-
-    ONLY ``FIXED`` COUNTS. 16 of the 49 closed bugs the unfiltered query adds across those 52
-    filings are INCOMPLETE (9), DUPLICATE (4) or WORKSFORME (3). "Nobody could reproduce it" and
-    "it was filed twice" say nothing about whether this crash still happens, and WORKSFORME is
-    exactly what bug 1861423 above is.
-
-    ``_split_by_application`` FIRST, and it is not ceremonial. 3 of those 49 are Thunderbird
-    bugs — 2011814 on our 2061960's signature, 2001729 and 1954381 on our 2063003's — and none
-    of the three fires the gate; but on the control sample below the split removes a firing
-    outright. ``shutdownhang | mozilla::SpinEventLoopUntil | nsThread::WaitForAll…`` on build
-    20260408160318 is suppressed by exactly one bug — 1524247, product ``MailNews Core``.
-    Gecko's signatures are shared; the crash is not.
-
-    FAILS OPEN, deliberately unlike its sibling: a lookup failure logs and files. The venue
-    lookup in ``autofile_bug`` already fails closed for the whole path, so a second fail-closed
-    network dependency would let one flaky BMO request become a silent global filing stop — for
-    a rule that fires on 1 filing in 52 — and a stalled pipeline in this product has no alarm.
-
-    DOMAIN: builds no more than about two weeks old. All 52 filings sit on builds 0.2-9.3 days
-    old (median 1.7) and ``config._SWEEP_DEFAULTS["max_age_s"]`` is 14 days. On a 14-day nightly
-    control sample (60 reports/day from 2026-08-07; 599 distinct (signature, build) pairs over
-    287 signatures) the rule fires on 47/599 = 7.8% overall — 48 before the application split
-    above — but that rate is a pure function of build age (measured as of 2026-08-21): 6.0%
-    for the 414 pairs at most 14 days old (25 fires, unchanged by the split) against 25.9% for
-    the 54 pairs older than 90 days — 27.8% before the split, whose single removal lands in
-    that bucket — where signature reuse dominates. Re-measure before the sweep window grows or
-    beta/Fenix is enabled. 21 of the 25 in-domain firings are suppressed by a bug Clouseau
-    itself filed and a human then fixed (8 of the 11 distinct suppressing bugs; the other 3 are
-    aryx's), which is exactly the shape this is for.
-
-    KILLED ALTERNATIVE, recorded so nobody rebuilds it: keying the dedup on the SUSPECTED
-    REGRESSOR NODE instead of the signature. It looks strictly better — it would catch 4 of the
-    panel's 7 duplicates against the signature key's ceiling of 2, and costs no BMO request at
-    all — and it is dead. 13 pairs among the 52 filings share a candidate node and only 4 of
-    those pairs are a true duplicate relation. The killer is 2061973 vs 2061975: same node
-    ``dfbb73240fbf``, same build 20260806095421, two different zlib-rs signatures
-    (``zlib_rs::inflate::inflate_fast_help_impl`` and
-    ``zlib_rs::inflate::writer::Writer::copy_match_help``), both still open and both worked by
-    humans (gsvelto on 2061973; ryanvm and glob on 2061975). Adding the build to the key does not
-    rescue it — 2064436 and 2065075 also share node ``e7ad1bf72931`` and build 20260818092026 and
-    are two different bugs.
-
-    CEILING, so the next reader expects the right amount: a signature-keyed dedup can see at most
-    2 of the panel's 7 duplicates at filing time, and this gate catches 1. 5 of the 7 are
-    cross-signature and 5 of the 7 targets are our OWN earlier filings — plan 17's defect A, not
-    this one. The headline case is NOT caught: bug 2063003 was filed 2026-08-12T15:19 against bug
-    2062219, whose ``cf_crash_signature`` carried only ``[@ nsAtom::IsStatic]`` until a human
-    added the variants 2h25m later. What this does buy is that human triage hygiene starts
-    paying: replaying those 7 with the target's signature present, the gate fires on 3 at the
-    real filing instant and on 6 of 7 against BMO as of today, and the resolution filter was the
-    only thing standing in the way.
-
-    Public, unauthenticated, read-only — like the venue lookup, and for the same reason: we must
-    not reason about a security bug only the filing account can see. Lowest bug id wins when
-    several qualify, a tie-break only (0 of the 52 filings had more than one)."""
+    Resolution time is a proxy for fix landing time. Delayed closure can suppress a crash
+    from a build that already contains the fix. Lookups are public and unauthenticated;
+    lookup failures and invalid build dates do not suppress filing.
+    """
     sig = (signature or "").strip()
     if not sig or buildid is None or buildid == "":
         return None
@@ -1570,13 +1479,8 @@ def _fixed_after_build_bug(signature, buildid, product, spellings=None):
     build_dt = sigage.to_datetime(buildid if isinstance(buildid, datetime) else str(buildid))
     if build_dt is None:
         return None
-    # The SAME query shape and the SAME re-check as `_open_bugs_for_signature`, minus the
-    # `resolution` filter — that one difference is the whole point of this function, and
-    # sharing everything else is what keeps the two questions answerable about one bug set.
-    # (It used to run its own `_is_specific_signature` gate on the summary clause; that length
-    # test was retired for `_summary_is_about`, which decides the same 200-signature panel on
-    # FORM instead of on a 16-character threshold read off two points.)
-    for bug, resolved in _fixed_bugs_about(sig, product, spellings=spellings):
+    for bug, resolved in _fixed_bugs_about(sig, product, spellings=spellings,
+                                           follow_duplicates=True):
         if resolved is not None and resolved > build_dt:
             return bug["id"]
     return None
@@ -1590,26 +1494,18 @@ class LookupFailed(RuntimeError):
 
 
 def _fixed_bugs_about(signature, product, use_cache=False, major=None,
-                      resolutions=("FIXED",), spellings=None, strict=False):
-    """``[(bug_row, resolved_datetime), ...]`` for the bugs on *signature* that are RESOLVED
-    FIXED and belong to this crash's own application, lowest id first.
+                      resolutions=("FIXED",), spellings=None, strict=False,
+                      follow_duplicates=False):
+    """Return ``[(bug_row, resolved_datetime), ...]``, sorted by bug ID.
 
-    The query, the ``_split_by_application`` drop, the ``_row_is_about`` re-check and the
-    FIXED-only rule are shared by the TWO questions the resolution date can answer — was this
-    crash reported before somebody fixed it (``_fixed_after_build_bug``), and is this crash
-    still happening on a build that already contains the fix (``_incomplete_fix_bug``). They are
-    mirror images across the same inequality, so they must see the same bug set or the pair
-    stops being exhaustive. Every argument for the filters is in ``_fixed_after_build_bug``.
+    Match ``signature`` or ``spellings``, exclude other applications, and retain
+    ``resolutions`` (FIXED by default). With ``follow_duplicates``, also include matching
+    duplicate chains' targets with an allowed resolution and application. These targets
+    need not carry the signature; ``via_duplicate`` records the source duplicate's ID.
 
-    Deliberately NOT merged with ``_open_bugs_for_signature``: that one filters
-    ``resolution="---"`` and must keep doing so (a closed bug is not a comment venue), and 30+
-    tests mock it by name. Keep the two param dicts in step by hand.
-
-    Public, unauthenticated, read-only. Request or JSON decoding errors return ``[]``.
-    With ``strict=True``, they raise ``LookupFailed`` to distinguish failure from no matches.
-
-    ``spellings`` widens the question over the crash's other names (``sigfamily``): a bug FIXED
-    on the old name after this build is this crash's fix as much as one on the new name."""
+    Lookups are public and unauthenticated. Request or JSON errors raise ``LookupFailed``
+    in strict mode; otherwise the failed lookup contributes no rows. Caching is opt-in
+    via ``use_cache=True``."""
     sig = (signature or "").strip()
     if not sig:
         return []
@@ -1617,21 +1513,15 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
 
     names = [sig] + sorted(s for s in set(spellings or ()) if s and s != sig)
 
-    # OPT-IN caching, per (signature, product), for the worker's lifetime. `_incomplete_fix_bug`
-    # asks this on every run that would otherwise file nothing -- ~90% of them -- and the same
-    # signature recurs across proto-clusters and build days, so uncached it is a BMO request per
-    # dossier on a service that rate-limits for ~45 minutes.
-    #
-    # OFF for `_fixed_after_build_bug`, deliberately: that one SUPPRESSES a filing, it runs at
-    # most once per filing attempt so it costs nothing to keep live, and a stale "no FIXED bug
-    # yet" would let through exactly the duplicate it exists to stop.
-    key = (sig, product or "", major, tuple(resolutions), tuple(names[1:]))
+    # Keep the suppression check live: a cached miss could allow a duplicate filing.
+    # `_incomplete_fix_bug` opts into caching to reuse lookups across dossiers.
+    key = (sig, product or "", major, tuple(resolutions), tuple(names[1:]), follow_duplicates)
     if use_cache and key in _FIXED_BUGS_CACHE:
         return _FIXED_BUGS_CACHE[key]
 
     fields = ("id,summary,status,resolution,product,component,"
               "cf_crash_signature,cf_last_resolved,creation_time,"
-              "assigned_to,assigned_to_detail")
+              "assigned_to,assigned_to_detail,dupe_of")
     if major:
         # The crash's own train's status flag (`cf_status_firefox155`): the one field that says
         # whether a FIXED bug's fix is on THIS train. See `_known_on_train_bug`.
@@ -1662,14 +1552,60 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
     ours, _theirs = _split_by_application(bugs, product)
     out = []
     wanted = {r.upper() for r in resolutions}
+    duplicates = []
     for bug in sorted((b for b in ours if b.get("id")), key=lambda b: b["id"]):
-        if (bug.get("resolution") or "").upper() not in wanted:
-            continue
         if not any(_row_is_about(bug, name) for name in names):
             continue
-        out.append((bug, sigage.to_datetime(bug.get("cf_last_resolved"))))
+        resolution = (bug.get("resolution") or "").upper()
+        if resolution in wanted:
+            out.append((bug, sigage.to_datetime(bug.get("cf_last_resolved"))))
+        elif follow_duplicates and resolution == "DUPLICATE" and bug.get("dupe_of"):
+            duplicates.append(bug)
+    if duplicates:
+        endpoints = _duplicate_endpoints(duplicates)
+        if endpoints is None:
+            if strict:
+                raise LookupFailed("duplicate lookup failed for {!r}".format(signature))
+            endpoints = []
+        seen = {bug["id"] for bug, _ in out}
+        ends = _split_by_application([e for e, _src in endpoints], product)[0]
+        kept = {e["id"] for e in ends}
+        for end, source in endpoints:
+            if end["id"] in kept and end["id"] not in seen and \
+                    (end.get("resolution") or "").upper() in wanted:
+                seen.add(end["id"])
+                out.append((dict(end, via_duplicate=source),
+                            sigage.to_datetime(end.get("cf_last_resolved"))))
+        out.sort(key=lambda pair: pair[0]["id"])
     if use_cache:
         _FIXED_BUGS_CACHE[key] = out
+    return out
+
+
+def _duplicate_endpoints(duplicates):
+    """Return ``[(endpoint_row, source_duplicate_id), ...]`` or ``None`` on lookup failure.
+
+    Follow at most ``_DUP_CHAIN_MAX_HOPS`` links; omit missing rows and unfinished chains.
+    """
+    pending = {b["id"]: b["dupe_of"] for b in duplicates}
+    out = []
+    for _hop in range(_DUP_CHAIN_MAX_HOPS):
+        if not pending:
+            break
+        rows = _bugs_by_id(sorted(set(pending.values())))
+        if rows is None:
+            return None
+        by_id = {r["id"]: r for r in rows}
+        following = {}
+        for source, target in pending.items():
+            row = by_id.get(target)
+            if row is None:
+                continue
+            if (row.get("resolution") or "").upper() == "DUPLICATE" and row.get("dupe_of"):
+                following[source] = row["dupe_of"]
+            else:
+                out.append((row, source))
+        pending = following
     return out
 
 

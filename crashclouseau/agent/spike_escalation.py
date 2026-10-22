@@ -1406,7 +1406,7 @@ def resolve_venue_below_public(signatures, product, buildid, token, *, bucket=No
     if build_dt is None:
         return None
     try:
-        fixed = bugzilla_apply._fixed_bugs_about(signatures[0], product)
+        fixed = bugzilla_apply._fixed_bugs_about(signatures[0], product, follow_duplicates=True)
     except Exception:  # pragma: no cover - the lookup already swallows
         fixed = []
     for bug, resolved in fixed:
