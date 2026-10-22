@@ -3262,8 +3262,9 @@ def _hot_engine_suppression(seed):
     if _frequency_regression_reasons(seed):
         return None
     try:
+        first_seen = utils.get_build_date(str(seed["signature_first_seen_ever"])[:14]).date()
         unchanged = sigtrend.rate_unchanged(seed.get("product"), seed.get("channel"),
-                                            seed.get("signature") or "")
+                                            seed.get("signature") or "", first_seen=first_seen)
     except Exception:
         logger.warning("agent: rate lookup failed for %s; not suppressed", seed.get("uuid"),
                        exc_info=True)

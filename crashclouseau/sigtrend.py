@@ -429,11 +429,12 @@ def _bounds(asof, window, baseline, first_day=None):
 
 
 def rate_unchanged(product, channel, signature, asof=None,
-                   window=WINDOW_DAYS, baseline=BASELINE_DAYS):
+                   window=WINDOW_DAYS, baseline=BASELINE_DAYS, first_seen=None):
     """Return whether the rollup measured the signature's rate as not rising, or ``None``.
 
     ``None`` means unmeasured: an uncollected channel, missing exposure, thin coverage or a
-    failed read. ``MIN_INSTALLS`` installations after a silent baseline are a change."""
+    failed read. ``MIN_INSTALLS`` installations after a silent baseline are a change.
+    ``first_seen`` is the signature's first build date on any channel."""
     if channel not in SUPPORTED_CHANNELS:
         return None
     asof = asof or date.today()
@@ -444,7 +445,10 @@ def rate_unchanged(product, channel, signature, asof=None,
     try:
         series = models.SignatureDaily.series(product, channel, signature, base_start, win_end,
                                               strict=True)
-        first_day = models.SignatureDaily.first_day(product, channel, signature, strict=True)
+        # Keep the full baseline if the signature existed by its start.
+        first_day = None
+        if first_seen is None or first_seen > base_start:
+            first_day = models.SignatureDaily.first_day(product, channel, signature, strict=True)
     except Exception:
         return None
     return _unchanged_from_series(series, exposure, asof, window=window, baseline=baseline,

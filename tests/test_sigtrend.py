@@ -352,6 +352,23 @@ class TestRateUnchanged(unittest.TestCase):
                                    return_value={self.ASOF: (1, 1)}):
                 self.assertIsNone(sigtrend.rate_unchanged("Firefox", "nightly", _SIG, self.ASOF))
 
+    def test_an_old_signature_silent_on_the_channel_is_measured(self):
+        def unchanged(series, first_seen):
+            with mock.patch.object(models.ChannelDaily, "series", return_value=self._exposure()), \
+                    mock.patch.object(models.SignatureDaily, "series", return_value=series), \
+                    mock.patch.object(models.SignatureDaily, "first_day",
+                                      return_value=min(series)):
+                return sigtrend.rate_unchanged("Firefox", "nightly", _SIG, self.ASOF,
+                                               first_seen=first_seen)
+
+        one = {self.ASOF: (1, 1)}
+        self.assertIsNone(unchanged(one, None))
+        self.assertIs(unchanged(one, date(2014, 4, 28)), True)
+        # Recent signatures still use the first rollup day.
+        self.assertIsNone(unchanged(one, self.ASOF - timedelta(days=14)))
+        three = {self.ASOF - timedelta(days=i): (1, 1) for i in range(3)}
+        self.assertIs(unchanged(three, date(2014, 4, 28)), False)
+
     def test_uncollected_channels_and_missing_exposure_are_none(self):
         with mock.patch.object(models.ChannelDaily, "series", return_value={}) as exposure:
             self.assertIsNone(sigtrend.rate_unchanged("Firefox", "release", _SIG, self.ASOF))

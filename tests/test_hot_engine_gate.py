@@ -9,6 +9,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
+from datetime import date  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import config, corroborations, models, sigtrend  # noqa: E402
@@ -74,7 +75,8 @@ class TestHotEngineGate(_Base):
         self.assertEqual(v.mechanism.statement, "the release assert fires")
         self.assertTrue(d.corroborations["hot_engine_suppressed"])
         sigtrend.rate_unchanged.assert_called_once_with(
-            "Firefox", "nightly", "(anonymous namespace)::BytecodeParser::simulateOp")
+            "Firefox", "nightly", "(anonymous namespace)::BytecodeParser::simulateOp",
+            first_seen=date(2019, 6, 19))
 
     def test_a_rate_change_spares_it(self):
         with mock.patch.object(orch, "_frequency_regression_reasons", return_value=["rate"]):
