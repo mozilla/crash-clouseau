@@ -15,7 +15,7 @@ from unittest import mock  # noqa: E402
 from crashclouseau import bugzilla_apply, config, report_bug, spikes  # noqa: E402
 from crashclouseau.agent import same_defect, spike_escalation as se  # noqa: E402
 from crashclouseau.agent.spike_agent import SpikeFindings  # noqa: E402
-from tests.test_autofile import _Base, _INFO, _cfg, _is_postgres  # noqa: E402
+from tests.test_autofile import _Base, _INFO, _bug, _cfg, _is_postgres  # noqa: E402
 from tests.test_release_filing import _RELEASE_INFO, _upstream  # noqa: E402
 from tests.test_spike_escalation import _FilerBase, _esc  # noqa: E402
 
@@ -863,6 +863,367 @@ class TestSpikeFiler(_FilerBase):
         self.assertEqual(res["mode"], "spike_new_bug")
         bugzilla_apply._match_same_defect.assert_not_called()
         self.assertNotIn("same_defect_check", res)
+
+
+_META = {"id": 1866944, "keywords": ["meta", "crash"], "product": "Core",
+         "creation_time": "2023-11-20T00:00:00Z", "regressed_by": [], "assigned_to": ""}
+_BUCKET_TITLE = "_dl_catch_error blocks BgIOThreadPool shutdown inside libsecret-1.so.0"
+_WORK = {"title": _BUCKET_TITLE, "bucket": "_dl_catch_error | libsecret-1.so.0",
+         "target": "nsThreadPool::ShutdownWithTimeout BgIOThreadPool", "name": "BgIOThreadPool",
+         "files": ["security/manager/ssl/LibSecret.cpp", "security/manager/ssl/OSKeyStore.cpp"],
+         "thread": {"index": 28, "name": "BgIOThr~Pool #3", "frames": [
+             {"stackpos": 0, "function": "g_main_loop_run", "module": "libglib-2.0.so.0",
+              "filename": "glib/gmain.c", "line": 4516},
+             {"stackpos": 1, "function": "", "module": "libsecret-1.so.0", "filename": ""}]}}
+
+
+class TestBucketPrompt(unittest.TestCase):
+    def test_the_awaited_work_and_the_tracker_are_shown(self):
+        crash = dict(same_defect.crash_from_dossier("Foo::Bar", _DOSSIER, _STACK["frames"]),
+                     awaited={"name": "BgIOThr~Pool #3", "frames": _WORK["thread"]["frames"]})
+        sib = {"bug": 2013019, "summary": "OS Key Store implementation can hang",
+               "status": "NEW", "by_tracker": 1866944, "description": "libsecret hangs"}
+        text = same_defect.user_prompt(crash, None, [sib])
+        self.assertIn("The work this hang waits for, on thread `BgIOThr~Pool #3`:\n"
+                      "  0 g_main_loop_run  (glib/gmain.c:4516)", text)
+        self.assertIn("Listed because: blocks [meta] bug 1866944, which holds the crash's "
+                      "signature", text)
+        self.assertIn("they are the tracker's dependencies instead", same_defect._SYSTEM)
+
+
+class TestBucketCandidates(unittest.TestCase):
+    _DEPS = {10: 1866944, 11: 1866944, 12: 1866944, 13: 1866944, 14: 1866944, 15: 1866944,
+             16: 1866944}
+
+    def setUp(self):
+        p = mock.patch.object(bugzilla_apply, "_tracker_dependencies",
+                              return_value=dict(self._DEPS))
+        p.start()
+        self.addCleanup(p.stop)
+        self.reads = []
+
+    def _run(self, rows, extra=()):
+        def read(ids, token=None, extra_fields=""):
+            self.reads.append((list(ids), extra_fields))
+            return [dict(r, description="comment 0 of {}".format(r["id"]))
+                    for r in list(rows) + list(extra) if r["id"] in ids]
+        with mock.patch.object(bugzilla_apply, "_crash_bug_rows", side_effect=read), \
+                mock.patch.object(bugzilla_apply, "_bug_comments") as comments:
+            out = bugzilla_apply._bucket_candidates([1866944], "Firefox", _BUILDID)
+        comments.assert_not_called()
+        return out
+
+    def test_open_and_later_fixed_dependencies_newest_first(self):
+        rows = [_row(10, sigs=(), created="2026-01-28T00:00:00Z"),
+                _row(11, sigs=(), created="2026-10-12T00:00:00Z"),
+                _row(12, resolution="FIXED", status="RESOLVED", resolved="2026-09-01T00:00:00Z"),
+                _row(13, resolution="FIXED", status="RESOLVED", sigs=(),
+                     created="2026-10-04T00:00:00Z", resolved="2026-10-19T00:00:00Z"),
+                _row(14, keywords=("meta",)),
+                _row(15, product="Thunderbird"),
+                _row(16, resolution="WONTFIX", status="RESOLVED")]
+        out = self._run(rows)
+        self.assertEqual([b["bug"] for b in out], [11, 13, 10])
+        first = out[0]
+        self.assertEqual((first["by_tracker"], first["status"], first["signatures"]),
+                         (1866944, "NEW", []))
+        self.assertEqual(first["description"], "comment 0 of 11")
+        self.assertNotIn("comments", first)
+        self.assertEqual(out[1]["status"], "RESOLVED FIXED")
+        self.assertEqual(self.reads[0], ([10, 11, 12, 13, 14, 15, 16], "description"))
+
+    def test_large_trackers_are_read_in_batches(self):
+        with mock.patch.object(bugzilla_apply, "_ROWS_PER_READ", 3):
+            self._run([_row(10)])
+        self.assertEqual([ids for ids, _ in self.reads], [[10, 11, 12], [13, 14, 15], [16]])
+
+    def test_a_duplicate_is_replaced_by_its_target(self):
+        rows = [_row(10, resolution="DUPLICATE", status="RESOLVED", dupe_of=99)]
+        out = self._run(rows, extra=[_row(99, sigs=(), created="2026-10-04T00:00:00Z")])
+        self.assertEqual([(b["bug"], b["by_tracker"], b["description"]) for b in out],
+                         [(99, 1866944, "comment 0 of 99")])
+        self.assertEqual(self.reads[-1], ([99], "description"))
+
+    def test_failed_lookups_are_none(self):
+        bugzilla_apply._tracker_dependencies.return_value = None
+        self.assertIsNone(self._run([_row(10)]))
+        bugzilla_apply._tracker_dependencies.return_value = dict(self._DEPS)
+        with mock.patch.object(bugzilla_apply, "_crash_bug_rows", return_value=None):
+            self.assertIsNone(bugzilla_apply._bucket_candidates([1866944], "Firefox", _BUILDID))
+
+
+class TestTrackerDependencies(unittest.TestCase):
+    def test_the_dependency_map(self):
+        reply = mock.Mock()
+        reply.json.return_value = {"bugs": [{"id": 1633342, "depends_on": [5, 6]},
+                                            {"id": 1866944, "depends_on": [6, 7]}]}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=reply) as get:
+            out = bugzilla_apply._tracker_dependencies([1866944, 1633342])
+        self.assertEqual(out, {6: 1866944, 7: 1866944, 5: 1633342})
+        self.assertEqual(get.call_args.kwargs["params"]["id"], "1866944,1633342")
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=OSError("down")):
+            self.assertIsNone(bugzilla_apply._tracker_dependencies([1866944]))
+
+    def test_comment_0_is_an_extra_field(self):
+        reply = mock.Mock()
+        reply.json.return_value = {"bugs": []}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=reply) as get:
+            bugzilla_apply._crash_bug_rows([7], extra_fields="description")
+            self.assertTrue(get.call_args.kwargs["params"]["include_fields"].endswith(
+                ",cf_last_resolved,description"))
+            bugzilla_apply._crash_bug_rows([7])
+            self.assertTrue(get.call_args.kwargs["params"]["include_fields"].endswith(
+                ",cf_last_resolved"))
+
+    def test_later_comments_of_several_bugs_in_one_read(self):
+        reply = mock.Mock()
+        reply.json.return_value = {"bugs": {
+            "7": {"comments": [{"creator": "a@moz.example", "text": "c0"},
+                               {"creator": "jstutte@mozilla.com", "text": "A different cohort."},
+                               {"creator": "release-mgmt-account-bot@mozilla.tld",
+                                "text": "topcrash"}]},
+            "8": {"comments": [{"creator": "b@moz.example", "text": "c0"}]}}}
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=reply) as get:
+            out = bugzilla_apply._later_comments([7, 8])
+        self.assertEqual(out, {7: [{"author": "jstutte@mozilla.com",
+                                    "text": "A different cohort."}], 8: []})
+        self.assertEqual(get.call_count, 1)
+        self.assertTrue(get.call_args.args[0].endswith("/7/comment"))
+        self.assertEqual(get.call_args.kwargs["params"]["ids"], ["8"])
+        self.assertNotIn("headers", get.call_args.kwargs)
+        with mock.patch.object(bugzilla_apply.net, "get") as get:
+            self.assertEqual(bugzilla_apply._later_comments([]), {})
+            get.assert_not_called()
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=OSError("down")):
+            self.assertIsNone(bugzilla_apply._later_comments([7]))
+
+
+class TestBucketRanking(unittest.TestCase):
+    def test_the_rare_identifiers_rank_first(self):
+        crash = {"title": _BUCKET_TITLE,
+                 "mechanism": "An `OSKeyStore` job on `BgIOThreadPool` is stuck in "
+                              "`LibSecret::StoreSecret`.",
+                 "awaited": {"frames": _WORK["thread"]["frames"]}}
+        terms = bugzilla_apply._bucket_terms(crash, _WORK)
+        self.assertIn("oskeystore", terms)
+        self.assertIn("libsecret", terms)
+        # Exclude wait names and words outside code spans in the title.
+        for common in ("bgiothreadpool", "shutdownwithtimeout", "blocks", "shutdown"):
+            self.assertNotIn(common, terms)
+        bugs = [{"bug": 1, "summary": "Suggest ingest blocks BgIOThreadPool shutdown",
+                 "description": "viaduct send_sync"},
+                {"bug": 2, "summary": "nsPrinterCUPS blocks BgIOThreadPool shutdown",
+                 "description": "cupsCopyDestInfo"},
+                {"bug": 3, "summary": "OS Key Store implementation can hang and cause shutdown "
+                                      "hangs", "description": "On Linux the keyring prompt..."}]
+        self.assertEqual([b["bug"] for b in bugzilla_apply._rank_bucket_candidates(terms, bugs)],
+                         [3, 1, 2])
+
+    def test_ties_keep_the_order(self):
+        bugs = [{"bug": 1, "summary": "a"}, {"bug": 2, "summary": "b"}]
+        self.assertEqual(bugzilla_apply._rank_bucket_candidates({"unrelated"}, bugs), bugs)
+
+    def test_the_awaited_thread(self):
+        self.assertEqual(bugzilla_apply._awaited_thread(_WORK)["name"], "BgIOThr~Pool #3")
+        main = {"main": {"name": "Main Thread", "frames": [{"function": "F"}]}}
+        self.assertEqual(bugzilla_apply._awaited_thread(main),
+                         {"name": "Main Thread", "frames": [{"function": "F"}]})
+        self.assertIsNone(bugzilla_apply._awaited_thread({"threads": 1}))
+        self.assertIsNone(bugzilla_apply._awaited_thread(None))
+
+
+class TestBucketBug(unittest.TestCase):
+    _BUGS = [{"bug": 2080828, "summary": "nsPrinterCUPS blocks BgIOThreadPool shutdown",
+              "status": "NEW", "signatures": [], "by_tracker": 1866944, "description": "cups"},
+             {"bug": 2013019, "summary": "OS Key Store implementation can hang",
+              "status": "NEW", "signatures": [], "by_tracker": 1866944,
+              "description": "libsecret"}]
+
+    _LATER = {2013019: [{"author": "jstutte@mozilla.com", "text": "The libsecret cohort."}]}
+
+    def _run(self, answer, bugs=_BUGS, cfg=_SD_CFG, later=_LATER):
+        async def run(*a, **k):
+            return answer
+        describe = mock.Mock(return_value={"signature": "Foo::Bar", "title": "",
+                                           "mechanism": "An `OSKeyStore` job hangs.",
+                                           "frames": []})
+        with mock.patch.object(bugzilla_apply, "_bucket_candidates",
+                               return_value=bugs) as lookup, \
+                mock.patch.object(bugzilla_apply, "_later_comments",
+                                  return_value=later) as comments, \
+                mock.patch.object(same_defect, "run_same_defect", side_effect=run) as agent:
+            out = bugzilla_apply._bucket_bug(
+                "Foo::Bar", [], [_META], _WORK, _BUCKET_TITLE,
+                dict(_INFO, node="abc", buildid=_BUILDID), cfg, describe)
+        if bugs:
+            self.assertEqual(lookup.call_args.args, ([1866944], "Firefox", _BUILDID))
+        self.comments = comments
+        return out, agent, describe
+
+    def test_a_match_names_the_tracker(self):
+        (bug, check), agent, describe = self._run(
+            same_defect.SameDefect(bug=2013019, confidence="high", reason="Same libsecret."))
+        self.assertEqual(bug, 2013019)
+        self.assertEqual((check["tracker"], check["by_tracker"], check["regressor"]),
+                         (1866944, [2013019, 2080828], None))
+        self.assertNotIn("by_stack", check)
+        self.assertEqual(bugzilla_apply._tracked_clause(bug, check),
+                         "bug 2013019 already tracks this cause of [meta] bug 1866944")
+        crash, regressor, listed = agent.call_args.args
+        self.assertEqual((crash["title"], crash["awaited"]["name"]),
+                         (_BUCKET_TITLE, "BgIOThr~Pool #3"))
+        self.assertIsNone(regressor)
+        self.assertEqual([(b["bug"], b["comments"]) for b in listed],
+                         [(2013019, self._LATER[2013019]), (2080828, [])])
+        describe.assert_called_once_with()
+
+    def test_the_ranked_candidates_are_capped(self):
+        (_, check), agent, _ = self._run(same_defect.SameDefect(bug=None, confidence="high"),
+                                         cfg=dict(_SD_CFG, max_bugs=1))
+        self.assertEqual([b["bug"] for b in agent.call_args.args[2]], [2013019])
+        self.assertEqual(check["bugs"], [2013019])
+        self.comments.assert_called_once_with([2013019])
+
+    def test_unreadable_comments_of_the_selected_bugs(self):
+        (bug, check), agent, _ = self._run(None, later=None)
+        self.assertIsNone(bug)
+        self.assertEqual(check["error"], bugzilla_apply._TRACKER_LOOKUP_FAILED)
+        agent.assert_not_called()
+
+    def test_below_the_floor_and_no_match(self):
+        for answer in (same_defect.SameDefect(bug=2013019, confidence="low"),
+                       same_defect.SameDefect(bug=None, confidence="high")):
+            (bug, check), _, _ = self._run(answer)
+            self.assertIsNone(bug)
+            self.assertNotIn("tracker", check)
+
+    def test_nothing_to_compare(self):
+        (bug, check), agent, describe = self._run(None, bugs=[])
+        self.assertEqual((bug, check), (None, None))
+        agent.assert_not_called()
+        describe.assert_not_called()
+
+    def test_a_failed_lookup(self):
+        (bug, check), agent, _ = self._run(None, bugs=None)
+        self.assertIsNone(bug)
+        self.assertEqual(check["error"], bugzilla_apply._TRACKER_LOOKUP_FAILED)
+        agent.assert_not_called()
+
+
+class TestTheFilerOnABucket(_Base):
+    _CHECK = {"regressor": None, "bugs": [2013019], "by_tracker": [2013019], "bug": 2013019,
+              "confidence": "high", "reason": "Same libsecret wait.", "tracker": 1866944}
+    _DOSSIER = {"candidate": {"node": "n"}, "verdict": {"title": _BUCKET_TITLE},
+                "corroborations": {"hang_awaited_work": _WORK}}
+
+    def setUp(self):
+        super().setUp()
+        p = [
+            mock.patch.object(bugzilla_apply.config, "get_agent_same_defect",
+                              return_value=dict(_SD_CFG)),
+            mock.patch.object(bugzilla_apply, "_open_bugs_for_signature",
+                              return_value=[_bug(1866944, keywords=["meta"])]),
+            mock.patch.object(bugzilla_apply, "_bucket_bug",
+                              return_value=(2013019, dict(self._CHECK))),
+            mock.patch.object(bugzilla_apply, "_same_defect_bug"),
+        ]
+        for x in p:
+            x.start()
+            self.addCleanup(x.stop)
+
+    def test_a_tracked_cause_is_not_filed_again(self):
+        res = self._file(dossier=self._DOSSIER)
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["meta_bugs"]), (2013019, [1866944]))
+        self.assertEqual(res["skipped"],
+                         "bug 2013019 already tracks this cause of [meta] bug 1866944")
+        self.assertEqual(res["same_defect"]["reason"], "Same libsecret wait.")
+        self.assertEqual((self.created, self.comments, self.puts, self.filed), ([], [], [], []))
+        args = bugzilla_apply._bucket_bug.call_args.args
+        self.assertEqual((args[2][0]["id"], args[3], args[4]), (1866944, _WORK, _BUCKET_TITLE))
+        bugzilla_apply._same_defect_bug.assert_not_called()
+
+    def test_an_unreadable_tracker_files_nothing(self):
+        bugzilla_apply._bucket_bug.return_value = (
+            None, {"regressor": None, "error": bugzilla_apply._TRACKER_LOOKUP_FAILED})
+        res = self._file(dossier=self._DOSSIER)
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["skipped"], "could not read the bugs blocking [meta] bug 1866944; "
+                                         "not risking a duplicate")
+        self.assertEqual(self.created, [])
+
+    def test_a_new_cause_files_its_bucket_bug_and_records_the_check(self):
+        check = dict(self._CHECK, bug=None)
+        del check["tracker"]
+        bugzilla_apply._bucket_bug.return_value = (None, check)
+        res = self._file(dossier=self._DOSSIER)
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual(res["same_defect_check"], check)
+        self.assertEqual(len(self.created), 1)
+        bugzilla_apply._same_defect_bug.assert_not_called()
+
+    def test_not_without_a_tracker_disabled_or_withheld(self):
+        bugzilla_apply._same_defect_bug.return_value = (None, None)
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        self._file(dossier=self._DOSSIER)
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1866944, keywords=["meta"])]
+        with mock.patch.object(bugzilla_apply.sensitive, "is_withheld", return_value=True):
+            self._file(dossier=self._DOSSIER)
+        bugzilla_apply.config.get_agent_same_defect.return_value = dict(_SD_CFG, enabled=False)
+        self.assertEqual(self._file(dossier=self._DOSSIER)["mode"], "new_bug")
+        bugzilla_apply._bucket_bug.assert_not_called()
+
+
+class TestSpikeFilerOnABucket(_FilerBase):
+    _CHECK = {"regressor": None, "bugs": [2013019], "by_tracker": [2013019], "bug": 2013019,
+              "confidence": "high", "reason": "Same cause.", "tracker": 1866944}
+
+    def setUp(self):
+        super().setUp()
+        p = [
+            mock.patch.object(config, "get_agent_same_defect", return_value=dict(_SD_CFG)),
+            mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[_META]),
+            mock.patch.object(bugzilla_apply, "_bucket_bug",
+                              return_value=(2013019, dict(self._CHECK))),
+            mock.patch.object(bugzilla_apply, "_match_same_defect"),
+        ]
+        for x in p:
+            x.start()
+            self.addCleanup(x.stop)
+
+    def test_a_tracked_cause_is_not_filed_again(self):
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertFalse(res["filed"])
+        self.assertEqual((res["bug"], res["venue_kind"]), (2013019, "tracked_bucket"))
+        self.assertEqual(res["skipped"],
+                         "bug 2013019 already tracks this cause of [meta] bug 1866944")
+        self.assertEqual((self.created, self.comments), ([], []))
+        args = bugzilla_apply._bucket_bug.call_args.args
+        self.assertEqual((args[0], args[4]), ("mozilla::Foo::Bar",
+                                              "The buffer allocator rewrite made a fresh "
+                                              "content process OOM"))
+        self.assertEqual(args[5]["product"], "Firefox")
+        self.assertEqual(args[7]()["mechanism"], self.findings.summary)
+        bugzilla_apply._match_same_defect.assert_not_called()
+
+    def test_an_unreadable_tracker_is_retried(self):
+        bugzilla_apply._bucket_bug.return_value = (
+            None, {"regressor": None, "error": bugzilla_apply._TRACKER_LOOKUP_FAILED})
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["filed"], res["retry"]), (False, True))
+        self.assertEqual(self.created, [])
+
+    def test_a_new_cause_files_its_bucket_bug(self):
+        bugzilla_apply._bucket_bug.return_value = (None, dict(self._CHECK, bug=None))
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual((res["filed"], res["mode"]), (True, "spike_new_bug"))
+        self.assertIsNone(res["same_defect_check"]["bug"])
+        self.assertEqual(res["meta_bugs"], [1866944])
+
+    def test_an_ungrounded_spike_goes_to_the_tracker_unchecked(self):
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=False)
+        self.assertEqual(res["venue_kind"], "meta")
+        bugzilla_apply._bucket_bug.assert_not_called()
 
 
 @unittest.skipUnless(_is_postgres(), "the filed_bug JSONB queries need a disposable Postgres")

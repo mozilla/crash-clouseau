@@ -1615,6 +1615,13 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             for_spike = False
             logger.info("spike: %r is held by [meta] bug %s and the analysis names no bucket "
                         "-- the spike goes to the tracker as a comment", signature, venue["id"])
+    if venue is None and meta_bugs and bucket_title and not withheld:
+        match, check = _bucket_match(esc, brief, findings, details, stack, meta_bugs,
+                                     bucket_title)
+        if match is not None:
+            return dict(result, **match)
+        if check:
+            result["same_defect_check"] = check
     if venue is None and not meta_bugs and not withheld:
         match, check = _same_defect_match(esc, brief, findings, grounded, details, stack,
                                           screened, mode, token)
@@ -1772,6 +1779,32 @@ def _same_defect_match(esc, brief, findings, grounded, details, stack, screened,
         return None, check
     logger.info("spike: escalation %s is the same defect as bug %s", esc.id, bug)
     return bugzilla_apply._add_to_same_defect_bug(bug, signature, check, mode, token), None
+
+
+def _bucket_match(esc, brief, findings, details, stack, meta_bugs, title):
+    """Return ``(decline, None)`` on a match or lookup failure, else ``(None, check or None)``.
+
+    A match declines filing without attaching the tracker's signature."""
+    from crashclouseau.agent import same_defect
+
+    cfg = config.get_agent_same_defect()
+    if not cfg["enabled"]:
+        return None, None
+    signature = (esc.signature or "").strip()
+    frames = (stack or {}).get("frames")
+    info = {"product": esc.product, "buildid": esc.buildid, "channel": esc.channel,
+            "node": brief.get("pin_rev") or ""}
+    bug, check = bugzilla_apply._bucket_bug(
+        signature, frames, meta_bugs, spike_report._spike_awaited_work(brief), title, info, cfg,
+        lambda: same_defect.crash_from_spike(signature, findings, frames, details))
+    if (check or {}).get("error") == bugzilla_apply._TRACKER_LOOKUP_FAILED:
+        return {"retry": True, "skipped": "could not read the bugs blocking [meta] bug {}; not "
+                                          "risking a duplicate".format(meta_bugs[0]["id"])}, None
+    if bug is None:
+        return None, check
+    logger.info("spike: escalation %s is a cause bug %s already tracks", esc.id, bug)
+    return {"bug": bug, "venue_kind": "tracked_bucket", "same_defect": check,
+            "skipped": bugzilla_apply._tracked_clause(bug, check)}, None
 
 
 def _screen(brief, findings, grounded, details, stack, link_regressor):

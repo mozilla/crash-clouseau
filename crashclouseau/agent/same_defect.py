@@ -30,9 +30,11 @@ _SYSTEM = (
     "You decide whether a Firefox crash that is about to be filed as a new bug is the same "
     "defect as a bug that already exists. Candidates are bugs attributed to the same regressor "
     "(filings naming it and that bug's regressions) and bugs we filed or commented on whose "
-    "stacks share frames with this crash, with duplicates replaced by their targets. Neither "
-    "establishes a shared changeset or defect. One defect can appear under several crash "
-    "signatures.\n\n"
+    "stacks share frames with this crash, with duplicates replaced by their targets. When a "
+    "[meta] tracker holds the crash's signature, they are the tracker's dependencies instead, "
+    "each about one cause of that shared signature and often without a signature of its own. "
+    "None of these establishes a shared changeset or defect. One defect can appear under "
+    "several crash signatures.\n\n"
     "Same defect means that one code fix would stop both crashes: the same faulty code path or "
     "state, reached through the same part of the change when a regressor is named. Sharing the "
     "regressor, stack frames, the component, a changed file or a crash type does not establish "
@@ -214,6 +216,11 @@ def user_prompt(crash: dict, regressor: dict | None, siblings: list[dict]) -> st
     frames = _frame_lines(crash.get("frames"), _MAX_FRAMES)
     if frames:
         lines += ["Stack:", *frames]
+    awaited = crash.get("awaited") or {}
+    frames = _frame_lines(awaited.get("frames"), _MAX_FRAMES)
+    if frames:
+        lines += ["The work this hang waits for, on thread `{}`:".format(
+            awaited.get("name") or "?"), *frames]
     for sib in siblings:
         lines += ["", "BUG {}: {}".format(sib.get("bug"), sib.get("summary") or "")]
         if sib.get("status"):
@@ -223,6 +230,9 @@ def user_prompt(crash: dict, regressor: dict | None, siblings: list[dict]) -> st
             lines.append("Crash signatures: {}".format(" ".join("[@ {}]".format(s) for s in sigs)))
         if sib.get("by_regressor"):
             lines.append("Listed because: attributed to the regressor")
+        if sib.get("by_tracker"):
+            lines.append("Listed because: blocks [meta] bug {}, which holds the crash's "
+                         "signature".format(sib["by_tracker"]))
         if sib.get("shared_frames"):
             lines.append("Listed because: our filing, whose stack shares these frames with the "
                          "crash: {}".format("; ".join(sib["shared_frames"])))

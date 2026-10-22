@@ -2014,14 +2014,17 @@ def _regression_ids(regressor, timeout=_HTTP_TIMEOUT):
     return [int(b) for b in (row or {}).get("regressions") or []]
 
 
-def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT, token=None):
-    """Read candidate fields with an optional token; return ``None`` on failure."""
+def _crash_bug_rows(ids, timeout=_HTTP_TIMEOUT, token=None, extra_fields=""):
+    """Read candidate fields with an optional token; return ``None`` on failure.
+
+    *extra_fields* adds fields such as ``description`` (comment 0)."""
     if not ids:
         return []
     params = {
         "id": ",".join(str(i) for i in ids),
         "include_fields": "id,summary,status,resolution,dupe_of,creation_time,product,keywords,"
-                          "cf_crash_signature,cf_last_resolved",
+                          "cf_crash_signature,cf_last_resolved" + (
+                              "," + extra_fields if extra_fields else ""),
     }
     try:
         r = net.get(_bz_rest(), params=params, timeout=timeout, headers=_auth(token))
@@ -2254,34 +2257,39 @@ def _same_defect_candidates(regressor, signature, product, max_bugs, buildid=Non
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
-def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg, token=None):
-    """Run ``_match_same_defect`` for a crash with a dossier."""
+def _dossier_crash(uuid, signature, dossier, stack):
+    """Build same-defect prompt fields from a dossier and the crash's IPC error."""
     from crashclouseau import report_bug
     from crashclouseau.agent import same_defect
 
+    return same_defect.crash_from_dossier(
+        signature, dossier, (stack or {}).get("frames"),
+        report_bug.fetch_crash_reason(uuid).get("ipc_fatal_error_msg"))
+
+
+def _same_defect_bug(uuid, uuid_info, stack, dossier, signature, cfg, token=None):
+    """Run ``_match_same_defect`` for a crash with a dossier."""
     candidate = (dossier or {}).get("candidate") or {}
     frames = (stack or {}).get("frames") or ((dossier or {}).get("crash") or {}).get("frames")
-
-    def describe():
-        return same_defect.crash_from_dossier(
-            signature, dossier, (stack or {}).get("frames"),
-            report_bug.fetch_crash_reason(uuid).get("ipc_fatal_error_msg"))
-
-    return _match_same_defect(signature, frames, candidate, uuid_info, cfg, describe, token=token)
+    return _match_same_defect(signature, frames, candidate, uuid_info, cfg,
+                              lambda: _dossier_crash(uuid, signature, dossier, stack),
+                              token=token)
 
 
-def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=None):
+def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=None, bugs=None):
     """Compare public and restricted candidates separately.
 
-    *describe()* supplies prompt fields. Return ``(bug or None, check record or None)``.
+    *describe()* supplies prompt fields; *bugs* replaces the candidate lookup.
+    Return ``(bug or None, check record or None)``.
     """
     import asyncio
     from crashclouseau.agent import same_defect
 
     reg = (regressor or {}).get("bug") or None
-    bugs = _same_defect_candidates(reg, signature, info.get("product"), cfg["max_bugs"],
-                                   buildid=info.get("buildid"), token=token, frames=frames,
-                                   cfg=cfg)
+    if bugs is None:
+        bugs = _same_defect_candidates(reg, signature, info.get("product"), cfg["max_bugs"],
+                                       buildid=info.get("buildid"), token=token, frames=frames,
+                                       cfg=cfg)
     if bugs is None:
         return None, {"regressor": reg, "error": "bug lookup failed"}
     if not bugs:
@@ -2306,9 +2314,13 @@ def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=
 
     def listed(group):
         out = {"regressor": reg, "bugs": [b["bug"] for b in group]}
-        by_stack = [b["bug"] for b in group if not b.get("by_regressor")]
+        by_stack = [b["bug"] for b in group
+                    if not (b.get("by_regressor") or b.get("by_tracker"))]
         if by_stack:
             out["by_stack"] = by_stack
+        by_tracker = [b["bug"] for b in group if b.get("by_tracker")]
+        if by_tracker:
+            out["by_tracker"] = by_tracker
         return out
 
     check = None
@@ -2329,6 +2341,190 @@ def _match_same_defect(signature, frames, regressor, info, cfg, describe, token=
         logger.info("autofile: no same-defect match among restricted bugs %s for %r",
                     [b["bug"] for b in hidden], signature)
     return None, check
+
+
+_TRACKER_LOOKUP_FAILED = "tracker dependency lookup failed"
+
+
+def _tracker_dependencies(meta_ids, timeout=_HTTP_TIMEOUT):
+    """Map each bug blocking *meta_ids* to the first tracker it blocks; ``None`` on failure."""
+    params = {"id": ",".join(str(i) for i in meta_ids), "include_fields": "id,depends_on"}
+    try:
+        r = net.get(_bz_rest(), params=params, timeout=timeout)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: dependency lookup failed for %s: %s", meta_ids, exc)
+        return None
+    out = {}
+    for meta in sorted(bugs, key=lambda b: meta_ids.index(b["id"]) if b["id"] in meta_ids
+                       else len(meta_ids)):
+        for dep in meta.get("depends_on") or []:
+            out.setdefault(dep, meta["id"])
+    return out
+
+
+_ROWS_PER_READ = 200
+
+
+def _rows_with_description(ids):
+    """Read candidate fields and comment 0 in batches; return ``None`` on failure."""
+    out = []
+    for i in range(0, len(ids), _ROWS_PER_READ):
+        rows = _crash_bug_rows(ids[i:i + _ROWS_PER_READ], extra_fields="description")
+        if rows is None:
+            return None
+        out += rows
+    return out
+
+
+def _bucket_candidates(meta_ids, product, buildid):
+    """Read public dependency candidates and comment 0, newest first.
+
+    Follow one duplicate hop; exclude meta and other-application bugs. Keep unresolved bugs
+    or bugs resolved FIXED after *buildid*. Return ``None`` on lookup failure.
+    """
+    from crashclouseau import sigage
+
+    trackers = _tracker_dependencies(meta_ids)
+    if trackers is None:
+        return None
+    rows = _rows_with_description(sorted(trackers))
+    if rows is None:
+        return None
+    known = {b["id"] for b in rows}
+    targets = sorted({b["dupe_of"] for b in rows
+                      if b.get("resolution") == "DUPLICATE" and b.get("dupe_of")} - known)
+    extra = _rows_with_description(targets)
+    if extra is None:
+        return None
+    by_id = {b["id"]: b for b in rows + extra}
+    build_dt = sigage.to_datetime(buildid if isinstance(buildid, datetime) else str(buildid or ""))
+    picked = {}
+    for b in rows:
+        tracker = trackers.get(b["id"])
+        if b.get("resolution") == "DUPLICATE":
+            b = by_id.get(b.get("dupe_of"))
+            if b is None:
+                continue
+        resolved = sigage.to_datetime(b.get("cf_last_resolved"))
+        if b.get("resolution") == "FIXED":
+            usable = bool(build_dt and resolved and resolved > build_dt)
+        else:
+            usable = not b.get("resolution")
+        if usable and "meta" not in (b.get("keywords") or []):
+            picked.setdefault(b["id"], (b, trackers.get(b["id"], tracker)))
+    kept = _split_by_application([b for b, _ in picked.values()], product)[0]
+    kept.sort(key=lambda b: b.get("creation_time") or "", reverse=True)
+    return [{"bug": b["id"], "summary": b.get("summary") or "",
+             "status": "RESOLVED FIXED" if b.get("resolution") else (b.get("status") or ""),
+             "signatures": _signature_field_entries(b.get("cf_crash_signature")),
+             "by_tracker": picked[b["id"]][1], "description": b.get("description") or ""}
+            for b in kept]
+
+
+def _later_comments(ids, timeout=_HTTP_TIMEOUT):
+    """Read ``{bug: later comments}`` anonymously in one request; ``None`` on failure.
+
+    Skip comment 0 and authors matching ``_is_automation``."""
+    if not ids:
+        return {}
+    params = {"ids": [str(i) for i in ids[1:]], "include_fields": "creator,text"}
+    try:
+        r = net.get("{}/{}/comment".format(_bz_rest(), ids[0]), params=params, timeout=timeout)
+        r.raise_for_status()
+        bugs = (r.json() or {}).get("bugs") or {}
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: comment read failed for bugs %s: %s", ids, exc)
+        return None
+    return {int(bug): [{"author": c.get("creator") or "", "text": c.get("text") or ""}
+                       for c in ((data or {}).get("comments") or [])[1:]
+                       if not _is_automation(c.get("creator"))]
+            for bug, data in bugs.items()}
+
+
+_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{5,}")
+_CODE_RE = re.compile(r"`([^`]+)`")
+
+
+def _squashed(text):
+    """Match identifiers across spaces and punctuation, preserving underscores."""
+    return re.sub(r"[^a-z0-9_]", "", (text or "").lower())
+
+
+def _stem(path):
+    """Return the basename before its first dot."""
+    return os.path.basename(str(path or "")).split(".")[0]
+
+
+def _bucket_terms(crash, work):
+    """Extract identifiers from stacks, files and code spans, excluding wait target/name terms."""
+    parts = []
+    for key in ("title", "mechanism", "data_flow"):
+        parts += _CODE_RE.findall(crash.get(key) or "")
+    frames = (crash.get("awaited") or {}).get("frames") or crash.get("frames") or []
+    for f in frames:
+        parts += [f.get("function") or "", _stem(f.get("module")), _stem(f.get("filename"))]
+    parts += [_stem(p) for p in (work or {}).get("files") or []]
+    wait = " ".join(str((work or {}).get(key) or "") for key in ("target", "name"))
+    common = {t.lower() for t in _TERM_RE.findall(wait)}
+    return {t.lower() for t in _TERM_RE.findall(" ".join(parts))} - common
+
+
+def _rank_bucket_candidates(terms, bugs):
+    """Rank by rare terms in summaries, then comment 0; preserve ties.
+
+    Ignore terms found in more than half the summaries or descriptions, respectively."""
+    import math
+
+    def scores(texts):
+        hits = [{t for t in terms if t in text} for text in texts]
+        df = {t: sum(t in h for h in hits) for t in terms}
+        n = len(texts)
+        return [sum(math.log((n + 1) / df[t]) for t in h if 2 * df[t] <= n) for h in hits]
+
+    summary = scores([_squashed(b.get("summary")) for b in bugs])
+    body = scores([_squashed(b.get("description")) for b in bugs])
+    return [bugs[i] for i in sorted(range(len(bugs)), key=lambda i: (-summary[i], -body[i]))]
+
+
+def _awaited_thread(work):
+    """Select busy-thread, exited-thread or main-thread frames from ``hang.awaited_summary``."""
+    for key in ("thread", "exited_thread", "main"):
+        thread = (work or {}).get(key) or {}
+        if thread.get("frames"):
+            return {"name": thread.get("name") or "", "frames": thread["frames"]}
+    return None
+
+
+def _bucket_bug(signature, frames, meta_bugs, work, title, info, cfg, describe):
+    """Compare this bucket with the trackers' dependency candidates.
+
+    Return ``(bug or None, check or None)``. Matches record ``tracker`` in the check;
+    failed dependency or comment reads set its ``error`` to ``_TRACKER_LOOKUP_FAILED``."""
+    bugs = _bucket_candidates([b["id"] for b in meta_bugs], info.get("product"),
+                              info.get("buildid"))
+    if bugs is None:
+        return None, {"regressor": None, "error": _TRACKER_LOOKUP_FAILED}
+    if not bugs:
+        return None, None
+    crash = dict(describe(), title=title)
+    awaited = _awaited_thread(work)
+    if awaited:
+        crash["awaited"] = awaited
+    bugs = _rank_bucket_candidates(_bucket_terms(crash, work), bugs)[:cfg["max_bugs"]]
+    later = _later_comments([b["bug"] for b in bugs])
+    if later is None:
+        return None, {"regressor": None, "error": _TRACKER_LOOKUP_FAILED}
+    bugs = [dict(b, comments=later.get(b["bug"], [])) for b in bugs]
+    bug, check = _match_same_defect(signature, frames, None, info, cfg, lambda: crash, bugs=bugs)
+    if bug is not None:
+        check["tracker"] = next(b["by_tracker"] for b in bugs if b["bug"] == bug)
+    return bug, check
+
+
+def _tracked_clause(bug, check):
+    return "bug {} already tracks this cause of [meta] bug {}".format(bug, check.get("tracker"))
 
 
 def _same_defect_clause(bug, check):
@@ -3313,9 +3509,29 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
             "skipped": "signature is held by [meta] bug {}; the verdict names no bucket to "
                        "file, and a bug titled by the signature would be a second "
                        "catch-all".format(tracker)}, restricted)
-    # Compare before creating a bug, except on withheld, incomplete-fix or meta-bucket paths.
     same_defect_check = None
     sd_cfg = config.get_agent_same_defect()
+    # Bucket bugs omit the signature, so check the tracker's dependencies for an existing cause.
+    if bug_id is None and meta_bugs and sd_cfg["enabled"] and not (withheld or incomplete_fix):
+        tracked, same_defect_check = _bucket_bug(
+            signature, (stack or {}).get("frames"), meta_bugs,
+            ((dossier or {}).get("corroborations") or {}).get("hang_awaited_work"),
+            report_bug.bucket_title(dossier), uuid_info, sd_cfg,
+            lambda: _dossier_crash(uuid, signature, dossier, stack))
+        metas = [b["id"] for b in meta_bugs]
+        if (same_defect_check or {}).get("error") == _TRACKER_LOOKUP_FAILED:
+            return _with_restricted({
+                "filed": False, "meta_bugs": metas,
+                "skipped": "could not read the bugs blocking [meta] bug {}; not risking a "
+                           "duplicate".format(metas[0])}, restricted)
+        if tracked is not None:
+            logger.info("autofile: bug %s already tracks this cause of [meta] bug %s -- not "
+                        "filing a bucket bug for %s", tracked, same_defect_check["tracker"], uuid)
+            return _with_restricted({
+                "filed": False, "bug": tracked, "meta_bugs": metas,
+                "same_defect": same_defect_check,
+                "skipped": _tracked_clause(tracked, same_defect_check)}, restricted)
+    # Compare before creating a bug, except on withheld, incomplete-fix or meta-bucket paths.
     if bug_id is None and sd_cfg["enabled"] and not (withheld or incomplete_fix or meta_bugs):
         unless_dropped = mode == "comment_unless_dropped"
         # Include restricted candidates when the channel may comment.
