@@ -23,25 +23,22 @@ class TestBlackHole(unittest.TestCase):
         job.id = jid
         return job
 
-    def test_cancels_and_returns_false(self):
+    def test_logs_and_leaves_the_job_to_rq(self):
         job = self._job()
-        self.assertFalse(worker.black_hole(job))  # False => suppress RQ default handling
-        job.cancel.assert_called_once()
+        with mock.patch.object(worker.logger, "error") as log:
+            self.assertFalse(worker.black_hole(job))  # Stop the exception-handler chain.
+        self.assertIn("run_evidence_agent('uuid-1',) failed", log.call_args.args[0])
+        job.cancel.assert_not_called()
 
-    def test_swallows_cancel_error_no_crashloop(self):
-        # RQ calls this handler for ABANDONED jobs too (OOM-SIGKILLed worker leaves its
-        # job in StartedJobRegistry). Cancelling an already-terminal job raises
-        # InvalidJobOperation/NoSuchJobError; that escaping exception is what crash-looped
-        # the worker ("found an unhandled exception, quitting" -> restart -> repeat).
-        # black_hole must swallow it and still return False, never re-raise.
-        job = self._job("abandoned")
-        job.cancel.side_effect = Exception("InvalidJobOperation: cannot cancel a finished job")
-        try:
-            result = worker.black_hole(job)
-        except Exception as exc:  # pragma: no cover - the regression we're guarding against
-            self.fail("black_hole propagated {!r} (would crash-loop the worker)".format(exc))
-        self.assertFalse(result)
-        job.cancel.assert_called_once()
+
+class TestFailureTtl(unittest.TestCase):
+    def test_enqueued_jobs_keep_their_failure_for_thirty_days(self):
+        queue = worker.get_queue("ttl-check")
+        with mock.patch.object(worker.Queue, "enqueue_call") as base:
+            queue.enqueue_call(func=print, result_ttl=0)
+            self.assertEqual(base.call_args.kwargs["failure_ttl"], 30 * 24 * 3600)
+            queue.enqueue_call(func=print, failure_ttl=60)
+            self.assertEqual(base.call_args.kwargs["failure_ttl"], 60)
 
 
 class TestWorkerRunsTheScheduler(unittest.TestCase):

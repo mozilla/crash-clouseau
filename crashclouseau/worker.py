@@ -23,27 +23,21 @@ if redis_url.startswith("rediss://"):
 else:
     conn = redis.from_url(redis_url)
 __QUEUE = None
+# Retention for failed jobs and their results.
+FAILURE_TTL = 30 * 24 * 3600
 
 
 def black_hole(job, *exc_info):
-    args = job.args
-    func = job.func_name
-    logger.error(("Job for call {}{} failed").format(func, args))
-    # Best-effort cleanup. RQ invokes this handler for ABANDONED jobs too (a worker
-    # SIGKILLed by an OOM leaves its job in StartedJobRegistry; registry maintenance on
-    # the next worker boot fails it and calls the exception handlers). Cancelling a job
-    # that RQ already moved to a terminal state raises InvalidJobOperation/NoSuchJobError
-    # — and that exception was escaping the worker's maintenance loop ("found an
-    # unhandled exception, quitting" -> Heroku restart -> same poison job -> crash-loop).
-    # Swallow it: cancelling is cleanup, never a reason to kill the worker.
-    try:
-        job.cancel()
-    except Exception:
-        logger.warning(
-            "black_hole: could not cancel job %s (already terminal/abandoned)",
-            getattr(job, "id", "?"),
-        )
+    """Log the failure; leave failure recording and retries to RQ."""
+    logger.error(("Job for call {}{} failed").format(job.func_name, job.args))
     return False
+
+
+class _Queue(Queue):
+    """Default failed-job retention to 30 days."""
+
+    def enqueue_call(self, *args, failure_ttl=None, **kwargs):
+        return super().enqueue_call(*args, failure_ttl=failure_ttl or FAILURE_TTL, **kwargs)
 
 
 def get_queue(name="low"):
@@ -54,7 +48,7 @@ def get_queue(name="low"):
     if __QUEUE is None:
         __QUEUE = {}
     if name not in __QUEUE:
-        __QUEUE[name] = Queue(name, connection=conn, default_timeout=6000)
+        __QUEUE[name] = _Queue(name, connection=conn, default_timeout=6000)
     return __QUEUE[name]
 
 
