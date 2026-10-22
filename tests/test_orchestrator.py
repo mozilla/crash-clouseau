@@ -11,6 +11,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import contextlib  # noqa: E402
 import unittest  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
@@ -1239,6 +1240,60 @@ class TestOwnJobIdWiring(unittest.TestCase):
                         _triage_returning(_abstain_result())):
             orch.run_evidence_agent("u-1")
         self.assertIsNone(MDoss.claim_running.call_args.kwargs.get("own_job_id"))
+
+
+class TestOwnInterruptedRun(unittest.TestCase):
+    """Retries wait until their own running dossier can be reclaimed."""
+
+    def _dossier(self, quiet_s, job_id="job-abc", status="running", naive=False):
+        updated = datetime.now(timezone.utc) - timedelta(seconds=quiet_s)
+        if naive:
+            updated = updated.replace(tzinfo=None)
+        return mock.Mock(status=status, updated=updated, payload={"job_id": job_id})
+
+    def test_the_wait_until_the_row_may_be_reclaimed(self):
+        reclaim = orch.models._OWN_JOB_RECLAIM_AFTER_S
+        with mock.patch.object(orch.models, "Dossier") as MDoss:
+            MDoss.get_by_uuid.return_value = self._dossier(60)
+            self.assertAlmostEqual(orch._own_run_wait("u-1", "job-abc"), reclaim - 60 + 1,
+                                   delta=2)
+            MDoss.get_by_uuid.return_value = self._dossier(60, naive=True)
+            self.assertAlmostEqual(orch._own_run_wait("u-1", "job-abc"), reclaim - 60 + 1,
+                                   delta=2)
+            for d in (self._dossier(reclaim + 10), self._dossier(60, job_id="other"),
+                      self._dossier(60, status="done"), None):
+                MDoss.get_by_uuid.return_value = d
+                self.assertEqual(orch._own_run_wait("u-1", "job-abc"), 0)
+            MDoss.get_by_uuid.reset_mock()
+            self.assertEqual(orch._own_run_wait("u-1", None), 0)
+            MDoss.get_by_uuid.assert_not_called()
+
+    def test_the_retry_comes_back_instead_of_skipping(self):
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        MDoss.get_by_uuid.return_value = self._dossier(60)
+        with pD, pV, pC, pS as seed, pSc, \
+             mock.patch.object(orch, "_current_job", return_value=mock.Mock(id="job-abc")), \
+             mock.patch.object(orch.config, "get_agent_skip_if_existing", return_value=True):
+            out = orch.run_evidence_agent("u-1")
+            forced = orch.run_evidence_agent("u-1", force=True)
+        for res in (out, forced):
+            self.assertIsInstance(res, orch.Retry)
+            self.assertEqual(res.max, 1)
+            self.assertAlmostEqual(res.intervals[0], orch.models._OWN_JOB_RECLAIM_AFTER_S - 60
+                                   + 1 + orch._OWN_RETRY_MARGIN_S, delta=2)
+        seed.assert_not_called()
+        MDoss.skip_triage.assert_not_called()
+        MDoss.claim_running.assert_not_called()
+
+    def test_a_second_interruption_gets_its_own_wait(self):
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        MDoss.get_by_uuid.return_value = self._dossier(60)
+        for used, expected in ((None, 1), (1, 2), (2, 3)):
+            job = mock.Mock(id="job-abc", number_of_retries=used)
+            with pD, pV, pC, pS, pSc, \
+                 mock.patch.object(orch, "_current_job", return_value=job), \
+                 mock.patch.object(orch.config, "get_agent_skip_if_existing", return_value=True):
+                self.assertEqual(orch.run_evidence_agent("u-1").max, expected)
 
 
 class TestLiveJobUuids(unittest.TestCase):

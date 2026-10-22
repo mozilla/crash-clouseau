@@ -55,6 +55,8 @@ _DEFAULT_COST_CAP = 2.0
 # A "running" dossier older than job_timeout + this buffer is a dead orphan (RQ kills a
 # run at job_timeout; the buffer avoids racing a run that's legitimately near the cap).
 _STALE_BUFFER_S = 300
+# Retry slightly past the reclaim threshold to avoid timing races.
+_OWN_RETRY_MARGIN_S = 30
 
 # Substrings (in the exception type or message) that mark a TRANSIENT failure worth an
 # automatic retry rather than a terminal error. A ~20-min triage fires hundreds of
@@ -5466,6 +5468,20 @@ def _record_withheld(uuid, seed, row, reason):
         logger.error("agent: %s withheld decline not recorded", uuid, exc_info=True)
 
 
+def _own_run_wait(uuid, own_job_id):
+    """Seconds to wait before retrying this job's running dossier, or 0."""
+    if not own_job_id:
+        return 0
+    d = models.Dossier.get_by_uuid(uuid)
+    if d is None or d.status != "running" or not isinstance(d.updated, datetime):
+        return 0
+    if str((d.payload or {}).get("job_id") or "") != str(own_job_id):
+        return 0
+    updated = d.updated if d.updated.tzinfo else d.updated.replace(tzinfo=timezone.utc)
+    quiet = (datetime.now(timezone.utc) - updated).total_seconds()
+    return max(0, int(models._OWN_JOB_RECLAIM_AFTER_S - quiet) + 1)
+
+
 def run_evidence_agent(uuid, force=False):
     """RQ entrypoint: run the triage agent for one UUID and persist the result.
     On failure it records the reason (dossier ``payload['error']``) and marks status; a
@@ -5486,7 +5502,8 @@ def run_evidence_agent(uuid, force=False):
         # re-take it instead of waiting out the reaper. Needed HERE as well as at the
         # claim: this early-out runs first, so without it the claim's arm is unreachable
         # for every non-forced job. See ``Dossier.claim_running``.
-        own_job_id = getattr(_current_job(), "id", None)
+        job = _current_job()
+        own_job_id = getattr(job, "id", None)
         # THE MONEY SWITCH HAS TO REACH A JOB THAT IS ALREADY IN THE QUEUE. `AGENT_CHANNELS` was
         # only ever read at ENQUEUE time (`enqueue_agent`), so dropping a channel from it stopped
         # new jobs and nothing else: on 2026-09-07 esr115 and esr140 were removed from the
@@ -5530,6 +5547,16 @@ def run_evidence_agent(uuid, force=False):
                 logger.info("agent: %s is %r, a signature config.ignored_signatures names; "
                             "not running", uuid, signature)
                 return
+        # A retry can arrive before its previous attempt's heartbeat is old enough
+        # for skip_triage and claim_running to allow recovery.
+        wait = _own_run_wait(uuid, own_job_id)
+        if wait:
+            delay = wait + _OWN_RETRY_MARGIN_S
+            logger.info("agent: %s is this job's own interrupted run; retrying in %ds", uuid,
+                        delay)
+            # RQ counts returned retries across attempts; allow one more wait.
+            used = getattr(job, "number_of_retries", None)
+            return Retry(max=(used if isinstance(used, int) else 0) + 1, interval=delay)
         # Cheap cost dedup early-out (already-done / a same-proto sibling). A forced
         # retrigger bypasses it; the atomic claim below is still the real guard.
         if skip_dedup and not force and (
