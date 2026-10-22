@@ -1262,7 +1262,30 @@ def build_awaited_work_block(corroborations, max_frames=_MAX_AWAITED_FRAMES):
     head = "The thread the main thread is waiting for -- thread {} `{}`{}:".format(
         thread.get("index"), thread.get("name") or "unnamed",
         " ({})".format(", ".join(notes)) if notes else "")
-    return head + "\n" + _fenced(hang.frames_text(thread["frames"], max_frames))
+    return (head + "\n" + _fenced(hang.frames_text(thread["frames"], max_frames))
+            + _unreliable_note(thread, max_frames))
+
+
+def _unreliable_note(thread, max_frames):
+    """A line naming the printed frames recovered by stack scanning, or ``""``."""
+    shown = {f.get("stackpos") for f in (thread.get("frames") or [])[:max_frames]}
+    positions = sorted(p for p in thread.get("unreliable") or [] if p in shown)
+    if not positions:
+        return ""
+    runs = []
+    for p in positions:
+        if runs and p == runs[-1][1] + 1:
+            runs[-1][1] = p
+        else:
+            runs.append([p, p])
+    spans = ", ".join(str(a) if a == b else "{}-{}".format(a, b) for a, b in runs)
+    if len(positions) == 1:
+        text = "Frame {} is unreliable: the stack walker fell back to scanning the stack there, " \
+               "so it may not be a real call."
+    else:
+        text = "Frames {} are unreliable: the stack walker fell back to scanning the stack " \
+               "there, so they may not be real calls."
+    return "\n" + text.format(spans)
 
 
 def _main_subject_block(work, max_frames):
@@ -1277,6 +1300,7 @@ def _main_subject_block(work, max_frames):
                 "not completed:\n{}".format(
                     exited.get("index"), exited.get("name") or "unnamed",
                     _fenced(hang.frames_text(exited["frames"], max_frames))))
+        text += _unreliable_note(exited, max_frames)
         if main.get("work"):
             text += ("\n\nThe main thread was not parked at sample time: the frames above show "
                      "code running inside `{}`.".format(

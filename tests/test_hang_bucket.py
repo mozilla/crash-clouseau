@@ -499,8 +499,13 @@ class TestScannedFrames(unittest.TestCase):
         self.assertEqual(s["bucket"], "libsecret-1.so.0")
         self.assertEqual(s["title"], "libsecret-1.so.0 blocks BgIOThreadPool shutdown")
         self.assertEqual(s["files"], [])
-        # Keep scanned frames in the displayed stack.
+        # Keep scanned frames in the displayed stack, and say which are unreliable.
         self.assertEqual(s["thread"]["frames"][7]["function"], "free")
+        self.assertEqual(s["thread"]["unreliable"], [6, 7, 8, 9, 10, 11, 12])
+        block = report_bug.build_awaited_work_block({"hang_awaited_work": s})
+        self.assertTrue(block.endswith(
+            "```\nFrames 6-11 are unreliable: the stack walker fell back to scanning the stack "
+            "there, so they may not be real calls."))
         self.assertEqual(hang.work_frame_candidates(hang.reliable(_LIBSECRET["frames"])), [])
         with mock.patch.object(hang, "_annotate_line") as ann:
             self.assertIsNone(hang.awaited_origin(raw, "nightly"))
@@ -512,10 +517,28 @@ class TestScannedFrames(unittest.TestCase):
         self.assertEqual(s["bucket"], "mozilla::dom::quota::QuotaManager::UnloadQuota | unixSync")
         untrusted = [{k: v for k, v in f.items() if k != "trust"} for f in _SQLITE["frames"]]
         self.assertEqual(hang.bucket_key(untrusted), s["bucket"])
+        self.assertNotIn("unreliable", s["thread"])
+        self.assertTrue(report_bug.build_awaited_work_block({"hang_awaited_work": s})
+                        .endswith("```"))
         with mock.patch.object(hang, "_annotate_line", return_value=dict(_ROW, lineno=4000)):
             origin = hang.awaited_origin(raw, "nightly")
         self.assertEqual((origin["function"], origin["stackpos"]),
                          ("mozilla::dom::quota::QuotaManager::UnloadQuota", 4))
+
+    def test_the_note_names_printed_frames_only(self):
+        rows = [{"stackpos": i, "function": "F{}".format(i)} for i in range(6)]
+        note = report_bug._unreliable_note({"frames": rows, "unreliable": [1, 3, 4, 5, 9]}, 6)
+        self.assertEqual(note, "\nFrames 1, 3-5 are unreliable: the stack walker fell back to "
+                               "scanning the stack there, so they may not be real calls.")
+        self.assertIn("Frame 3 is unreliable", report_bug._unreliable_note(
+            {"frames": rows, "unreliable": [3]}, 6))
+        self.assertEqual(report_bug._unreliable_note({"frames": rows, "unreliable": [9]}, 6), "")
+        self.assertEqual(report_bug._unreliable_note({"frames": rows}, 6), "")
+        exited = {"exited_thread": {"index": 4, "name": "Pool #1", "frames": rows[:2],
+                                    "unreliable": [1]}}
+        self.assertTrue(report_bug._main_subject_block(exited, 12).endswith(
+            "Frame 1 is unreliable: the stack walker fell back to scanning the stack there, so "
+            "it may not be a real call."))
 
     def test_a_thread_whose_work_is_only_scanned_is_idle_in_the_census(self):
         lost = {"thread_name": "WRScene~derLP#0", "frames": [

@@ -617,6 +617,18 @@ def bucket_title(frames, target):
     return title[:_MAX_TITLE]
 
 
+def _displayed(thread):
+    """The ``{index, name, frames}`` a bug prints for an ``awaited_threads`` entry, with
+    ``unreliable``: the printed positions that ``reliable`` dropped, when there are any."""
+    out = {"index": thread["index"], "name": thread["name"],
+           "frames": thread["frames"][:MAX_FRAMES]}
+    kept = {r["stackpos"] for r in thread["reliable"]}
+    dropped = [r["stackpos"] for r in out["frames"] if r["stackpos"] not in kept]
+    if dropped:
+        out["unreliable"] = dropped
+    return out
+
+
 def _with_main(out, main):
     """Promote sampled main-thread work to the summary's top-level routing fields."""
     out["main"] = main
@@ -648,8 +660,7 @@ def awaited_summary(raw):
     if busy:
         head = busy[0]
         frames = head["reliable"]
-        out["thread"] = {"index": head["index"], "name": head["name"],
-                         "frames": head["frames"][:MAX_FRAMES]}
+        out["thread"] = _displayed(head)
         out["bucket"] = bucket_key(frames)
         # The WORK frames' files only: the thread-start and event-loop files under them are on
         # every thread in the process and say nothing about this one.
@@ -660,8 +671,7 @@ def awaited_summary(raw):
         return out
     if exited:
         head = exited[0]
-        out["exited_thread"] = {"index": head["index"], "name": head["name"],
-                                "frames": head["frames"][:MAX_FRAMES]}
+        out["exited_thread"] = _displayed(head)
         base = _INSTANCE_RE.sub("", head["name"]).strip() or target["name"] or "the awaited thread"
         # Include the main-thread sample because it supplies the title, files and candidate.
         out["bucket"] = "unjoined | {}".format(base)
