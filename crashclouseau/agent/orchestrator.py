@@ -5082,11 +5082,11 @@ def _heartbeat(uuid):
         t.join(timeout=5)
 
 
-def _autofile(uuid, payload, row, planned=None):
+def _autofile(uuid, payload, row, planned=None, lock_wait=None):
     """File a persisted analysis, or record a decline supplied by the dry run.
 
     Catch filing errors so they do not mark the completed analysis as failed.
-    ``planned`` bypasses the filer to preserve the dry run's decline."""
+    ``planned`` preserves a dry-run decline; ``lock_wait`` sets the lock acquisition wait."""
     try:
         from crashclouseau import bugzilla_apply
         stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
@@ -5096,6 +5096,7 @@ def _autofile(uuid, payload, row, planned=None):
             uuid, uuid_info, stack, payload.get("dossier") or {},
             row["verdict"], row["confidence"],
             floor_waiver=(payload.get("publish_confirmation") or {}).get("floor_waiver"),
+            lock_wait=lock_wait,
         )
         if planned is not None and planned.get("filing_error"):
             # Defer dry-run error records until the analysis is persisted.
@@ -5774,7 +5775,9 @@ def run_evidence_agent(uuid, force=False):
                 # Declines planned at higher confidence need an incomplete-fix check.
                 _autofile(uuid, payload, row, planned=plan)
             else:
-                _autofile(uuid, payload, row)
+                # Reserve the publishing margin when waiting for the lock.
+                _autofile(uuid, payload, row,
+                          lock_wait=None if left is None else left - _PUBLISH_MARGIN_S)
     except Exception as exc:
         logger.error("agent: run_evidence_agent failed for %s", uuid, exc_info=True)
         reason = "{}: {}".format(type(exc).__name__, exc)

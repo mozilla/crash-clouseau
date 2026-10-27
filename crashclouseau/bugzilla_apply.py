@@ -31,9 +31,11 @@ the global switch and product holds; channel holds apply only to the ordinary fi
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 
 from . import net
@@ -2925,6 +2927,74 @@ def passes_local_filing_gates(uuid, uuid_info, dossier, verdict, confidence):
     return bool(config.get_bugzilla_token())
 
 
+# Both filers share a lock from duplicate checks through recording the filing.
+# Renew the lease because filing can outlast its initial TTL.
+_FILING_LOCK_KEY = "clouseau:filing:lock"
+_FILING_LOCK_TTL_S = 120
+_FILING_LOCK_RENEW_S = 30
+_FILING_LOCK_WAIT_S = 300
+FILING_LOCK_BUSY = "another filing held the filing lock for {:.0f}s; not risking a duplicate"
+
+
+def filing_lock_wait(wait=None):
+    """Use the default lock wait for None; clamp explicit waits to zero or above."""
+    return _FILING_LOCK_WAIT_S if wait is None else max(0.0, wait)
+
+
+def _keep_filing_lock(lock, stop):
+    """Periodically renew the lease until stopped or ownership is lost."""
+    import redis
+
+    while not stop.wait(_FILING_LOCK_RENEW_S):
+        try:
+            lock.reacquire()
+        except redis.exceptions.LockError:
+            logger.error("autofile: lost the filing lock while filing; another filing may run "
+                         "alongside this one")
+            return
+        except redis.exceptions.RedisError as exc:
+            logger.warning("autofile: could not renew the filing lock (%s)", exc)
+
+
+@contextlib.contextmanager
+def filing_lock(wait=None):
+    """Acquire and renew the shared filing lock; yield False on acquisition timeout.
+
+    Redis errors during acquisition allow filing without the lock."""
+    import redis
+    from crashclouseau import worker
+
+    wait = filing_lock_wait(wait)
+    # Share the ownership token with the renewal thread.
+    lock = worker.conn.lock(_FILING_LOCK_KEY, timeout=_FILING_LOCK_TTL_S, sleep=0.5,
+                            blocking_timeout=wait, thread_local=False)
+    try:
+        held = lock.acquire()
+    except redis.exceptions.RedisError as exc:
+        logger.warning("autofile: filing lock unavailable (%s); filing without it", exc)
+        held = None
+    if not held:
+        if held is False:
+            logger.warning("autofile: filing lock busy for %.0fs", wait)
+        yield held is None
+        return
+    stop = threading.Event()
+    keeper = threading.Thread(target=_keep_filing_lock, args=(lock, stop),
+                              name="filing-lock", daemon=True)
+    keeper.start()
+    try:
+        yield True
+    finally:
+        stop.set()
+        keeper.join(timeout=10)
+        try:
+            lock.release()
+        except redis.exceptions.LockError:
+            logger.warning("autofile: the filing lock was gone at release")
+        except redis.exceptions.RedisError as exc:
+            logger.warning("autofile: could not release the filing lock (%s)", exc)
+
+
 def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floor_waiver=None):
     """Run filing checks until a decline or the first screened Bugzilla write.
 
@@ -2932,8 +3002,8 @@ def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floo
     without writing to Bugzilla or recording filing results in the DB."""
     token = _DRY_RUN.set(True)
     try:
-        res = autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
-                           floor_waiver=floor_waiver)
+        res = _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
+                            floor_waiver=floor_waiver)
     except _WouldPublish as stop:
         return {"filed": False, "dry_run": True, "would_publish": stop.action, "bug": stop.bug}
     finally:
@@ -2942,7 +3012,7 @@ def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floo
 
 
 def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False,
-                 floor_waiver=None):
+                 floor_waiver=None, lock_wait=None):
     """File a crash analysis under the configured policy and return filing or decline details.
 
     Check product/channel policy, run options, verdict eligibility, prior filings and the
@@ -2957,10 +3027,25 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
 
     ``floor_waiver="agreed"`` bypasses the actionable installation floor; ``"pending"``
     only bypasses it during a dry run.
+
+    ``lock_wait`` overrides the default lock acquisition wait.
     """
     if dry_run:
         return _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence,
                                  floor_waiver=floor_waiver)
+    if _DRY_RUN.get():
+        # Dry runs do not need the filing lock.
+        return _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
+                             floor_waiver=floor_waiver)
+    with filing_lock(lock_wait) as held:
+        if not held:
+            return {"filed": False, "skipped": FILING_LOCK_BUSY.format(filing_lock_wait(lock_wait))}
+        return _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
+                             floor_waiver=floor_waiver)
+
+
+def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_waiver=None):
+    """Run filing checks and writes, subject to the dry-run context."""
     channel = uuid_info.get("channel")
     product = uuid_info.get("product")
     # THE PRODUCT HOLD OUTRANKS EVERYTHING, the operator's per-run instruction included. Fenix

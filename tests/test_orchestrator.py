@@ -1021,6 +1021,34 @@ class TestConfirmBeforePublishing(unittest.TestCase):
         self.assertIn("30s of job time left",
                       MDoss.record_filing_decline.call_args.args[1]["skipped"])
 
+    def test_the_filer_waits_for_the_lock_only_with_time_beyond_its_margin(self):
+        now = [0.0]
+
+        async def _slow(*, crash, tools_cfg=None, llm_cfg=None, recorder=None, extra=None):
+            now[0] = 1000.0
+            return _lead_result()
+
+        pD, pV, pC, pS, pSc, MDoss, MVerd = TestRunEvidenceAgent._patches(self)
+        with pD, pV, pC, pS, pSc, \
+             mock.patch("crashclouseau.agent.triage.run_crash_triage", _slow), \
+             mock.patch.object(orch, "_clock", lambda: now[0]), \
+             mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600), \
+             mock.patch("crashclouseau.bugzilla_apply.passes_local_filing_gates",
+                        return_value=False), \
+             mock.patch.object(orch, "_autofile") as autofile:
+            orch.run_evidence_agent("u-1")
+        self.assertEqual(autofile.call_args.kwargs["lock_wait"],
+                         3600 - 1000 - orch._PUBLISH_MARGIN_S)
+
+    def test_autofile_passes_the_lock_wait_to_the_filer(self):
+        with mock.patch("crashclouseau.bugzilla_apply.autofile_bug",
+                        return_value={"filed": False, "skipped": "autofile disabled"}) as filer, \
+             mock.patch.object(orch.models.CrashStack, "get_by_uuid",
+                               return_value=([], {"uuid": "u-1"})):
+            orch._autofile("u-1", {"dossier": {}}, {"verdict": "actionable", "confidence": 70},
+                           lock_wait=42)
+        self.assertEqual(filer.call_args.kwargs["lock_wait"], 42)
+
     def test_job_timeout_sources(self):
         with mock.patch.object(orch.config, "get_agent_job_timeout", return_value=3600):
             for job, expected in ((None, 3600),                          # outside RQ

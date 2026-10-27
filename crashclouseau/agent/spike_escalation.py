@@ -80,6 +80,8 @@ _STALE_BUFFER_S = 300
 # At most three filing attempts, at least 15 minutes apart; reuse the investigation.
 _FILING_RETRIES = 3
 _FILING_RETRY_AFTER_S = 900
+# Limit lock contention delays in the scheduled retry sweep.
+_RETRY_LOCK_WAIT_S = 30
 _RAW_HEAD, _RAW_TAIL = 2000, 8000
 _HEX = frozenset("0123456789abcdef")
 _MIN_NODE = 7
@@ -976,8 +978,11 @@ def run_spike_escalation(escalation_id):
         logger.info("spike: escalation %s investigated (%s turns, $%.2f, %d tool calls, "
                     "findings=%s)", esc.id, run.num_turns, run.total_cost_usd or 0.0,
                     run.tool_calls, "yes" if findings is not None else "none")
-        filing = file_spike_bug(esc, brief, findings, grounded=run.grounded)
-        esc.merge_payload({"filing": filing})
+        # Record the filing before unlocking so `_own_prior_bugs` can find it.
+        with bugzilla_apply.filing_lock() as held:
+            filing = (file_spike_bug(esc, brief, findings, grounded=run.grounded) if held
+                      else _lock_busy_filing(esc))
+            esc.merge_payload({"filing": filing})
         esc.set_status("done")
         if filing.get("filed"):
             logger.info("spike: escalation %s -> bug %s (%s)", esc.id, filing.get("bug"),
@@ -1433,6 +1438,14 @@ def _needinfo_person_for(findings, brief):
     except Exception:
         logger.warning("spike: could not resolve the culprit's author", exc_info=True)
         return {}
+
+
+def _lock_busy_filing(esc):
+    """Return a retryable decline for lock contention."""
+    return {"filed": False, "retry": True, "at": datetime.now(timezone.utc).isoformat(),
+            "signature": (esc.signature or "").strip(), "channel": esc.channel,
+            "buildid": esc.buildid, "uuid": esc.uuid,
+            "skipped": bugzilla_apply.FILING_LOCK_BUSY.format(bugzilla_apply.filing_lock_wait())}
 
 
 def file_spike_bug(esc, brief, findings, grounded=True):
@@ -2039,17 +2052,23 @@ def _retry_filings(cfg):
             continue
         if esc.updated and (datetime.now(timezone.utc) - _aware(esc.updated)).total_seconds() < _FILING_RETRY_AFTER_S:
             continue
-        try:
-            findings = (SpikeFindings.model_validate(payload["findings"])
-                        if payload.get("findings") else None)
-            brief = build_spike_brief(esc, light=True)
-            brief["culprit_in_window"] = bool(payload.get("culprit_in_window"))
-            result = file_spike_bug(esc, brief, findings, grounded=bool(payload.get("grounded")))
-        except Exception as exc:
-            logger.error("spike: filing retry failed for escalation %s", esc.id, exc_info=True)
-            result = {"filed": False, "skipped": "retry failed: {}".format(exc)}
-        result["attempts"] = attempts + 1
-        esc.merge_payload({"filing": result})
+        with bugzilla_apply.filing_lock(_RETRY_LOCK_WAIT_S) as held:
+            if not held:
+                # Avoid a separate contention wait for each remaining retry.
+                break
+            try:
+                findings = (SpikeFindings.model_validate(payload["findings"])
+                            if payload.get("findings") else None)
+                brief = build_spike_brief(esc, light=True)
+                brief["culprit_in_window"] = bool(payload.get("culprit_in_window"))
+                result = file_spike_bug(esc, brief, findings,
+                                        grounded=bool(payload.get("grounded")))
+            except Exception as exc:
+                logger.error("spike: filing retry failed for escalation %s", esc.id,
+                             exc_info=True)
+                result = {"filed": False, "skipped": "retry failed: {}".format(exc)}
+            result["attempts"] = attempts + 1
+            esc.merge_payload({"filing": result})
         retried += 1
         logger.info("spike: filing retry %d for escalation %s -> %s", attempts + 1, esc.id,
                     "bug {}".format(result.get("bug")) if result.get("filed") else result.get("skipped"))
