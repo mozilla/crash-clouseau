@@ -437,6 +437,16 @@
             "days": 182,
             "max_candidates": 8
         },
+        "nimbus_onset":
+        {
+            "enabled": true,
+            "lookback_hours": 168,
+            "onset_days": 30,
+            "max_recipes": 8,
+            "stack_frames": 10,
+            "note_hours": 48,
+            "cache_seconds": 3600
+        },
         "filters":
         {
             "ubiquitous_paths": ["mfbt/", "memory/mozalloc/", "xpcom/string/", "xpcom/ds/nsTArray", "xpcom/ds/nsTHashMap", "xpcom/ds/nsBaseHashtable", "xpcom/ds/PLDHashTable", "xpcom/base/nsCOMPtr", "security/ct/CTKnownLogs.h", "security/manager/ssl/StaticHPKPins.h"],

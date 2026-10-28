@@ -1007,6 +1007,40 @@ def build_stale_signature_note(corroborations):
     return note + " Clouseau lowered its own confidence one step for that."
 
 
+def _recent_nimbus_recipes(corroborations):
+    """Nimbus recipes close enough to onset to mention or route a needinfo request."""
+    onset = (corroborations or {}).get("nimbus_onset") or {}
+    limit = 60 * config.get_agent_nimbus_onset()["note_hours"]
+    return [r for r in onset.get("recipes") or []
+            if r.get("minutes_before") is not None and r["minutes_before"] <= limit]
+
+
+def build_nimbus_onset_note(corroborations):
+    """Format recent Nimbus matches for the bug comment, or return an empty string."""
+    from crashclouseau import nimbus
+
+    rows = []
+    for r in _recent_nimbus_recipes(corroborations):
+        published = (r.get("published") or "")[:16].replace("T", " ")
+        if not r.get("slug") or not published:
+            continue
+        prefs = r.get("prefs") or []
+        sets = " (sets {})".format(", ".join("`{}`".format(p) for p in prefs)) if prefs else ""
+        rows.append(
+            "- {} [`{}`]({}) went live on {} UTC, {} before the first report. Feature {}{} "
+            "shares {} with the top of the stack.".format(
+                "Rollout" if r.get("rollout") else "Experiment", r["slug"],
+                nimbus.SUMMARY_URL.format(r["slug"]), published,
+                nimbus.gap_phrase(r["minutes_before"]),
+                ", ".join("`{}`".format(f) for f in r.get("features") or []) or "(unknown)",
+                sets, ", ".join("`{}`".format(t) for t in r.get("shared") or [])))
+    if not rows:
+        return ""
+    head = "Nimbus recipes that went live shortly before this signature's first report:"
+    tail = "Publication timing and shared terms alone do not establish causation."
+    return "\n".join([head, *rows, tail])
+
+
 def build_trend_note(corroborations):
     """"The rate went up Nx" — the sentence that IS the deliverable for this class, or ``None``.
 
@@ -1448,6 +1482,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         build_stats_sentence(first, stats, info),
         recent_note,
         build_signature_since_note((dossier or {}).get("corroborations"), info.get("buildid")),
+        build_nimbus_onset_note((dossier or {}).get("corroborations")),
         because,
         # Only publish references for the claim printed above.
         build_code_references({"mechanism": verdict.get("mechanism")}, channel),
@@ -1520,6 +1555,7 @@ def build_bug_comment(
         # question a reader asks first: how long has this existed, and did it just get worse.
         build_trend_note((dossier or {}).get("corroborations")),
         build_stale_signature_note((dossier or {}).get("corroborations")),
+        build_nimbus_onset_note((dossier or {}).get("corroborations")),
         build_hardware_note((dossier or {}).get("corroborations"), channel,
                             product=info.get("product")),
         build_exposer_note((dossier or {}).get("corroborations")),
@@ -2913,6 +2949,20 @@ def _triage_owner_person(product, component, account="", away_days=None):
     return found
 
 
+def _nimbus_owner_person(corroborations, away_days=None):
+    """Return the first verified, askable owner of a matching feature, or None."""
+    for r in _recent_nimbus_recipes(corroborations):
+        for fid, owners in (r.get("owners") or {}).items():
+            for owner in owners or []:
+                # Manifest owners may be aliases; require a verified Bugzilla account.
+                if _bugzilla_user(owner).get("exists") is not True:
+                    continue
+                found = _person_for_account(owner)
+                if found.get("account") and not _away(found, away_days):
+                    return {"person": found, "feature": fid}
+    return None
+
+
 def _owner_for_old_origin(person, dossier, product, component, days, away_days=None):
     """Return a triage owner to ask, or ``None`` to keep the current requestee.
 
@@ -3108,16 +3158,23 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     asked = (stale.get("person") or {}) if stale else person
     away = policy.get("needinfo_away_days")
     owner = None
-    if actionable and not stale and candidate and candidate.get("node"):
+    # For actionable filings, prefer an eligible owner of a matching Nimbus feature.
+    nimbus = (_nimbus_owner_person(dossier.get("corroborations"), away)
+              if actionable and not stale else None)
+    if not nimbus and actionable and not stale and candidate and candidate.get("node"):
         owner = _owner_for_old_origin(person, dossier, product, component,
                                       policy.get("author_active_days"), away)
-    if not stale and not owner and (
+    if not nimbus and not stale and not owner and (
             _inactive_author(person, policy.get("author_fixed_days"),
                              policy.get("author_fixed_min")) or _away(person, away)):
         owner = _triage_owner_person(product, component, person.get("account"), away)
     if owner:
         asked = owner
-    role = stale.get("role", "triage owner") if stale else ("triage owner" if owner else "")
+    if nimbus:
+        asked = nimbus["person"]
+    role = stale.get("role", "triage owner") if stale else (
+        "the owner of the Nimbus feature `{}`".format(nimbus["feature"]) if nimbus
+        else "triage owner" if owner else "")
     ask = _needinfo_line(asked, role=role)
     recent_note = None
     if actionable:

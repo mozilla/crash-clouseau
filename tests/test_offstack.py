@@ -43,13 +43,16 @@ _NO_ONLINE_LOOKUP = None
 
 
 def setUpModule():
-    global _NO_ONLINE_LOOKUP
+    global _NO_ONLINE_LOOKUP, _NO_NIMBUS
     _NO_ONLINE_LOOKUP = mock.patch.object(orch, "_resolve_compiled_out")
     _NO_ONLINE_LOOKUP.start()
+    _NO_NIMBUS = mock.patch.object(orch, "_nimbus_onset", return_value={})
+    _NO_NIMBUS.start()
 
 
 def tearDownModule():
     _NO_ONLINE_LOOKUP.stop()
+    _NO_NIMBUS.stop()
 
 
 _SF = SearchfoxCitation(

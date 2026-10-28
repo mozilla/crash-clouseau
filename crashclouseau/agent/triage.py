@@ -1919,8 +1919,69 @@ def _crash_facts(crash: dict) -> list[str]:
     lines += _signature_trend_lines(crash)
     # The beta/release counterpart of the trend block: which VERSION the rate stepped up in.
     lines += _version_rate_lines(crash)
+    lines += _nimbus_onset_lines(crash)
     lines += _hot_engine_holdout_lines(crash)
     return lines
+
+
+def _nimbus_onset_lines(crash: dict) -> list[str]:
+    """Live Nimbus recipes that went live shortly before the signature's first report."""
+    from crashclouseau import nimbus
+
+    onset = crash.get("nimbus_onset") or {}
+    status = onset.get("status")
+    if status not in ("ok", "none"):
+        return []
+    first = (onset.get("first_report") or "")[:16].replace("T", " ")
+    app = onset.get("application") or "this product's"
+    hours = onset.get("lookback_hours")
+    if status == "none":
+        return ["", "NIMBUS: no live {} rollout or experiment targeting this channel and version "
+                    "went live in the {} hours before this signature's first report ({} UTC, any "
+                    "channel).".format(app, hours, first)]
+    recipes = onset.get("recipes") or []
+    others = onset.get("others") or []
+    if not recipes:
+        return ["", "NIMBUS: {} live {} recipe{} targeting this channel and version went live in "
+                    "the {} hours before this signature's first report ({} UTC, any channel); "
+                    "none shares a term with the top of this stack: {}.".format(
+                        len(others), app, "" if len(others) == 1 else "s", hours, first,
+                        ", ".join(others))]
+    out = ["", "NIMBUS RECIPES BEFORE THIS SIGNATURE'S FIRST REPORT ({} UTC, any channel): live "
+               "{} rollouts and experiments targeting this channel and version that went live in "
+               "the {} hours before it and share a term with the top of this stack.".format(
+                   first, app, hours)]
+    for r in recipes:
+        share = r.get("share")
+        out.append("  - {}: {}{}, live {} UTC, {} before the first report.".format(
+            r.get("slug"), "rollout" if r.get("rollout") else "experiment",
+            " to {:.0f}% of eligible clients".format(100 * share) if share is not None else "",
+            (r.get("published") or "")[:16].replace("T", " "),
+            nimbus.gap_phrase(r.get("minutes_before") or 0)))
+        features = r.get("features") or []
+        shown = [f for f in features if f.get("shared")]
+        for f in shown:
+            bits = ["feature " + f.get("id", "")]
+            owners = f.get("owners") or []
+            if owners:
+                bits.append("{} {}".format("owner" if len(owners) == 1 else "owners",
+                                           ", ".join(owners)))
+            if f.get("prefs"):
+                bits.append("sets " + ", ".join(f["prefs"]))
+            values = "; ".join("{} {}".format(b, v) for b, v in f.get("values") or [])
+            if values:
+                bits.append("branch values: " + values)
+            out.append("    " + "; ".join(bits) + ".")
+        rest = [f.get("id", "") for f in features if f not in shown]
+        if rest:
+            out.append("    Also sets, sharing no term: {}.".format(", ".join(rest)))
+        out.append("    Shares with the stack: {}.".format(", ".join(r.get("shared") or [])))
+    if others:
+        out.append("  Also live in that window, sharing no term with the stack: {}.".format(
+            ", ".join(others)))
+    out.append("  Check whether a configured feature reaches the crashing path; publication "
+               "timing and shared terms alone do not establish causation.")
+    return out
 
 
 def _hot_engine_holdout_lines(crash: dict) -> list[str]:

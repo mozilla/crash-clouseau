@@ -1473,6 +1473,21 @@ def get_agent_version_rates():
     }
 
 
+def get_agent_nimbus_onset():
+    """Nimbus lookup limits: report-search days, recipe lookback hours, source-frame count,
+    and maximum publication-to-report gap for bug notes and owner routing (``note_hours``)."""
+    a = get_agent().get("nimbus_onset", {})
+    return {
+        "enabled": _env_bool("NIMBUS_ONSET_ENABLED", a.get("enabled", True)),
+        "lookback_hours": int(a.get("lookback_hours", 168)),
+        "onset_days": int(a.get("onset_days", 30)),
+        "max_recipes": int(a.get("max_recipes", 8)),
+        "stack_frames": int(a.get("stack_frames", 10)),
+        "note_hours": int(a.get("note_hours", 48)),
+        "cache_seconds": int(a.get("cache_seconds", 3600)),
+    }
+
+
 def get_agent_bit_flip():
     """Hardware bit-flip suppression knobs.
 

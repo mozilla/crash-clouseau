@@ -455,6 +455,11 @@ REGISTRY = {
         "DAY inside its life, its first days having matched the previous version: a deployment, "
         "rollout, OS update or signature split, not the build. Recorded instead of a step; the "
         "count of these is how often the old block would have handed the model a false step."),
+    # -- Nimbus recipe matches --
+    "nimbus_onset": (
+        "evidence", ("report_bug.py",),
+        "Live recipes published before the first report, not excluded by channel/version "
+        "checks, and sharing terms with the top source frames."),
     "stale_signature_watchdog_unwaived": (
         "diagnostic", (),
         "A hang/timeout crash whose candidate landed after the signature existed and which had "

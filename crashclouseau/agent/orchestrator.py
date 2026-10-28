@@ -978,6 +978,9 @@ def build_seed(uuid):
         # (2026-09-06) is why: 155.0.1 ran at ~5x 155.0's rate, its dot-release diff held one
         # cookie change, and the run abstained because nothing said so. All None when unknown.
         "version_rates": _version_rates(info, channel),
+        # Check recipe publication dates as well as build changesets.
+        "nimbus_onset": _nimbus_onset(info, uuid_info, channel, frames,
+                                      _onset_first_ever(sig_first_report_date, family_facts)),
         # Has this signature's install-normalised crash RATE changed? (`sigtrend.trend_facts`.)
         # A DB read, no Socorro call. Empty dict when the rollup has too little history to
         # compare against, which must read as "not measured" and never as "no change" — the
@@ -1036,9 +1039,32 @@ def _version_rates(info, channel):
             channel=channel or "nightly",
             days=cfg["days"], step_ratio=cfg["step_ratio"], min_reports=cfg["min_reports"],
         )
-    except Exception as exc:                            # pragma: no cover - never break a seed
+    except Exception as exc:  # pragma: no cover
         logger.warning("agent: version-rates lookup failed: %s", exc)
         return empty
+
+
+def _onset_first_ever(sig_first_report_date, family_facts):
+    """Return the earliest known report day for this signature and its predecessors."""
+    days = [sig_first_report_date] + [
+        p.get("first_seen_ever_date") for p in (family_facts or {}).get("signature_predecessors") or []
+        if isinstance(p, dict)]
+    days = [d for d in days if d]
+    return min(days) if days else None
+
+
+def _nimbus_onset(info, uuid_info, channel, frames, first_ever=None):
+    """Fetch Nimbus onset facts without failing seed construction."""
+    from crashclouseau import nimbus
+
+    try:
+        return nimbus.onset_facts(
+            info.get("signature", ""), info.get("product") or uuid_info.get("product", ""),
+            channel, info.get("version"), uuid_info.get("node", ""), frames,
+            first_ever=first_ever)
+    except Exception as exc:                            # pragma: no cover - never break a seed
+        logger.warning("agent: Nimbus onset lookup failed: %s", exc)
+        return dict(nimbus.NO_ONSET, status="failed", recipes=[], others=[])
 
 
 def _hardware_noise(info, channel):
@@ -1784,6 +1810,30 @@ def _record_version_step(dossier, seed):
             event.get("day") or "no single day")
     if flags:
         dossier.corroborations = {**(dossier.corroborations or {}), **flags}
+
+
+def _record_nimbus_onset(dossier, seed):
+    """Store matching Nimbus features, prefs and owners in dossier corroborations."""
+    onset = (seed or {}).get("nimbus_onset") or {}
+    recipes = onset.get("recipes") or []
+    if onset.get("status") != "ok" or not recipes:
+        return
+
+    # Retain only matching features for the bug note and owner routing.
+    recorded = []
+    for recipe in recipes:
+        features = [f for f in recipe.get("features") or [] if f.get("shared")]
+        recorded.append({
+            "slug": recipe.get("slug"), "rollout": recipe.get("rollout"),
+            "published": recipe.get("published"), "minutes_before": recipe.get("minutes_before"),
+            "features": [f.get("id") for f in features],
+            "prefs": [p for f in features for p in f.get("prefs") or []],
+            "owners": {f.get("id"): f.get("owners") or [] for f in features},
+            "shared": recipe.get("shared") or [],
+        })
+    dossier.corroborations = {**(dossier.corroborations or {}), "nimbus_onset": {
+        "first_report": onset.get("first_report"), "recipes": recorded,
+    }}
 
 
 def _classify_exposer(dossier, seed):
@@ -4870,6 +4920,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         _apply_hang_origin_gate(result.dossier, seed)
         # Per-version rate step (beta/release): recorded, not acted on. See `_record_version_step`.
         _record_version_step(result.dossier, seed)
+        _record_nimbus_onset(result.dossier, seed)
         # Corroboration gate: a fault-address<->struct-field-offset OR prior-signature
         # match raises a bare lead (medium/50%) to `probable` (70%).
         _apply_corroboration_gate(result.dossier, seed)

@@ -29,6 +29,17 @@ from crashclouseau import pushlog, sigtrend  # noqa: E402
 from crashclouseau.agent import orchestrator as orch  # noqa: E402
 from crashclouseau.agent import triage  # noqa: E402
 
+
+def setUpModule():
+    global _NO_NIMBUS
+    _NO_NIMBUS = mock.patch.object(orch, "_nimbus_onset", return_value={})
+    _NO_NIMBUS.start()
+
+
+def tearDownModule():
+    _NO_NIMBUS.stop()
+
+
 BUILD = datetime(2026, 7, 22, 10, 4, 59, tzinfo=timezone.utc)
 
 
