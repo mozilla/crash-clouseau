@@ -93,6 +93,37 @@ class TestBlame(unittest.TestCase):
         self.assertIn("bug 1955060", out)
         self.assertNotIn("bug 1955060 BACKOUT", out)
 
+    def test_each_changeset_is_described_once(self):
+        wrap = "6cfd7b3f6088" + "0" * 28
+        rows = {"annotate": [
+            {"lineno": 2853, "node": "ce1fe9986ce9" + "0" * 28, "author": "M <m@x>",
+             "desc": "Bug 1333459 - part2-2: handle access keys first\n\nbody",
+             "revdate": [1500854400.0, 0], "targetline": 2063, "line": "\n",
+             "abspath": "dom/ipc/TabParent.cpp"},
+            {"lineno": 2854, "node": wrap, "author": "K <k@x>",
+             "desc": "Bug 1539884 - Part 16: Mark RecvReplyKeyEvent as CAN_RUN_SCRIPT_BOUNDARY",
+             "revdate": [1639747671.0, 0], "targetline": 2683, "abspath": "f.cpp",
+             "line": "  RefPtr<Element> frameElement = mFrameElement;\n"},
+            {"lineno": 2855, "node": wrap, "author": "K <k@x>",
+             "desc": "Bug 1539884 - Part 16: Mark RecvReplyKeyEvent as CAN_RUN_SCRIPT_BOUNDARY",
+             "revdate": [1639747671.0, 0], "targetline": 2684,
+             "line": "  EventDispatcher::Dispatch(frameElement, presContext,\n"},
+        ]}
+        with mock.patch.object(H.Annotate, "get", return_value={"f.cpp": rows}):
+            out = _run(H.blame(CTX, "f.cpp", 2853, 2855))
+        self.assertEqual(out.count("CAN_RUN_SCRIPT_BOUNDARY"), 1)
+        self.assertIn("6cfd7b3f6088  2021-12-17  +L2683-2684  | Bug 1539884 - Part 16", out)
+        self.assertIn("ce1fe9986ce9  2017-07-24  +L2063 in dom/ipc/TabParent.cpp  | Bug 1333459",
+                      out)
+        self.assertNotIn("body", out)
+
+    def test_a_row_without_date_or_targetline_still_lists_its_changeset(self):
+        rows = {"annotate": [{"lineno": 5, "node": "f" * 40, "author": "x@y",
+                              "desc": "Bug 7 - thing", "line": "L\n"}]}
+        with mock.patch.object(H.Annotate, "get", return_value={"f": rows}):
+            out = _run(H.blame(CTX, "f", 5))
+        self.assertIn("ffffffffffff  ?  | Bug 7 - thing", out)
+
 
 class TestChangeset(unittest.TestCase):
     def test_metadata_and_files(self):

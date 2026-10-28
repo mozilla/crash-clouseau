@@ -152,8 +152,9 @@ async def blame(
     node: Annotated[str, Field(description="As-of revision (hg/git node or 'tip').")] = "tip",
     channel: Annotated[str, Field(description="Channel -> hg repo; default = crash's channel.")] = "",
 ) -> str:
-    """Blame a line range: for each line, the changeset that last touched it (hg node, bug,
-    author, description). Use on the crashing line to find which change last modified it.
+    """Blame lines with hg node, bug and author; list each changeset's date, description
+    and historical path/line numbers. To trace past a change, use `mcp__patch__diff` to find
+    the replaced `-` line and path, then blame them at the changeset's parent.
     Prefer this over `curl .../json-annotate` or local `hg/git blame`."""
     ch = channel or ctx.channel
     hg_node = _resolve(_pin(ctx, node))
@@ -170,15 +171,11 @@ async def blame(
     if not sel:
         return "blame: no annotation for {} lines {}-{} (channel {}).".format(path, start, end, ch)
     out = ["blame {} lines {}-{} (channel {}):".format(path, start, end, ch)]
+    changesets = {}
     for r in sel:
-        # Same tags as `file_history`, and the BACKOUT one matters MORE here: a revert
-        # permanently owns every line it re-adds, so blaming a crashing line lands on the
-        # revert rather than on whoever wrote the line. Untagged, this read
-        # ("L408: 65b7ea25c7db bug 2046861 Serban Stanca") presents a sheriff's revert as the
-        # author of the crashing line and hands over the REVERTED patch's bug number as if it
-        # were the revert's own — which is how `00b44d2a-4343-4caa-9e12-907550260802` came to
-        # name a backout as its culprit. The bug number is kept, not hidden: it is the right
-        # bug to read, just not evidence that this changeset introduced anything.
+        node = _short(r.get("node"))
+        changesets.setdefault(node, []).append(r)
+        # Re-added lines can blame a backout rather than the original change.
         desc = r.get("desc") or ""
         tags = []
         bug = _bug(desc)
@@ -187,9 +184,26 @@ async def blame(
         if _BACKOUT_RE.match(desc.strip()):
             tags.append("BACKOUT")
         out.append("  L{}: {}  {}{}  | {}".format(
-            r.get("lineno"), _short(r.get("node")),
+            r.get("lineno"), node,
             (" ".join(tags) + "  ") if tags else "",
             _author(r.get("author")), (r.get("line") or "").rstrip("\n")[:100]))
+    # targetline/abspath refer to the blamed revision, not its parent.
+    out.append("changesets (each one is the LAST change to its lines):")
+    for node, rows in changesets.items():
+        r = rows[0]
+        lines = sorted(r["targetline"] for r in rows if isinstance(r.get("targetline"), int))
+        location = []
+        if lines:
+            first, last = lines[0], lines[-1]
+            location.append(f"+L{first}" if first == last else f"+L{first}-{last}")
+        abspath = r.get("abspath") or ""
+        if abspath and abspath != path:
+            location.append(f"in {abspath}")
+        details = " ".join(location)
+        if details:
+            details += "  "
+        out.append(f"  {node}  {_date(r.get('revdate'))}  {details}| "
+                   f"{_first_line(r.get('desc'))[:200]}")
     return "\n".join(out)
 
 

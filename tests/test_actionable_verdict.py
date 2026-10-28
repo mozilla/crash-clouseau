@@ -135,6 +135,12 @@ class TestWhatTheSchemaRequires(unittest.TestCase):
         self.assertIn("actionable", toks)
         self.assertLessEqual(toks, {d.value for d in Decision})
 
+    def test_the_origin_is_not_a_last_touch_that_kept_the_behaviour(self):
+        prompt = " ".join(triage._system_prompt().split())
+        self.assertIn("names only the LAST change to it", prompt)
+        self.assertIn("blame the line it replaced (the `-` side of that change's "
+                      "`mcp__patch__diff`) at the change's parent", prompt)
+
 
 class TestWhatTheGatesDoWithIt(unittest.TestCase):
     def test_the_verdict_row_carries_its_own_label_and_the_mechanism(self):

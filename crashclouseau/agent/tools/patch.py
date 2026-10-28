@@ -71,7 +71,10 @@ def _fmt_patch(ext, node: str) -> str:
             len(omitted), "" if len(omitted) == 1 else "s", ", ".join(omitted)))
     n = 0
     for i, f in enumerate(files):
-        out.append("file {} ({})".format(f.filename, f.status))
+        status = f.status
+        if status in ("renamed", "copied") and f.old_path and f.old_path != f.filename:
+            status += f" from {f.old_path}"
+        out.append(f"file {f.filename} ({status})")
         for h in f.hunks:
             where = " in {}".format(h.enclosing_function) if h.enclosing_function else ""
             out.append("  @@ -{} +{}{}".format(h.old_start, h.new_start, where))

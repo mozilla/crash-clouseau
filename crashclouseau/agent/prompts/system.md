@@ -241,7 +241,11 @@ good ones. So make TWO decisions, in order:
    named buffer) — in code that is ours to fix, and no changeset you can defend caused it in
    this window. It claims nothing about any changeset: a bug will be filed asking the code's
    owner to look. It REQUIRES a cited `mechanism`, and `candidate` set to the ORIGIN of the
-   failing code — the changeset `mcp__history__blame` names for the cited line. That is how
+   failing code — the change that wrote what fails. `mcp__history__blame` on the cited line
+   names only the LAST change to it: if that change left the behaviour as it was (a rename, a
+   reformat, a move, a value re-wrapped in a smart pointer or a local), blame the line it
+   replaced (the `-` side of that change's `mcp__patch__diff`) at the change's parent
+   (`mcp__history__changeset` lists it). That is how
    the owner and the component are found; it is accused of nothing and may be years old. On
    a shutdown hang, prefer the WORK's line (the awaited thread's, or sampled main-thread work
    above shutdown control flow); generic spin, thread-shutdown or IPC teardown frames are not

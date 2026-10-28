@@ -297,6 +297,24 @@ class TestDerivedSignals(unittest.TestCase):
         self.assertIn("NOT SHOWN, 1 further changed file", out)
         self.assertIn("later.cpp", out)
 
+    def test_a_renamed_file_names_its_old_path(self):
+        # Parent blame needs the old path.
+        from crashclouseau.agent.tools.patch import _fmt_patch
+        diff = ("diff --git a/dom/ipc/TabParent.cpp b/dom/ipc/BrowserParent.cpp\n"
+                "rename from dom/ipc/TabParent.cpp\nrename to dom/ipc/BrowserParent.cpp\n"
+                "--- a/dom/ipc/TabParent.cpp\n+++ b/dom/ipc/BrowserParent.cpp\n"
+                "@@ -10,1 +10,1 @@\n-TabParent::Recv() {\n+BrowserParent::Recv() {\n")
+        ex = pe.PatchExtraction(node="n", channel="nightly", raw_diff=diff,
+                                files=pe.parse_hunks(diff))
+        out = _fmt_patch(ex, "n")
+        self.assertIn("file dom/ipc/BrowserParent.cpp (renamed from dom/ipc/TabParent.cpp)", out)
+        self.assertIn("- 10: TabParent::Recv() {", out)
+        plain = pe.PatchExtraction(node="n", channel="nightly", raw_diff=_NULLCHECK,
+                                   files=pe.parse_hunks(_NULLCHECK))
+        heads = [ln for ln in _fmt_patch(plain, "n").split("\n") if ln.startswith("file ")]
+        self.assertTrue(heads)
+        self.assertFalse(any(" from " in ln for ln in heads))
+
     def test_a_lockfile_is_not_rendered_but_is_named(self):
         """36b14b9bf5f9 (the wgpu bump, bug 2066780) renders alphabetically, so ``Cargo.lock``
         came first, spent line budget the crashing ``server.rs`` never got, and ended up the
