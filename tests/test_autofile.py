@@ -825,7 +825,8 @@ class TestTheLookupCarriesTheProduct(unittest.TestCase):
         # it as "nobody has named a cause", which is what an absent field means here.
         self.assertEqual(rows, [{"id": 2057980, "product": "MailNews Core",
                                  "keywords": ["crash", "meta"], "regressed_by": [],
-                                 "creation_time": "2026-07-27T07:40:41Z"}])
+                                 "creation_time": "2026-07-27T07:40:41Z",
+                                 "summary_only": True}])
 
     def test_a_named_regressor_reaches_the_row(self):
         class _Resp:
@@ -896,6 +897,58 @@ class TestTheLookupCarriesTheProduct(unittest.TestCase):
         with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp()):
             rows = bugzilla_apply._open_bugs_for_signature("mozilla::widget::WlLogHandler")
         self.assertEqual([r["id"] for r in rows], [2059617])
+
+    def test_a_row_without_the_signature_field_is_marked_summary_only(self):
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"bugs": [
+                    {"id": 1331366, "product": "Toolkit", "cf_crash_signature": "",
+                     "summary": "telemetry/tests/unit/test_ChildScalars.js | application "
+                                "crashed [@ mozilla::jni::GetEnvForThread]"},
+                    {"id": 1345895, "product": "Core",
+                     "cf_crash_signature": "[@ mozilla::jni::GetEnvForThread]",
+                     "summary": "Crash in [@ mozilla::jni::GetEnvForThread]"},
+                ]}
+
+        with mock.patch.object(bugzilla_apply.net, "get", return_value=_Resp()):
+            rows = bugzilla_apply._open_bugs_for_signature("mozilla::jni::GetEnvForThread")
+        self.assertEqual([(r["id"], r.get("summary_only")) for r in rows],
+                         [(1331366, True), (1345895, None)])
+
+    def test_a_duplicate_into_the_bug_clears_the_mark(self):
+        rows = bugzilla_apply._merge_duplicate_targets(
+            [{"id": 7, "summary_only": True}], [{"id": 7, "via_duplicates": [8]}])
+        self.assertEqual(rows, [{"id": 7, "via_duplicates": [8]}])
+
+
+class TestSummaryOnlyVenue(_Base):
+    """Skip summary-only venues unless they are the regressor bug."""
+
+    def test_it_is_not_commented_on_and_nothing_is_filed(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            dict(_bug(1331366), summary_only=True)]
+        res = self._file()
+        self.assertEqual((res["filed"], res["bug"], res["summary_only"]),
+                         (False, 1331366, True))
+        self.assertIn("only in its summary", res["skipped"])
+        self.assertEqual((self.comments, self.created, self.puts), ([], [], []))
+
+    def test_a_bug_carrying_the_field_is_preferred(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            dict(_bug(1331366), summary_only=True), _bug(2061999)]
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2061999, "comment_on_existing"))
+
+    def test_the_regressor_bug_itself_still_gets_the_comment(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            dict(_bug(1331366), summary_only=True)]
+        res = self._file(dossier={"candidate": {"node": "n", "bug": 1331366}})
+        self.assertEqual((res["bug"], res["mode"]), (1331366, "comment_on_existing"))
 
 
 class TestBugPredatesTheCause(_Base):

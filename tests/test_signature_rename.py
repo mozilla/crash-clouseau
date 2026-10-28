@@ -413,6 +413,31 @@ class TestTheVenueSearch(unittest.TestCase):
         self.assertEqual([r["id"] for r in rows], [2000000])
         self.assertEqual(bugzilla_apply._split_out_metas(rows), ([], rows))
 
+    def test_a_summary_only_bug_does_not_evict_a_sibling_venue(self):
+        fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
+               "s_first_build": HANDOFF_BUILD}
+        sib_bug = dict(self.OLD_BUG, id=77, cf_crash_signature="[@ {}]".format(NORETURN))
+        test_bug = dict(self.NEW_BUG, id=1331366, cf_crash_signature="",
+                        summary="test.js | application crashed [@ {}]".format(CHECK))
+        with mock.patch.object(bugzilla_apply.net, "get",
+                               return_value=_Resp({"bugs": [sib_bug, test_bug]})), \
+                mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature", return_value=[]):
+            rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=fam, product="Firefox")
+        self.assertEqual([(r["id"], r.get("summary_only")) for r in rows],
+                         [(77, None), (1331366, True)])
+
+    def test_a_summary_only_meta_still_evicts_a_sibling_venue(self):
+        fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
+               "s_first_build": HANDOFF_BUILD}
+        sib_bug = dict(self.OLD_BUG, id=77, cf_crash_signature="[@ {}]".format(NORETURN))
+        meta = dict(self.NEW_BUG, id=2000000, keywords=["meta"], cf_crash_signature="",
+                    summary="[meta] Crash in [@ {}]".format(CHECK))
+        with mock.patch.object(bugzilla_apply.net, "get",
+                               return_value=_Resp({"bugs": [sib_bug, meta]})), \
+                mock.patch.object(bugzilla_apply, "_duplicate_targets_for_signature", return_value=[]):
+            rows = bugzilla_apply._open_bugs_for_signature(CHECK, family=fam, product="Firefox")
+        self.assertEqual([r["id"] for r in rows], [2000000])
+
     def test_another_applications_bug_does_not_evict_a_sibling_venue(self):
         fam = {"predecessors": [], "siblings": [dict(SIB, relation="frame-variant")],
                "s_first_build": HANDOFF_BUILD}

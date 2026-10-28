@@ -1560,10 +1560,14 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         venue, for_spike, predating, landing_unresolved = _regression_venue(
             existing, findings.culprit, esc, signature)
     elif existing:
-        venue, for_spike = _pick_venue(existing, esc.build_day)
+        venue, for_spike = _pick_venue(
+            [b for b in existing if not b.get("summary_only")] or existing, esc.build_day)
     public_venue_declined = None
     if venue is not None and withheld:
         public_venue_declined, venue = venue["id"], None
+    if venue is not None and bugzilla_apply._summary_only(
+            venue, culprit.bug if culprit is not None else None):
+        return dict(result, **bugzilla_apply._summary_only_decline(venue))
     if venue is not None and for_spike and venue.get("regressed_by"):
         return dict(result, bug=venue["id"], skipped=(
             "bug {} was filed for this spike and already names its regressor ({})".format(

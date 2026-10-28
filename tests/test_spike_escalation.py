@@ -646,6 +646,25 @@ class TestFiling(_FilerBase):
             res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
         self.assertEqual((res["bug"], res["mode"]), (55, "spike_comment"))
 
+    def test_a_summary_only_bug_filed_for_the_spike_loses_to_the_signature_bug(self):
+        findings = self.findings.model_copy(update={"culprit": None})
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []},
+                {"id": 66, "creation_time": "2026-09-03T06:00:00Z", "product": "Firefox",
+                 "keywords": [], "regressed_by": [], "summary_only": True}]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
+
+    def test_only_a_summary_only_bug_gets_nothing(self):
+        findings = self.findings.model_copy(update={"culprit": None})
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 66, "creation_time": "2026-09-03T06:00:00Z", "product": "Firefox",
+                 "keywords": [], "regressed_by": [], "summary_only": True}]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["filed"], res["bug"], res["summary_only"]), (False, 66, True))
+        self.assertEqual((self.created, self.comments), ([], []))
+
     def test_an_open_bug_filed_before_the_culprit_landed_gets_a_new_bug(self):
         with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
                 {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",

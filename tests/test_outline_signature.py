@@ -125,6 +125,14 @@ class TestTheVenueSearch(unittest.TestCase):
         self.assertEqual([r["id"] for r in rows], [2005069])
         self.assertNotIn("via_relation", rows[0])
 
+    def test_a_frame_named_only_in_a_summary_does_not_displace_the_venue(self):
+        own = dict(self.BUG, id=2080031, cf_crash_signature="[@ {}]".format(OUTLINE))
+        frame = dict(self.BUG, id=2090000, cf_crash_signature="",
+                     summary="Crash in [@ {}]".format(ALLOCATE))
+        rows = self._lookup([own, frame], ALLOCATE)
+        self.assertEqual([(r["id"], r.get("summary_only")) for r in rows],
+                         [(2080031, None), (2090000, True)])
+
     def _lookup_with_dups(self, bugs, dups, targets, frame):
         def fake_get(url, params=None, timeout=None):
             params = params or {}

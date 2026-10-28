@@ -267,6 +267,24 @@ class TestTheVenue(_WakeBase):
         self.assertEqual(res["wake_stale"]["skipped"],
                          "could not read the owners of bug 2000000")
 
+    def test_a_summary_only_bug_is_never_the_venue(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(1961865), dict(_bug(2000000), summary_only=True)]
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["bug"]), (True, 1961865))
+        self.assertEqual([b for b, _ in self.puts], [1961865])
+
+    def test_only_summary_only_bugs_decline(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            dict(_bug(1961865), summary_only=True)]
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["skipped"]), (False, _DECLINE))
+        self.assertEqual(res["wake_stale"]["skipped"],
+                         "bug 1961865 names the signature only in its summary, not in its "
+                         "crash signature field")
+        self.assertEqual((self.puts, self.comments, self.created), ([], [], []))
+        bugzilla_apply._bug_activity.assert_not_called()
+
     def test_a_venue_reached_by_another_name_says_so(self):
         sibling = dict(_bug(2000000), via_signature="Foo::Bar", via_relation="sibling")
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865), sibling]

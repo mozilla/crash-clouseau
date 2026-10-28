@@ -709,10 +709,26 @@ def _row_is_about(bug, signature):
     sig = (signature or "").strip().lower()
     if not sig:
         return False
-    if any(entry.lower() == sig
-           for entry in _signature_field_entries(bug.get("cf_crash_signature"))):
-        return True
-    return _summary_is_about(bug.get("summary"), sig)
+    return _cf_is_about(bug, sig) or _summary_is_about(bug.get("summary"), sig)
+
+
+def _cf_is_about(bug, signature):
+    """Match an exact ``cf_crash_signature`` entry, ignoring case."""
+    sig = (signature or "").strip().lower()
+    return bool(sig) and any(entry.lower() == sig for entry in
+                             _signature_field_entries(bug.get("cf_crash_signature")))
+
+
+def _summary_only(venue, regressor_bug=None):
+    """Reject summary-only comment venues, except the regressor's own bug."""
+    venue = venue or {}
+    return bool(venue.get("summary_only")) and venue.get("id") != regressor_bug
+
+
+def _summary_only_decline(venue):
+    return {"filed": False, "bug": venue["id"], "summary_only": True,
+            "skipped": ("open bug {} names this signature only in its summary, not in its "
+                        "crash signature field; not commenting there").format(venue["id"])}
 
 
 # How many other names of the crash the venue search may add to its OR. Each costs two clauses
@@ -759,6 +775,7 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
     Recheck substring results against exact signature entries or bracketed signatures
     in summaries, including lambda variants. Direct family matches record ``via_signature``
     and ``via_relation``; handoffs use the new name's first build as ``venue_since``.
+    Mark direct matches ``summary_only`` when no searched name is in ``cf_crash_signature``.
 
     Merge duplicate targets, then prefer own-signature venues (including metas) in
     ``product``'s application over sibling-only matches. Keep handoff matches.
@@ -804,26 +821,24 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
     # ``regressed_by`` rides along because it decides whether a venue wants our comment at
     # all — see the gate in ``autofile_bug``. Free: same request, one more field.
     rows = []
+    ranked_others = sorted(others, key=lambda s: (_relation_rank(others[s]["relation"]), s))
     for b in sorted(bugs, key=lambda b: b.get("id", 0)):
         if not b.get("id"):
             continue
-        if any(_row_is_about(b, s) for s in own):
-            row = _venue_row(b)
-            if any(_row_is_about(b, s) for s in frames):
-                row["carries_frame"] = True
-            rows.append(row)
-            continue
-        via = next((s for s in sorted(others, key=lambda s: (_relation_rank(others[s]["relation"]), s))
-                    if _row_is_about(b, s)), None)
-        if via is None:
-            continue
         row = _venue_row(b)
-        row["via_signature"] = others[via]["via"]
-        row["via_relation"] = others[via]["relation"]
+        if not any(_row_is_about(b, s) for s in own):
+            via = next((s for s in ranked_others if _row_is_about(b, s)), None)
+            if via is None:
+                continue
+            match = others[via]
+            row["via_signature"] = match["via"]
+            row["via_relation"] = match["relation"]
+            if match["since"]:
+                row["venue_since"] = match["since"]
         if any(_row_is_about(b, s) for s in frames):
             row["carries_frame"] = True
-        if others[via]["since"]:
-            row["venue_since"] = others[via]["since"]
+        if not any(_cf_is_about(b, s) for s in spellings):
+            row["summary_only"] = True
         rows.append(row)
     relations = {s: v["relation"] for s, v in others.items()}
     merged = _merge_duplicate_targets(
@@ -831,18 +846,24 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
                                                relations=relations, frames=frames))
     # Foreign frame matches must not suppress eligible outline-only venues.
     foreign = config.get_other_app_products(product)
-    if any(r.get("carries_frame") and (r.get("product") or "") not in foreign for r in merged):
+    if any(r.get("carries_frame") and _evicts(r) and (r.get("product") or "") not in foreign
+           for r in merged):
         merged = [r for r in merged if r.get("carries_frame") or r.get("via_relation")]
     return _prefer_own_signature(merged, product)
+
+
+def _evicts(row):
+    """Summary-only rows cannot displace other venues unless they are metas."""
+    return not row.get("summary_only") or "meta" in (row.get("keywords") or [])
 
 
 def _prefer_own_signature(rows, product):
     """Drop sibling-only matches when a same-application own-signature venue exists.
 
-    Own-signature matches and targets of own-signature duplicates qualify, including
-    metas. Keep handoff matches."""
+    Keep handoff matches. Summary-only rows qualify only if they are metas."""
     foreign = config.get_other_app_products(product)
-    if any(not r.get("via_relation") and (r.get("product") or "") not in foreign for r in rows):
+    if any(not r.get("via_relation") and _evicts(r) and (r.get("product") or "") not in foreign
+           for r in rows):
         return [r for r in rows if r.get("via_relation") != "sibling"]
     return rows
 
@@ -876,6 +897,8 @@ def _merge_duplicate_targets(rows, targets):
         if row is None:
             by_id[t["id"]] = dict(t)
             continue
+        # A matching duplicate links the signature to this target.
+        row.pop("summary_only", None)
         if _relation_rank(t.get("via_relation")) < _relation_rank(row.get("via_relation")):
             row.pop("via_signature", None)
             row.pop("via_relation", None)
@@ -1424,12 +1447,11 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None, sig
     does an unreachable reopen history — that one is a rescue and not a gate, so a BMO blip
     leaves the age verdict standing rather than flipping it.
 
-    Scans oldest-first and takes the first plausible bug rather than testing only the oldest:
-    with a 2022 bug and one we filed last week both open, the right answer is last week's, not
-    a third bug."""
+    Scan summary-only rows last, preserving input order within each group."""
     from crashclouseau import sigage
 
-    ids = [b["id"] for b in bugs or []]
+    bugs = sorted(bugs or [], key=lambda b: bool(b.get("summary_only")))
+    ids = [b["id"] for b in bugs]
     if candidate_bug and candidate_bug in ids:
         return candidate_bug, []
     if landed is None:
@@ -1442,7 +1464,7 @@ def _bug_for_this_regression(bugs, landed, max_age_days, candidate_bug=None, sig
         return (landed - clock).total_seconds() / 86400.0 <= max_age_days
 
     predating = []
-    for bug in bugs or []:
+    for bug in bugs:
         created = sigage.to_datetime(bug.get("creation_time"))
         if created is None:
             return bug["id"], []
@@ -2637,9 +2659,10 @@ def _crash_spike(uuid_info):
 def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family):
     """Comment on an eligible stale bug, or return a decline.
 
-    Every matching bug must be stale and have no Clouseau comment. Choose the most-discussed
-    venue, oldest on ties. Require a public origin if known, a screened comment and no
-    memory-safety signal. Ask an eligible assignee, origin author, then triage owner.
+    All matches must be stale and have no Clouseau comment. Choose the most-discussed eligible
+    venue, oldest on ties. A summary-only venue is eligible only if it is the origin bug.
+    Require a public origin if known, a screened comment and no memory-safety signal.
+    Ask an eligible assignee, origin author, then triage owner.
 
     ``shadow`` records a preview; ``comment`` posts one update with any new needinfo.
     Require novelty unless the crash's rate or build day is a spike.
@@ -2655,6 +2678,11 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
 
     if sensitive.is_withheld((dossier or {}).get("corroborations")):
         return no("the crash report shows a memory-safety signal")
+    origin = ((dossier or {}).get("candidate") or {}).get("bug")
+    venues = [b for b in existing if not _summary_only(b, origin)]
+    if not venues:
+        return no("bug {} names the signature only in its summary, not in its crash "
+                  "signature field".format(venue["id"]))
     days = cfg.get("wake_stale_days") or 180
     now = datetime.now(timezone.utc)
     activities = {}
@@ -2668,10 +2696,9 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
             return no("bug {} has a human comment from {}".format(
                 bug["id"], activity["last_human"].date().isoformat()))
         activities[bug["id"]] = activity
-    # A bare crash-stats bug next to a discussed one is its duplicate, not the place to post.
-    venue = max(existing, key=lambda b: activities[b["id"]]["discussion"])
+    # Prefer the eligible venue with the most discussion.
+    venue = max(venues, key=lambda b: activities[b["id"]]["discussion"])
     since = activities[venue["id"]]["last_human"].date().isoformat()
-    origin = ((dossier or {}).get("candidate") or {}).get("bug")
     if origin:
         hidden = disclosure.nonpublic([origin])
         if hidden is None:
@@ -3396,6 +3423,11 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
                     bug_id, uuid, channel or "?", mode)
         bug_id = None
         landing_unresolved = False
+    chosen = next((b for b in existing if b["id"] == bug_id), None)
+    if chosen and not withheld and _summary_only(chosen, regressor):
+        logger.info("autofile: bug %s names %r only in its summary — not commenting there "
+                    "for %s", bug_id, signature, uuid)
+        return dict(_summary_only_decline(chosen), **_via_fields(chosen))
     if predating and bug_id is None:
         if landing_unresolved:
             # WARNING, not info: this is the only path on which a filing is routed by a fact
