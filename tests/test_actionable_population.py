@@ -274,7 +274,8 @@ class TestTheAsk(unittest.TestCase):
         self.assertEqual(p["needinfo_email"], "owner@moz.example")
         self.assertEqual(p["needinfo"], ":jimm, as triage owner, can you have a look please?")
         self.assertIn(":jimm, as triage owner, can you have a look please?", p["comment"])
-        self.assertIn("(bug 2010557) by :bobowen.", p["comment"])
+        self.assertIn("(bug 2010557) by :bobowen, which landed on 2017-05-30; this signature "
+                      "is also reported on builds made before that date.", p["comment"])
         self.assertNotIn(":bobowen, can you have a look", p["comment"])
 
     def test_a_restricted_bug_ccs_the_triage_owner_it_asks(self):

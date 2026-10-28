@@ -345,6 +345,32 @@ class TestTheBugItFiles(unittest.TestCase):
         self.assertEqual(p["keywords"], ["crash", "regression"])
         self.assertIn("Suspected regressor:", p["comment"])
 
+    def test_an_origin_after_the_first_seen_build_is_named_as_the_last_change(self):
+        late = {"landed": "2024-04-22", "days_before_build": 900.0, "predates_signature": False}
+        p = _build_preview(_preview_dossier(actionable_origin_age=late))
+        c = p["comment"]
+        self.assertIn("- The failing code was last changed in [507a4c21a8eb](", c)
+        self.assertIn("(bug 2010557) by :bobowen, which landed on 2024-04-22; this signature "
+                      "is also reported on builds made before that date.", c)
+        self.assertNotIn("comes from", c)
+        self.assertIn(":bobowen, can you have a look please?", c)
+        self.assertEqual(p["needinfo_email"], "bob@x.com")
+        for phrase in _FORBIDDEN:
+            self.assertNotIn(phrase, c, phrase)
+
+    def test_the_origins_own_bug_is_named_as_the_last_change_too(self):
+        late = {"landed": "2024-04-22", "days_before_build": 900.0, "predates_signature": False}
+        c = report_bug.build_actionable_comment(
+            _UI, {"frames": []}, _preview_dossier(actionable_origin_age=late),
+            stale_since="2025-01-01", stale_bug=2010557)
+        self.assertIn("- The failing code was last changed in this bug: [507a4c21a8eb](", c)
+
+    def test_an_unknown_landing_keeps_the_origin_wording(self):
+        for age in ({}, {"predates_signature": None, "landed": "2024-04-22"},
+                    {"predates_signature": False}):
+            c = _build_preview(_preview_dossier(actionable_origin_age=age))["comment"]
+            self.assertIn("- The failing code comes from [507a4c21a8eb](", c, age)
+
     def test_a_fresh_origin_says_when_it_landed_and_that_nothing_predates_it(self):
         fresh = {"landed": "2026-09-12", "days_before_build": 6.5, "predates_signature": True}
         c = _build_preview(_preview_dossier(actionable_origin_age=fresh))["comment"]
@@ -608,6 +634,9 @@ class TestThePage(unittest.TestCase):
                 html = panel._get(ev).get_data(as_text=True)
                 self.assertIn("the cited changeset landed 2026-09-12, ", html)
                 self.assertIn("d before this build; " + tail, html)
+                heading = ("Where the failing code comes from" if predates
+                           else "Last change to the failing code")
+                self.assertIn(heading, html)
 
 
 if __name__ == "__main__":

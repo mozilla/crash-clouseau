@@ -1439,6 +1439,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         info["version"] = version
     verdict = (dossier or {}).get("verdict") or {}
     candidate = (dossier or {}).get("candidate") or {}
+    corroborations = (dossier or {}).get("corroborations") or {}
     mechanism = ((verdict.get("mechanism") or {}).get("statement") or "").strip()
     facts = [_list_item(mechanism)] if mechanism else []
     if candidate.get("node"):
@@ -1447,7 +1448,10 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         if candidate.get("bug") and not own:
             link += " (bug {})".format(candidate["bug"])
         who = author_display or _candidate_author(candidate)
-        origin = ((dossier or {}).get("corroborations") or {}).get("hang_awaited_origin") or {}
+        if who:
+            link += " by {}".format(who)
+        origin = corroborations.get("hang_awaited_origin") or {}
+        age = corroborations.get("actionable_origin_age") or {}
         if origin.get("node") and str(origin["node"])[:12].lower() == str(
                 candidate["node"])[:12].lower():
             # A hang bucket is routed by the blame of the awaited work's frame, and blame is
@@ -1458,16 +1462,18 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
                 where += " ({}{})".format(origin["path"], at)
             subject = ("The code the main thread was running" if origin.get("source") == "main"
                        else "The work the main thread waits for")
-            facts.append("- {} -- {} -- was last changed by {}{}."
-                         .format(subject, where, link, " by {}".format(who) if who else ""))
+            facts.append("- {} -- {} -- was last changed by {}."
+                         .format(subject, where, link))
+        elif age.get("predates_signature") is False and age.get("landed"):
+            facts.append("- The failing code was last changed in {}{}, which landed on {}; "
+                         "this signature is also reported on builds made before that date."
+                         .format("this bug: " if own else "", link, age["landed"]))
         elif own:
-            facts.append("- The failing code was added in this bug: {}{}{}.".format(
-                link, " by {}".format(who) if who else "",
-                _fresh_origin_clause((dossier or {}).get("corroborations"), fresh_limit)))
+            facts.append("- The failing code was added in this bug: {}{}.".format(
+                link, _fresh_origin_clause(corroborations, fresh_limit)))
         else:
-            facts.append("- The failing code comes from {}{}{}.".format(
-                link, " by {}".format(who) if who else "",
-                _fresh_origin_clause((dossier or {}).get("corroborations"), fresh_limit)))
+            facts.append("- The failing code comes from {}{}.".format(
+                link, _fresh_origin_clause(corroborations, fresh_limit)))
     because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
     stale = ("This bug has had no comment from a person since {}. Clouseau analysed a recent "
              "crash report on its signature; the analysis is below.".format(stale_since)
@@ -1478,11 +1484,11 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
         build_reason_block(details),
         build_frames_block(stack, max_frames=max_frames, details=details),
-        build_awaited_work_block((dossier or {}).get("corroborations")),
+        build_awaited_work_block(corroborations),
         build_stats_sentence(first, stats, info),
         recent_note,
-        build_signature_since_note((dossier or {}).get("corroborations"), info.get("buildid")),
-        build_nimbus_onset_note((dossier or {}).get("corroborations")),
+        build_signature_since_note(corroborations, info.get("buildid")),
+        build_nimbus_onset_note(corroborations),
         because,
         # Only publish references for the claim printed above.
         build_code_references({"mechanism": verdict.get("mechanism")}, channel),

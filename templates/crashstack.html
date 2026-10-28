@@ -372,7 +372,7 @@
 
       {% if has_cand -%}
       <div class="evidence-section">
-        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% elif is_actionable %}Where the failing code comes from{% else %}Suspected regressor{% endif %}</h3>
+        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% elif is_actionable and (corrob.get('actionable_origin_age') or {}).get('predates_signature') is sameas false %}Last change to the failing code{% elif is_actionable %}Where the failing code comes from{% else %}Suspected regressor{% endif %}</h3>
         <p>
           <a href="{{ repo_url }}/rev?node={{ cand['node'] }}" target="_blank" rel="noopener"><code>{{ cand['node'] }}</code></a>
           {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}" target="_blank" rel="noopener">bug {{ cand['bug'] }}</a>{% endif %}
