@@ -813,8 +813,8 @@ class Dossier(BaseModel):
         deterministically. The clause earns its keep on a RE-VALIDATED stored payload,
         where the flag IS present and must not be undone.
 
-        (1e) Fails classified by ``is_alternative_check`` bypass (1)-(1d). Their claim refs
-        are recorded in ``skeptic_alternatives_unbound``.
+        (1e) Alternative checks bypass (1)-(1d); their claim refs are recorded in
+        ``skeptic_alternatives_unbound``. See ``is_alternative_check``.
 
         (2) ANY surviving lead must carry a cited anchor; an anchorless lead is demoted to
         abstain (nothing to hand a human)."""
@@ -838,7 +838,8 @@ class Dossier(BaseModel):
         for s in self.skeptic:
             if s.status != SkepticStatus.failed:
                 continue
-            if is_alternative_check(s, self.candidate, candidate_bugs):
+            if is_alternative_check(s, self.candidate, candidate_bugs,
+                                    actionable=v.decision == Decision.actionable):
                 # (1e) Exclude alternatives from both downgrade and abstain rules.
                 alternatives.append(s.claim_ref)
                 continue
@@ -1041,15 +1042,15 @@ def _same_bug_nodes(candidate, candidate_bugs):
     return {n: b for n, b in candidate_bugs.items() if bug and str(b) == bug}
 
 
-def is_alternative_check(result, candidate, candidate_bugs=None) -> bool:
-    """Heuristically identify a check of another changeset.
+def is_alternative_check(result, candidate, candidate_bugs=None, *, actionable=False) -> bool:
+    """Identify a skeptic check of a changeset other than the candidate.
 
     Accept a Candidate or node string; return False without a candidate node.
-    Compare node, claim_ref hashes, or note hashes under a seed/window/alternative
-    claim_ref, in that order. References to the candidate's hg/git hash prevent exemption.
-    Its bug number also prevents exemption unless every recognized hash across all three
-    fields maps to that bug in the seed's ``candidate_bugs``. This allows checks of other
-    parts or backouts sharing the bug number."""
+    For actionable verdicts, a valid explicit node overrides claim_ref and note.
+    Otherwise, prefer node, then claim_ref hashes, then note hashes under a
+    seed/window/alternative claim_ref. Mentions of the candidate's hg/git hash
+    prevent exemption. Its bug number also blocks exemption unless every recognized
+    hash maps to that bug in candidate_bugs."""
     candidate_bugs = candidate_bugs or {}
     if isinstance(candidate, str) or candidate is None:
         ids, bug = [str(candidate or "").strip().lower()], ""
@@ -1061,13 +1062,16 @@ def is_alternative_check(result, candidate, candidate_bugs=None) -> bool:
         return False
     bug = bug or _bug_of(ids[0], candidate_bugs)
     ids = [i for i in ids if i]
+    node = str(getattr(result, "node", "") or "").strip().lower()
+    if actionable and _NODE_RE.fullmatch(node):
+        return not any(_same_changeset(node, i) for i in ids)
+
     ref = str(result.claim_ref or "").lower()
     note = str(result.note or "").lower()
     text = ref + " " + note
     if any(i[:7] in text for i in ids):
         return False
 
-    node = str(getattr(result, "node", "") or "").strip().lower()
     if _NODE_RE.fullmatch(node):
         hashes = [node]
     elif _changesets(ref):

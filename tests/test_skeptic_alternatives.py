@@ -112,6 +112,25 @@ class TestTheVeto(unittest.TestCase):
         self.assertEqual(d.verdict.decision, Decision.actionable)
         self.assertEqual(parse_and_validate(handoff).verdict.decision, Decision.abstain)
 
+    def test_an_actionable_origin_survives_the_change_it_was_traced_past(self):
+        # On actionable verdicts, a different node outweighs a note naming the candidate.
+        traced = _fail("candidate_" + OTHER[:7], "only wrapped the read in a RefPtr; the "
+                       "replaced line is from {}".format(CAND), node=OTHER)
+        d = parse_and_validate(_handoff(skeptic=[traced]))
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        self.assertEqual(d.corroborations["skeptic_alternatives_unbound"],
+                         ["candidate_" + OTHER[:7]])
+        stored = dossier_from_db_json(dossier_to_db_json(d))
+        self.assertEqual(stored.verdict.decision, Decision.actionable)
+        lead = _handoff(skeptic=[traced])
+        lead["verdict"] = dict(lead["verdict"], decision="lead")
+        lead["hunks"] = [{"node": CAND, "filename": "a.cpp", "header": "@@ -1 +1 @@",
+                          "lines": ["+ 1: x"], "citations": [_SF_DICT]}]
+        self.assertEqual(parse_and_validate(lead).verdict.decision, Decision.abstain)
+        own = _fail("candidate", "unrelated", node=CAND)
+        self.assertEqual(parse_and_validate(_handoff(skeptic=[own])).verdict.decision,
+                         Decision.abstain)
+
     def test_a_lead_keeps_its_rung(self):
         handoff = _handoff(skeptic=[_fail("seed:" + OTHER)])
         handoff["verdict"] = dict(handoff["verdict"], decision="lead")
