@@ -17,7 +17,7 @@ import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, report_bug, spikes  # noqa: E402
-from tests.test_autofile import _INFO, _OLD, _PREVIEW, _Base, _bug, _cfg  # noqa: E402
+from tests.test_autofile import _INFO, _OLD, _PREVIEW, _Base, _bug, _cfg, _judge  # noqa: E402
 
 _RELEASE_INFO = {**_INFO, "channel": "release", "version": "155.0.1",
                  "buildid": "20260903215306"}
@@ -127,6 +127,24 @@ class TestReleaseCommentsUnlessItDroppedOnBeta(_Base):
         self.assertEqual(self.created, [])
         self.assertEqual(drop.call_args.args[1:], ("Firefox", "release", "155.0.1"))
         self.assertIn("Foo::Bar", drop.call_args.args[0])
+
+    def test_a_different_defect_files_a_new_bug(self):
+        _judge(self, {2072627: "different"})
+        res, _d = self._file([_bug(2072627)], _upstream(False))
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2072627])
+        self.assertEqual(self.comments, [])
+
+    def test_an_older_unjudged_bug_still_skips(self):
+        _judge(self, {2072627: "different"})
+        res, _d = self._file([_bug(1429978, created=_OLD), _bug(2072627)], _upstream(False))
+        self.assertFalse(res["filed"])
+        self.assertIn("none can be about this regression", res["skipped"])
+
+    def test_a_drop_still_files_past_a_different_defect(self):
+        _judge(self, {2072627: "different"})
+        res, _d = self._file([_bug(2072627)], _upstream(True))
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
 
     def test_a_venue_naming_a_regressor_still_declines(self):
         res, _d = self._file([_bug(1943005, created=_OLD), _bug(2069097, regressed_by=[42])],

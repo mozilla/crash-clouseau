@@ -15,7 +15,7 @@ from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, config, report_bug  # noqa: E402
 from crashclouseau.agent import comment_novelty  # noqa: E402
-from tests.test_autofile import _INFO, _PREVIEW, _Base, _bug  # noqa: E402
+from tests.test_autofile import _INFO, _PREVIEW, _Base, _bug, _judge  # noqa: E402
 
 _DECLINE = "open bug 1961865 exists; an actionable crash is filed only where no bug is"
 _OWNER = {"nick": "segun", "name": "", "email": "owner@moz.example",
@@ -283,7 +283,53 @@ class TestTheVenue(_WakeBase):
                          "bug 1961865 names the signature only in its summary, not in its "
                          "crash signature field")
         self.assertEqual((self.puts, self.comments, self.created), ([], [], []))
-        bugzilla_apply._bug_activity.assert_not_called()
+
+    def test_the_selected_venue_is_the_judged_one(self):
+        judge = _judge(self, {2000000: "different", 1961865: "same"})
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["bug"]), (True, 1961865))
+        self.assertEqual([b for b, _ in self.puts], [1961865])
+        self.assertEqual([c.args[0] for c in judge.call_args_list], [2000000, 1961865])
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2000000])
+
+    def test_an_active_different_defect_does_not_block(self):
+        self.activity[2000000]["last_human"] = _ago(3)
+        _judge(self, {2000000: "different", 1961865: "same"})
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["bug"]), (True, 1961865))
+
+    def test_an_active_unjudged_bug_still_blocks(self):
+        self.activity[1961865]["last_human"] = _ago(3)
+        _judge(self, {2000000: "same"})
+        res = self._wake(mode="comment")
+        self.assertEqual(res["wake_stale"]["skipped"], "bug 1961865 has a human comment from "
+                         "{}".format(_ago(3).date().isoformat()))
+
+    def test_only_different_defects_file_a_new_bug(self):
+        _judge(self, {1961865: "different", 2000000: "different"})
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.puts, [])
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2000000, 1961865])
+        self.assertEqual(
+            [d["bug"] for d in report_bug.build_bug_preview.call_args.kwargs["different_defect"]],
+            [2000000, 1961865])
+
+    def test_shadow_does_not_file_past_different_defects(self):
+        _judge(self, {1961865: "different", 2000000: "different"})
+        res = self._wake(mode="shadow")
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["wake_stale"]["skipped"],
+                         "every open bug on this signature tracks a different defect")
+        self.assertEqual(self.created, [])
+
+    def test_a_summary_only_different_defect_files_a_new_bug(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            dict(_bug(1961865), summary_only=True)]
+        _judge(self, {1961865: "different"})
+        res = self._wake(mode="comment")
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
 
     def test_a_venue_reached_by_another_name_says_so(self):
         sibling = dict(_bug(2000000), via_signature="Foo::Bar", via_relation="sibling")

@@ -410,6 +410,13 @@
             "model": "claude-opus-5-5",
             "effort": "medium"
         },
+        "venue_judge":
+        {
+            "enabled": true,
+            "model": "claude-opus-5-5",
+            "effort": "medium",
+            "max_venues": 3
+        },
         "same_site":
         {
             "enabled": true

@@ -951,6 +951,126 @@ class TestSummaryOnlyVenue(_Base):
         self.assertEqual((res["bug"], res["mode"]), (1331366, "comment_on_existing"))
 
 
+def _judge(test, verdicts):
+    """Mock verdicts by bug ID; return ``None`` for unlisted bugs."""
+    from crashclouseau.agent import venue_judge
+
+    def check(bug_id, draft, cfg):
+        v = verdicts.get(bug_id)
+        return {"verdict": v, "reason": "reason {}".format(bug_id), "cost_usd": 0.1} if v else None
+
+    p = mock.patch.object(venue_judge, "check", side_effect=check)
+    test.addCleanup(p.stop)
+    return p.start()
+
+
+class TestADifferentDefect(_Base):
+    def test_the_only_venue_gets_a_new_bug_that_names_it(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061999)]
+        judge = _judge(self, {2061999: "different"})
+        res = self._file()
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual(res["different_defect"], [{"bug": 2061999, "reason": "reason 2061999"}])
+        self.assertEqual((self.comments, len(self.created)), ([], 1))
+        self.assertEqual(report_bug.build_bug_preview.call_args.kwargs["different_defect"],
+                         res["different_defect"])
+        judge.assert_called_once_with(2061999, "the whole bug opener", mock.ANY)
+
+    def test_the_next_venue_gets_the_comment(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2061999, "2026-08-08T00:00:00Z"), _bug(2062000, "2026-08-09T00:00:00Z")]
+        _judge(self, {2061999: "different", 2062000: "same"})
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2062000, "comment_on_existing"))
+        self.assertEqual([b for b, _ in self.comments], [2062000])
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2061999])
+
+    def test_no_verdict_keeps_the_comment(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061999)]
+        _judge(self, {})
+        res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2061999, "comment_on_existing"))
+        self.assertNotIn("different_defect", res)
+
+    def test_the_kill_switch(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061999)]
+        judge = _judge(self, {2061999: "different"})
+        with mock.patch.object(bugzilla_apply.config, "get_agent_venue_judge",
+                               return_value=dict(cconfig.get_agent_venue_judge(), enabled=False)):
+            res = self._file()
+        self.assertEqual(res["mode"], "comment_on_existing")
+        judge.assert_not_called()
+
+    def test_at_most_max_venues_are_rejected(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [
+            _bug(2061999, "2026-08-08T00:00:00Z"), _bug(2062000, "2026-08-09T00:00:00Z")]
+        _judge(self, {2061999: "different", 2062000: "different"})
+        with mock.patch.object(bugzilla_apply.config, "get_agent_venue_judge",
+                               return_value=dict(cconfig.get_agent_venue_judge(), max_venues=1)):
+            res = self._file()
+        self.assertEqual((res["bug"], res["mode"]), (2062000, "comment_on_existing"))
+
+    def test_a_skip_channel_files_past_a_different_defect(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061999)]
+        _judge(self, {2061999: "different"})
+        res = self._file(comment_on_existing="skip")
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2061999])
+
+    def _incomplete_fix_without_a_candidate(self):
+        fix = {"id": 2063678, "node": "bbdaf4e3b2c2", "pushdate": _LANDED, "product": "Core",
+               "component": "General", "assigned_to": "", "resolved": "2026-08-19T21:27:05Z"}
+        p = mock.patch.object(bugzilla_apply, "_incomplete_fix_bug", return_value=fix)
+        p.start()
+        self.addCleanup(p.stop)
+        report_bug.build_bug_preview.side_effect = (
+            lambda *a, **kw: dict(_PREVIEW) if kw.get("incomplete_fix") else None)
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061999)]
+        return _judge(self, {2061999: "different"})
+
+    def test_an_incomplete_fix_on_a_skip_channel_is_judged(self):
+        judge = self._incomplete_fix_without_a_candidate()
+        res = self._file(verdict="abstain", confidence=25, dossier={"verdict": {}},
+                         comment_on_existing="skip")
+        judge.assert_called_once_with(2061999, "the whole bug opener", mock.ANY)
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2061999])
+
+    def test_an_incomplete_fix_on_a_comment_channel_is_judged(self):
+        judge = self._incomplete_fix_without_a_candidate()
+        res = self._file(verdict="abstain", confidence=25, dossier={"verdict": {}})
+        judge.assert_called_once_with(2061999, "the whole bug opener", mock.ANY)
+        self.assertEqual((res["filed"], res["mode"]), (True, "new_bug"))
+        self.assertEqual(self.comments, [])
+
+    def test_a_skip_channel_still_skips_the_same_defect(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = [_bug(2061999), _bug(2062000)]
+        _judge(self, {2061999: "different", 2062000: "same"})
+        res = self._file(comment_on_existing="skip")
+        self.assertEqual((res["filed"], res["bug"]), (False, 2062000))
+        self.assertEqual(res["skipped"], "open bug 2062000 exists")
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [2061999])
+        self.assertEqual(self.created, [])
+
+
+class TestTheDifferentDefectNote(unittest.TestCase):
+    def test_one_bug(self):
+        self.assertEqual(
+            report_bug.build_different_defect_note([{"bug": 7, "reason": "A test failure."}]),
+            "Filed as a new bug rather than a comment on bug 7: it is open on this signature "
+            "but appears to track a different defect.\n- Bug 7: A test failure.\n"
+            "Please duplicate if that is wrong.")
+
+    def test_two_bugs_and_a_dropped_reason(self):
+        note = report_bug.build_different_defect_note(
+            [{"bug": 7, "reason": ""}, {"bug": 8, "reason": "Another caller."}])
+        self.assertTrue(note.startswith("Filed as a new bug rather than a comment on bug 7, "
+                                        "bug 8: they are open on this signature but appear"))
+        self.assertNotIn("- Bug 7", note)
+        self.assertIn("- Bug 8: Another caller.", note)
+        self.assertEqual(report_bug.build_different_defect_note(None), "")
+
+
 class TestBugPredatesTheCause(_Base):
     def test_an_open_bug_older_than_the_regressor_gets_a_new_bug(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1798397, _OLD)]

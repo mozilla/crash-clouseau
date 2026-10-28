@@ -1374,6 +1374,13 @@ def get_agent_comment_novelty():
     return {"model": o.get("model", "opus"), "effort": o.get("effort", "medium")}
 
 
+def get_agent_venue_judge():
+    """Read agent.venue_judge settings; ``max_venues`` caps the bugs judged per crash."""
+    o = get_agent().get("venue_judge", {})
+    return {"enabled": bool(o.get("enabled", True)), "model": o.get("model", "opus"),
+            "effort": o.get("effort", "medium"), "max_venues": int(o.get("max_venues", 3))}
+
+
 def get_agent_same_site():
     """Same-site recording settings; ``SAME_SITE_ENABLED`` overrides ``enabled``."""
     o = get_agent().get("same_site", {})

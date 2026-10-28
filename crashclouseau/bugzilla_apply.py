@@ -725,6 +725,63 @@ def _summary_only(venue, regressor_bug=None):
     return bool(venue.get("summary_only")) and venue.get("id") != regressor_bug
 
 
+def _cf_first(rows):
+    """Put summary-only rows last, preserving order within each group."""
+    return sorted(rows or [], key=lambda b: bool(b.get("summary_only")))
+
+
+def _first(rows):
+    """Return the first row as a venue selection."""
+    return (rows[0] if rows else None,)
+
+
+def _row_for(rows, bug_id):
+    return next((b for b in rows if b["id"] == bug_id), None) if bug_id is not None else None
+
+
+def _venue_draft(uuid_info, stack, dossier, incomplete_fix=None):
+    """Build the judge's draft; return ``""`` if no preview can be built."""
+    from crashclouseau import report_bug
+
+    try:
+        preview = report_bug.build_bug_preview(uuid_info, stack, dossier,
+                                               incomplete_fix=incomplete_fix)
+        return (preview or {}).get("comment") or ""
+    except Exception:
+        logger.warning("autofile: venue judge draft failed", exc_info=True)
+        return ""
+
+
+def _pick_same_defect(pool, pick, draft):
+    """Return ``(selection, rejected)`` after skipping venues judged ``different``.
+
+    *pick* returns ``(venue, ...)``; a ``None`` venue ends selection. Preserve its extra
+    fields and collect rejections as ``{bug, reason}``. Build *draft* at most once.
+    Keep the venue on an empty draft, failed check or exhausted ``max_venues`` limit."""
+    from crashclouseau.agent import venue_judge
+
+    cfg = config.get_agent_venue_judge()
+    rejected = []
+    text = None
+    pool = list(pool or [])
+    while True:
+        selection = pick(pool)
+        venue = selection[0]
+        if venue is None or not cfg["enabled"] or len(rejected) >= cfg["max_venues"]:
+            return selection, rejected
+        if text is None:
+            text = draft() or ""
+        if not text:
+            return selection, rejected
+        verdict = venue_judge.check(venue["id"], text, cfg)
+        if not verdict or verdict["verdict"] != "different":
+            return selection, rejected
+        logger.info("autofile: bug %s tracks a different defect: %s", venue["id"],
+                    verdict["reason"])
+        rejected.append({"bug": venue["id"], "reason": verdict["reason"]})
+        pool = [b for b in pool if b["id"] != venue["id"]]
+
+
 def _summary_only_decline(venue):
     return {"filed": False, "bug": venue["id"], "summary_only": True,
             "skipped": ("open bug {} names this signature only in its summary, not in its "
@@ -2656,16 +2713,18 @@ def _crash_spike(uuid_info):
     return None
 
 
-def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family):
+def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family,
+                    rejected=None):
     """Comment on an eligible stale bug, or return a decline.
 
-    All matches must be stale and have no Clouseau comment. Choose the most-discussed eligible
-    venue, oldest on ties. A summary-only venue is eligible only if it is the origin bug.
-    Require a public origin if known, a screened comment and no memory-safety signal.
-    Ask an eligible assignee, origin author, then triage owner.
+    Prefer the most-discussed eligible venue, preserving input order on ties. Only the
+    origin bug may be a summary-only venue. Collect different-defect verdicts in *rejected*;
+    remaining matches must be stale and have no Clouseau comment.
 
-    ``shadow`` records a preview; ``comment`` posts one update with any new needinfo.
-    Require novelty unless the crash's rate or build day is a spike.
+    Require a public origin if known, screened text and no memory-safety signal. Ask the assignee,
+    origin author or triage owner, in that order. Require novelty unless a spike is detected.
+    ``shadow`` records a preview; ``comment`` posts it, or returns ``{"file_new": True}``
+    if all venues were rejected.
     """
     mode = config.wake_mode(cfg.get("wake_stale"))
     venue = existing[0]
@@ -2679,25 +2738,41 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
     if sensitive.is_withheld((dossier or {}).get("corroborations")):
         return no("the crash report shows a memory-safety signal")
     origin = ((dossier or {}).get("candidate") or {}).get("bug")
-    venues = [b for b in existing if not _summary_only(b, origin)]
-    if not venues:
-        return no("bug {} names the signature only in its summary, not in its crash "
-                  "signature field".format(venue["id"]))
-    days = cfg.get("wake_stale_days") or 180
-    now = datetime.now(timezone.utc)
     activities = {}
     for bug in existing:
         activity = _bug_activity(bug["id"])
         if activity is None or activity["last_human"] is None:
             return no("could not read the comments on bug {}".format(bug["id"]))
+        activities[bug["id"]] = activity
+
+    def pick(rows):
+        return (min(rows, default=None, key=lambda b: (
+            _summary_only(b, origin), -activities[b["id"]]["discussion"])),)
+
+    (chosen,), different = _pick_same_defect(
+        existing, pick, lambda: _venue_draft(uuid_info, stack, dossier))
+    if rejected is not None:
+        rejected.extend(different)
+    if chosen is None:
+        if mode == "shadow":
+            return no("every open bug on this signature tracks a different defect")
+        return {"file_new": True}
+    venue = chosen
+    ruled_out = {d["bug"] for d in different}
+    days = cfg.get("wake_stale_days") or 180
+    now = datetime.now(timezone.utc)
+    for bug in existing:
+        activity = activities[bug["id"]]
+        if bug["id"] in ruled_out:
+            continue
         if activity["ours"]:
             return no("bug {} already has a Clouseau comment".format(bug["id"]))
         if now - activity["last_human"] < timedelta(days=days):
             return no("bug {} has a human comment from {}".format(
                 bug["id"], activity["last_human"].date().isoformat()))
-        activities[bug["id"]] = activity
-    # Prefer the eligible venue with the most discussion.
-    venue = max(venues, key=lambda b: activities[b["id"]]["discussion"])
+    if _summary_only(venue, origin):
+        return no("bug {} names the signature only in its summary, not in its crash "
+                  "signature field".format(venue["id"]))
     since = activities[venue["id"]]["last_human"].date().isoformat()
     if origin:
         hidden = disclosure.nonpublic([origin])
@@ -3349,8 +3424,13 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
                     "— not a venue for a crash report", [b["id"] for b in meta_bugs])
     # Actionable crashes with an open venue use `wake_stale` or decline, regardless of
     # `comment_on_existing`. Other applications and meta bugs have already been excluded.
+    different = []
     if actionable and existing:
-        return _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family)
+        res = _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, family,
+                              rejected=different)
+        if not res.get("file_new"):
+            return dict(res, different_defect=different) if different else res
+        existing = []
     # `skip` writes nothing past an open public bug; `file_new` files separately and
     # references it. Restricted filings bypass these policies below.
     mode = config.comment_mode(cfg["comment_on_existing"])
@@ -3379,6 +3459,12 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
         if hidden:
             restricted, withheld = "regressor", True
     if existing and mode == "skip" and not withheld:
+        _, different = _pick_same_defect(
+            _cf_first(existing), _first,
+            lambda: _venue_draft(uuid_info, stack, dossier, incomplete_fix))
+        rejected = {d["bug"] for d in different}
+        existing = [b for b in existing if b["id"] not in rejected]
+    if existing and mode == "skip" and not withheld:
         # `bug` on a `filed: False` result is the bug the decision was ABOUT -- the open venue
         # this crash was not written into -- as on every other decline shape below that names
         # one; the tasks view renders it as "not filed (bug N)".
@@ -3389,21 +3475,30 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
                 "skipped": "open bug {}{} exists{}".format(
                     existing[0]["id"], _via_clause(existing[0]),
                     _upstream_clause(upstream) if asked_upstream else ""),
-                **_via_fields(existing[0]), **({"upstream": upstream} if upstream else {})}
+                **_via_fields(existing[0]), **({"upstream": upstream} if upstream else {}),
+                **({"different_defect": different} if different else {})}
     # WHICH of those open bugs, if any, can be about this regression — the oldest one often
     # cannot, and with no landing date NONE of them can be shown to
     # (``_bug_for_this_regression``). Resolved before the preview is built so a new bug filed
     # past an older one can say so, and say which of the two reasons it was.
     landed = _candidate_landed(dossier, channel)
-    bug_id, predating = _bug_for_this_regression(
-        existing,
-        landed,
-        cfg["comment_max_bug_age_days"],
-        candidate_bug=((dossier or {}).get("candidate") or {}).get("bug"),
-        signature=signature,
-    )
+
+    def choose(pool):
+        bug_id, predating = _bug_for_this_regression(
+            pool, landed, cfg["comment_max_bug_age_days"],
+            candidate_bug=((dossier or {}).get("candidate") or {}).get("bug"),
+            signature=signature)
+        return _row_for(pool, bug_id), predating
+
+    if comment_allowed and existing and not withheld:
+        (venue, predating), different = _pick_same_defect(
+            existing, choose, lambda: _venue_draft(uuid_info, stack, dossier, incomplete_fix))
+    else:
+        venue, predating = choose(existing)
+    bug_id = venue["id"] if venue else None
     landing_unresolved = landed is None and bug_id is None and bool(predating)
-    if comment_only and bug_id is None and not withheld:
+    all_different = bool(existing) and {d["bug"] for d in different} >= {b["id"] for b in existing}
+    if comment_only and bug_id is None and not withheld and not all_different:
         # No suitable venue: skip rather than file a new public bug.
         return {"filed": False, "bug": existing[0]["id"], "upstream": upstream,
                 "skipped": "open bug {}{} exists and none can be about this regression".format(
@@ -3615,6 +3710,7 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
             never_comment=never_comment,
             incomplete_fix=incomplete_fix,
             restrict=restricted is not None,
+            different_defect=different if bug_id is None else None,
         )
     except Exception as exc:
         logger.error("autofile: preview build failed for %s", uuid, exc_info=True)
@@ -3712,6 +3808,8 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
               "at": datetime.now(timezone.utc).isoformat()}
     if same_defect_check:
         result["same_defect_check"] = same_defect_check
+    if different:
+        result["different_defect"] = different
     if withhold:
         # Persisted so the choice is auditable from the dossier, and so that "how often does the
         # security venue fire, and does anyone unrestrict it?" is answerable later from prod

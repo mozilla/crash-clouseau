@@ -1416,7 +1416,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
                              version=None, needinfo=None, author_display=None,
                              max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None,
                              fresh_limit=None, stale_since=None, stale_bug=None,
-                             recent_note=None):
+                             recent_note=None, different_defect=None):
     """Build the opening comment for an ``actionable`` bug, with no regressor claim.
 
     1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
@@ -1486,6 +1486,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         because,
         # Only publish references for the claim printed above.
         build_code_references({"mechanism": verdict.get("mechanism")}, channel),
+        build_different_defect_note(different_defect),
         needinfo,
         _comment_provenance(channel) if stale_since else _provenance(channel),
     ]
@@ -1510,6 +1511,7 @@ def build_bug_comment(
     never_comment=False,
     max_frames=_MAX_PREVIEW_FRAMES,
     bucket_opener=None,
+    different_defect=None,
 ):
     """The SINGLE comment the filed bug opens with, in the shape a triager expects from a
     hand-filed crash bug (cf. bug 2057432 comment 0):
@@ -1574,6 +1576,7 @@ def build_bug_comment(
             related_bugs, landing_unresolved=landing_unresolved,
             node=((dossier or {}).get("candidate") or {}).get("node"),
             never_comment=never_comment),
+        build_different_defect_note(different_defect),
         build_other_app_bugs_note(other_app_bugs),
         needinfo,
         _provenance(channel),
@@ -1768,6 +1771,20 @@ def build_related_bugs_note(related_bugs, landing_unresolved=False, node=None,
             "it" if len(bugs) == 1 else "they",
         )
     )
+
+
+def build_different_defect_note(different_defect):
+    """Explain different-defect rejections, omitting empty reasons."""
+    rows = [d for d in different_defect or [] if d.get("bug")]
+    if not rows:
+        return ""
+    one = len(rows) == 1
+    head = ("Filed as a new bug rather than a comment on {}: {} open on this signature but {} "
+            "a different defect.".format(", ".join("bug {}".format(d["bug"]) for d in rows),
+                                         "it is" if one else "they are",
+                                         "appears to track" if one else "appear to track"))
+    reasons = ["- Bug {}: {}".format(d["bug"], d["reason"]) for d in rows if d.get("reason")]
+    return "\n".join([head, *reasons, "Please duplicate if that is wrong."])
 
 
 def build_other_app_bugs_note(other_app_bugs):
@@ -3033,52 +3050,21 @@ def _bug_version(channel):
 
 def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bugs=None,
                       landing_unresolved=False, meta_bugs=None, never_comment=False,
-                      incomplete_fix=None, restrict=False, stale=None):
-    """The "bug we'd file" preview for the crashstack panel, and the payload the automatic
-    filer posts: ``{title, comment, product, component, version, type, keywords,
-    cf_crash_signature, blocked, needinfo, needinfo_email}``.
+                      incomplete_fix=None, restrict=False, stale=None, different_defect=None):
+    """Build the crashstack preview and automatic filer's bug fields.
 
-    ``comment`` is the whole bug opener as ONE comment (``build_bug_comment``) -- the
-    stack, the crash reason, the volume, the analysis and the needinfo ask together, the
-    way a triager reads a hand-filed crash bug. ``needinfo_email`` is the requestee the
-    flag needs (the rendered ``needinfo`` line only carries a display nick).
-    product/component are best-effort from the regressor (``resolve_product_component``).
-    Returns ``None`` when there is no candidate regressor to file a bug against.
+    Return ``None`` without a candidate node or ``incomplete_fix``. The preview includes
+    the title, full comment, routing, version, keywords, signatures, relations and needinfo.
 
-    ``related_bugs``, ``other_app_bugs`` and ``meta_bugs`` are open bugs on this signature that
-    the automatic filer decided NOT to comment on — respectively because the changeset landed
-    after they were filed (or, under ``landing_unresolved``, because we could not tell WHEN it
-    landed, which is a different sentence and not the same claim), because they belong to
-    another application built on Gecko, and because they are ``[meta]`` trackers; passing them
-    puts the reason in the bug. The page preview passes none of them — it does not know, because
-    deciding needs a Bugzilla search and a changeset's landing date, neither of which belongs in
-    a render.
+    ``related_bugs`` and ``other_app_bugs`` explain unused venues. ``different_defect``
+    adds the judge's ``{bug, reason}`` rejections. ``meta_bugs`` enables a bucket title,
+    opener and dependencies when ``bucket_title`` supplies a name.
 
-    The metadata below ``component`` is what a hand-filed crash bug carries and what
-    ``create_bug`` needs to be accepted at all: ``version``/``type`` are MANDATORY on BMO, and
-    ``keywords``/``cf_crash_signature`` mirror what the hand-draft path sets in ``improve`` -- so
-    the preview shows the whole bug rather than the parts a filer would then have to supply by
-    hand.
-
-    The regressor is linked by ``regressed_by`` ALONE. ``blocked`` carries the ``clouseau``
-    tracking bug and nothing else: the regressor's bug used to be added there as well, which
-    asserted the same thing twice in two shapes, one of them backwards (a blocks entry says that
-    bug cannot be closed until this crash is fixed).
-
-    ``regressed_by`` asserts causation as structured, tooling-visible data, so it is set only
-    under the same gate as the ``regression`` keyword (``link_regressor`` below). It was withheld
-    entirely while the only precision figure was the ~28% of leads the corrected second-opinion
-    instrument put on the true regressor -- measured across ALL leads, before the stale-signature
-    and backout gates. The filings answer it directly now: of the 39 bugs filed at rung 70 up to
-    2026-08-17, 12 have a ``regressed_by`` a human set, and 11 of those name the bug we named. The
-    one that does not (bug 2062119, whose candidate landed in 2022) is exactly what this gate
-    excludes.
-
-    For actionable verdicts, ``stale`` supplies ``since``, ``person``, ``bug`` and optional
-    ``role`` (default ``triage owner``). Other previews may redirect to a triage owner under
-    the origin-age, FIXED-count or last-seen rules, retaining author attribution.
-    Actionable previews add recent counts when ``_recent_adds`` finds additional channels or
-    higher counts than ``fetch_signature_stats``."""
+    Actionable previews omit regression claims. Other previews link a candidate bug in
+    ``regressed_by`` only when ``is_suspected_regression`` accepts the corroborations.
+    For actionable stale-bug comments, ``stale`` supplies ``since``, ``person``, ``bug``
+    and optional ``role`` (default ``triage owner``).
+    """
     dossier = dossier or {}
     candidate = dossier.get("candidate")
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
@@ -3198,7 +3184,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             author_display=_person_display(person), bucket_opener=opener,
             fresh_limit=policy.get("fresh_origin_days"),
             stale_since=(stale or {}).get("since"), stale_bug=(stale or {}).get("bug"),
-            recent_note=recent_note,
+            recent_note=recent_note, different_defect=different_defect,
         ) if actionable else build_bug_comment(
             uuid_info,
             stack,
@@ -3217,6 +3203,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             meta_bugs=meta_bugs,
             never_comment=never_comment,
             bucket_opener=opener,
+            different_defect=different_defect,
         ),
         "product": product,
         "component": component,

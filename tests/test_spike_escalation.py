@@ -25,6 +25,7 @@ from crashclouseau import bugzilla_apply, config, models, report_bug, spike_repo
 from crashclouseau.agent import spike_agent, spike_escalation as se  # noqa: E402
 from crashclouseau.agent.spike_agent import SpikeFindings  # noqa: E402
 from crashclouseau.agent.tools import crashstats  # noqa: E402
+from tests.test_autofile import _judge  # noqa: E402
 
 
 def _row(number, baseline, installs, outcome=utils.SELECTED, signature="mozilla::Foo::Bar",
@@ -655,6 +656,31 @@ class TestFiling(_FilerBase):
                  "keywords": [], "regressed_by": [], "summary_only": True}]):
             res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
         self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
+
+    def test_a_different_defect_gets_a_new_bug_that_names_it(self):
+        findings = self.findings.model_copy(update={"culprit": None})
+        _judge(self, {55: "different"})
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["filed"], res["mode"]), (True, "spike_new_bug"))
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [55])
+        self.assertEqual(self.comments, [])
+        self.assertIn("appears to track a different defect", self.created[0]["description"])
+        self.assertIn("- Bug 55: reason 55", self.created[0]["description"])
+
+    def test_the_next_open_bug_gets_the_spike_comment(self):
+        findings = self.findings.model_copy(update={"culprit": None})
+        _judge(self, {55: "different", 56: "same"})
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2024-01-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []},
+                {"id": 56, "creation_time": "2024-02-01T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(_esc(), self.brief, findings, grounded=True)
+        self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 56, "spike_comment"))
+        self.assertEqual([d["bug"] for d in res["different_defect"]], [55])
 
     def test_only_a_summary_only_bug_gets_nothing(self):
         findings = self.findings.model_copy(update={"culprit": None})

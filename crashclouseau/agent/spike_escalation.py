@@ -1548,20 +1548,41 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     related = []
     predating = []
     landing_unresolved = False
+    different = []
+    selection = None
+
+    def choose(rows):
+        if _names_a_regression(findings, grounded):
+            return _regression_venue(rows, findings.culprit, esc, signature)
+        venue, for_spike = _pick_venue(
+            [b for b in rows if not b.get("summary_only")] or rows,
+            esc.build_day) or (None, False)
+        return venue, for_spike, [], False
+
+    if existing and mode != "file_new" and not withheld:
+        def draft():
+            return _without_withdrawn(spike_report.build_spike_comment(
+                brief, findings, details=details, stack=stack, link_regressor=link_regressor,
+                grounded=grounded, as_comment=True), withdrawn, screened)
+
+        if mode == "skip":
+            pick = bugzilla_apply._first
+            existing = bugzilla_apply._cf_first(existing)
+        else:
+            pick = choose
+        selection, different = bugzilla_apply._pick_same_defect(existing, pick, draft)
+        rejected = {d["bug"] for d in different}
+        existing = [b for b in existing if b["id"] not in rejected]
+        if different:
+            result["different_defect"] = different
     if existing and mode == "skip" and not withheld:
         named = _pick_venue(existing, esc.build_day)[0]
         return dict(result, skipped="open bug {}{} exists".format(
             named["id"], bugzilla_apply._via_clause(named)), **bugzilla_apply._via_fields(named))
     if existing and mode == "file_new":
         related = sorted(b["id"] for b in existing)
-    elif existing and _names_a_regression(findings, grounded):
-        # Use the ordinary filer's age and history rules for grounded candidates at
-        # medium confidence or higher, matching the `regression` keyword threshold.
-        venue, for_spike, predating, landing_unresolved = _regression_venue(
-            existing, findings.culprit, esc, signature)
     elif existing:
-        venue, for_spike = _pick_venue(
-            [b for b in existing if not b.get("summary_only")] or existing, esc.build_day)
+        venue, for_spike, predating, landing_unresolved = selection or choose(existing)
     public_venue_declined = None
     if venue is not None and withheld:
         public_venue_declined, venue = venue["id"], None
@@ -1708,7 +1729,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 details=details, stack=stack, link_regressor=link_regressor, grounded=grounded,
                 related_bugs=related or None, other_app_bugs=other_app or None,
                 meta_bugs=meta_bugs or None, withhold=withheld, bucket_title=bucket_title,
-                predating_bugs=predating or None, landing_unresolved=landing_unresolved)
+                predating_bugs=predating or None, landing_unresolved=landing_unresolved,
+                different_defect=different or None)
             preview["comment"] = _without_withdrawn(preview["comment"], withdrawn, screened)
             if withheld and not preview.get("groups"):
                 return dict(result, skipped="{} and no security group for product {!r}".format(
