@@ -2551,37 +2551,105 @@ def _apply_signature_age_gate(dossier, seed):
 
 
 def _resolve_candidate_backout(dossier, seed):
-    """Ask hg whether the chosen candidate was BACKED OUT, and store the backout sha on it.
+    """Resolve the candidate's backout revision before the shared, network-free gates.
 
-    ONLINE ONLY, and deliberately not inside ``apply_deterministic_gates``: that function is
-    shared with the offline eval runner, which must stay network-free. Splitting resolve (here)
-    from decide (``_apply_backout_gate``) is what keeps the gate a pure, offline-safe no-op.
-
-    Runs BEFORE the second-opinion pass so a doomed lead never buys a ~$1 independent review of
-    a changeset we are about to suppress. The ``json_rev`` request is shared with
-    ``_resolve_candidate_git_commit``; recent Git candidates may also need a revert lookup.
-
-    Best-effort — a failed lookup leaves ``backedout_by`` empty, which the gate treats as "not
-    backed out". That asymmetry is deliberate: never suppress a verdict on a lookup failure."""
+    Failed lookups leave ``backedout_by`` empty and do not trigger suppression."""
     cand = dossier.candidate if dossier is not None else None
     if cand is None or not cand.node or cand.backedout_by:
         return
     try:
         from crashclouseau import sigage
 
-        # ``seed["channel"]`` — NOT ``cand.channel``, which is a model-supplied schema field and
-        # is empty on every dossier (nothing fills it). An empty channel makes json_rev skip the
-        # request entirely and cache {}, which would poison the lookup for the rest of the run.
+        # Use the seed's channel; the model-supplied candidate channel may be empty.
         backedout_by = sigage.backedout_by_for_node(cand.node, (seed or {}).get("channel"))
     except Exception:
         logger.warning("agent: backout lookup failed for %s", cand.node, exc_info=True)
         return
     if backedout_by:
         dossier.candidate = cand.model_copy(update={"backedout_by": backedout_by})
-        # Already doomed by ``_apply_backout_gate``; don't buy a request for the mirror
-        # predicate below on a verdict that is about to be suppressed outright.
+        # Resolve origin presence separately before applying the backout gate.
         return
     _resolve_candidate_is_backout(dossier, seed)
+
+
+_SEARCHFOX_PINNED_RE = re.compile(
+    r"searchfox\.org/[^/\s]+/rev/([0-9a-f]{12,40})/([^#?\s]+)#L?(\d+)(?:-L?(\d+))?")
+# Skip common comment/import forms and bare punctuation; `*out = value;` is code.
+_TRIVIAL_LINE_RE = re.compile(
+    r"^\s*(?:[{}()\[\];,]*|/\*.*|\*+(?:[\s/].*)?|//.*|#\s*include\b.*"
+    r"|(?:import|package|use)\b.*)\s*$")
+
+
+def _origin_evidence(verdict, build, frame_lines=True):
+    """Yield trusted frame lines and Searchfox ranges pinned to the build as (path, first, last)."""
+    from crashclouseau import inspector
+
+    for c in (verdict.mechanism.citations if verdict.mechanism else []):
+        if getattr(c, "kind", "") == "stack_frame":
+            if frame_lines and c.filename and c.line:
+                yield c.filename, c.line, c.line
+            continue
+        pinned = _SEARCHFOX_PINNED_RE.search(getattr(c, "permalink", None) or "")
+        if not pinned:
+            continue
+        rev, path, first, last = pinned.groups()
+        try:
+            # Convert Git pins before comparing them with the hg build revision.
+            hg = rev if rev[:12] == build[:12] else (inspector.git2hg(rev) or "")
+        except Exception:
+            continue
+        if hg[:12] == build[:12]:
+            yield path, int(first), int(last or first)
+
+
+def _resolve_backed_out_origin_presence(dossier, seed):
+    """Record a non-trivial cited build line that still blames a backed-out actionable origin.
+
+    Check at most two candidate files. Failed lookups leave suppression unchanged.
+    Kept outside the shared gates so offline evaluation makes no network requests."""
+    if dossier is None:
+        return
+    v, cand = dossier.verdict, dossier.candidate
+    build = str((seed or {}).get("build_node") or "")
+    if (v is None or v.decision != Decision.actionable or cand is None or not cand.node
+            or not cand.backedout_by or len(build) < 12):
+        return
+    from libmozdata.hgmozilla import Annotate
+
+    from crashclouseau import sigage
+
+    channel = (seed or {}).get("channel") or "nightly"
+    try:
+        rev = sigage.json_rev(cand.node, channel)
+        files = {f.get("file") for f in rev.get("files") or [] if isinstance(f, dict)}
+    except Exception:
+        logger.warning("agent: origin files lookup failed for %s", cand.node, exc_info=True)
+        return
+    ranges = {}
+    trusted = (seed or {}).get("line_numbers_trusted") is not False
+    for path, first, last in _origin_evidence(v, build, frame_lines=trusted):
+        if path in files:
+            ranges.setdefault(path, []).append((first, last))
+    for path, cited in list(ranges.items())[:2]:
+        try:
+            data = Annotate.get(path, channel, build) or {}
+            rows = (data.get(path) or {}).get("annotate") or []
+        except Exception:
+            logger.warning("agent: origin presence lookup failed for %s in %s", cand.node, path)
+            continue
+        for row in rows:
+            try:
+                n = int(row.get("lineno", -1))
+            except (TypeError, ValueError):
+                continue
+            if (str(row.get("node") or "").startswith(cand.node)
+                    and not _TRIVIAL_LINE_RE.match(row.get("line") or "")
+                    and any(first <= n <= last for first, last in cited)):
+                dossier.corroborations = {
+                    **(dossier.corroborations or {}),
+                    "candidate_backedout_origin_present": {"file": path, "line": n},
+                }
+                return
 
 
 def _resolve_candidate_is_backout(dossier, seed):
@@ -2623,27 +2691,10 @@ def _resolve_candidate_is_backout(dossier, seed):
 
 
 def _apply_backout_gate(dossier, seed):
-    """SUPPRESS a verdict whose candidate was BACKED OUT: there is nothing left to act on.
+    """Suppress backed-out candidates unless an actionable origin has cited code in the build.
 
-    A backed-out changeset is not in the tree. Whatever it did, no one can fix it, and a patch
-    is usually backed out precisely BECAUSE it was wrong — so naming one costs a triager's
-    attention and returns nothing. Unlike the stale-signature downweight this is not a
-    confidence question, so it is not a one-rung clamp but an outright abstain: 14 of the 17
-    measured cases sat at rung 25 or 50 anyway, and rung 25 has nowhere lower to go.
-
-    Measured on the canary DB (1501 dossiers, 847 reported verdicts): 17 reported leads named a
-    candidate the model itself flagged as backed out, and hg confirmed 19 of those 20 distinct
-    nodes were genuinely backed out (the 20th IS a revert, equally dead). But the model's flag
-    also MISSES them — 1 of 12 sampled `backedout: false` reported leads was in fact backed out
-    (`fa615d158e7b`, backed out by `9367c2806d2f`) — which extrapolates to ~9% of reported leads
-    rather than 2%. Hence a deterministic check on OUR OWN hg lookup, never on the model's flag.
-
-    Deliberately UNCONDITIONAL on the backout's timing. A patch backed out after the triaged
-    build could still be that build's true cause (``plans/09-skeptic-verifier.md:88``), but it is
-    equally unactionable, and resolving the backout's own landing date costs a second request.
-
-    Reads only ``candidate.backedout_by``, which ``_resolve_candidate_backout`` sets online, so
-    this is a natural no-op in the offline eval. Mutates in place; never raises."""
+    Read resolver evidence without network requests. Backout timing is not checked.
+    Existing abstentions keep their reason."""
     v = dossier.verdict if dossier is not None else None
     cand = dossier.candidate if dossier is not None else None
     if v is None or cand is None or not cand.backedout_by:
@@ -2656,6 +2707,9 @@ def _apply_backout_gate(dossier, seed):
     }
     if v.decision == Decision.abstain:
         # Already not reported — record the fact for the page and leave the reason alone.
+        return
+    if v.decision == Decision.actionable and dossier.corroborations.get(
+            "candidate_backedout_origin_present"):
         return
     # A NEW Verdict, not ``model_copy``: an abstain must not carry the needinfo_draft
     # (``Verdict._consistency_rule`` rejects that outright) and must not inherit
@@ -4946,12 +5000,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         _fold_second_opinion(
             result.dossier, second_opinion, seed, status=second_opinion_status
         )
-        # Backed-out candidate -> nothing to act on -> abstain. LAST of the verdict gates, and
-        # after the second-opinion fold, because it is the only unconditional one: no boost,
-        # corroboration or independent agreement can make a changeset that is not in the tree
-        # actionable, so it must get the final word on the rung. A pure read of
-        # ``candidate.backedout_by`` (resolved online by ``_resolve_candidate_backout``), hence a
-        # no-op in the offline eval and no network call on this shared path.
+        # Apply backout suppression after the fold; cited actionable origins may be exempt.
         _apply_backout_gate(result.dossier, seed)
         # The MIRROR predicate, and the last word after it: the candidate IS ITSELF a backout.
         # Net-zero (it reverts a patch from its own push) -> abstain; otherwise cap the
@@ -5222,12 +5271,9 @@ def _settle(result, seed):
     _record_hang_awaited_work(result.dossier, seed)
     _apply_hang_origin_gate(result.dossier, seed)
 
-    # Was the chosen candidate backed out — or is it ITSELF a backout? Resolved HERE,
-    # before the second opinion, so a candidate we are about to suppress never buys a
-    # ~$1 independent review. Online only (a cached hg lookup, plus one json-pushes
-    # request on the ~0.5% of runs that name a backout); the gates that act on the
-    # answers live in the shared ladder.
+    # Resolve backout metadata and cited origin presence before the shared gates.
     _resolve_candidate_backout(result.dossier, seed)
+    _resolve_backed_out_origin_presence(result.dossier, seed)
 
     # Is the mechanism's own machinery even in this build? Online (searchfox + one
     # cached raw-rev), and beside the backout resolver for the same reason: the gate

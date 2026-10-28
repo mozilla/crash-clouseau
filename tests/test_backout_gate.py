@@ -24,6 +24,7 @@ from crashclouseau.agent.schema import (  # noqa: E402
     Decision,
     Dossier,
     SearchfoxCitation,
+    StackFrameCitation,
     Verdict,
     parse_and_validate,
 )
@@ -172,6 +173,189 @@ class TestBackoutResolver(unittest.TestCase):
         with mock.patch.object(sigage, "backedout_by_for_node") as f:
             orch._resolve_candidate_backout(d, _SEED)
         f.assert_not_called()
+
+
+_FILE = "mobile/android/geckoview/src/main/java/org/mozilla/gecko/process/ServiceAllocator.java"
+_ORIGIN = "dba5330a46dc"
+
+
+def _frame(path=_FILE, line=431, stackpos=0):
+    return StackFrameCitation(uuid="u-1", stackpos=stackpos, filename=path, line=line,
+                              function="allocate", node="9080a547a12c")
+
+
+def _actionable_origin(backedout_by=_BACKOUT, citations=None):
+    return Dossier(
+        candidate=Candidate(node=_ORIGIN, bug=1608301, backedout_by=backedout_by),
+        verdict=Verdict(decision=Decision.actionable, confidence=Confidence.probable,
+                        mechanism=Claim(text="throws when no slot is free",
+                                        citations=citations or [_frame()]),
+                        consistency=Claim(text="old code", citations=[_SF])),
+    )
+
+
+def _row(lineno, node, line="code();\n"):
+    return {"lineno": lineno, "node": node + "0" * (40 - len(node)), "line": line}
+
+
+class TestBackedOutActionableOrigin(unittest.TestCase):
+    """Only cited, non-trivial build lines can exempt an actionable origin from suppression."""
+
+    _SEED = dict(_SEED, build_node="9080a547a12c")
+
+    def _resolve(self, d, rows, files=(_FILE,), git2hg="9080a547a12c" + "0" * 28):
+        rev = {"files": [{"file": f, "status": "added"} for f in files]}
+        with mock.patch.object(sigage, "json_rev", return_value=rev), \
+             mock.patch("crashclouseau.inspector.git2hg", return_value=git2hg), \
+             mock.patch("libmozdata.hgmozilla.Annotate.get",
+                        side_effect=lambda path, ch, node: {path: {"annotate": rows}}) as ann:
+            orch._resolve_backed_out_origin_presence(d, self._SEED)
+        return ann
+
+    def test_a_cited_line_that_still_blames_the_origin_is_not_suppressed(self):
+        d = _actionable_origin()
+        ann = self._resolve(d, [_row(430, "f" * 12), _row(431, _ORIGIN)])
+        ann.assert_called_once_with(_FILE, "nightly", "9080a547a12c")
+        self.assertEqual(d.corroborations["candidate_backedout_origin_present"],
+                         {"file": _FILE, "line": 431})
+        orch._apply_backout_gate(d, self._SEED)
+        self.assertEqual(d.verdict.decision, Decision.actionable)
+        self.assertTrue(d.corroborations["candidate_backedout"])
+        self.assertNotIn("candidate_backedout_suppressed", d.corroborations)
+
+    def test_surviving_header_lines_do_not_count(self):
+        # Only the uncited header lines blame the origin.
+        d = _actionable_origin()
+        self._resolve(d, [_row(1, _ORIGIN, "/* This Source Code Form is subject to\n"),
+                          _row(7, _ORIGIN, "import android.content.Context;\n"),
+                          _row(431, "1fa64c7fe170")])
+        self.assertNotIn("candidate_backedout_origin_present", d.corroborations)
+        orch._apply_backout_gate(d, self._SEED)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
+
+    def _pinned(self, anchor="4751-4771"):
+        sha = "9a2dc53c369c7ae5172018b35988e1d2ffeff402"
+        return SearchfoxCitation(
+            permalink="https://searchfox.org/firefox-main/rev/{}/{}#{}".format(sha, _FILE, anchor),
+            symbol_id="_Z1", repo="mozilla-central")
+
+    def test_a_range_pinned_to_the_build_counts_its_code_lines(self):
+        d = _actionable_origin(citations=[self._pinned()])
+        ann = self._resolve(d, [_row(4751, _ORIGIN, "}\n"), _row(4760, _ORIGIN)])
+        ann.assert_called_once_with(_FILE, "nightly", "9080a547a12c")
+        self.assertEqual(d.corroborations["candidate_backedout_origin_present"],
+                         {"file": _FILE, "line": 4760})
+
+    def test_a_pin_to_another_revision_proves_nothing_about_the_build(self):
+        # Blame at the origin's revision does not establish presence in the build.
+        d = _actionable_origin(citations=[self._pinned()])
+        ann = self._resolve(d, [_row(4760, _ORIGIN)], git2hg="dba5330a46dc" + "0" * 28)
+        ann.assert_not_called()
+        self.assertNotIn("candidate_backedout_origin_present", d.corroborations or {})
+
+    def test_r8_frame_lines_are_not_evidence_but_a_pinned_range_is(self):
+        # Remapped frame lines are untrusted; independently pinned source lines still qualify.
+        seed = dict(self._SEED, line_numbers_trusted=False)
+        rows = [_row(431, _ORIGIN), _row(4760, _ORIGIN)]
+        for cites, kept in (([_frame()], False), ([_frame(), self._pinned()], True)):
+            with self.subTest(kept=kept):
+                d = _actionable_origin(citations=cites)
+                rev = {"files": [{"file": _FILE, "status": "added"}]}
+                with mock.patch.object(sigage, "json_rev", return_value=rev), \
+                     mock.patch("crashclouseau.inspector.git2hg",
+                                return_value="9080a547a12c" + "0" * 28), \
+                     mock.patch("libmozdata.hgmozilla.Annotate.get",
+                                return_value={_FILE: {"annotate": rows}}):
+                    orch._resolve_backed_out_origin_presence(d, seed)
+                found = (d.corroborations or {}).get("candidate_backedout_origin_present")
+                self.assertEqual(found, {"file": _FILE, "line": 4760} if kept else None)
+
+    def test_the_page_says_the_code_is_still_there(self):
+        import pathlib
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates"
+                / "crashstack.html").read_text()
+        kept = page.index("corrob.get('candidate_backedout_origin_present')")
+        self.assertLess(kept, page.index("no actionable-origin exception was established"))
+        self.assertIn("but the cited code is still in the build", page)
+
+    def test_a_dereference_is_code_not_a_comment(self):
+        for text in ("  *out = value;\n", "  **pp = nullptr;\n"):
+            with self.subTest(text=text):
+                d = _actionable_origin()
+                self._resolve(d, [_row(431, _ORIGIN, text)])
+                self.assertEqual(d.corroborations["candidate_backedout_origin_present"],
+                                 {"file": _FILE, "line": 431})
+
+    def test_a_lone_brace_or_header_line_proves_nothing(self):
+        for cite, rows in ((self._pinned("4751"), [_row(4751, _ORIGIN, "}\n")]),
+                           (_frame(line=1), [_row(1, _ORIGIN, " * License, v. 2.0.\n")]),
+                           (_frame(), [_row(431, _ORIGIN, "  }\n")]),
+                           (_frame(), [_row(431, _ORIGIN, "   */\n")])):
+            with self.subTest(cite=cite):
+                d = _actionable_origin(citations=[cite])
+                self._resolve(d, rows)
+                self.assertNotIn("candidate_backedout_origin_present", d.corroborations or {})
+
+    def test_an_unpinned_permalink_and_an_uncited_file_ask_nothing(self):
+        unpinned = SearchfoxCitation(permalink="https://searchfox.org/firefox-main/source/{}#431"
+                                     .format(_FILE), symbol_id="_Z1", repo="mozilla-central")
+        for d in (_actionable_origin(citations=[unpinned]),
+                  _actionable_origin(citations=[_frame(path="other/File.java")])):
+            ann = self._resolve(d, [_row(431, _ORIGIN)])
+            ann.assert_not_called()
+            self.assertNotIn("candidate_backedout_origin_present", d.corroborations or {})
+
+    def test_a_missing_file_does_not_stop_the_next(self):
+        other = "widget/android/jni/GeckoBundleUtils.cpp"
+        d = _actionable_origin(citations=[_frame(), _frame(path=other, line=12, stackpos=1)])
+        rev = {"files": [{"file": f, "status": "added"} for f in (other, _FILE)]}
+
+        def annotate(path, channel, node):
+            if path == _FILE:
+                raise RuntimeError("404")
+            return {other: {"annotate": [_row(12, _ORIGIN)]}}
+
+        with mock.patch.object(sigage, "json_rev", return_value=rev), \
+             mock.patch("libmozdata.hgmozilla.Annotate.get", side_effect=annotate) as ann:
+            orch._resolve_backed_out_origin_presence(d, self._SEED)
+        # Citation order, not the changeset's file order: frame 0's file is read first.
+        self.assertEqual([c.args[0] for c in ann.call_args_list], [_FILE, other])
+        self.assertEqual(d.corroborations["candidate_backedout_origin_present"]["file"], other)
+
+    def test_ranges_share_one_lookup_and_only_two_files_are_read(self):
+        other, third = "other.cpp", "third.cpp"
+        cites = [_frame(), _frame(path=other), _frame(line=432), _frame(path=third)]
+        rev = {"files": [{"file": f} for f in (_FILE, other, third)]}
+        for rows, expected in (([_row(432, _ORIGIN)], [_FILE]), ([], [_FILE, other])):
+            with self.subTest(rows=rows):
+                d = _actionable_origin(citations=cites)
+                with mock.patch.object(sigage, "json_rev", return_value=rev), \
+                     mock.patch("libmozdata.hgmozilla.Annotate.get",
+                                side_effect=lambda path, ch, node: {path: {"annotate": rows}}) as ann:
+                    orch._resolve_backed_out_origin_presence(d, self._SEED)
+                self.assertEqual([c.args[0] for c in ann.call_args_list], expected)
+                if rows:
+                    self.assertEqual(d.corroborations["candidate_backedout_origin_present"],
+                                     {"file": _FILE, "line": 432})
+
+    def test_a_failed_lookup_records_nothing(self):
+        d = _actionable_origin()
+        with mock.patch.object(sigage, "json_rev", side_effect=RuntimeError("hg down")):
+            orch._resolve_backed_out_origin_presence(d, self._SEED)
+        self.assertNotIn("candidate_backedout_origin_present", d.corroborations or {})
+
+    def test_a_lead_or_a_clean_origin_asks_nothing(self):
+        with mock.patch.object(sigage, "json_rev") as rev:
+            orch._resolve_backed_out_origin_presence(_lead(), self._SEED)
+            orch._resolve_backed_out_origin_presence(_actionable_origin(backedout_by=""),
+                                                     self._SEED)
+        rev.assert_not_called()
+
+    def test_a_lead_is_suppressed_even_with_the_fact(self):
+        d = _lead()
+        d.corroborations = {"candidate_backedout_origin_present": {"file": _FILE, "line": 431}}
+        orch._apply_backout_gate(d, self._SEED)
+        self.assertEqual(d.verdict.decision, Decision.abstain)
 
 
 class TestThroughTheGates(unittest.TestCase):

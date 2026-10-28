@@ -325,9 +325,11 @@ REGISTRY = {
     "candidate_backedout_by": ("evidence", ("templates/crashstack.html",), ""),
     "candidate_backedout_suppressed": (
         "suppression", ("templates/crashstack.html",),
-        "NOT in `_INSTANCE_SUPPRESSED`, so it closes the cluster forever — and a RELANDED patch "
-        "is still suppressed, because `backedoutby` stays set and hg exposes no 'relanded as' "
-        "pointer (worklist rank 18)."),
+        "Not instance-specific (`_INSTANCE_SUPPRESSED`); counts toward cluster suppression."),
+    "candidate_backedout_origin_present": (
+        "evidence", ("agent/orchestrator.py", "templates/crashstack.html"),
+        "`{file, line}`: cited build code still blames the candidate; exempts actionable "
+        "verdicts from backout suppression."),
     "candidate_is_backout": ("evidence", ("templates/crashstack.html",), ""),
     "candidate_backout_same_push": ("evidence", ("templates/crashstack.html",), ""),
     "candidate_backout_suppressed": ("suppression", ("templates/crashstack.html",), ""),

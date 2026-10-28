@@ -262,7 +262,12 @@
       {% endif -%}
       {% if corrob.get('candidate_backedout') -%}
       <div class="corrob-chips">
-        <span class="corrob-chip refute" title="Clouseau checked hg itself: this changeset was backed out, so it is not in the tree and there is nothing left to fix. A patch is usually backed out because it was wrong, so it is suppressed rather than reported &mdash; whatever the rest of the analysis found.">candidate was backed out by <code>{{ corrob.get('candidate_backedout_by','')[:12]|e }}</code>{% if corrob.get('candidate_backedout_suppressed') %} &mdash; not reported{% endif %}</span>
+        {% set present = corrob.get('candidate_backedout_origin_present') -%}
+        {% if present -%}
+        <span class="corrob-chip" title="Blame at the crash build attributes the cited code to this changeset despite its backout metadata.">marked backed out by <code>{{ corrob.get('candidate_backedout_by','')[:12]|e }}</code>, but the cited code is still in the build (<code>{{ present.get('file','')|e }}:{{ present.get('line','')|e }}</code>)</span>
+        {% else -%}
+        <span class="corrob-chip refute" title="Repository metadata marks this changeset as backed out; no actionable-origin exception was established.">candidate was backed out by <code>{{ corrob.get('candidate_backedout_by','')[:12]|e }}</code>{% if corrob.get('candidate_backedout_suppressed') %} &mdash; not reported{% endif %}</span>
+        {% endif -%}
       </div>
       {% endif -%}
       {% if corrob.get('candidate_is_backout') -%}
