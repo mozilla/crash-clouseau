@@ -5131,6 +5131,27 @@ def _record_file_components(dossier, seed):
         return
     if found:
         dossier.corroborations = {**(dossier.corroborations or {}), "file_components": found}
+        _record_history_components(dossier, stack, found)
+
+
+def _record_history_components(dossier, stack, found):
+    """Record file-history components for products with a General component hint."""
+    out = {}
+    try:
+        from crashclouseau import bugcomponents, report_bug
+        from crashclouseau.agent import spike_escalation
+
+        for product in dict.fromkeys(pc[0] for pc in found.values() if pc[1] == "General"):
+            component = bugcomponents.history_component(
+                product, stack, report_bug._bugs_product_component,
+                spike_escalation._components_of)
+            if component:
+                out[product] = component
+    except Exception:
+        logger.warning("agent: history components failed", exc_info=True)
+        return
+    if out:
+        dossier.corroborations = {**(dossier.corroborations or {}), "history_components": out}
 
 
 _HG_USER_EMAIL = re.compile(r"<([^<>@\s]+@[^<>@\s]+)>")

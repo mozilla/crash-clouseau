@@ -116,6 +116,151 @@ class TestFileComponents(unittest.TestCase):
             self.assertEqual(bc.file_components(self.CHANGESET, self.STACK), {})
 
 
+FENIX = "mobile/android/fenix/app/src/main/java/org/mozilla/fenix"
+AC = "mobile/android/android-components/components"
+ANDROID_RULES = {"mobile/": ["Firefox for Android", "General"],
+                 "mobile/android/geckoview/": ["GeckoView", "General"]}
+ACTIVE = {"Accounts and Sync", "Downloads", "Tabs", "Contextual AI", "General"}
+
+
+def _commits(*bugs, files=2):
+    return [{"messageHeadline": "Bug {} - change. r=x".format(b), "changedFilesIfAvailable": files}
+            for b in bugs]
+
+
+class TestHistoryComponent(unittest.TestCase):
+    """Bug numbers encode their component: 1xx Accounts and Sync, 2xx Downloads, 3xx Tabs,
+    4xx Contextual AI, 5xx General, 6xx GeckoView :: General."""
+    SYNC = AC + "/service/firefox-accounts/src/main/java/mozilla/components/service/fxa/FxA.kt"
+    STORE = AC + "/lib/dataprotect/src/main/java/mozilla/components/lib/dataprotect/Store.kt"
+
+    def setUp(self):
+        self.histories = {}
+        p = mock.patch.object(bc, "_path_histories",
+                              side_effect=lambda paths: {k: self.histories.get(k, [])
+                                                         for k in paths})
+        self.fetch = p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _components(ids):
+        names = {1: "Accounts and Sync", 2: "Downloads", 3: "Tabs", 4: "Contextual AI",
+                 5: "General"}
+        return {b: ("GeckoView", "General") if b // 100 == 6 else
+                ("Firefox for Android", names[b // 100]) for b in ids}
+
+    def _run(self, paths, active=ACTIVE):
+        return bc.history_component("Firefox for Android", paths, self._components,
+                                    lambda product: active, rules=ANDROID_RULES)
+
+    def test_the_bugs_that_changed_the_files_name_the_component(self):
+        self.histories = {self.SYNC: _commits(101, 102, 103, 301, 501),
+                          self.STORE: _commits(104, 105, 106, 107, 201)}
+        self.assertEqual(self._run(["android.os.Foo", self.STORE, self.SYNC]), "Accounts and Sync")
+
+    def test_bulk_changes_and_reverts_do_not_vote(self):
+        bulk = _commits(501, 502, 503, 504, 505, 506, 507, files=2426)
+        reverts = [{"messageHeadline": 'Revert "Bug 508 - x"', "changedFilesIfAvailable": 1},
+                   {"messageHeadline": "Backed out changeset abc (Bug 509)",
+                    "changedFilesIfAvailable": 1},
+                   {"messageHeadline": "No Bug - Import translations", "changedFilesIfAvailable": 3}]
+        self.histories = {self.SYNC: bulk + reverts + _commits(101, 102, 103, 104, 105)}
+        self.assertEqual(self._run([self.SYNC]), "Accounts and Sync")
+        self.histories = {self.SYNC: bulk + reverts + _commits(101), FENIX: _commits(102)}
+        self.assertIsNone(self._run([self.SYNC]))
+
+    def test_one_busy_file_does_not_outvote_the_others(self):
+        # Each file gets one vote regardless of its number of bugs; ties have no winner.
+        browser, closed = FENIX + "/browser/BrowserFragment.kt", AC + "/feature/recentlyclosed/R.kt"
+        self.histories = {browser: _commits(*range(401, 411)), closed: _commits(301, 302, 303,
+                                                                                304, 305)}
+        self.assertIsNone(self._run([browser, closed]))
+
+    def test_general_a_minority_or_too_few_bugs_name_nothing(self):
+        self.histories = {self.SYNC: _commits(501, 502, 503, 101, 102)}
+        self.assertIsNone(self._run([self.SYNC]))
+        self.histories = {self.SYNC: _commits(101, 102, 201, 202, 301, 302, 401, 402)}
+        self.assertIsNone(self._run([self.SYNC]))
+        self.histories = {self.SYNC: _commits(101, 102)}
+        self.assertIsNone(self._run([self.SYNC]))
+
+    def test_shared_bugs_count_once_toward_the_minimum(self):
+        paths = [self.SYNC, self.STORE, self.STORE.replace("Store.kt", "Other.kt")]
+        for bugs in ((101,), (101, 102)):
+            with self.subTest(bugs=bugs):
+                self.histories = {p: _commits(*bugs) for p in paths}
+                self.assertIsNone(self._run(paths))
+        self.histories = {p: _commits(101, 102, 103) for p in paths}
+        self.assertEqual(self._run(paths), "Accounts and Sync")
+
+    def test_an_inactive_or_unknown_component_names_nothing(self):
+        self.histories = {self.SYNC: _commits(101, 102, 103, 104, 105)}
+        self.assertIsNone(self._run([self.SYNC], active={"General", "Tabs"}))
+        self.assertIsNone(self._run([self.SYNC], active=None))
+
+    def test_a_thin_file_borrows_its_nearest_directories_history(self):
+        fxa = self.SYNC.rsplit("/", 1)[0]
+        self.histories = {self.SYNC: _commits(101), fxa: _commits(102, 103, 104, 105, 301)}
+        self.assertEqual(self._run([self.SYNC]), "Accounts and Sync")
+        dirs = self.fetch.call_args_list[1][0][0]
+        self.assertIn(fxa, dirs)
+        self.assertEqual(len(dirs), bc.HISTORY_DIR_LEVELS)
+        self.assertEqual(bc._parent_dirs("dom/media/platforms/wmf/WMF.cpp",
+                                         {"dom/media/": ["Core", "Audio/Video"]}),
+                         ["dom/media/platforms/wmf", "dom/media/platforms", "dom/media"])
+
+    def test_other_products_files_and_bugs_do_not_vote(self):
+        gv = "mobile/android/geckoview/src/main/java/org/mozilla/geckoview/GeckoRuntime.java"
+        self.histories = {gv: _commits(601, 602, 603, 604, 605),
+                          self.SYNC: _commits(101, 102, 103, 601, 602)}
+        self.assertEqual(self._run([gv, self.SYNC]), "Accounts and Sync")
+        self.assertNotIn(gv, self.fetch.call_args_list[0][0][0])
+        self.assertIsNone(self._run([gv]))
+        self.assertIsNone(self._run(["mobile/android/fenix/app/src/test/java/T.kt"]))
+
+    def test_unavailable_history_or_bugs_name_nothing(self):
+        self.fetch.side_effect = None
+        self.fetch.return_value = None
+        self.assertIsNone(self._run([self.SYNC]))
+        self.fetch.side_effect = lambda paths: {k: _commits(101, 102, 103, 104, 105) for k in paths}
+        self.assertIsNone(bc.history_component("Firefox for Android", [self.SYNC],
+                                               mock.Mock(side_effect=RuntimeError("bmo down")),
+                                               lambda product: ACTIVE, rules=ANDROID_RULES))
+
+
+class TestPathHistories(unittest.TestCase):
+    def setUp(self):
+        from tests import REAL_PATH_HISTORIES
+        self.real = REAL_PATH_HISTORIES
+
+    def test_without_a_token_github_is_not_asked(self):
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch("crashclouseau.net.post") as post:
+            os.environ.pop("GITHUB_TOKEN", None)
+            self.assertIsNone(self.real(["a/b.kt"]))
+        post.assert_not_called()
+
+    def test_one_query_maps_each_path_to_its_commits(self):
+        r = mock.Mock(status_code=200)
+        r.json.return_value = {"data": {"repository": {"object": {
+            "h0": {"nodes": _commits(1)}, "h1": {"nodes": []}}}}}
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t"}), \
+                mock.patch("crashclouseau.net.post", return_value=r) as post:
+            self.assertEqual(self.real(["a/b.kt", "a"]), {"a/b.kt": _commits(1), "a": []})
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["variables"], {"p0": "a/b.kt", "p1": "a"})
+        self.assertIn("history(first: {}, path: $p1)".format(bc.HISTORY_COMMITS), body["query"])
+        self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer t"})
+
+    def test_a_refusal_is_no_history(self):
+        for status, payload in ((502, None), (200, {"errors": [{"message": "rate limited"}]})):
+            r = mock.Mock(status_code=status, text="<html>502</html>")
+            r.json.return_value = payload
+            with self.subTest(status=status), mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t"}), \
+                    mock.patch("crashclouseau.net.post", return_value=r):
+                self.assertIsNone(self.real(["a/b.kt"]))
+
+
 class TestLoad(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

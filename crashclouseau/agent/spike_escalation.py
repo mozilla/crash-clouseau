@@ -1208,6 +1208,29 @@ def _most_common(pcs):
 
 
 def resolve_component(findings, signature, crash_product, stack=None):
+    """``_resolve_component``, with a General answer replaced by the component named by the
+    file history of the stack (``bugcomponents.history_component``)."""
+    frames = [f.get("filename") for f in (stack or {}).get("frames") or []]
+    loaded = {}
+
+    def load_rules():
+        # Cache empty maps too: _load does not cache failed fetches.
+        if "rules" not in loaded:
+            loaded["rules"] = bugcomponents._load()
+        return loaded["rules"]
+
+    product, component, how = _resolve_component(findings, signature, crash_product, frames,
+                                                 load_rules)
+    if component == "General" and frames and load_rules():
+        refined = bugcomponents.history_component(
+            product, frames, report_bug._bugs_product_component, _components_of,
+            rules=load_rules())
+        if refined:
+            return product, refined, "the file history of the stack"
+    return product, component, how
+
+
+def _resolve_component(findings, signature, crash_product, frames, load_rules):
     """Return ``(product, component, how)`` for a new bug.
 
     Prefer the investigator's pair, then signature bugs. Next try cited files and stack
@@ -1235,9 +1258,7 @@ def resolve_component(findings, signature, crash_product, stack=None):
         return product, component, "the signature's existing bugs"
     named = findings.product if findings is not None and findings.product not in foreign else None
     cited = _cited_paths(findings)
-    frames = [f.get("filename") for f in (stack or {}).get("frames") or []]
-    # Load once: failed fetches are not cached.
-    rules = bugcomponents._load() if cited or frames else {}
+    rules = load_rules() if cited or frames else {}
     code = ((_code_components(cited, foreign, rules), "moz.build of the cited files"),
             (_code_components(frames, foreign, rules, bugcomponents.STACK_WINDOW),
              "moz.build of the stack")) if rules else ()

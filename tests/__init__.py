@@ -10,7 +10,12 @@ mailmap._cache.update(entries={}, until=float("inf"))
 
 from unittest import mock  # noqa: E402
 
+from crashclouseau import bugcomponents  # noqa: E402
 from crashclouseau.agent import venue_judge  # noqa: E402
+
+# Prevent GitHub file-history calls unless a test overrides this mock.
+REAL_PATH_HISTORIES = bugcomponents._path_histories
+mock.patch.object(bugcomponents, "_path_histories", return_value=None).start()
 
 # Prevent model calls unless a test overrides this mock.
 REAL_VENUE_CHECK = venue_judge.check

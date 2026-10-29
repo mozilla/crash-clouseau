@@ -1994,7 +1994,18 @@ def _code_component(file_components, foreign):
     return None
 
 
-def resolve_product_component(candidate, channel, product=None, file_components=None):
+def resolve_product_component(candidate, channel, product=None, file_components=None,
+                              history_components=None):
+    """Resolve the filing pair, refining General from history within the same product."""
+    pc = _resolve_product_component(candidate, channel, product, file_components)
+    refined = (history_components or {}).get(pc[0]) if pc[1] == "General" else None
+    if refined:
+        logger.info("bug preview: filing in %s :: %s, from the file history", pc[0], refined)
+        return pc[0], refined
+    return pc
+
+
+def _resolve_product_component(candidate, channel, product=None, file_components=None):
     """Resolve a filing component, excluding other applications' products at every step.
 
     Prefer the regressor bug's pair. Otherwise, use the most frequent allowed pair from
@@ -3084,9 +3095,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     channel = uuid_info.get("channel")
     uuid = uuid_info.get("uuid", "")
     if candidate and candidate.get("node"):
+        corro = dossier.get("corroborations") or {}
         product, component = resolve_product_component(
             candidate, channel, uuid_info.get("product"),
-            file_components=(dossier.get("corroborations") or {}).get("file_components"))
+            file_components=corro.get("file_components"),
+            history_components=corro.get("history_components"))
         person = _needinfo_person(candidate, channel)
     else:
         # No changeset: the FIXED bug is the authority on both. Its component is where this

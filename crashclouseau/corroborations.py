@@ -576,6 +576,10 @@ REGISTRY = {
         "evidence", ("report_bug.py",),
         "Component estimates for the changeset, stack and overlap (`bugcomponents.file_components`). "
         "The author-based filing fallback requires a match with one of these pairs."),
+    "history_components": (
+        "evidence", ("report_bug.py",),
+        "`{product: component}` inferred by `bugcomponents.history_component`. "
+        "Replaces General within the same product."),
 }
 
 

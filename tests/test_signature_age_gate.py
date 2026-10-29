@@ -463,6 +463,44 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
                                    ["accessible/a.cpp", None])
         self.assertEqual(d.corroborations["file_components"], found)
 
+    def test_records_the_file_history_component_of_each_general_product(self):
+        d = _lead()
+        seed = dict(_SEED, frames=[{"filename": "mobile/android/a.kt"}])
+        found = {"stack": ["GeckoView", "General"], "overlap": ["Firefox for Android", "General"],
+                 "changeset": ["Firefox for Android", "General"]}
+        names = {"Firefox for Android": "Accounts and Sync", "GeckoView": None}
+        with mock.patch.object(sigage, "json_rev", return_value={}), \
+                mock.patch("crashclouseau.bugcomponents.file_components", return_value=found), \
+                mock.patch("crashclouseau.bugcomponents.history_component",
+                           side_effect=lambda product, *a: names[product]) as history:
+            orch._record_file_components(d, seed)
+        self.assertEqual([c[0][:2] for c in history.call_args_list],
+                         [("GeckoView", ["mobile/android/a.kt"]),
+                          ("Firefox for Android", ["mobile/android/a.kt"])])
+        self.assertEqual(d.corroborations["history_components"],
+                         {"Firefox for Android": "Accounts and Sync"})
+
+    def test_no_general_product_or_no_answer_records_no_history(self):
+        for found, answer in (({"stack": ["Core", "Layout"]}, "X"),
+                              ({"stack": ["Firefox for Android", "General"]}, None)):
+            d = _lead()
+            with self.subTest(found=found), mock.patch.object(sigage, "json_rev", return_value={}), \
+                    mock.patch("crashclouseau.bugcomponents.file_components", return_value=found), \
+                    mock.patch("crashclouseau.bugcomponents.history_component",
+                               return_value=answer) as history:
+                orch._record_file_components(d, _SEED)
+            self.assertNotIn("history_components", d.corroborations)
+            self.assertEqual(history.called, answer is None)
+        d = _lead()
+        with mock.patch.object(sigage, "json_rev", return_value={}), \
+                mock.patch("crashclouseau.bugcomponents.file_components",
+                           return_value={"stack": ["Firefox for Android", "General"]}), \
+                mock.patch("crashclouseau.bugcomponents.history_component",
+                           side_effect=RuntimeError("github down")):
+            orch._record_file_components(d, _SEED)       # must not raise
+        self.assertIn("file_components", d.corroborations)
+        self.assertNotIn("history_components", d.corroborations)
+
     def test_file_components_absent_or_failing_leave_the_dossier_alone(self):
         d = _lead()
         with mock.patch.object(sigage, "json_rev", return_value={}), \

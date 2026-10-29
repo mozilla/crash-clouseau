@@ -424,6 +424,26 @@ class TestComponent(unittest.TestCase):
             self.assertEqual(self._resolve(None, "Firefox", frames),
                              ("Core", "Graphics: ImageLib", "moz.build of the stack"))
 
+    def test_the_file_history_refines_a_general_answer(self):
+        # An unknown investigator component falls back to General before history refinement.
+        frames = ["third_party/application-services/components/viaduct/FetchBackend.kt"]
+        with mock.patch.object(se.bugcomponents, "history_component",
+                               return_value="Sync") as history:
+            self.assertEqual(self._resolve(self._viaduct(), frames=frames),
+                             ("Application Services", "Sync", "the file history of the stack"))
+        self.assertEqual(history.call_args[0][:2], ("Application Services", frames))
+        self.assertEqual(history.call_args.kwargs["rules"], self._RULES)
+        with mock.patch.object(se.bugcomponents, "history_component",
+                               return_value=None):
+            self.assertEqual(self._resolve(self._viaduct(), frames=frames),
+                             ("Application Services", "General", "moz.build of the stack"))
+        with mock.patch.object(se.bugcomponents, "history_component") as history:
+            self.assertEqual(self._resolve(None, "Firefox", ["image/Image.cpp"]),
+                             ("Core", "Graphics: ImageLib", "moz.build of the stack"))
+            self.assertEqual(self._resolve(None, "Fenix"),
+                             ("Firefox for Android", "General", "fallback"))
+        history.assert_not_called()
+
     def test_the_fallback_follows_the_crash_product(self):
         self.assertEqual(self._resolve(None, "Fenix"), ("Firefox for Android", "General", "fallback"))
         self.assertEqual(self._resolve(None, "Firefox"), ("Core", "General", "fallback"))
