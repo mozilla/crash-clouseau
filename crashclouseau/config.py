@@ -1170,6 +1170,9 @@ def get_agent_autofile(channel=None, product=None):
         # separate by three orders of magnitude — the correct comment landed on a bug filed 9
         # days AFTER its regressor, the wrong one on a bug filed 1375 days BEFORE.
         "comment_max_bug_age_days": a.get("comment_max_bug_age_days", 30),
+        # Block new bugs for this many days after a matching bug is duplicated to an
+        # unreadable target. 0/null disables this gate.
+        "hidden_duplicate_days": a.get("hidden_duplicate_days", 14),
         # Maximum recorded origin age for waiving the actionable installation floor.
         # `report_bug.fresh_origin_days` also checks first-seen ordering and novelty flags.
         # 14 days is a policy default, not a measured cutoff. `0` or `null` disables the waiver.

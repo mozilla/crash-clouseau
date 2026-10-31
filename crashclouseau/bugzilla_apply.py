@@ -821,6 +821,21 @@ def _family_spelling_map(signature, family):
     return out
 
 
+def _signature_search_params(spellings, fields, resolution=None):
+    """Build a substring query for crash-signature fields and bracketed summaries."""
+    params = {"include_fields": fields, "j_top": "OR"}
+    if resolution is not None:
+        params["resolution"] = resolution
+    for i, spelling in enumerate(spellings):
+        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
+        params["o{}".format(2 * i + 1)] = "substring"
+        params["v{}".format(2 * i + 1)] = spelling
+        params["f{}".format(2 * i + 2)] = "short_desc"
+        params["o{}".format(2 * i + 2)] = "substring"
+        params["v{}".format(2 * i + 2)] = "[@ " + spelling
+    return params
+
+
 def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, product=None,
                              extra=()):
     """Return public open venues for the signature and its family, sorted by bug ID.
@@ -853,19 +868,9 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
     for spelling in frames:
         others.setdefault(spelling, {"via": spelling, "relation": "outline", "since": None})
     spellings = own + sorted(others)
-    params = {
-        "include_fields": "id,summary,status,resolution,creation_time,product,keywords,"
-                          "cf_crash_signature,regressed_by",
-        "j_top": "OR",
-        "resolution": "---",
-    }
-    for i, spelling in enumerate(spellings):
-        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
-        params["o{}".format(2 * i + 1)] = "substring"
-        params["v{}".format(2 * i + 1)] = spelling
-        params["f{}".format(2 * i + 2)] = "short_desc"
-        params["o{}".format(2 * i + 2)] = "substring"
-        params["v{}".format(2 * i + 2)] = "[@ " + spelling
+    params = _signature_search_params(
+        spellings, "id,summary,status,resolution,creation_time,product,keywords,"
+                   "cf_crash_signature,regressed_by", resolution="---")
     try:
         r = net.get(_bz_rest(), params=params, timeout=timeout)
         r.raise_for_status()
@@ -996,18 +1001,9 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
 
     # Search own lambda variants and any family spellings supplied by the caller.
     spellings = sorted(set(spellings or ()) | utils.lambda_siblings(sig))
-    params = {
-        "include_fields": "id,summary,cf_crash_signature,dupe_of,cf_last_resolved",
-        "j_top": "OR",
-        "resolution": "DUPLICATE",
-    }
-    for i, spelling in enumerate(spellings):
-        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
-        params["o{}".format(2 * i + 1)] = "substring"
-        params["v{}".format(2 * i + 1)] = spelling
-        params["f{}".format(2 * i + 2)] = "short_desc"
-        params["o{}".format(2 * i + 2)] = "substring"
-        params["v{}".format(2 * i + 2)] = "[@ " + spelling
+    params = _signature_search_params(
+        spellings, "id,summary,cf_crash_signature,dupe_of,cf_last_resolved",
+        resolution="DUPLICATE")
     try:
         r = net.get(_bz_rest(), params=params, timeout=timeout)
         r.raise_for_status()
@@ -1567,6 +1563,64 @@ def _fixed_after_build_bug(signature, buildid, product, spellings=None):
     return None
 
 
+def _hidden_duplicate_bug(signature, product, spellings=None, max_age_days=None, now=None):
+    """Find the newest recent same-application duplicate with an unreadable endpoint.
+
+    Return ``{"via": source_id, "resolved": datetime}``, or ``None`` on no match or
+    lookup failure. Ignore chains that exceed the hop limit.
+    """
+    sig = (signature or "").strip()
+    if not sig or not max_age_days:
+        return None
+    from crashclouseau import sigage
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
+    names = sorted(set(spellings or ()) | utils.lambda_siblings(sig))
+    params = _signature_search_params(
+        names, "id,summary,product,cf_crash_signature,dupe_of,cf_last_resolved",
+        resolution="DUPLICATE")
+    try:
+        r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+        dups = (r.json() or {}).get("bugs") or []
+    except Exception as exc:                                   # pragma: no cover - network
+        logger.warning("autofile: hidden-duplicate lookup failed for %r: %s", signature, exc)
+        return None
+    resolved_at = {}
+    duplicates = []
+    for d in _split_by_application(dups, product)[0]:
+        if not d.get("id") or not d.get("dupe_of"):
+            continue
+        if not any(_row_is_about(d, name) for name in names):
+            continue
+        resolved = sigage.to_datetime(d.get("cf_last_resolved"))
+        if resolved is None or not cutoff <= resolved <= now:
+            continue
+        resolved_at[d["id"]] = resolved
+        duplicates.append(d)
+    endpoints = _duplicate_endpoints(duplicates, include_missing=True)
+    if endpoints is None:
+        return None
+    hidden = [source for row, source in endpoints if row is None]
+    if not hidden:
+        return None
+    via = max(hidden, key=lambda source: (resolved_at[source], source))
+    return {"via": via, "resolved": resolved_at[via]}
+
+
+def _hidden_duplicate_result(hidden):
+    """Build the filing decline without naming the unreadable bug."""
+    via, resolved = hidden["via"], hidden["resolved"]
+    return {
+        "filed": False, "bug": via,
+        "hidden_duplicate": {"via": via, "resolved": resolved.isoformat()},
+        "skipped": ("bug {} on this signature was resolved on {} as a duplicate of a bug that "
+                    "is not public; the crash is tracked there, and a new bug would duplicate it"
+                    .format(via, resolved.strftime("%Y-%m-%d"))),
+    }
+
+
 _FIXED_BUGS_CACHE: dict = {}
 
 
@@ -1607,20 +1661,8 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
         # The crash's own train's status flag (`cf_status_firefox155`): the one field that says
         # whether a FIXED bug's fix is on THIS train. See `_known_on_train_bug`.
         fields += ",{}".format(_train_flag_field(major))
-    params = {
-        # `assigned_to` AND `assigned_to_detail`: BMO returns a `*_detail` field only when the
-        # BASE field is also requested, and silently omits it otherwise -- which read as
-        # "unassigned" here rather than as an error.
-        "include_fields": fields,
-        "j_top": "OR",
-    }
-    for i, name in enumerate(names):
-        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
-        params["o{}".format(2 * i + 1)] = "substring"
-        params["v{}".format(2 * i + 1)] = name
-        params["f{}".format(2 * i + 2)] = "short_desc"
-        params["o{}".format(2 * i + 2)] = "substring"
-        params["v{}".format(2 * i + 2)] = "[@ " + name
+    # Request both assignee fields for owner routing.
+    params = _signature_search_params(names, fields)
     try:
         r = net.get(_bz_rest(), params=params, timeout=_HTTP_TIMEOUT)
         r.raise_for_status()
@@ -1663,10 +1705,11 @@ def _fixed_bugs_about(signature, product, use_cache=False, major=None,
     return out
 
 
-def _duplicate_endpoints(duplicates):
+def _duplicate_endpoints(duplicates, include_missing=False):
     """Return ``[(endpoint_row, source_duplicate_id), ...]`` or ``None`` on lookup failure.
 
-    Follow at most ``_DUP_CHAIN_MAX_HOPS`` links; omit missing rows and unfinished chains.
+    Stop after ``_DUP_CHAIN_MAX_HOPS`` links. With ``include_missing``, also return
+    ``(None, source_id)`` for targets omitted from a successful lookup.
     """
     pending = {b["id"]: b["dupe_of"] for b in duplicates}
     out = []
@@ -1681,6 +1724,8 @@ def _duplicate_endpoints(duplicates):
         for source, target in pending.items():
             row = by_id.get(target)
             if row is None:
+                if include_missing:
+                    out.append((None, source))
                 continue
             if (row.get("resolution") or "").upper() == "DUPLICATE" and row.get("dupe_of"):
                 following[source] = row["dupe_of"]
@@ -3577,6 +3622,15 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
                 "skipped": "bug {} already tracks this signature on this train ({} = {}); "
                            "the fix is not here and this crash is that bug".format(
                                known["id"], known["field"], known["flag"])}, restricted)
+        # Treat recent duplicates with unreadable targets as tracked.
+        # Exempt meta signatures, which can cover multiple causes.
+        hidden = None if meta_bugs else _hidden_duplicate_bug(
+            signature, uuid_info.get("product"), max_age_days=cfg.get("hidden_duplicate_days"),
+            **widened)
+        if hidden:
+            decline = _hidden_duplicate_result(hidden)
+            logger.info("autofile: %s -- not filing for %s", decline["skipped"], uuid)
+            return _with_restricted(decline, restricted)
 
     # ALREADY HAS A REGRESSOR, so there is nothing for us to say. Our comment makes ONE claim
     # -- this changeset caused it -- and a venue whose `regressed_by` is already set has

@@ -1655,6 +1655,13 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                      "public": below["kind"] != "own_restricted" and below.get("public", True)}
             venue_kind = below["kind"]
             for_spike = False
+    if venue is None and not meta_bugs:
+        hidden = bugzilla_apply._hidden_duplicate_bug(
+            signature, product, spellings=bugzilla_apply._family_spellings(signature, family),
+            max_age_days=config.get_agent_autofile(channel, product=product).get(
+                "hidden_duplicate_days"))
+        if hidden:
+            return dict(result, **bugzilla_apply._hidden_duplicate_result(hidden))
     # A BUCKET-HOLDER SIGNATURE (an open [meta] tracker carries it): no bug titled by the
     # signature may be filed beside the tracker (:jstutte, bugs 2073349 c1 and 2069191 c5). A
     # grounded analysis that names its cause files a BUCKET bug -- titled for the cause, no
