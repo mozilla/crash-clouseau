@@ -59,7 +59,8 @@ class TestRecentChannelStats(unittest.TestCase):
                                "esr": {"count": 3, "installs": 3}})
         self.assertEqual((seen["signature"], seen["product"]), ("=Foo::Bar", "Firefox"))
         self.assertTrue(seen["date"].startswith(">="))
-        self.assertEqual(seen["_aggs.release_channel"], "_cardinality.install_time")
+        self.assertEqual(seen["_aggs.release_channel"],
+                         ["_cardinality.install_time", "moz_crash_reason"])
 
     def test_no_answer_is_unknown_and_not_cached(self):
         info = {"signature": "Foo::Bar", "product": "Fenix"}
@@ -114,6 +115,124 @@ class TestRecentChannelStats(unittest.TestCase):
         self.assertFalse(adds({"esr": {"count": 1, "installs": 1}}, {"count": 1, "installs": 1},
                               "esr153"))
         self.assertFalse(adds(None, {"count": 1}, "nightly"))
+
+
+def _reasons(term, count, installs, reasons):
+    row = _row(term, count, installs)
+    row["facets"]["moz_crash_reason"] = [{"term": t, "count": n} for t, n in reasons]
+    return row
+
+
+_ASSERT = "MOZ_DIAGNOSTIC_ASSERT(entry && *entry == actor->GetLifecycleProxy())"
+
+
+class TestTheCrashReasonSplit(unittest.TestCase):
+    def setUp(self):
+        report_bug._RECENT_CACHE.clear()
+
+    def _fetch(self, rows):
+        fake, _ = _search(rows)
+        with mock.patch.object(report_bug.socorro, "SuperSearch", fake):
+            return report_bug.fetch_recent_channel_stats(
+                {"signature": "Foo::Bar", "product": "Firefox"}, 30)
+
+    def test_complete_reason_lists_are_kept_and_merged(self):
+        got = self._fetch([_reasons("release", 11, 11, []),
+                           _reasons("beta", 3, 3, [("A", 2)]),
+                           _reasons("aurora", 2, 2, [("A", 1), ("B", 1)])])
+        self.assertEqual(got["release"]["reasons"], {})
+        self.assertEqual(got["beta"]["reasons"], {"A": 3, "B": 1})
+
+    def test_a_capped_list_is_unknown_for_the_whole_channel(self):
+        capped = [("R{}".format(i), 1) for i in range(report_bug._RECENT_FACETS_SIZE)]
+        got = self._fetch([_reasons("release", 60, 60, capped),
+                           _reasons("beta", 3, 3, [("A", 3)]),
+                           _reasons("aurora", 60, 60, capped)])
+        self.assertNotIn("reasons", got["release"])
+        self.assertNotIn("reasons", got["beta"])
+
+    def test_the_sentence_says_how_many_carry_the_reason(self):
+        recent = {"release": {"count": 11, "installs": 11, "reasons": {}},
+                  "nightly": {"count": 3, "installs": 3, "reasons": {_ASSERT: 3}},
+                  "esr": {"count": 1, "installs": 1, "reasons": {}}}
+        self.assertEqual(
+            report_bug.build_recent_channels_sentence(recent, "Firefox", 30, reason=_ASSERT),
+            "In the last 30 days, Firefox has 11 crashes (from 11 installations; none with this "
+            "crash reason) on release, 3 crashes (from 3 installations) on nightly and 1 crash "
+            "(without this crash reason) on esr with this signature.")
+        recent = {"release": {"count": 4799, "installs": 4500,
+                              "reasons": {"MOZ_CRASH(JNI exception)": 145}}}
+        self.assertIn("4799 crashes (from 4500 installations; 145 with this crash reason)",
+                      report_bug.build_recent_channels_sentence(
+                          recent, "Fenix", 30, reason="MOZ_CRASH(JNI exception)"))
+
+    def test_allocation_sizes_in_the_reason_are_ignored(self):
+        recent = {"release": {"count": 2, "installs": 2, "reasons": {
+            "out of memory: 0x0000000000101000 bytes requested": 1,
+            "out of memory: 0x0000000000202000 bytes requested": 1}}}
+        self.assertEqual(
+            report_bug.build_recent_channels_sentence(
+                recent, "Firefox", 30, reason="out of memory: 0x0000000000303000 bytes requested"),
+            "In the last 30 days, Firefox has 2 crashes (from 2 installations) on release with "
+            "this signature.")
+
+    def test_constants_in_stringified_code_are_kept(self):
+        for own, other in (("MOZ_RELEASE_ASSERT(count == 1)", "MOZ_RELEASE_ASSERT(count == 2)"),
+                           ("MOZ_CRASH(step 1)", "MOZ_CRASH(step 2)"),
+                           ("assertion failed: len == 1", "assertion failed: len == 2")):
+            recent = {"release": {"count": 10, "installs": 10, "reasons": {own: 1, other: 9}}}
+            self.assertIn("1 with this crash reason", report_bug.build_recent_channels_sentence(
+                recent, "Firefox", 30, reason=own), own)
+
+    def test_runtime_numbers_are_ignored_and_identifiers_kept(self):
+        key = report_bug._reason_key
+        self.assertEqual(key("[Parent 15916, Main Thread] ###!!! ABORT: file a.cpp:420"),
+                         key("[Parent 8508, Main Thread] ###!!! ABORT: file a.cpp:420"))
+        self.assertEqual(key("ElementAt(aIndex = 2, aLength = 2)"),
+                         key("ElementAt(aIndex = 28, aLength = 28)"))
+        self.assertEqual(key("zwp_linux_buffer_params_v1#280: error 7"),
+                         key("zwp_linux_buffer_params_v1#877: error 7"))
+        self.assertEqual(key("index out of bounds: the len is 5017 but the index is 5017"),
+                         key("index out of bounds: the len is 271 but the index is 271"))
+        self.assertEqual(key("out of memory: 0x00000000000FF958 bytes requested"),
+                         key("out of memory: 0x0000000000057A08 bytes requested"))
+        self.assertEqual(key("unreachable code: Expression [483] is not cached!"),
+                         key("unreachable code: Expression [2320] is not cached!"))
+        self.assertNotEqual(key("IPDL error: Msg_Read2 failed"),
+                            key("IPDL error: Msg_Read3 failed"))
+
+    def test_error_codes_are_kept(self):
+        key = report_bug._reason_key
+        self.assertNotEqual(key("zwp_linux_buffer_params_v1#280: error 7"),
+                            key("zwp_linux_buffer_params_v1#877: error 8"))
+        self.assertNotEqual(key("Failed to open the database: rv=0x80004005"),
+                            key("Failed to open the database: rv=0x8000FFFF"))
+        recent = {"release": {"count": 10, "installs": 10, "reasons": {
+            "params_v1#280: error 7": 1, "params_v1#877: error 8": 9}}}
+        self.assertIn("1 with this crash reason", report_bug.build_recent_channels_sentence(
+            recent, "Firefox", 30, reason="params_v1#169: error 7"))
+
+    def test_no_reason_or_an_unknown_split_says_nothing_more(self):
+        plain = ("In the last 30 days, Firefox has 11 crashes (from 11 installations) on release "
+                 "with this signature.")
+        known = {"release": {"count": 11, "installs": 11, "reasons": {}}}
+        unknown = {"release": {"count": 11, "installs": 11}}
+        self.assertEqual(report_bug.build_recent_channels_sentence(known, "Firefox", 30), plain)
+        self.assertEqual(report_bug.build_recent_channels_sentence(
+            unknown, "Firefox", 30, reason=_ASSERT), plain)
+
+    def test_the_preview_passes_the_crash_reason(self):
+        recent = {"release": {"count": 106, "installs": 100, "reasons": {}},
+                  "nightly": {"count": 3, "installs": 3, "reasons": {_ASSERT: 3}}}
+        c = tav._build_preview(tav._preview_dossier(), recent=recent,
+                               details={"moz_crash_reason": _ASSERT})["comment"]
+        self.assertIn("106 crashes (from 100 installations; none with this crash reason) on "
+                      "release", c)
+
+    def test_the_floor_still_counts_every_report(self):
+        recent = {"release": {"count": 60, "installs": 60, "reasons": {}}}
+        with mock.patch.object(report_bug.config, "get_spike", return_value=50):
+            self.assertEqual(report_bug.channels_over_floor(recent, "Firefox"), ["release"])
 
 
 class TestTheFloor(_Base):

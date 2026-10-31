@@ -254,13 +254,13 @@ def _preview_dossier(**corro):
     }
 
 
-def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=50):
+def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=50,
+                   details=None):
     """Render with stubbed crash counts and recipient lookups."""
+    details = details or {"reason": "EXCEPTION_BREAKPOINT", "address": "0x7ff6fb034c43"}
     with mock.patch.object(report_bug, "resolve_product_component",
                            return_value=("Core", "Security: Process Sandboxing")), \
-            mock.patch.object(report_bug, "fetch_crash_reason",
-                              return_value={"reason": "EXCEPTION_BREAKPOINT",
-                                            "address": "0x7ff6fb034c43"}), \
+            mock.patch.object(report_bug, "fetch_crash_reason", return_value=details), \
             mock.patch.object(report_bug, "fetch_signature_stats",
                               return_value=(False, {"count": 85, "installs": 77})), \
             mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \

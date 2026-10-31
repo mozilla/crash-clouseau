@@ -584,15 +584,18 @@ _RECENT_CACHE: dict = {}
 # Channel mapping after `config.channel_family`; unlisted values are ignored.
 _RECENT_CHANNELS = {"nightly": "nightly", "beta": "beta", "aurora": "beta",
                     "release": "release", "esr": "esr"}
+_RECENT_FACETS_SIZE = 50
 
 
 def fetch_recent_channel_stats(info, days):
-    """Return per-channel ``{count, installs}`` for this signature/product, all builds,
-    since UTC midnight ``days`` days ago. Sum counts and ``install_time`` cardinalities
-    within beta/aurora and ESR families; installations are not deduplicated across labels.
+    """Return per-channel report counts, install-time cardinalities and optional reasons.
 
-    Return ``None`` if disabled, missing signature/product, or the request fails or returns
-    no facets. Cache results per signature, product, window and UTC day."""
+    Query this signature/product since UTC midnight ``days`` days ago, across builds.
+    Sum beta/aurora and ESR labels without deduplicating installations.
+    Omit ``reasons`` for missing or capped reason facets.
+
+    Return ``None`` when disabled, inputs are missing, or the query fails.
+    Cache by signature, product, window and UTC day."""
     signature = ((info or {}).get("signature") or "").strip()
     product = (info or {}).get("product")
     if not days or not signature or not product:
@@ -614,8 +617,8 @@ def fetch_recent_channel_stats(info, days):
                 "date": ">=" + (today - timedelta(days=int(days))).isoformat(),
                 "_results_number": 0,
                 "_facets": "release_channel",
-                "_facets_size": 50,
-                "_aggs.release_channel": "_cardinality.install_time",
+                "_facets_size": _RECENT_FACETS_SIZE,
+                "_aggs.release_channel": ["_cardinality.install_time", "moz_crash_reason"],
             },
             handler=handler,
             handlerdata=got,
@@ -626,14 +629,27 @@ def fetch_recent_channel_stats(info, days):
     if "facets" not in got:
         return None
     out: dict = {}
+    incomplete = set()
     for row in got["facets"].get("release_channel") or []:
         channel = _RECENT_CHANNELS.get(config.channel_family(row.get("term")))
         if not channel:
             continue
-        agg = (row.get("facets") or {}).get("cardinality_install_time") or {}
+        facets = row.get("facets") or {}
+        agg = facets.get("cardinality_install_time") or {}
         entry = out.setdefault(channel, {"count": 0, "installs": 0})
         entry["count"] += int(row.get("count") or 0)
         entry["installs"] += int(agg.get("value") or 0)
+        # A full facet list may be truncated.
+        terms = facets.get("moz_crash_reason")
+        if terms is None or len(terms) >= _RECENT_FACETS_SIZE:
+            incomplete.add(channel)
+            continue
+        reasons = entry.setdefault("reasons", {})
+        for t in terms:
+            term = t.get("term")
+            reasons[term] = reasons.get(term, 0) + int(t.get("count") or 0)
+    for channel in incomplete:
+        out[channel].pop("reasons", None)
     _RECENT_CACHE[key] = out
     return out
 
@@ -659,18 +675,52 @@ def _recent_adds(recent, stats, channel):
     return False
 
 
-def build_recent_channels_sentence(recent, product, days):
-    """Summarize recent counts, most reports first; return ``None`` without reports."""
+_STATIC_REASON = re.compile(r"(MOZ_[A-Z_]*(?:ASSERT|CRASH)\w*\(|assertion failed:)")
+_DYNAMIC_NUMBERS = (
+    (re.compile(r"^\[(\w+(?: \w+)*) \d+,"), r"[\1 #,"),             # process id
+    (re.compile(r"\b(?:0x[0-9a-f]+|\d+)(?= bytes\b)", re.I), "#"),  # byte count
+    (re.compile(r"\b(a[A-Z]\w* = )-?\d+"), r"\1#"),                 # argument value
+    (re.compile(r"\b((?:len|index|length|size) is )\d+"), r"\1#"),  # bounds value
+    (re.compile(r"#\d+"), "#"),                                     # object id
+    (re.compile(r"\[\d+\]"), "[#]"),                                # bracketed number
+    (re.compile(r"(\.\w+):\d+\b"), r"\1:#"),                        # source line
+)
+
+
+def _reason_key(text):
+    """Normalize selected numeric fields; preserve assertion and MOZ_CRASH text."""
+    text = (text or "").strip()
+    if _STATIC_REASON.match(text):
+        return text
+    for pattern, repl in _DYNAMIC_NUMBERS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def build_recent_channels_sentence(recent, product, days, reason=None):
+    """Summarize channel counts, largest first; return ``None`` without reports.
+
+    Include matching-reason counts when known and below the channel total."""
     rows = sorted(((ch, row) for ch, row in (recent or {}).items() if row.get("count")),
                   key=lambda kv: (-kv[1]["count"], kv[0]))
     if not rows:
         return None
+    reason_key = _reason_key(reason) if reason else None
     parts = []
     for ch, row in rows:
         count, installs = row["count"], row.get("installs") or 0
         what = "1 crash" if count == 1 else "{} crashes".format(count)
+        notes = []
         if count > 1:
-            what += " (from {} installation{})".format(installs, "" if installs == 1 else "s")
+            notes.append("from {} installation{}".format(installs, "" if installs == 1 else "s"))
+        reasons = row.get("reasons")
+        if reason_key is not None and reasons is not None:
+            same = sum(n for term, n in reasons.items() if _reason_key(term) == reason_key)
+            if same < count:
+                notes.append("without this crash reason" if count == 1 else
+                             "{} with this crash reason".format(same or "none"))
+        if notes:
+            what += " ({})".format("; ".join(notes))
         label = "beta/DevEdition" if ch == "beta" and product == "Firefox" else ch
         parts.append("{} on {}".format(what, label))
     listed = parts[0] if len(parts) == 1 else "{} and {}".format(", ".join(parts[:-1]), parts[-1])
@@ -3192,12 +3242,15 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         "the owner of the Nimbus feature `{}`".format(nimbus["feature"]) if nimbus
         else "triage owner" if owner else "")
     ask = _needinfo_line(asked, role=role)
+    details = fetch_crash_reason(uuid)
     recent_note = None
     if actionable:
         days = policy.get("population_days")
         recent = fetch_recent_channel_stats(uuid_info, days)
         if _recent_adds(recent, stats, channel):
-            recent_note = build_recent_channels_sentence(recent, uuid_info.get("product"), days)
+            recent_note = build_recent_channels_sentence(
+                recent, uuid_info.get("product"), days,
+                reason=details.get("moz_crash_reason"))
     return {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
@@ -3209,7 +3262,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             uuid_info.get("signature"),
             prefix="" if actionable else (policy.get("summary_prefix") or "")),
         "comment": build_actionable_comment(
-            uuid_info, stack, dossier, details=fetch_crash_reason(uuid), stats=stats,
+            uuid_info, stack, dossier, details=details, stats=stats,
             first=first, version=version, needinfo=ask,
             author_display=_person_display(person), bucket_opener=opener,
             fresh_limit=policy.get("fresh_origin_days"),
@@ -3219,7 +3272,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             uuid_info,
             stack,
             dossier,
-            details=fetch_crash_reason(uuid),
+            details=details,
             stats=stats,
             first=first,
             version=version,
