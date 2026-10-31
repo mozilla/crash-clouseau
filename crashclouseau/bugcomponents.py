@@ -32,6 +32,11 @@ STACK_SKIP = (
     "ipc/chromium/", "xpcom/threads/", "toolkit/xre/", "xpcom/build/",
 )
 STACK_WINDOW = 8
+# Rank generated bindings after application frames.
+JVM_STACK_SKIP = ("toolkit/components/uniffi-bindgen-gecko-js/",)
+# Deprioritize R8 outlines and lambdas without another frame of the same outer class.
+_R8_OUTLINE = re.compile(r"\$\$ExternalSynthetic\w*Outline")
+_R8_LAMBDA = re.compile(r"\$\$(?:ExternalSyntheticLambda|Lambda)")
 
 _TEST_PARTS = ("/test/", "/tests/", "/crashtests/", "/reftests/", "/gtest/", "/mochitest")
 
@@ -145,12 +150,13 @@ def majority(paths, rules=None):
     return next(pc for pc in pcs if counts[pc] == best)
 
 
-def file_components(changeset_files, stack_files, rules=None):
-    """Return the most common ``[product, component]`` per group; omit unresolved groups.
+def file_components(changeset_files, stack_files, rules=None, ranked=False):
+    """Return ``[product, component]`` per resolved changeset, stack and overlap group.
 
     ``changeset`` excludes paths matched by the ``is_test`` heuristic. ``stack`` uses the
     first ``STACK_WINDOW`` resolvable frames outside ``STACK_SKIP``. ``overlap`` uses those
-    frames whose files remain in the filtered changeset."""
+    frames whose files remain in the filtered changeset. Use the most common component,
+    except that ``ranked`` selects the first component for stack and overlap."""
     changed = [f for f in (changeset_files or ()) if f and not is_test(f)]
     frames = [f for f in (stack_files or ()) if f and not f.startswith(STACK_SKIP)]
     if not (changed or frames):
@@ -160,12 +166,68 @@ def file_components(changeset_files, stack_files, rules=None):
         return {}
     frames = [f for f in frames if component_for(f, rules)][:STACK_WINDOW]
     touched = set(changed)
+
+    def pick(files):
+        if ranked:
+            return component_for(files[0], rules) if files else None
+        return majority(files, rules)
+
     out = {
         "changeset": majority(changed, rules),
-        "stack": majority(frames, rules),
-        "overlap": majority([f for f in frames if f in touched], rules),
+        "stack": pick(frames),
+        "overlap": pick([f for f in frames if f in touched]),
     }
     return {k: list(v) for k, v in out.items() if v}
+
+
+def jvm_significant(seed):
+    """Return a JVM seed's ``(significant_frame, ranked_files)``.
+
+    Prefer the processed exception chain to stored frames. Non-JVM seeds and lookup
+    failures return ``(None, None)``; an unresolved JVM stack returns ``(None, [])``.
+    """
+    seed = seed or {}
+    if not seed.get("java"):
+        return None, None
+    from crashclouseau import java
+
+    try:
+        exc = (seed.get("raw_crash") or {}).get("java_exception")
+        chain = java.exception_chain(exc) if exc else []
+        rules = _load()
+        frame, files = jvm_ranking(chain or [seed.get("frames") or []], rules)
+        if frame is None:
+            return None, files
+        return {"function": "{}.{}".format(frame.get("module"), frame.get("function")),
+                "file": frame["filename"],
+                "component": list(component_for(frame["filename"], rules))}, files
+    except Exception:
+        logger.warning("bugcomponents: JVM significant frame lookup failed", exc_info=True)
+        return None, None
+
+
+def jvm_ranking(chain, rules=None):
+    """Return the first ranked frame and unique file paths from a root-cause-first chain.
+
+    Rank component-mapped internal frames first, then generated bindings, R8 outlines
+    and lambdas without another frame of the same outer class in that exception.
+    Preserve exception and frame order within each group.
+    """
+    # Do not demote a frame merely because its component is General.
+    rules = _load() if rules is None else rules
+    kept, skipped = [], []
+    for frames in chain or ():
+        outers = collections.Counter(
+            (f.get("module") or "").split("$", 1)[0] for f in frames if f.get("internal"))
+        for f in frames:
+            path, module = f.get("filename") or "", f.get("module") or ""
+            if not (f.get("internal") and path and component_for(path, rules)):
+                continue
+            skip = (path.startswith(JVM_STACK_SKIP) or _R8_OUTLINE.search(module)
+                    or (_R8_LAMBDA.search(module) and outers[module.split("$", 1)[0]] < 2))
+            (skipped if skip else kept).append(f)
+    ordered = kept + skipped
+    return (ordered[0] if ordered else None), list(dict.fromkeys(f["filename"] for f in ordered))
 
 
 def _path_histories(paths):

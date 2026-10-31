@@ -580,6 +580,10 @@ REGISTRY = {
         "evidence", ("report_bug.py",),
         "`{product: component}` inferred by `bugcomponents.history_component`. "
         "Replaces General within the same product."),
+    "significant_frame": (
+        "evidence", ("report_bug.py",),
+        "`{function, file, component}` from `bugcomponents.jvm_significant`. "
+        "Replaces General within the same product, before `history_components`."),
 }
 
 

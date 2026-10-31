@@ -5112,10 +5112,7 @@ def _resolve_candidate_git_commit(dossier, seed):
 
 
 def _record_file_components(dossier, seed):
-    """Record ``file_components`` for the filing fallback during online runs.
-
-    Uses the candidate's hg files and seed stack; lookup failures leave the dossier unchanged.
-    """
+    """Record candidate/stack component hints and the JVM significant frame, when available."""
     cand = dossier.candidate if dossier is not None else None
     if cand is None or not cand.node:
         return
@@ -5124,11 +5121,15 @@ def _record_file_components(dossier, seed):
 
         rev = sigage.json_rev(cand.node, (seed or {}).get("channel")) or {}
         files = [f.get("file") if isinstance(f, dict) else f for f in rev.get("files") or []]
-        stack = [f.get("filename") for f in (seed or {}).get("frames") or []]
-        found = bugcomponents.file_components(files, stack)
+        significant, ranked = bugcomponents.jvm_significant(seed)
+        stack = ranked or [f.get("filename") for f in (seed or {}).get("frames") or []]
+        found = bugcomponents.file_components(files, stack, ranked=bool(ranked))
     except Exception:
         logger.warning("agent: file components failed for %s", cand.node, exc_info=True)
         return
+    if significant:
+        dossier.corroborations = {**(dossier.corroborations or {}),
+                                  "significant_frame": significant}
     if found:
         dossier.corroborations = {**(dossier.corroborations or {}), "file_components": found}
         _record_history_components(dossier, stack, found)

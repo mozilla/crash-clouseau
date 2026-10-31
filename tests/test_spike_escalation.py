@@ -444,6 +444,55 @@ class TestComponent(unittest.TestCase):
                              ("Firefox for Android", "General", "fallback"))
         history.assert_not_called()
 
+    _FENIX = "mobile/android/fenix/app/src/main/java/org/mozilla/fenix/"
+    _GV = "mobile/android/geckoview/src/main/java/org/mozilla/geckoview/"
+
+    def _resolve_jvm(self, findings, raw_crash):
+        rules = dict(self._RULES, **{"mobile/": ["Firefox for Android", "General"],
+                                     self._FENIX + "tabs/": ["Firefox for Android", "Tabs"],
+                                     "mobile/android/geckoview/": ["GeckoView", "General"]})
+        active = dict(self._ACTIVE, **{"Firefox for Android": {"General", "Tabs"},
+                                       "GeckoView": {"General"}})
+        # Stored frames contain only GeckoView; the cause below names Tabs.
+        stored = [{"module": "org.mozilla.geckoview.GeckoResult", "function": "f",
+                   "filename": self._GV + "GeckoResult.java", "internal": True}] * 3
+        paths = {"org/mozilla/fenix/tabs/Tabs.kt": self._FENIX + "tabs/Tabs.kt",
+                 "org/mozilla/geckoview/GeckoResult.java": self._GV + "GeckoResult.java"}
+        with mock.patch.object(se, "_components_of", side_effect=active.get), \
+                mock.patch.object(se, "_component_from_signature_bugs",
+                                  return_value=(None, None)), \
+                mock.patch.object(se.bugcomponents, "_load", return_value=rules), \
+                mock.patch.object(se.bugcomponents, "history_component",
+                                  return_value=None) as history, \
+                mock.patch("crashclouseau.models.File.get_full_path",
+                           side_effect=lambda n: paths.get(n, n)):
+            out = se.resolve_component(findings, "sig", "Fenix",
+                                       {"frames": stored, "java": True}, raw_crash=raw_crash)
+        return out, history
+
+    _TABS_CAUSE = {"java_exception": {"exception": {"values": [
+        {"stacktrace": {"frames": [{"module": "org.mozilla.fenix.tabs.TabsKt", "function": "g",
+                                    "filename": "Tabs.kt"}]}},
+        {"stacktrace": {"frames": [{"module": "org.mozilla.geckoview.GeckoResult",
+                                    "function": "f", "filename": "GeckoResult.java"}] * 3}}]}}}
+
+    def test_a_jvm_stack_names_the_significant_frames_component(self):
+        out, history = self._resolve_jvm(None, self._TABS_CAUSE)
+        self.assertEqual(out, ("Firefox for Android", "Tabs", "moz.build of the stack"))
+        out, _ = self._resolve_jvm(None, None)
+        self.assertEqual(out, ("GeckoView", "General", "moz.build of the stack"))
+
+    def test_the_significant_frame_refines_a_general_answer_of_its_product(self):
+        general = SpikeFindings(summary="S", product="Firefox for Android", component="General")
+        out, history = self._resolve_jvm(general, self._TABS_CAUSE)
+        self.assertEqual(out, ("Firefox for Android", "Tabs",
+                               "moz.build of org.mozilla.fenix.tabs.TabsKt.g"))
+        history.assert_not_called()
+        geckoview = SpikeFindings(summary="S", product="GeckoView", component="General")
+        out, history = self._resolve_jvm(geckoview, self._TABS_CAUSE)
+        self.assertEqual(out, ("GeckoView", "General", "investigator"))
+        history.assert_called_once()
+
     def test_the_fallback_follows_the_crash_product(self):
         self.assertEqual(self._resolve(None, "Fenix"), ("Firefox for Android", "General", "fallback"))
         self.assertEqual(self._resolve(None, "Firefox"), ("Core", "General", "fallback"))

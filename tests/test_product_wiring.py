@@ -2229,6 +2229,30 @@ class TestBugPreview(unittest.TestCase):
                     {"bug": None, "node": "c065adeeac27", "author": ""}, "nightly", "Fenix",
                     file_components=file_components, history_components=history), want)
 
+    def test_resolve_pc_the_significant_frame_refines_general_before_the_history(self):
+        def frame(product, component):
+            return {"function": "a.B.c", "file": "mobile/android/B.kt",
+                    "component": [product, component]}
+        general = {"overlap": ["Firefox for Android", "General"]}
+        history = {"Firefox for Android": "Downloads"}
+        cases = ((frame("Firefox for Android", "WebExtensions"), general,
+                  ("Firefox for Android", "WebExtensions")),
+                 (frame("GeckoView", "Media"), general, ("Firefox for Android", "Downloads")),
+                 (frame("Firefox for Android", "General"), general,
+                  ("Firefox for Android", "Downloads")),
+                 (frame("Firefox for Android", "WebExtensions"),
+                  {"overlap": ["Firefox for Android", "Tabs"]}, ("Firefox for Android", "Tabs")),
+                 (frame("Firefox for Android", "WebExtensions"), {}, (None, None)),
+                 (None, general, ("Firefox for Android", "Downloads")))
+        for significant, file_components, want in cases:
+            with self.subTest(significant=significant, file_components=file_components), \
+                    mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \
+                    mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+                self.assertEqual(report_bug.resolve_product_component(
+                    {"bug": None, "node": "c065adeeac27", "author": ""}, "nightly", "Fenix",
+                    file_components=file_components, history_components=history,
+                    significant_frame=significant), want)
+
     def test_resolve_pc_the_file_history_refines_a_general_regressor_bug(self):
         with mock.patch.object(report_bug, "_bugs_product_component",
                                return_value={123: ("Firefox for Android", "General")}):
@@ -2335,8 +2359,11 @@ class TestBugPreview(unittest.TestCase):
               "buildid": "20260727081724", "product": "Fenix"}
         fc = {"stack": ["Core", "Disability Access APIs"]}
         history = {"Firefox for Android": "Downloads"}
+        frame = {"function": "a.B.c", "file": "mobile/android/B.kt",
+                 "component": ["Firefox for Android", "Tabs"]}
         dossier = {"candidate": {"node": "n", "bug": 1},
-                   "corroborations": {"file_components": fc, "history_components": history},
+                   "corroborations": {"file_components": fc, "history_components": history,
+                                      "significant_frame": frame},
                    "verdict": {}}
         with mock.patch.object(report_bug, "resolve_product_component",
                                return_value=("Core", "Disability Access APIs")) as resolve, \
@@ -2346,7 +2373,8 @@ class TestBugPreview(unittest.TestCase):
                 mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
             report_bug.build_bug_preview(ui, self._stack3(), dossier)
         resolve.assert_called_once_with(dossier["candidate"], "nightly", "Fenix",
-                                        file_components=fc, history_components=history)
+                                        file_components=fc, history_components=history,
+                                        significant_frame=frame)
 
     def test_build_bug_preview_shape(self):
         ui = {"uuid": "u-1", "signature": "Foo::bar", "channel": "nightly",

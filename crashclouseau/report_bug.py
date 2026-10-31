@@ -1995,10 +1995,20 @@ def _code_component(file_components, foreign):
 
 
 def resolve_product_component(candidate, channel, product=None, file_components=None,
-                              history_components=None):
-    """Resolve the filing pair, refining General from history within the same product."""
+                              history_components=None, significant_frame=None):
+    """Resolve the filing pair, refining General within the same product.
+
+    Prefer the JVM significant frame's component, then the file-history component.
+    """
     pc = _resolve_product_component(candidate, channel, product, file_components)
-    refined = (history_components or {}).get(pc[0]) if pc[1] == "General" else None
+    if pc[1] != "General":
+        return pc
+    frame = (significant_frame or {}).get("component") or ()
+    if len(frame) == 2 and frame[0] == pc[0] and frame[1] != "General":
+        logger.info("bug preview: filing in %s :: %s, from %s", frame[0], frame[1],
+                    significant_frame.get("function"))
+        return tuple(frame)
+    refined = (history_components or {}).get(pc[0])
     if refined:
         logger.info("bug preview: filing in %s :: %s, from the file history", pc[0], refined)
         return pc[0], refined
@@ -3099,7 +3109,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         product, component = resolve_product_component(
             candidate, channel, uuid_info.get("product"),
             file_components=corro.get("file_components"),
-            history_components=corro.get("history_components"))
+            history_components=corro.get("history_components"),
+            significant_frame=corro.get("significant_frame"))
         person = _needinfo_person(candidate, channel)
     else:
         # No changeset: the FIXED bug is the authority on both. Its component is where this

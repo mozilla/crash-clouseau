@@ -66,6 +66,7 @@ import asyncio
 import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from functools import cache
 
 from crashclouseau import (
     app, bugcomponents, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug,
@@ -851,7 +852,7 @@ def build_spike_brief(esc, light=False):
         "is_hang": spike_report.is_hang(esc.signature, seed.get("raw_crash")),
         "pin_rev": seed.get("pin_rev") or (uuid_info or {}).get("node") or "",
         "raw_crash": seed.get("raw_crash"),
-        "stack_frames": {"frames": seed.get("frames") or []},
+        "stack_frames": {"frames": seed.get("frames") or [], "java": bool(seed.get("java"))},
         "facts": triage._crash_facts(seed),
         "stacks": [{"uuid": uuid, "stack": seed.get("stack") or ""}],
         "classic_runs": [],
@@ -1198,29 +1199,36 @@ def _code_components(paths, foreign, rules, limit=None):
     return out
 
 
-def _most_common(pcs):
-    """Most frequent pair; ties favor the first occurrence."""
+def _pick_component(pcs, ranked=False):
+    """First pair for ranked frames, otherwise most frequent (ties favor the first)."""
     if not pcs:
         return None
-    counts = Counter(pcs)
-    best = max(counts.values())
-    return next(pc for pc in pcs if counts[pc] == best)
+    if ranked:
+        return pcs[0]
+    return Counter(pcs).most_common(1)[0][0]
 
 
-def resolve_component(findings, signature, crash_product, stack=None):
-    """``_resolve_component``, with a General answer replaced by the component named by the
-    file history of the stack (``bugcomponents.history_component``)."""
-    frames = [f.get("filename") for f in (stack or {}).get("frames") or []]
-    loaded = {}
+def resolve_component(findings, signature, crash_product, stack=None, raw_crash=None):
+    """Resolve a filing component using ranked JVM frames when available.
 
+    Refine General within the same product using the significant frame, then file history.
+    """
+    stack = stack or {}
+    significant, ranked = bugcomponents.jvm_significant(dict(stack, raw_crash=raw_crash))
+    frames = ranked or [f.get("filename") for f in stack.get("frames") or []]
+
+    @cache
     def load_rules():
         # Cache empty maps too: _load does not cache failed fetches.
-        if "rules" not in loaded:
-            loaded["rules"] = bugcomponents._load()
-        return loaded["rules"]
+        return bugcomponents._load()
 
     product, component, how = _resolve_component(findings, signature, crash_product, frames,
-                                                 load_rules)
+                                                 load_rules, ranked=bool(ranked))
+    pc = (significant or {}).get("component") or ()
+    if component == "General" and len(pc) == 2 and pc[0] == product and pc[1] != "General":
+        components = _components_of(product)
+        if components is None or pc[1] in components:
+            return product, pc[1], "moz.build of {}".format(significant["function"])
     if component == "General" and frames and load_rules():
         refined = bugcomponents.history_component(
             product, frames, report_bug._bugs_product_component, _components_of,
@@ -1230,12 +1238,13 @@ def resolve_component(findings, signature, crash_product, stack=None):
     return product, component, how
 
 
-def _resolve_component(findings, signature, crash_product, frames, load_rules):
+def _resolve_component(findings, signature, crash_product, frames, load_rules, ranked=False):
     """Return ``(product, component, how)`` for a new bug.
 
     Prefer the investigator's pair, then signature bugs. Next try cited files and stack
     frames within the investigator's product, then its General component. Otherwise try
-    cited files, stack frames, then the crash-product default.
+    cited files, stack frames, then the crash-product default. ``ranked`` frames (most
+    significant first) give their first pair instead of the most common one.
     """
     foreign = config.get_other_app_products(crash_product)
     if findings is not None and findings.product and findings.component:
@@ -1259,17 +1268,18 @@ def _resolve_component(findings, signature, crash_product, frames, load_rules):
     named = findings.product if findings is not None and findings.product not in foreign else None
     cited = _cited_paths(findings)
     rules = load_rules() if cited or frames else {}
-    code = ((_code_components(cited, foreign, rules), "moz.build of the cited files"),
+    code = ((_code_components(cited, foreign, rules), "moz.build of the cited files",
+             False),
             (_code_components(frames, foreign, rules, bugcomponents.STACK_WINDOW),
-             "moz.build of the stack")) if rules else ()
-    for pcs, how in code:
-        pc = _most_common([pc for pc in pcs if pc[0] == named])
+             "moz.build of the stack", ranked)) if rules else ()
+    for pcs, how, prefer_first in code:
+        pc = _pick_component([pc for pc in pcs if pc[0] == named], prefer_first)
         if pc:
             return pc[0], pc[1], how
     if named and "General" in (_components_of(named) or ()):
         return named, "General", "the investigator's product"
-    for pcs, how in code:
-        pc = _most_common(pcs)
+    for pcs, how, prefer_first in code:
+        pc = _pick_component(pcs, prefer_first)
         if pc:
             return pc[0], pc[1], how
     product, component = _FALLBACK_COMPONENT.get(crash_product, ("Core", "General"))
@@ -1703,7 +1713,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         except Exception:  # pragma: no cover - a BMO read inside the ladder
             person = {}
     if venue is None:
-        bz_product, component, how = resolve_component(findings, signature, product, stack)
+        bz_product, component, how = resolve_component(findings, signature, product, stack,
+                                                       raw_crash=raw)
     else:
         bz_product, component, how = None, None, "existing bug"
     email = ""

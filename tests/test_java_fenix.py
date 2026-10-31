@@ -348,6 +348,43 @@ class TestFrames(unittest.TestCase):
                                                       java_exception={}), ([], set()))
 
 
+class TestExceptionChain(unittest.TestCase):
+    def test_each_exception_root_cause_first_with_its_files(self):
+        values = _load()["java_exception"]["exception"]["values"]
+        chain = java.exception_chain(_load()["java_exception"], _get_full_path)
+        self.assertEqual([len(c) for c in chain], [23, 20])
+        self.assertEqual([f["function"] for f in chain[0]],
+                         [f["function"] for f in values[0]["stacktrace"]["frames"]])
+        self.assertEqual([f["stackpos"] for f in chain[1]], list(range(20)))
+        self.assertEqual(_by(chain[1], DP_PKG + "Keystore", "generateKey")["filename"], KEYSTORE)
+        self.assertEqual(_by(chain[1], LAMBDA0, "invoke")["filename"], SECURE_PREFS)
+
+    def test_each_exception_keeps_max_frames_and_a_file_is_looked_up_once(self):
+        frame = {"module": DP_PKG + "Keystore", "function": "generateKey", "lineno": 1,
+                 "filename": "Keystore.kt"}
+        exc = {"exception": {"values": [{"stacktrace": {"frames": [frame] * 3}},
+                                        {"stacktrace": {"frames": [frame] * 70}}]}}
+        lookup = mock.Mock(side_effect=_get_full_path)
+        chain = java.exception_chain(exc, lookup)
+        self.assertEqual([len(c) for c in chain], [3, java.MAX_FRAMES])
+        lookup.assert_called_once_with("mozilla/components/lib/dataprotect/Keystore.kt")
+
+    def test_no_exception_gives_no_chain(self):
+        for exc in (None, {}, {"exception": {"values": [{"stacktrace": {"frames": []}}]}}):
+            self.assertEqual(java.exception_chain(exc, _get_full_path), [])
+
+    def test_the_significant_frame_of_the_fixture(self):
+        # The fixture's lone IconButton lambda ranks after the dataprotect and FxA frames.
+        from crashclouseau import bugcomponents
+        rules = {"mobile/": ["Firefox for Android", "General"],
+                 _AC + "compose/": ["Firefox for Android", "Design System and Theming"],
+                 _AC + "service/firefox-accounts/": ["Firefox for Android", "Accounts and Sync"]}
+        frame, files = bugcomponents.jvm_ranking(
+            java.exception_chain(_load()["java_exception"], _get_full_path), rules)
+        self.assertEqual((frame["module"], frame["function"]), (DP_PKG + "Keystore", "generateKey"))
+        self.assertEqual(files, [KEYSTORE, SECURE_PREFS, ACCOUNT_STORAGE, FXA_MANAGER, ICON_BUTTON])
+
+
 class TestHash(unittest.TestCase):
     def test_untrusted_lines_do_not_reach_the_hash(self):
         data = _load()

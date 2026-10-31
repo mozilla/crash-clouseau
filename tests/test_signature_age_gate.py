@@ -460,7 +460,7 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
                            return_value=found) as fc:
             orch._record_file_components(d, seed)
         fc.assert_called_once_with(["dom/ipc/BrowserBridgeParent.cpp", "accessible/x.cpp"],
-                                   ["accessible/a.cpp", None])
+                                   ["accessible/a.cpp", None], ranked=False)
         self.assertEqual(d.corroborations["file_components"], found)
 
     def test_records_the_file_history_component_of_each_general_product(self):
@@ -500,6 +500,73 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
             orch._record_file_components(d, _SEED)       # must not raise
         self.assertIn("file_components", d.corroborations)
         self.assertNotIn("history_components", d.corroborations)
+
+    _FENIX = "mobile/android/fenix/app/src/main/java/org/mozilla/fenix/"
+    _GV = "mobile/android/geckoview/src/main/java/org/mozilla/geckoview/"
+    _JVM_RULES = {"mobile/": ["Firefox for Android", "General"],
+                  _FENIX + "addons/": ["Firefox for Android", "WebExtensions"],
+                  "mobile/android/geckoview/": ["GeckoView", "General"]}
+
+    def _paths(self, name):
+        for p in (self._FENIX + "addons/InstalledAddonDetailsFragment.kt",
+                  self._GV + "GeckoResult.java"):
+            if p.endswith("/" + name):
+                return p
+        return name
+
+    def _jvm_seed(self, raw_crash):
+        # Stored frames contain only the outer exception's GeckoResult stack.
+        frame = {"module": "org.mozilla.geckoview.GeckoResult", "function": "dispatchLocked",
+                 "filename": self._GV + "GeckoResult.java", "internal": True}
+        return dict(_SEED, java=True, frames=[frame] * 3, raw_crash=raw_crash)
+
+    _WRAPPED = {"exception": {"values": [
+        {"stacktrace": {"frames": [
+            {"module": "org.mozilla.fenix.addons.InstalledAddonDetailsFragment",
+             "function": "enableButtons", "lineno": 3, "filename": "InstalledAddonDetailsFragment.kt"},
+            {"module": "org.mozilla.geckoview.GeckoResult", "function": "lambda$thenInternal$6",
+             "lineno": 11, "filename": "GeckoResult.java"}]}},
+        {"stacktrace": {"frames": [
+            {"module": "org.mozilla.geckoview.GeckoResult", "function": "dispatchLocked",
+             "lineno": 22, "filename": "GeckoResult.java"}]}}]}}
+
+    def _record_jvm(self, seed, rev=None):
+        d = _lead()
+        with mock.patch.object(sigage, "json_rev", return_value=rev or {}), \
+                mock.patch("crashclouseau.models.File.get_full_path", side_effect=self._paths), \
+                mock.patch("crashclouseau.bugcomponents._load", return_value=self._JVM_RULES), \
+                mock.patch("crashclouseau.bugcomponents.history_component", return_value=None):
+            orch._record_file_components(d, seed)
+        return d
+
+    def test_a_jvm_seed_records_the_significant_frame_of_the_root_cause(self):
+        d = self._record_jvm(self._jvm_seed({"java_exception": self._WRAPPED}),
+                             rev={"files": [self._GV + "GeckoResult.java"]})
+        self.assertEqual(d.corroborations["significant_frame"], {
+            "function": "org.mozilla.fenix.addons.InstalledAddonDetailsFragment.enableButtons",
+            "file": self._FENIX + "addons/InstalledAddonDetailsFragment.kt",
+            "component": ["Firefox for Android", "WebExtensions"]})
+        self.assertEqual(d.corroborations["file_components"], {
+            "stack": ["Firefox for Android", "WebExtensions"],
+            "changeset": ["GeckoView", "General"], "overlap": ["GeckoView", "General"]})
+
+    def test_a_jvm_seed_without_a_structured_exception_ranks_its_stored_frames(self):
+        d = self._record_jvm(self._jvm_seed(None))
+        self.assertEqual(d.corroborations["significant_frame"]["component"],
+                         ["GeckoView", "General"])
+
+    def test_a_native_seed_records_no_significant_frame(self):
+        d = self._record_jvm(dict(self._jvm_seed({"java_exception": self._WRAPPED}),
+                                  java=False))
+        self.assertNotIn("significant_frame", d.corroborations)
+        self.assertEqual(d.corroborations["file_components"]["stack"], ["GeckoView", "General"])
+
+    def test_a_failing_jvm_chain_falls_back_to_the_stored_frames(self):
+        seed = self._jvm_seed({"java_exception": self._WRAPPED})
+        with mock.patch("crashclouseau.java.exception_chain", side_effect=RuntimeError("db")):
+            d = self._record_jvm(seed)
+        self.assertNotIn("significant_frame", d.corroborations)
+        self.assertEqual(d.corroborations["file_components"]["stack"], ["GeckoView", "General"])
 
     def test_file_components_absent_or_failing_leave_the_dossier_alone(self):
         d = _lead()

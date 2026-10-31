@@ -18,6 +18,7 @@ import html
 import os
 import re
 import time
+from functools import cache
 
 from libmozdata.hgmozilla import Mercurial
 from libmozdata.lando import LandoCommitMapAPI, LandoMissingCommit
@@ -327,6 +328,31 @@ def inspect_java_stacktrace(
     if locate_methods and not trusted:
         _locate_methods(frames, resolved, node, channel)
     return frames, files
+
+
+def exception_chain(java_exception, get_full_path=None):
+    """Return root-cause-first frame lists with resolved filenames; omit empty exceptions.
+
+    Cap each exception at ``MAX_FRAMES`` so wrappers do not consume the causes' frame budget.
+    """
+    if get_full_path is None:
+        get_full_path = models.File.get_full_path
+    chain, frames, raw = [], [], []
+    trusted = config.java_trust_line_numbers()
+    for value in ((java_exception or {}).get("exception") or {}).get("values") or []:
+        mine = []
+        for f in (((value or {}).get("stacktrace") or {}).get("frames") or [])[:MAX_FRAMES]:
+            module, function = f.get("module") or "", f.get("function") or ""
+            lineno = f.get("lineno")
+            original = "at {}.{}({}{})".format(module, function, f.get("filename") or "",
+                                               "" if lineno is None else ":{}".format(lineno))
+            mine.append(_frame(module, function, _int_line(lineno), original, len(mine), "",
+                               trusted))
+            raw.append(f.get("filename") or "")
+        frames.extend(mine)
+        chain.append(mine)
+    _resolve_files(frames, raw, cache(get_full_path))
+    return [c for c in chain if c]
 
 
 # ---------------------------------------------------------------------------------------

@@ -128,6 +128,109 @@ def _commits(*bugs, files=2):
             for b in bugs]
 
 
+FFA = "Firefox for Android"
+ADDONS = FENIX + "/addons/InstalledAddonDetailsFragment.kt"
+TABS_UI = FENIX + "/tabstray/ui/TabManagementFragment.kt"
+THEME = FENIX + "/theme/FirefoxTheme.kt"
+KEYSTORE = AC + "/lib/dataprotect/src/main/java/mozilla/components/lib/dataprotect/Keystore.kt"
+STORAGE = AC + "/service/firefox-accounts/src/main/java/mozilla/components/service/fxa/" \
+    "AccountStorage.kt"
+ICON = AC + "/compose/base/src/main/java/mozilla/components/compose/base/button/IconButton.kt"
+RELAY = AC + "/service/fxrelay/src/main/java/mozilla/components/service/fxrelay/FxRelay.kt"
+GECKO_RESULT = "mobile/android/geckoview/src/main/java/org/mozilla/geckoview/GeckoResult.java"
+BINDINGS = "toolkit/components/uniffi-bindgen-gecko-js/android/components/relay/android/src/" \
+    "main/java/mozilla/appservices/relay/relay.kt"
+JVM_RULES = {
+    "mobile/": [FFA, "General"],
+    FENIX + "/addons/": [FFA, "WebExtensions"],
+    FENIX + "/tabstray/": [FFA, "Tabs"],
+    FENIX + "/theme/": [FFA, "Design System and Theming"],
+    AC + "/compose/base/": [FFA, "Design System and Theming"],
+    AC + "/service/firefox-accounts/": [FFA, "Accounts and Sync"],
+    AC + "/service/fxrelay/": [FFA, "Privacy"],
+    "mobile/android/geckoview/": ["GeckoView", "General"],
+    "toolkit/components/uniffi-bindgen-gecko-js/": ["Toolkit", "UniFFI Bindings"],
+}
+
+
+def _jf(module, function, filename="", internal=True):
+    return {"module": module, "function": function, "filename": filename, "internal": internal}
+
+
+class TestJvmRanking(unittest.TestCase):
+    def _rank(self, *chain):
+        frame, files = bc.jvm_ranking(list(chain), JVM_RULES)
+        return (frame and "{}.{}".format(frame["module"], frame["function"])), files
+
+    def test_the_innermost_exception_with_our_code_wins(self):
+        cause = [_jf("org.mozilla.fenix.addons.InstalledAddonDetailsFragment", "enableButtons",
+                     ADDONS),
+                 _jf("org.mozilla.geckoview.GeckoResult", "lambda$thenInternal$6", GECKO_RESULT)]
+        outer = [_jf("org.mozilla.geckoview.GeckoResult", "dispatchLocked", GECKO_RESULT)] * 8
+        self.assertEqual(self._rank(cause, outer),
+                         ("org.mozilla.fenix.addons.InstalledAddonDetailsFragment.enableButtons",
+                          [ADDONS, GECKO_RESULT]))
+
+    def test_an_exception_without_our_code_defers_to_the_next_one(self):
+        cause = [_jf("android.security.KeyStore2", "getSecurityLevel", internal=False)]
+        outer = [_jf("android.security.keystore2.Spi", "engineGenerateKey", internal=False),
+                 _jf("mozilla.components.lib.dataprotect.Keystore", "generateKey", KEYSTORE)]
+        self.assertEqual(self._rank(cause, outer)[0],
+                         "mozilla.components.lib.dataprotect.Keystore.generateKey")
+
+    def test_generated_bindings_and_r8_synthetics_rank_last(self):
+        frames = [
+            _jf("mozilla.appservices.relay.RelayKt", "uniffiCheckCallStatus", BINDINGS),
+            _jf("mozilla.components.service.fxa.Storage$$ExternalSyntheticApiModelOutline0",
+                "m", STORAGE),
+            # No other frame shares this lambda's outer class.
+            _jf("mozilla.components.compose.base.button.IconButtonKt"
+                "$$ExternalSyntheticLambda3", "invoke", ICON),
+            _jf("mozilla.components.service.fxrelay.FxRelayImpl", "fetchProfile", RELAY),
+        ]
+        self.assertEqual(self._rank(frames),
+                         ("mozilla.components.service.fxrelay.FxRelayImpl.fetchProfile",
+                          [RELAY, BINDINGS, STORAGE, ICON]))
+
+    def test_a_lambda_whose_class_has_other_frames_counts(self):
+        frames = [_jf("org.mozilla.fenix.tabstray.ui.TabManagementFragment"
+                      "$$ExternalSyntheticLambda11", "invoke", TABS_UI),
+                  _jf("org.mozilla.fenix.theme.FirefoxThemeKt", "FirefoxTheme", THEME),
+                  _jf("org.mozilla.fenix.tabstray.ui.TabManagementFragment"
+                      "$$ExternalSyntheticLambda3", "invoke", TABS_UI)]
+        self.assertEqual(bc.component_for(bc.jvm_ranking([frames], JVM_RULES)[0]["filename"],
+                                          JVM_RULES), (FFA, "Tabs"))
+
+    def test_skipped_frames_alone_give_the_first_of_them(self):
+        frames = [_jf("java.lang.String", "substring", internal=False),
+                  _jf("mozilla.appservices.relay.RelayKt", "uniffiCheckCallStatus", BINDINGS)]
+        self.assertEqual(self._rank(frames),
+                         ("mozilla.appservices.relay.RelayKt.uniffiCheckCallStatus", [BINDINGS]))
+
+    def test_a_general_frame_is_not_traded_for_an_owned_caller(self):
+        frames = [_jf("mozilla.components.lib.dataprotect.Keystore", "generateKey", KEYSTORE),
+                  _jf("mozilla.components.service.fxa.SecureAbove22AccountStorage", "read",
+                      STORAGE)]
+        self.assertEqual(self._rank(frames),
+                         ("mozilla.components.lib.dataprotect.Keystore.generateKey",
+                          [KEYSTORE, STORAGE]))
+
+    def test_unresolved_and_platform_frames_give_nothing(self):
+        frames = [_jf("android.os.Parcel", "createException", internal=False),
+                  _jf("org.mozilla.fenix.Gone", "run", "org/mozilla/fenix/Gone.kt"),
+                  _jf("org.mozilla.fenix.Synthetic$$ExternalSyntheticLambda0", "invoke")]
+        self.assertEqual(self._rank(frames), (None, []))
+        self.assertEqual(self._rank(), (None, []))
+
+    def test_ranked_files_give_their_first_component_not_the_most_common(self):
+        stack = [KEYSTORE, STORAGE, STORAGE, ICON]
+        self.assertEqual(bc.file_components([], stack, JVM_RULES)["stack"],
+                         [FFA, "Accounts and Sync"])
+        fc = bc.file_components([ICON, STORAGE], stack, JVM_RULES, ranked=True)
+        self.assertEqual(fc["stack"], [FFA, "General"])
+        self.assertEqual(fc["overlap"], [FFA, "Accounts and Sync"])
+
+
 class TestHistoryComponent(unittest.TestCase):
     """Bug numbers encode their component: 1xx Accounts and Sync, 2xx Downloads, 3xx Tabs,
     4xx Contextual AI, 5xx General, 6xx GeckoView :: General."""
