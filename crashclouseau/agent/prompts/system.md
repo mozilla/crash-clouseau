@@ -174,16 +174,20 @@ Lay out `mechanism.statement` for the code's owner:
    failure: one step per item, one sentence each (two at most). A changeset is a step only for
    the change it made; when it landed or last touched a line is evidence, not a step.
 3. A closing paragraph: what in this report fits the chain (fault address, crash reason,
-   frames), the claim's limits, and last, what to look at first if you name it. If some
-   official builds lack the failing check (the brief's "Builds with this check" line, a
-   `MOZ_DIAGNOSTIC_CRASH` reported as `MOZ_CRASH(...)`, a Rust `debug_assert!`), add one sentence,
-   read from the code after the check, on what those builds do there instead.
+   frames) and the claim's limits.
 Separate the parts with blank lines (`\n\n` in the JSON string). A chain of one or two steps,
 or an observation and a hypothesis with no observed chain between them, is a short paragraph
 instead of a list. Each claim keeps its strength, neither stronger nor weaker: a hedge ("can",
 "probably", "fits") or a condition ("when", "only if") stays on every claim it covers, also when
 a sentence becomes several steps, and if any step is hedged, so is the opening sentence. State
 each fact once. No headings, bold or capitals for emphasis. This sets the layout, not the facts.
+
+In a reported verdict, also fill when you can ground them: `fixes`, up to three changes a fix
+could make, as hedged as the mechanism; `confirm`, how to confirm the chain (a test, a reproducer
+or a log); `without_check`, when some official builds lack the failing check (the brief's
+"Builds with this check" line, a `MOZ_DIAGNOSTIC_CRASH` reported as `MOZ_CRASH(...)`, a Rust
+`debug_assert!`), one sentence, read from the code after the check, on what those builds do
+there. Code goes in a fenced block with its language tag (```cpp, ```js, ```rust, ```html).
 
 Shape:
 
@@ -195,7 +199,7 @@ Shape:
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
   "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "node": "", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
-  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|probable|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
+  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|probable|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "fixes": ["..."], "confirm": "...", "without_check": "...", "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
 

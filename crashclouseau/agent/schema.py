@@ -604,6 +604,11 @@ class SecondOpinion(BaseModel):
     cost_usd: float | None = None
 
 
+# Drop oversized sections rather than truncate code fences.
+_MAX_FIXES = 3
+_MAX_SECTION_CHARS = 2000
+
+
 class Verdict(BaseModel):
     decision: Decision
     confidence: Confidence = Confidence.low
@@ -636,12 +641,31 @@ class Verdict(BaseModel):
     # leaves it empty the filer derives one (``report_bug.bucket_title``). Normalised, never
     # validated -- a field the model may omit must not be able to destroy a verdict.
     title: str = ""
+    # Optional sections for the filed bug.
+    fixes: list[str] = Field(default_factory=list)
+    confirm: str = ""
+    without_check: str = ""
 
     @field_validator("title", mode="before")
     @classmethod
     def _one_line_title(cls, v):
         text = " ".join(str(v or "").split())
         return text[:200]
+
+    @field_validator("fixes", mode="before")
+    @classmethod
+    def _fix_items(cls, v):
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, (list, tuple)):
+            return []
+        return [text for item in v if (text := cls._section_text(item))][:_MAX_FIXES]
+
+    @field_validator("confirm", "without_check", mode="before")
+    @classmethod
+    def _section_text(cls, v):
+        text = str(v or "").strip()
+        return text if len(text) <= _MAX_SECTION_CHARS else ""
 
     @model_validator(mode="after")
     def _consistency_rule(self):
@@ -686,6 +710,15 @@ class Verdict(BaseModel):
             if self.needinfo_draft:
                 raise ValueError("abstain must not carry a needinfo_draft")
         return self
+
+
+def kept_analysis(verdict):
+    """Fields to retain when rebuilding a verdict with the same analysis."""
+    if verdict is None:
+        return {}
+    return {"mechanism": verdict.mechanism, "consistency": verdict.consistency,
+            "fixes": list(verdict.fixes), "confirm": verdict.confirm,
+            "without_check": verdict.without_check}
 
 
 class Dossier(BaseModel):
@@ -773,8 +806,7 @@ class Dossier(BaseModel):
             abstain_reason="mechanism established, but no origin changeset was named for the "
                            "failing code, so there is nobody to route it to",
             abstain_kind=AbstainKind.pre_existing,
-            mechanism=v.mechanism,
-            consistency=v.consistency,
+            **kept_analysis(v),
         )
         return self
 
@@ -873,8 +905,7 @@ class Dossier(BaseModel):
                     decision=Decision.lead,
                     confidence=Confidence.medium,
                     needinfo_draft=self._soft_lead_draft(),
-                    mechanism=v.mechanism,
-                    consistency=v.consistency,
+                    **kept_analysis(v),
                 )
             else:
                 self.verdict = Verdict(

@@ -35,7 +35,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from crashclouseau import config, sigage, utils
+from crashclouseau import compiled_out, config, sigage, utils
 from crashclouseau.agent import roles
 from crashclouseau.logger import logger
 from crashclouseau.agent.errors import MissingHandoffError
@@ -1780,32 +1780,6 @@ def _is_oom(crash, raw):
     return utils.is_oom_crash((crash or {}).get("signature"), raw)
 
 
-# Assert macros compiled out of some official builds, by the define that enables them.
-_SCOPED_CHECKS = (("MOZ_DIAGNOSTIC_ASSERT", "MOZ_DIAGNOSTIC_ASSERT_ENABLED"),
-                  ("MOZ_ASSERT", "MOZ_ASSERT_ENABLED"))
-_OFFICIAL_BUILDS = ("nightly", "aurora", "beta", "release", "esr")
-
-
-def _builds_phrase(channels):
-    names = [roles._build_name(ch) for ch in channels]
-    return names[0] if len(names) == 1 else "{} and {}".format(", ".join(names[:-1]), names[-1])
-
-
-def _check_build_scope(reason):
-    """Which official builds compile the failing assert in, or ``None`` for checks they all have."""
-    from crashclouseau import compiled_out
-
-    text = str(reason or "").strip()
-    for macro, define in _SCOPED_CHECKS:
-        if text.startswith(macro + "("):
-            on = compiled_out.channels_with(define)
-            off = [ch for ch in _OFFICIAL_BUILDS if ch not in on]
-            where = "{} builds".format(_builds_phrase(on)) if on else "debug builds"
-            return "`{}` is in {} only; {} builds run on past it".format(
-                macro, where, _builds_phrase(off))
-    return None
-
-
 def _oom_allocation_size(raw):
     """``OOMAllocationSize`` with thousands separators (``"1,046,872"``), or ``None``."""
     v = (raw or {}).get("oom_allocation_size")
@@ -1885,7 +1859,7 @@ def _crash_facts(crash: dict) -> list[str]:
         ("MOZ_CRASH_REASON", _first_present(
             raw.get("moz_crash_reason"), dump.get("moz_crash_reason")
         )),
-        ("Builds with this check", _check_build_scope(_first_present(
+        ("Builds with this check", compiled_out.check_build_scope(_first_present(
             raw.get("moz_crash_reason"), dump.get("moz_crash_reason")))),
         # ProtocolUtils.cpp records the IPC message separately from the generic parent crash reason.
         ("IPC FatalError message", raw.get("ipc_fatal_error_msg")),

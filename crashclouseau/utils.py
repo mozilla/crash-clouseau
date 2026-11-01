@@ -123,6 +123,52 @@ def lambda_siblings(signature):
     }
 
 
+_FENCE_OPEN = re.compile(r"^(\s*)(`{3,})([^`]*)$")
+# Prefer HTML over embedded scripts and Rust over C++-like syntax.
+_CODE_LANGUAGES = (
+    ("html", re.compile(r"^\s*<(?:!DOCTYPE|html|body|script|video|audio|div|iframe|style)\b",
+                        re.I | re.M)),
+    ("shell", re.compile(r"^\s*(?:\$ |\./mach |MOZ_LOG=|export |cd )", re.M)),
+    ("rust", re.compile(r"\bfn \w+\s*\(|\blet mut\b|#\[(?:test|cfg|derive)|\bimpl\b.*\{|\bunwrap\(\)")),
+    ("kotlin", re.compile(r"\bfun \w+\s*\(|\bval \w+\s*[=:]|\boverride fun\b")),
+    ("java", re.compile(r"\b(?:public|private) (?:static )?(?:void|class|final)\b")),
+    ("cpp", re.compile(r"#include\b|\bnullptr\b|\w::\w|->\w|\bMOZ_[A-Z_]+\(|\bTEST(?:_F)?\(|RefPtr<|"
+                       r"\bm[A-Z]\w*\.\w+\(")),
+    ("js", re.compile(r"\bfunction\b|=>|\b(?:const|let|var) \w+\s*=|\bawait\b|\bdocument\.|\badd_task\(")),
+    ("python", re.compile(r"^\s*(?:def \w+\(|import \w+$|from \w+ import)", re.M)),
+)
+
+
+def code_language(code):
+    """Guess a fence language, falling back to ``text``."""
+    for lang, pattern in _CODE_LANGUAGES:
+        if pattern.search(code or ""):
+            return lang
+    return "text"
+
+
+def tag_code_fences(text):
+    """Guess language tags for closed, unlabelled backtick blocks.
+
+    Leave tagged and unclosed blocks unchanged."""
+    if not text or "```" not in text:
+        return text
+    lines = text.split("\n")
+    opening = None
+    for i, line in enumerate(lines):
+        if opening is None:
+            match = _FENCE_OPEN.match(line)
+            if match:
+                indent, fence, language = match.groups()
+                opening = i
+        elif line.strip() == fence:
+            if not language.strip():
+                body = "\n".join(lines[opening + 1:i])
+                lines[opening] = indent + fence + code_language(body)
+            opening = None
+    return "\n".join(lines)
+
+
 def lambda_families(signatures):
     """``{signature: [every member of its family, sorted]}`` for the signatures that share a
     family with at least one other in *signatures*. A lone signature is not listed: the caller

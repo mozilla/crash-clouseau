@@ -13,7 +13,7 @@ from libmozdata.bugzilla import Bugzilla
 from libmozdata.hgmozilla import Mercurial
 from . import net
 from urllib.parse import parse_qs, quote, urlencode, urlparse
-from . import buginfo, config, mailmap, models, sensitive, utils
+from . import buginfo, compiled_out, config, mailmap, models, sensitive, utils
 from .logger import logger
 
 
@@ -420,7 +420,7 @@ def build_code_references(verdict, channel, max_refs=_MAX_CODE_REFS):
 # Include report_type and ipc_channel_error to distinguish hangs from IPC errors
 # in the frames heading.
 _REASON_COLUMNS = ["moz_crash_reason", "reason", "address", "report_type", "ipc_fatal_error_msg",
-                   "ipc_channel_error"]
+                   "ipc_channel_error", "process_type"]
 # Process caches: the comment is rendered on every page view of a culprit/lead crash, and
 # neither of these moves in a way that matters for a preview (a crash's reason is
 # immutable; the counts only creep up). uuid -> value; keeps the render to one fetch per
@@ -1398,6 +1398,45 @@ def _main_subject_block(work, max_frames):
     return None
 
 
+_PROCESS_IMPACT = {
+    "parent": "The parent process crashes, so the whole browser closes.",
+    "content": "A content process crashes; the tabs it hosts show a crash page.",
+}
+_PROCESS_NAMES = {"gpu": "GPU", "rdd": "RDD", "gmplugin": "GMP plugin"}
+
+
+def build_impact_section(details, verdict):
+    """Render process impact, check scope and behavior without the check; ``None`` if empty."""
+    details = details or {}
+    process = str(details.get("process_type") or "").strip().lower()
+    parts = []
+    if process in _PROCESS_IMPACT:
+        parts.append(_PROCESS_IMPACT[process])
+    elif process:
+        parts.append("The {} process crashes.".format(_PROCESS_NAMES.get(process, process)))
+    scope = compiled_out.check_build_scope(details.get("moz_crash_reason"))
+    if scope:
+        parts.append(scope + ".")
+    without = str((verdict or {}).get("without_check") or "").strip()
+    if without:
+        parts.append(utils.tag_code_fences(without))
+    return "**Impact**\n\n" + " ".join(parts) if parts else None
+
+
+def build_fix_sections(verdict):
+    """Render supplied fixes and confirmation steps, or return ``None``."""
+    v = verdict or {}
+    out = []
+    fixes = [str(f).strip() for f in v.get("fixes") or [] if str(f or "").strip()]
+    if fixes:
+        out.append("**Possible fixes**\n\n" + "\n".join(
+            _list_item(utils.tag_code_fences(f)) for f in fixes))
+    confirm = str(v.get("confirm") or "").strip()
+    if confirm:
+        out.append("**How to confirm**\n\n" + utils.tag_code_fences(confirm))
+    return "\n\n".join(out) or None
+
+
 def _list_item(text):
     """Prefix a bullet and indent nonblank continuation lines by two spaces."""
     first, *rest = text.split("\n")
@@ -1467,21 +1506,13 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
                              max_frames=_MAX_PREVIEW_FRAMES, bucket_opener=None,
                              fresh_limit=None, stale_since=None, stale_bug=None,
                              recent_note=None, different_defect=None):
-    """Build the opening comment for an ``actionable`` bug, with no regressor claim.
-
-    1. the crash-report link, the crash reason, the top frames (as ``build_bug_comment``);
-    2. crash counts, optional per-channel ``recent_note``, and first-seen build;
-    3. the cited mechanism and origin used for routing, with timing when the origin qualifies
-       for the waiver (``fresh_limit`` = ``autofile.fresh_origin_days``);
-    4. the mechanism's code references, the ask, the provenance footer.
+    """Build an actionable bug comment without a regressor claim.
 
     ``stale_since`` adds the activity date from ``_bug_activity`` and uses the comment footer.
     ``stale_bug`` identifies the current bug for origin wording.
 
-    The mechanism is copied whole. Consistency stays in the dossier because age and volume are
-    rendered from deterministic data and free-form prose cannot be filtered safely. Skeptic,
-    dissent, diagnostic and calibration text is also omitted because this verdict makes no
-    changeset claim."""
+    Publish the mechanism and optional filing sections. Omit consistency, skeptic and dissent;
+    render age and volume from deterministic data."""
     uuid = (uuid_info or {}).get("uuid", "")
     channel = (uuid_info or {}).get("channel")
     info = dict(uuid_info or {})
@@ -1491,7 +1522,7 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
     candidate = (dossier or {}).get("candidate") or {}
     corroborations = (dossier or {}).get("corroborations") or {}
     mechanism = ((verdict.get("mechanism") or {}).get("statement") or "").strip()
-    facts = [_list_item(mechanism)] if mechanism else []
+    facts = [_list_item(utils.tag_code_fences(mechanism))] if mechanism else []
     if candidate.get("node"):
         link = changeset_links(candidate["node"], channel, candidate.get("git_commit") or "")
         own = bool(stale_bug) and str(candidate.get("bug") or "") == str(stale_bug)
@@ -1540,6 +1571,8 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         build_signature_since_note(corroborations, info.get("buildid")),
         build_nimbus_onset_note(corroborations),
         because,
+        build_impact_section(details, verdict),
+        build_fix_sections(verdict),
         # Only publish references for the claim printed above.
         build_code_references({"mechanism": verdict.get("mechanism")}, channel),
         build_different_defect_note(different_defect),
@@ -1620,11 +1653,13 @@ def build_bug_comment(
         # ABOVE the analysis, because on this path it is the reason the bug exists at all and
         # the analysis below it may be an abstain with nothing in it.
         build_incomplete_fix_note(incomplete_fix, channel),
-        _explanation_comment(
+        utils.tag_code_fences(_explanation_comment(
             (dossier or {}).get("verdict"), (dossier or {}).get("candidate"), channel,
             corroborations=(dossier or {}).get("corroborations"),
             author_display=author_display,
-        ),
+        )),
+        build_impact_section(details, (dossier or {}).get("verdict")),
+        build_fix_sections((dossier or {}).get("verdict")),
         build_code_references((dossier or {}).get("verdict"), channel),
         build_skeptic_block(dossier),
         build_dissent_note(dossier),
@@ -1691,16 +1726,7 @@ def _unbacktick_bug_refs(text):
     )
 
 
-# Last line of every filed bug. One sentence, not a section: the reviewer of bug 2061961 had to
-# INFER that a machine wrote the analysis ("the automated analysis suspected my patch"), and a
-# reader who knows can discount it themselves without the prose hedging every clause. The
-# invitation to resolve it is not politeness — an INVALID from someone who knows the code is a
-# useful outcome, and the alternative is a stale needinfo nobody wants to be rude about.
-# What the LLM analyses, by the crash's own channel. NOT a cosmetic string: the paragraph's
-# whole job is to tell a reader what wrote the analysis so they can discount it, and "analyses
-# nightly crashes" on a bug whose crash is a beta crash is false in the one sentence that is
-# supposed to be reliable. A channel we have no phrase for gets the honest general one rather
-# than a guess — this is a bug comment, not a log line.
+# Channel labels for the automated-filing footer; unknown channels use "Firefox crashes".
 _PROVENANCE_SCOPE = {
     "nightly": "nightly crashes",
     "beta": "beta and Developer Edition crashes",
@@ -1710,8 +1736,7 @@ _PROVENANCE_SCOPE = {
 
 
 def _provenance(channel=None):
-    """The last line of every filed bug, with the crash's own channel named in it. An ESR line
-    label (``esr140``) is named by its family: the reader wants to know it was an ESR crash."""
+    """Render the new-bug footer for the crash's channel."""
     return _PROVENANCE_TEMPLATE.format(scope=_provenance_scope(channel))
 
 
@@ -1736,22 +1761,17 @@ def existing_bug_comment(text, channel=None):
 
 
 _PROVENANCE_TEMPLATE = (
+    # Keep automation and submitted-report attribution visible when collapsed.
+    "<details>\n<summary>Filed automatically by Clouseau with an LLM, from a submitted crash "
+    "report: not an independent Mozilla discovery</summary>\n\n"
     "_Filed automatically by [Clouseau](https://github.com/mozilla/crash-clouseau), which "
     "analyses {scope} with an LLM. Nothing above was written or checked by a human. "
     "Please close it as INVALID if it is wrong — that is useful feedback, not a nuisance._\n\n"
-    # THE ATTRIBUTION SENTENCE, and it is not politeness. :mccr8 on bug 2065051: the dupe "is
-    # going to kind of cause a bit of a headache for the bug bounty process, because at a casual
-    # glance it looks like we found it internally and thus won't pay a bounty, but of course we
-    # only saw that crash because of the report." A machine filing reads as an internal discovery
-    # unless it says otherwise, and the reporter loses the bounty to that impression.
-    #
-    # The rule behind it, stated once: a machine-filed bug should always be the duplicate SOURCE,
-    # never the duplicate target. We have no claim to precedence over the human whose report is
-    # the only reason we saw the crash at all.
+    # Ask readers to preserve the earlier reporter's credit when resolving duplicates.
     "_This is not an independent Mozilla discovery: the crash is known here only because "
     "somebody submitted the crash report linked at the top. If this duplicates an existing "
     "report, please resolve THIS bug as the duplicate and leave the credit with the earlier "
-    "reporter._"
+    "reporter._\n\n</details>"
 )
 
 

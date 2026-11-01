@@ -223,7 +223,7 @@ def analysis_section(findings, brief, author_display=None, link_regressor=False,
     if findings.open_questions:
         lines.append("Worth checking first:\n" + "\n".join(
             "- {}".format(x) for x in findings.open_questions[:_MAX_LIST]))
-    return "\n\n".join(lines)
+    return utils.tag_code_fences("\n\n".join(lines))
 
 
 def has_analysis(findings, grounded=True):

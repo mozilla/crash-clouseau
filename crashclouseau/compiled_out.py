@@ -253,10 +253,40 @@ def channel_off(channel=None):
     return _partition(channel or build_channel())[1]
 
 
+# Display names in build-scope output order.
+BUILD_NAMES = {
+    "nightly": "nightly",
+    "aurora": "Developer Edition",
+    "beta": "beta",
+    "release": "release",
+    "esr": "ESR",
+}
+# Assertion macro -> enabling define.
+_SCOPED_CHECKS = (("MOZ_DIAGNOSTIC_ASSERT", "MOZ_DIAGNOSTIC_ASSERT_ENABLED"),
+                  ("MOZ_ASSERT", "MOZ_ASSERT_ENABLED"))
+
+
 def channels_with(macro):
     """The channels, nightly first, whose official builds define *macro*."""
-    return [ch for ch in ("nightly", "aurora", "beta", "release", "esr")
-            if macro in _CHANNEL_MACROS[ch][0]]
+    return [ch for ch in BUILD_NAMES if macro in _CHANNEL_MACROS[ch][0]]
+
+
+def _builds_phrase(channels):
+    names = [BUILD_NAMES[ch] for ch in channels]
+    return names[0] if len(names) == 1 else "{} and {}".format(", ".join(names[:-1]), names[-1])
+
+
+def check_build_scope(reason):
+    """Describe the build scope of recognized assertions; otherwise return ``None``."""
+    text = str(reason or "").strip()
+    for macro, define in _SCOPED_CHECKS:
+        if text.startswith(macro + "("):
+            on = channels_with(define)
+            off = [ch for ch in BUILD_NAMES if ch not in on]
+            where = "{} builds".format(_builds_phrase(on)) if on else "debug builds"
+            return "`{}` is in {} only; {} builds run on past it".format(
+                macro, where, _builds_phrase(off))
+    return None
 
 
 def build_type_deny(channel=None):

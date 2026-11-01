@@ -30,6 +30,7 @@ from crashclouseau import app, config, db, mailmap, models, sensitive, utils, wo
 from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
+    kept_analysis,
     AbstainKind,
     AreaExpert,
     CONFIDENCE_SCORE,
@@ -1601,8 +1602,7 @@ def _downgrade_to_lead_or_abstain(dossier, seed, reason, abstain_reason,
             decision=Decision.lead,
             confidence=rung,
             needinfo_draft=dossier._soft_lead_draft(),
-            mechanism=v.mechanism,
-            consistency=v.consistency,
+            **kept_analysis(v),
         )
         # Mark that this lead is a PRECISION-DOWNGRADE of a strong-evidence verdict (SF-3 /
         # exposer / a confident second-opinion refutation) and, through `_SO_BOOST_POLICY`,
@@ -2254,8 +2254,7 @@ def _fold_second_opinion(dossier, second_opinion, seed, status=None):
                 decision=Decision.abstain,
                 confidence=Confidence.low,
                 abstain_reason=why,
-                mechanism=v.mechanism,
-                consistency=v.consistency,
+                **kept_analysis(v),
             )
             flags["second_opinion_abstained"] = True
             logger.info(
@@ -2485,8 +2484,7 @@ def _apply_signature_age_gate(dossier, seed):
                             "this code comes from; the mechanism stands, the routing does not"
                             .format(landed_after, first_seen)),
             abstain_kind=AbstainKind.pre_existing,
-            mechanism=v.mechanism,
-            consistency=v.consistency,
+            **kept_analysis(v),
         )
         logger.info(
             "agent: actionable origin %s landed %.1fd AFTER this signature was first seen (%s) "
@@ -2724,8 +2722,7 @@ def _apply_backout_gate(dossier, seed):
                 cand.node, sha[:12]
             )
         ),
-        mechanism=v.mechanism,
-        consistency=v.consistency,
+        **kept_analysis(v),
     )
     dossier.corroborations = {
         **dossier.corroborations, "candidate_backedout_suppressed": True
@@ -3151,8 +3148,7 @@ def _apply_hang_wait_gate(dossier, seed):
                         "the awaited work, which is what a bug would be about, is {}"
                         .format(", ".join(sorted(cited)), where)),
         abstain_kind=AbstainKind.pre_existing,
-        mechanism=v.mechanism,
-        consistency=v.consistency,
+        **kept_analysis(v),
         title=v.title,
     )
     logger.info("agent: actionable mechanism on a hang cites only the wait code %s -> abstain "
@@ -3249,8 +3245,7 @@ def _apply_oom_gate(dossier, seed):
                         "actionable OOM bug: {}{}"
                         .format(why, "; the report shows {}".format(picture) if picture else "")),
         abstain_kind=AbstainKind.resource_exhaustion,
-        mechanism=v.mechanism,
-        consistency=v.consistency,
+        **kept_analysis(v),
         title=v.title,
     )
     logger.info("agent: actionable verdict with unsupported OOM evidence (%s) -> "
@@ -3333,8 +3328,7 @@ def _apply_bad_machine_gate(dossier, seed):
             "signatures over {:.0f}h on a single CPU — the profile of a failing machine, not of "
             "a code defect; suppressed rather than reported".format(sigs, (span or 0) / 3600.0)
         ),
-        mechanism=v.mechanism,
-        consistency=v.consistency,
+        **kept_analysis(v),
     )
     dossier.corroborations = {**dossier.corroborations, "bad_machine_suppressed": True}
     logger.info(
@@ -3392,8 +3386,7 @@ def _hot_engine_verdict(path, age, prior=None):
             "profile of failing hardware, not of a code defect; suppressed rather than "
             "reported".format(path, age)),
         abstain_kind=AbstainKind.hardware,
-        mechanism=getattr(prior, "mechanism", None),
-        consistency=getattr(prior, "consistency", None),
+        **kept_analysis(prior),
         title=getattr(prior, "title", "") or "",
     )
 
@@ -4209,8 +4202,7 @@ def _apply_bit_flip_gate(dossier, seed, before_run=False):
         decision=Decision.abstain,
         confidence=Confidence.low,
         abstain_reason=reason,
-        mechanism=v.mechanism,
-        consistency=v.consistency,
+        **kept_analysis(v),
     )
     dossier.corroborations = {**dossier.corroborations, **suppressed}
     logger.info(
@@ -4699,8 +4691,7 @@ def _apply_compiled_out_gate(dossier, seed):
         decision=Decision.abstain,
         confidence=Confidence.low,
         abstain_reason=reason,
-        mechanism=v.mechanism,
-        consistency=v.consistency,
+        **kept_analysis(v),
     )
     dossier.corroborations = {
         **(dossier.corroborations or {}),
@@ -4766,8 +4757,7 @@ def _apply_is_backout_gate(dossier, seed):
                     cand.node, reverted[:12]
                 )
             ),
-            mechanism=v.mechanism,
-            consistency=v.consistency,
+            **kept_analysis(v),
         )
         dossier.corroborations = {
             **dossier.corroborations, "candidate_backout_suppressed": True

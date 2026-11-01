@@ -92,15 +92,7 @@ _GROUND = (
 #
 # THE THREE MACRO LISTS ARE RENDERED FROM `compiled_out` so the prompt and the gate cannot drift
 # -- `tests/test_compiled_out_guard.py` pins that all 20 are present.
-# The build name a prompt should use for each channel, and whether MOZ_DIAGNOSTIC_ASSERT is on.
-# Read from each branch's own `moz.configure` -- see `compiled_out._CHANNEL_MACROS`.
-_BUILD_NAME = {
-    "nightly": "nightly",
-    "beta": "beta",
-    "aurora": "Developer Edition",
-    "release": "release",
-    "esr": "ESR",
-}
+_BUILD_NAME = compiled_out.BUILD_NAMES
 
 
 def _build_name(channel):
