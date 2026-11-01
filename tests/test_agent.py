@@ -235,6 +235,29 @@ class TestBuildOptions(unittest.TestCase):
         self.assertNotIn("IPC FatalError message",
                          "\n".join(triage._crash_facts(dict(_CRASH, raw_crash={}))))
 
+    def test_crash_facts_say_which_builds_have_a_diagnostic_assert(self):
+        from crashclouseau.agent import second_opinion
+
+        reason = "MOZ_DIAGNOSTIC_ASSERT(mStart <= mEnd) (Invalid Interval)"
+        crash = dict(_CRASH, raw_crash={"moz_crash_reason": reason})
+        line = ("Builds with this check: `MOZ_DIAGNOSTIC_ASSERT` is in nightly and Developer "
+                "Edition builds only; beta, release and ESR builds run on past it")
+        facts = triage._crash_facts(crash)
+        self.assertEqual(facts.index(line), facts.index("MOZ_CRASH_REASON: " + reason) + 1)
+        self.assertIn(line, second_opinion._user_prompt(crash, None))
+
+    def test_crash_facts_scope_a_debug_assert_and_skip_checks_every_build_has(self):
+        debug = triage._crash_facts(dict(_CRASH, raw_crash={"moz_crash_reason": "MOZ_ASSERT(x)"}))
+        self.assertIn("Builds with this check: `MOZ_ASSERT` is in debug builds only; nightly, "
+                      "Developer Edition, beta, release and ESR builds run on past it", debug)
+        for reason in ("MOZ_RELEASE_ASSERT(x)", "MOZ_CRASH(OOM)", "assertion failed: x",
+                       "MOZ_DIAGNOSTIC_ASSERTS_ARE_NOT_A_MACRO"):
+            facts = "\n".join(triage._crash_facts(dict(_CRASH, raw_crash={"moz_crash_reason": reason})))
+            self.assertNotIn("Builds with this check", facts, reason)
+
+    def test_the_mechanism_layout_asks_for_the_behaviour_without_the_check(self):
+        self.assertIn("\"Builds with this check\" line", triage._system_prompt())
+
     def test_user_prompt_no_candidate_block_when_absent(self):
         self.assertNotIn("candidate changesets", triage._user_prompt(_CRASH))
 

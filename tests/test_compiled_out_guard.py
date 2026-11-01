@@ -109,6 +109,11 @@ class TestTheClauseKeepsTheContextNotTheInstrument(unittest.TestCase):
         self.assertIn("every symbol the MECHANISM DEPENDS ON, not just the ones you cited", prompt)
         self.assertIn("AutoMarkingLock", prompt)
 
+    def test_channels_with_reads_the_per_channel_table(self):
+        self.assertEqual(co.channels_with("MOZ_DIAGNOSTIC_ASSERT_ENABLED"), ["nightly", "aurora"])
+        self.assertEqual(co.channels_with("MOZ_ASSERT_ENABLED"), [])
+        self.assertEqual(co.channels_with("RELEASE_OR_BETA"), ["aurora", "beta", "release", "esr"])
+
     def test_compiled_out_is_still_fail_and_not_unverifiable(self):
         # defe860 is NOT reverted. The PLATFORM shape is 15 of the 39 build-guard fails and 3 of
         # the 8 binding vetoes in the month, and it is correct every time; routing it back to

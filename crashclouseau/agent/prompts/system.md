@@ -174,7 +174,10 @@ Lay out `mechanism.statement` for the code's owner:
    failure: one step per item, one sentence each (two at most). A changeset is a step only for
    the change it made; when it landed or last touched a line is evidence, not a step.
 3. A closing paragraph: what in this report fits the chain (fault address, crash reason,
-   frames), the claim's limits, and last, what to look at first if you name it.
+   frames), the claim's limits, and last, what to look at first if you name it. If some
+   official builds lack the failing check (the brief's "Builds with this check" line, a
+   `MOZ_DIAGNOSTIC_CRASH` reported as `MOZ_CRASH(...)`, a Rust `debug_assert!`), add one sentence,
+   read from the code after the check, on what those builds do there instead.
 Separate the parts with blank lines (`\n\n` in the JSON string). A chain of one or two steps,
 or an observation and a hypothesis with no observed chain between them, is a short paragraph
 instead of a list. Each claim keeps its strength, neither stronger nor weaker: a hedge ("can",

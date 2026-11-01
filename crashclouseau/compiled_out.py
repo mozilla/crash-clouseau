@@ -253,6 +253,12 @@ def channel_off(channel=None):
     return _partition(channel or build_channel())[1]
 
 
+def channels_with(macro):
+    """The channels, nightly first, whose official builds define *macro*."""
+    return [ch for ch in ("nightly", "aurora", "beta", "release", "esr")
+            if macro in _CHANNEL_MACROS[ch][0]]
+
+
 def build_type_deny(channel=None):
     """Both halves: every macro the ``moz.configure`` walk must not be asked about."""
     on, off = _partition(channel or build_channel())
