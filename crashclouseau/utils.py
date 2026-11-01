@@ -69,6 +69,9 @@ _LAMBDA_COMPONENT = re.compile(
     r"(?<=::)(?:\$(?:_\d+)?|<lambda(?:_|#)\d+>|\{lambda#\d+\})(?=::|$| \|)"
 )
 _LAMBDA_T_COMPONENT = re.compile(r"(?<=::)<T>(?=::|$| \|)")
+# A templated constructor frame is named `X<T>::X<T>` or `X<T>::X`, depending on the symbols.
+_CTOR_WITH_T = re.compile(r"(?<![\w$])(\w+)<T>::\1<T>(?= \||$)")
+_CTOR_BARE = re.compile(r"(?<![\w$])(\w+)<T>::\1(?= \||$)")
 
 
 # R8 outline and enum-unboxing helper names.
@@ -109,13 +112,18 @@ def lambda_family(signature):
 
 
 def lambda_siblings(signature):
-    """Every spelling Socorro may give *signature*'s lambdas, itself included -- what a lookup
-    keyed on the signature (our filings, Bugzilla's crash-signature field) has to ask for so
-    the other half of the same defect is not invisible to it."""
+    """Every spelling Socorro may give *signature*'s lambdas and templated constructors,
+    itself included -- what a lookup keyed on the signature (our filings, Bugzilla's
+    crash-signature field) has to ask for so the other half of the same defect is not
+    invisible to it."""
     if not signature:
         return set()
     family = lambda_family(signature)
-    return {signature, family, _LAMBDA_T_COMPONENT.sub("$", family)}
+    out = set()
+    for s in (signature, family, _LAMBDA_T_COMPONENT.sub("$", family)):
+        bare = _CTOR_WITH_T.sub(r"\1<T>::\1", s)
+        out |= {s, bare, _CTOR_BARE.sub(r"\1<T>::\1<T>", bare)}
+    return out
 
 
 def lambda_families(signatures):

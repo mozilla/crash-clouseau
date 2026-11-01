@@ -159,6 +159,59 @@ class TestSplitLambdaIsDecidedAsOne(unittest.TestCase):
         self.assertIn("mozilla::Foo::Bar", data)          # from-zero, its own decision
 
 
+CTOR = ("mozilla::media::Interval<T>::Interval<T> | "
+        "mozilla::media::TimeIntervals::ToMicrosecondResolution")
+CTOR_BARE = ("mozilla::media::Interval<T>::Interval | "
+             "mozilla::media::TimeIntervals::ToMicrosecondResolution")
+
+
+class TestTemplatedConstructorSpellings(unittest.TestCase):
+    def test_both_constructor_spellings_are_siblings(self):
+        self.assertEqual(utils.lambda_siblings(CTOR), {CTOR, CTOR_BARE})
+        self.assertEqual(utils.lambda_siblings(CTOR_BARE), {CTOR, CTOR_BARE})
+
+    def test_every_constructor_frame_switches_together(self):
+        sig = "A<T>::A<T> | B<T>::B<T> | C::Run"
+        self.assertEqual(utils.lambda_siblings(sig), {sig, "A<T>::A | B<T>::B | C::Run"})
+
+    def test_a_lambda_and_a_constructor_combine(self):
+        self.assertEqual(utils.lambda_siblings(D + " | Foo<T>::Foo"), {
+            D + " | Foo<T>::Foo", D + " | Foo<T>::Foo<T>",
+            T + " | Foo<T>::Foo", T + " | Foo<T>::Foo<T>"})
+
+    def test_other_templated_names_are_left_alone(self):
+        for sig in ("nsTArray_Impl<T>::AppendElementInternal<T>", "Foo<T>::Foo<T>::operator()",
+                    "mozilla::Maybe<T>::ref", HANG):
+            self.assertEqual(utils.lambda_siblings(sig), {sig}, sig)
+
+    def test_the_family_used_to_merge_counts_is_unchanged(self):
+        self.assertEqual(utils.lambda_family(CTOR), CTOR)
+        self.assertEqual(utils.lambda_family(CTOR_BARE), CTOR_BARE)
+
+    def test_the_venue_lookup_finds_a_bug_on_the_other_spelling(self):
+        captured = {}
+
+        class R:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"bugs": [{"id": 2075441, "summary": "Crash in [@ " + CTOR_BARE + "]",
+                                  "cf_crash_signature": "[@ " + CTOR_BARE + "]",
+                                  "keywords": [], "product": "Core"}]}
+
+        def get(url, params=None, timeout=None):
+            captured.update(params or {})
+            return R()
+
+        with mock.patch.object(bugzilla_apply.net, "get", side_effect=get):
+            bugs = bugzilla_apply._open_bugs_for_signature(CTOR)
+        values = {v for k, v in captured.items() if k.startswith("v")}
+        self.assertIn(CTOR_BARE, values)
+        self.assertEqual([b["id"] for b in bugs], [2075441])
+        self.assertNotIn("via_signature", bugs[0])
+
+
 class TestTheFilerSeesBothSpellings(unittest.TestCase):
     def test_the_venue_lookup_asks_bugzilla_for_both(self):
         captured = {}
