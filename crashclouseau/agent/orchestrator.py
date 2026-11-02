@@ -3745,15 +3745,19 @@ def _sibling_report_facts(family_facts, raw_crash, product):
     counted = bool(got.get("reason_counted"))
     out = []
     for x in rows:
-        c = (got.get("rows") or {}).get(x["signature"])
+        c = (got.get("rows") or {}).get(x["signature"]) or {}
         out.append({
             "signature": x["signature"],
             "relation": x.get("relation"),
             "reports": c["reports"] if c else (0 if got else x.get("total_all_channels")),
-            "platforms": (c or {}).get("platforms") or {},
-            "same_reason": (c or {}).get("same_reason", 0) if counted else None,
-            "channels": (c or {}).get("channels") or {},
-            "first_day": (c or {}).get("first_day"),
+            "platforms": c.get("platforms") or {},
+            "all_channels": c.get("all_channels") or {},
+            "versions": c.get("versions") or {},
+            "first_seen_ever": c.get("first_seen_ever"),
+            "first_seen_ever_date": c.get("first_seen_ever_date"),
+            "same_reason": c.get("same_reason", 0) if counted else None,
+            "channels": c.get("channels") or {},
+            "first_day": c.get("first_day"),
         })
     out.sort(key=lambda r: (-(r["same_reason"] or 0), -(r["reports"] or 0), r["signature"]))
     platform = raw.get("os_name") or ((raw.get("json_dump") or {}).get("system_info") or {}).get("os")

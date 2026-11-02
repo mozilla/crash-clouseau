@@ -815,12 +815,12 @@ def _nested_counts(row, field):
 
 
 def sibling_reports(signatures, reason, product="Firefox", until=None):
-    """Count sibling reports by platform and matching-reason reports by channel.
+    """Count sibling reports by platform, channel and major version; add SignatureFirstDate.
 
-    Counts span the family window across all channels. Returns ``{since, reason_counted,
-    rows}``, with rows keyed by signature. ``first_day`` is the earliest returned matching-reason
-    day within that window. Ignore ``same_reason`` unless ``reason_counted`` is true.
-    Returns ``None`` for empty input, a batch failure, or missing all-report facets."""
+    Returns ``{since, reason_counted, rows}`` with rows keyed by signature. Counts span
+    this product's family window across all channels. ``reason_counted`` validates the
+    matching-reason counts and their earliest day, ``first_day``. Return ``None`` on
+    empty input or a failed all-report lookup; missing first dates leave counts intact."""
     sigs = [s for s in signatures or () if s]
     if not sigs:
         return None
@@ -835,7 +835,8 @@ def sibling_reports(signatures, reason, product="Firefox", until=None):
         "_facets_size": _DISCOVERY_FACETS,
     }
     got = {}
-    queries = [_query({**common, "_aggs.signature": "platform"}, got, "all")]
+    queries = [_query({**common, "_aggs.signature": ["platform", "release_channel",
+                                                     "major_version"]}, got, "all")]
     if reason:
         queries.append(_query({**common, "reason": "=" + reason,
                                "_aggs.signature": "release_channel",
@@ -853,7 +854,15 @@ def sibling_reports(signatures, reason, product="Firefox", until=None):
         sig, n = row.get("term"), int(row.get("count") or 0)
         if sig in sigs and n > 0:
             rows[sig] = {"reports": n, "platforms": _nested_counts(row, "platform"),
+                         "all_channels": _nested_counts(row, "release_channel"),
+                         "versions": {str(v): count for v, count in
+                                      _nested_counts(row, "major_version").items()},
                          "same_reason": 0, "channels": {}, "first_day": None}
+    first_seen = sigage.first_seen_ever_facts(list(rows))
+    for sig, row in rows.items():
+        facts = first_seen.get(sig) or {}
+        row.update(first_seen_ever=facts.get("first_build"),
+                   first_seen_ever_date=facts.get("first_date"))
     counted = bool(reason) and _usable(got.get("reason"))
     if counted:
         facets = got["reason"]["facets"]

@@ -16,7 +16,7 @@ import unittest  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import sigfamily  # noqa: E402
+from crashclouseau import sigage, sigfamily  # noqa: E402
 from crashclouseau.agent import orchestrator as orch, second_opinion, triage  # noqa: E402
 from crashclouseau.agent.schema import Dossier  # noqa: E402
 
@@ -27,10 +27,11 @@ REASON = "FACILITY_VISUALCPP / ERROR_PROC_NOT_FOUND"
 UNTIL = datetime(2026, 10, 2, 12, tzinfo=timezone.utc)
 
 
-def _row(term, count, field=None, terms=None):
+def _row(term, count, **facets):
     out = {"term": term, "count": count}
-    if field:
-        out["facets"] = {field: [{"term": t, "count": n} for t, n in terms.items()]}
+    if facets:
+        out["facets"] = {f: [{"term": t, "count": n} for t, n in ts.items()]
+                         for f, ts in facets.items()}
     return out
 
 
@@ -59,18 +60,25 @@ class FakeRun:
 
 def _fake():
     return FakeRun(
-        all_rows=[_row(A, 66, "platform", {"Windows NT": 66}),
-                  _row(B, 43, "platform", {"Windows NT": 43})],
-        reason_rows=[_row(A, 64, "release_channel", {"release": 59, "beta": 2, "aurora": 3})],
+        all_rows=[_row(A, 66, platform={"Windows NT": 66},
+                       release_channel={"release": 60, "esr": 6},
+                       major_version={115: 6, 150: 60}),
+                  _row(B, 43, platform={"Windows NT": 43})],
+        reason_rows=[_row(A, 64, release_channel={"release": 59, "beta": 2, "aurora": 3})],
         # Unsorted dates exercise earliest-day selection.
-        days=[_row("2026-08-05T00:00:00+00:00", 3, "signature", {A: 3}),
-              _row("2026-08-03T00:00:00+00:00", 1, "signature", {A: 1})])
+        days=[_row("2026-08-05T00:00:00+00:00", 3, signature={A: 3}),
+              _row("2026-08-03T00:00:00+00:00", 1, signature={A: 1})])
 
 
 class TestSiblingReports(unittest.TestCase):
-    def _call(self, fake, reason=REASON, sigs=(A, B)):
-        with mock.patch.object(sigfamily, "_run", fake):
-            return sigfamily.sibling_reports(list(sigs), reason, "Firefox", until=UNTIL)
+    def _call(self, fake, reason=REASON, sigs=(A, B), first=None):
+        first = {A: {"first_build": "20140608211132", "first_date": "2014-06-12"}} \
+            if first is None else first
+        with mock.patch.object(sigfamily, "_run", fake), \
+                mock.patch.object(sigage, "first_seen_ever_facts", return_value=first) as ever:
+            got = sigfamily.sibling_reports(list(sigs), reason, "Firefox", until=UNTIL)
+        self.ever_calls = ever.call_args_list
+        return got
 
     def test_counts_by_platform_and_same_reason_by_channel(self):
         fake = _fake()
@@ -78,10 +86,19 @@ class TestSiblingReports(unittest.TestCase):
         self.assertEqual(got["since"], "2026-04-03")
         self.assertTrue(got["reason_counted"])
         self.assertEqual(got["rows"][A], {
-            "reports": 66, "platforms": {"Windows NT": 66}, "same_reason": 64,
-            "channels": {"release": 59, "beta": 2, "aurora": 3}, "first_day": "2026-08-03"})
+            "reports": 66, "platforms": {"Windows NT": 66},
+            "all_channels": {"release": 60, "esr": 6}, "versions": {"115": 6, "150": 60},
+            "same_reason": 64, "channels": {"release": 59, "beta": 2, "aurora": 3},
+            "first_day": "2026-08-03",
+            "first_seen_ever": "20140608211132", "first_seen_ever_date": "2014-06-12"})
         self.assertEqual(got["rows"][B]["same_reason"], 0)
         self.assertEqual(got["rows"][B]["first_day"], None)
+        self.assertEqual((got["rows"][B]["all_channels"], got["rows"][B]["versions"]), ({}, {}))
+        self.assertIsNone(got["rows"][B]["first_seen_ever"])
+        all_query = next(p for p in fake.params if "reason" not in p)
+        self.assertEqual(all_query["_aggs.signature"],
+                         ["platform", "release_channel", "major_version"])
+        self.assertEqual(self.ever_calls, [mock.call([A, B])], "one batched lookup")
         reason_query = next(p for p in fake.params if "reason" in p)
         self.assertEqual(reason_query["reason"], "=" + REASON)
         self.assertEqual(reason_query["signature"], ["=" + A, "=" + B])
@@ -103,6 +120,12 @@ class TestSiblingReports(unittest.TestCase):
     def test_failures_and_empty_input_return_none(self):
         self.assertIsNone(self._call(FakeRun([], fail=True)))
         self.assertIsNone(self._call(_fake(), sigs=()))
+        self.assertEqual(self.ever_calls, [])
+
+    def test_no_first_date_leaves_the_counts(self):
+        got = self._call(_fake(), first={})
+        self.assertIsNone(got["rows"][A]["first_seen_ever"])
+        self.assertEqual(got["rows"][A]["reports"], 66)
 
 
 SIBLINGS = [
@@ -123,6 +146,8 @@ class TestTheSeedFact(unittest.TestCase):
     def test_live_siblings_sorted_by_same_reason_reports(self):
         got = {"since": "2026-04-03", "reason_counted": True, "rows": {
             A: {"reports": 66, "platforms": {"Windows NT": 66}, "same_reason": 64,
+                "all_channels": {"esr": 60, "release": 6}, "versions": {"115": 60},
+                "first_seen_ever": "20140608211132", "first_seen_ever_date": "2014-06-12",
                 "channels": {"release": 59}, "first_day": "2026-08-03"},
             B: {"reports": 43, "platforms": {"Windows NT": 43}, "same_reason": 0,
                 "channels": {}, "first_day": None}}}
@@ -130,6 +155,11 @@ class TestTheSeedFact(unittest.TestCase):
         self.assertEqual(call.call_args[0][0], [B, A], "`unclassified` is not live")
         self.assertEqual([r["signature"] for r in out["rows"]], [A, B])
         self.assertEqual(out["rows"][0]["same_reason"], 64)
+        self.assertEqual((out["rows"][0]["all_channels"], out["rows"][0]["versions"],
+                          out["rows"][0]["first_seen_ever_date"]),
+                         ({"esr": 60, "release": 6}, {"115": 60}, "2014-06-12"))
+        self.assertEqual((out["rows"][1]["all_channels"], out["rows"][1]["first_seen_ever"]),
+                         ({}, None))
         self.assertEqual(out["reason"], REASON)
         self.assertEqual(out["platform"], "Windows NT")
         self.assertEqual(out["since"], "2026-04-03")
@@ -217,6 +247,19 @@ class TestTheBrief(unittest.TestCase):
                                    "3, beta 2), first on 2026-08-03".format(A))
         self.assertEqual(lines[3], "  `{}` (its frames are deeper in this crash's stack): 1 report "
                                    "(Mac OS X 1); none with the same reason".format(B))
+
+    def test_channels_versions_and_first_report(self):
+        row = dict(BLOCK["rows"][1], all_channels={"esr": 145, "default": 9, "release": 3},
+                   versions={"115": 139, "140": 5, "150": 2, "155": 2, "158": 2},
+                   first_seen_ever="20140608211132", first_seen_ever_date="2014-06-12")
+        lines = triage._sibling_lines({"signature_sibling_reports": dict(BLOCK, rows=[row])})
+        self.assertIn("'First reported' is Socorro's recorded first report across products and channels",
+                      lines[1])
+        self.assertEqual(lines[2], "  `{}` (its frames are deeper in this crash's stack): 1 report "
+                                   "(Mac OS X 1); channels esr 145, default 9, release 3; versions "
+                                   "115 139, 140 5, 150 2, 155 2 (+1 more); first reported "
+                                   "2014-06-12 (build 20140608211132); none with the same "
+                                   "reason".format(B))
 
     def test_without_reason_counts(self):
         block = dict(BLOCK, reason=None, since=None,

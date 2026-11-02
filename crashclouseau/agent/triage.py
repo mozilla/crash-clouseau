@@ -1227,6 +1227,7 @@ _SIBLING_RELATIONS = {
     "spelling": "another spelling of this signature",
 }
 _MAX_SIBLING_LINES = 5
+_MAX_SIBLING_VERSIONS = 4
 
 
 def _sibling_lines(crash: dict) -> list[str]:
@@ -1236,9 +1237,12 @@ def _sibling_lines(crash: dict) -> list[str]:
     if not rows:
         return []
 
-    def counts(d):
-        return ", ".join("{} {}".format(k, n) for k, n in sorted(
-            (d or {}).items(), key=lambda kv: (-kv[1], kv[0])))
+    def counts(d, limit=None):
+        items = sorted((d or {}).items(), key=lambda kv: (-kv[1], kv[0]))
+        text = ", ".join("{} {}".format(k, n) for k, n in items[:limit])
+        if limit is not None and len(items) > limit:
+            text += " (+{} more)".format(len(items) - limit)
+        return text
 
     reason = facts.get("reason")
     head = ("SIBLING SIGNATURES: signatures that share frames with this one and are still "
@@ -1250,7 +1254,9 @@ def _sibling_lines(crash: dict) -> list[str]:
             if facts.get("platform") else "")
     else:
         head += "; same-reason counts are unavailable"
-    out = ["", head + ". Shared frames and a shared reason do not show that it is the same crash."]
+    out = ["", head + ". Versions are major versions. 'First reported' is Socorro's recorded "
+                      "first report across products and channels. Shared frames and reason "
+                      "do not show that it is the same crash."]
     for r in rows[:_MAX_SIBLING_LINES]:
         n = r.get("reports")
         line = "  `{}` ({}): {} report{}{}".format(
@@ -1258,6 +1264,15 @@ def _sibling_lines(crash: dict) -> list[str]:
             _SIBLING_RELATIONS.get(r.get("relation"), r.get("relation") or "related"),
             n if n is not None else "?", "" if n == 1 else "s",
             " ({})".format(counts(r.get("platforms"))) if r.get("platforms") else "")
+        if r.get("all_channels"):
+            line += "; channels {}".format(counts(r["all_channels"]))
+        if r.get("versions"):
+            line += "; versions {}".format(counts(r["versions"], _MAX_SIBLING_VERSIONS))
+        first_date, first_build = r.get("first_seen_ever_date"), r.get("first_seen_ever")
+        if first_date or first_build:
+            line += "; first reported {}".format(first_date or "?")
+            if first_build:
+                line += " (build {})".format(first_build)
         if reason and r.get("same_reason"):
             line += "; {} with the same reason ({}), first on {}".format(
                 r["same_reason"], counts(r.get("channels")), r.get("first_day") or "?")
