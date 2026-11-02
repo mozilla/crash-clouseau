@@ -1715,6 +1715,12 @@ class TestPayload(_Base):
         self.assertEqual(self.created[0]["flags"],
                          [{"name": "needinfo", "status": "?", "requestee": "dev@moz.example"}])
 
+    def test_the_last_change_author_is_ccd_on_the_created_bug(self):
+        preview = dict(_PREVIEW, cc=["author@moz.example"])
+        with mock.patch("crashclouseau.report_bug.build_bug_preview", return_value=preview):
+            self._file()
+        self.assertEqual(self.created[0]["cc"], ["author@moz.example"])
+
     def test_needinfo_can_be_turned_off_without_stopping_filing(self):
         res = self._file(needinfo=False)
         self.assertTrue(res["filed"])
@@ -1878,6 +1884,24 @@ class TestWithoutEditbugsRelationshipsGoByPut(_Base):
         self.assertTrue(res["filed"])
         self.assertEqual(len(calls), 2)                        # nothing else left to take off
         self.assertEqual(res["needinfo_dropped"], "dev@moz.example")
+
+    def test_a_cc_bugzilla_refuses_never_loses_the_bug(self):
+        bugzilla_apply._can_create_relationships.return_value = False
+        calls = []
+
+        def create(payload, token):
+            calls.append(payload)
+            if payload.get("cc"):
+                raise bugzilla_apply.BugzillaRejected("code 51, no user named X", status=404)
+            return 999
+        bugzilla_apply._create_bug.side_effect = create
+        preview = dict(_PREVIEW, cc=["author@moz.example"])
+        with mock.patch("crashclouseau.report_bug.build_bug_preview", return_value=preview):
+            res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual([("cc" in c, "flags" in c) for c in calls],
+                         [(True, True), (True, False), (False, False)])
+        self.assertEqual(res["cc_dropped"], ["author@moz.example"])
 
 
 class TestTheEditbugsRead(unittest.TestCase):
@@ -2201,7 +2225,7 @@ class TestTheNeedinfoNeverCostsTheBug(_Base):
         self.assertEqual(res["bug"], 999)
         self.assertIsNone(res["needinfo"])                    # not claimed
         self.assertEqual(res["needinfo_dropped"], "dev@moz.example")
-        # Needinfo is last in the retry ladder.
+        # This payload has no CC, so dropping needinfo is the final retry.
         self.assertEqual(len(calls), 4)
         self.assertNotIn("flags", calls[-1])
         self.assertEqual((res["blocks"], res["regressed_by"]), (["clouseau"], [42]))
@@ -2408,6 +2432,31 @@ class TestTheNeedinfoNeverTakesSomebodyElses(_Base):
         self.assertNotIn("needinfo_failed", res)
         self.assertEqual(len(self.comments), 1)                # the analysis is posted anyway
         self.assertEqual(len(self.filed), 1)
+
+    def test_the_last_change_author_is_ccd_when_the_triage_owner_is_asked(self):
+        preview = dict(_PREVIEW, cc=["author@moz.example"])
+        with mock.patch("crashclouseau.report_bug.build_bug_preview", return_value=preview):
+            res = self._file()
+        self.assertEqual(self.puts[-1], (4242, {"cc": {"add": ["author@moz.example"]}}))
+        self.assertEqual(res["cc_added"], "author@moz.example")
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+
+    def test_a_failed_cc_keeps_the_comment_and_the_needinfo(self):
+        preview = dict(_PREVIEW, cc=["author@moz.example"])
+        puts = self.puts
+
+        def put(bug_id, changes, token):
+            if "cc" in changes:
+                raise RuntimeError("boom")
+            puts.append((bug_id, changes))
+            return bug_id
+        with mock.patch("crashclouseau.report_bug.build_bug_preview", return_value=preview), \
+                mock.patch.object(bugzilla_apply, "_put_bug", side_effect=put):
+            res = self._file()
+        self.assertTrue(res["filed"])
+        self.assertEqual(res["cc_failed"], "author@moz.example")
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+        self.assertEqual(len(self.comments), 1)
 
     def test_the_match_ignores_address_case(self):
         bugzilla_apply._existing_needinfos.return_value = {"dev@moz.example"}

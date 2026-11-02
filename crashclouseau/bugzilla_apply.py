@@ -510,10 +510,10 @@ def _can_create_relationships(token):
 def _create_bug_keeping_the_bug(payload, token):
     """Create a bug, removing optional fields after a 4xx refusal.
 
-    The retry order is ``regressed_by``, ``blocks``, train fields, then needinfo. Return the bug
-    id and removed categories so callers can retry them by PUT. Relationships are removed before
-    the first attempt when the account lacks ``editbugs``. Never retry transport errors or 5xx
-    responses because the POST may have succeeded. If all retries fail, raise the first refusal."""
+    Drop ``regressed_by``, ``blocks``, train fields, needinfo, then CC; return the bug ID
+    and dropped categories. Omit relationships up front without ``editbugs``.
+    Do not retry transport errors or 5xx responses: the POST may have succeeded.
+    If all retries fail, raise the first refusal."""
     body, dropped = payload, frozenset()
     relations = [k for k in ("regressed_by", "blocks") if payload.get(k)]
     if relations and not _can_create_relationships(token):
@@ -523,7 +523,8 @@ def _create_bug_keeping_the_bug(payload, token):
     for name, keys in (("regressed_by", ("regressed_by",)),
                        ("blocks", ("blocks",)),
                        ("train_flags", tuple(k for k in body if _is_train_flag(k))),
-                       ("needinfo", ("flags",))):
+                       ("needinfo", ("flags",)),
+                       ("cc", ("cc",))):
         if not any(body.get(k) for k in keys):
             continue
         body = {k: v for k, v in body.items() if k not in keys}
@@ -605,6 +606,16 @@ def _set_needinfo(bug_id, email, token):
         return None
     except Exception as exc:
         logger.warning("autofile: needinfo for %s on bug %s failed: %s", email, bug_id, exc)
+        return exc
+
+
+def _add_cc(bug_id, account, token):
+    """Add an account to CC; return the update error, or ``None`` on success."""
+    try:
+        _put_bug(bug_id, {"cc": {"add": [account]}}, token)
+        return None
+    except Exception as exc:
+        logger.warning("autofile: cc of %s on bug %s failed: %s", account, bug_id, exc)
         return exc
 
 
@@ -3918,6 +3929,9 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
             failed = isinstance(outcome, Exception)
             result.update({"filed": True, "bug": bug_id, "mode": "comment_on_existing",
                            "needinfo": None if failed else (email or None)})
+            for account in preview.get("cc") or []:
+                key = "cc_failed" if _add_cc(bug_id, account, token) else "cc_added"
+                result[key] = account
             # HOW THE VENUE WAS FOUND, when it was through a duplicate rather than the bug's own
             # signature field: the same audit reason as `predating_bugs` — if a dup ever routes
             # us into the wrong bug, these rows are how we find out.
@@ -3939,6 +3953,8 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
             if "needinfo" in dropped:
                 result["needinfo_dropped"] = email
                 email = ""
+            if "cc" in dropped:
+                result["cc_dropped"] = payload.get("cc")
             # Filed PAST an open bug on the same signature. Recorded so the choice is
             # auditable from the dossier — this is the one place the filer knowingly creates
             # something that looks like a duplicate, and if the age rule is ever wrong these

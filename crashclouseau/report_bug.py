@@ -765,6 +765,14 @@ def fresh_origin_days(corroborations, limit):
     return days
 
 
+def older_sibling_origin(corroborations):
+    """Return the older sibling's signature if this signature has no pre-landing builds."""
+    age = (corroborations or {}).get("actionable_origin_age") or {}
+    if not age.get("predates_signature"):
+        return None
+    return (age.get("older_sibling") or {}).get("signature") or None
+
+
 def _fresh_origin_clause(corroborations, limit):
     """Describe the landing and available first-seen builds, or return ``""`` if ineligible
     or the landing date is missing."""
@@ -1533,11 +1541,11 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
             link += " by {}".format(who)
         origin = corroborations.get("hang_awaited_origin") or {}
         age = corroborations.get("actionable_origin_age") or {}
-        older = (age.get("older_sibling") or {}).get("signature")
+        older = older_sibling_origin(corroborations)
         prior_reports = None
         if age.get("predates_signature") is False:
             prior_reports = "this signature is also reported"
-        elif age.get("predates_signature") and older:
+        elif older:
             prior_reports = "`[@ {}]`, which shares frames with this signature, is reported".format(older)
         if origin.get("node") and str(origin["node"])[:12].lower() == str(
                 candidate["node"])[:12].lower():
@@ -2033,12 +2041,14 @@ def security_group(product):
 
 
 def restrict_preview(preview):
-    """Copy the preview with the product's security group and needinfo requestee as CC.
+    """Add the product's security group and prepend the requestee to existing CCs.
 
     Leave groups empty if no security group resolves; the filer checks this before creating."""
     group = security_group(preview.get("product"))
     account = preview.get("needinfo_email") or ""
-    return dict(preview, groups=[group] if group else [], cc=[account] if account else [])
+    cc = ([account] if account else []) + [
+        a for a in preview.get("cc") or [] if a and a.casefold() != account.casefold()]
+    return dict(preview, groups=[group] if group else [], cc=cc)
 
 
 def _candidate_author(candidate):
@@ -3062,19 +3072,20 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     """
     dossier = dossier or {}
     candidate = dossier.get("candidate")
+    corro = dossier.get("corroborations") or {}
+    has_candidate = bool(candidate and candidate.get("node"))
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
     # (``bugzilla_apply._incomplete_fix_bug``) is a bug whose fix is already in this build on a
     # signature that bug owns, and the crash is still here — an OBSERVATION, with no changeset
     # to defend. The pipeline was built to defend a changeset, which is why this needed a second
     # entry point rather than a looser candidate: 15 of the 32 fixes among human-filed
     # existing-signature crash bugs (47%) named no regressor at all.
-    if (not candidate or not candidate.get("node")) and not incomplete_fix:
+    if not has_candidate and not incomplete_fix:
         return None
     channel = uuid_info.get("channel")
     uuid = uuid_info.get("uuid", "")
     author_unaskable = False
-    if candidate and candidate.get("node"):
-        corro = dossier.get("corroborations") or {}
+    if has_candidate:
         product, component = resolve_product_component(
             candidate, channel, uuid_info.get("product"),
             file_components=corro.get("file_components"),
@@ -3103,14 +3114,14 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # along so the volume sentence can count what the signature search alone undercounts.
     first, stats = fetch_signature_stats(
         uuid, uuid_info,
-        siblings=((dossier or {}).get("corroborations") or {}).get("signature_siblings_live") or ())
+        siblings=corro.get("signature_siblings_live") or ())
     # The channel's filing marks (`config.get_agent_autofile`): release titles its bugs
     # "[new in release] Crash in [@ ...]" and nominates the crash's version for tracking; every
     # other channel has neither. Read here so the page preview shows the bug the filer will post
     # -- for the crash's own product too, as the filer does (a product overlay carries no mark
     # today, so `product=` changes nothing for Firefox).
     policy = config.get_agent_autofile(channel, product=uuid_info.get("product"))
-    suspected_regression = bool(is_suspected_regression(dossier.get("corroborations")))
+    suspected_regression = bool(is_suspected_regression(corro))
     # AN `actionable` VERDICT CLAIMS NO REGRESSION, whatever the window says about its ORIGIN
     # changeset (2026-09-17): no `regression` keyword, no `regressed_by`, no release marks (the
     # prefix and the tracking ask both say "new regression"), and its own affirmative opener.
@@ -3127,8 +3138,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # 0xffffffffffffffff (a hardware bit flip). The deterministic address fires on 1 of 57
     # filings, which is exactly the one a human restricted.
     # The filer may also request restriction for nonpublic bug references.
-    withhold = restrict or sensitive.is_withheld(dossier.get("corroborations"))
-    g = security_group(product) if withhold else None
+    withhold = restrict or sensitive.is_withheld(corro)
     # A BUCKET BUG (2026-09-18). The signature is held by an open `[meta]` tracker, so it is a
     # catch-all for every cause under one main-thread wait, and the bug filed for THIS cause is
     # named for the cause, carries no `cf_crash_signature` (the signature stays with the meta,
@@ -3137,7 +3147,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # and his 2073426). With no title material there is no bucket bug: the filer declines, and
     # the page preview shows the plain form.
     meta_ids = [int(b["id"]) for b in (meta_bugs or []) if (b or {}).get("id")]
-    awaited = (dossier.get("corroborations") or {}).get("hang_awaited_work") or {}
+    awaited = corro.get("hang_awaited_work") or {}
     bucket_name = bucket_title(dossier) if meta_ids else ""
     bucket = bool(meta_ids and bucket_name)
     opener = build_bucket_opener(meta_bugs, uuid_info.get("signature")) if bucket else None
@@ -3145,8 +3155,9 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     stale = stale if actionable else None
     away = policy.get("needinfo_away_days")
     # For actionable filings, prefer an eligible owner of a matching Nimbus feature.
-    nimbus = (_nimbus_owner_person(dossier.get("corroborations"), away)
+    nimbus = (_nimbus_owner_person(corro, away)
               if actionable and not stale else None)
+    cc = []
     if stale:
         asked = stale.get("person") or {}
         role = stale.get("role", "triage owner")
@@ -3155,13 +3166,18 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         role = "the owner of the Nimbus feature `{}`".format(nimbus["feature"])
     else:
         owner = None
-        if actionable and candidate and candidate.get("node"):
+        older = actionable and has_candidate and bool(older_sibling_origin(corro))
+        if actionable and has_candidate and not older:
             owner = _owner_for_old_origin(person, dossier, product, component,
                                           policy.get("author_active_days"), away)
         if not owner and (
-                author_unaskable or _inactive_author(
+                older or author_unaskable or _inactive_author(
                     person, policy.get("author_fixed_days"), policy.get("author_fixed_min")) or _away(person, away)):
             owner = _triage_owner_person(product, component, person.get("account"), away)
+        # Failed lookups retain the unverified hg address; exclude it from CC.
+        account = person.get("account") or ""
+        if owner and older and account and not _bugzilla_user(account).get("unverified"):
+            cc.append(account)
         asked = owner or person
         role = "triage owner" if owner else ""
     ask = _needinfo_line(asked, role=role)
@@ -3174,7 +3190,7 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             recent_note = build_recent_channels_sentence(
                 recent, uuid_info.get("product"), days,
                 reason=details.get("moz_crash_reason"))
-    return {
+    preview = {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps
         # these bugs searchable/dedupable alongside Socorro-filed ones. Capped at BMO's
@@ -3256,20 +3272,8 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         # create for an unknown requestee, so an unresolved account means no flag (and the
         # prose above still names the person).
         "needinfo_email": (asked or {}).get("account") or "",
-        # SECURITY VENUE. :mccr8 on bug 2065051: "Bugs on poison crashes like that should always
-        # be filed initially a security issue." `[]` on an ordinary crash, so nothing changes for
-        # the 98% -- and a group NAME rather than a boolean because BMO has no
-        # `is_security_issue` create parameter (it answers 400, code 53; Treeherder's own SERVER
-        # translates its checkbox into `groups` from a per-product table). `security_group` reads
-        # BMO's answer per product, because production's differ: Core is `core-security` while
-        # Firefox/Toolkit/DevTools are `firefox-core-security`.
-        #
-        # An empty list when the crash IS memory-unsafe means the group could not be resolved,
-        # and `autofile_bug` treats that as "do not file" -- see the check there. The distinction
-        # cannot be drawn here, because a preview has no business refusing.
-        "groups": [g] if (withhold and g) else [],
-        # CC grants the requestee access to a restricted bug (cclist_accessible defaults true),
-        # satisfying BMO Flag::_check_requestee even without security-group membership.
-        "cc": ([(asked or {}).get("account")]
-               if withhold and (asked or {}).get("account") else []),
+        # The filer checks for a security group after restrict_preview resolves it.
+        "groups": [],
+        "cc": cc,
     }
+    return restrict_preview(preview) if withhold else preview

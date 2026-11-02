@@ -279,10 +279,19 @@ def _preview_dossier(**corro):
     }
 
 
+def _older_origin_age(**over):
+    return {"landed": "2023-08-16", "days_before_build": 30.0, "predates_signature": True,
+            "older_sibling": {"signature": "mozilla::EventListenerManager::MarkForCC",
+                              "first_build": "20140608211132", "first_date": "2014-06-12"},
+            **over}
+
+
 def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=50,
-                   details=None):
-    """Render with stubbed crash counts and recipient lookups."""
+                   details=None, users=None):
+    """Render with stubbed crash counts and recipient lookups; ``users`` overrides
+    ``_bugzilla_user`` per address."""
     details = details or {"reason": "EXCEPTION_BREAKPOINT", "address": "0x7ff6fb034c43"}
+    found = {"exists": True, "nick": "bobowen"}
     with mock.patch.object(report_bug, "resolve_product_component",
                            return_value=("Core", "Security: Process Sandboxing")), \
             mock.patch.object(report_bug, "fetch_crash_reason", return_value=details), \
@@ -290,7 +299,7 @@ def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=
                               return_value=(False, {"count": 85, "installs": 77})), \
             mock.patch("crashclouseau.models.Node.authors_for", return_value={}), \
             mock.patch.object(report_bug, "_bugzilla_user",
-                              return_value={"exists": True, "nick": "bobowen"}), \
+                              side_effect=lambda e: (users or {}).get(e, found)), \
             mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=recent), \
             mock.patch.object(report_bug, "_component_activity", return_value=active), \
             mock.patch.object(report_bug, "_recent_fixes", return_value=fixes), \
@@ -384,12 +393,9 @@ class TestTheBugItFiles(unittest.TestCase):
             self.assertNotIn(phrase, c, phrase)
 
     def test_an_older_sibling_names_the_origin_as_the_last_change(self):
-        older = {"signature": "mozilla::EventListenerManager::MarkForCC",
-                 "first_build": "20140608211132", "first_date": "2014-06-12"}
         # Cover both sides of the waiver's age limit.
         for landed, days in (("2024-04-22", 900.0), ("2026-09-12", 6.5)):
-            age = {"landed": landed, "days_before_build": days, "predates_signature": True,
-                   "older_sibling": older}
+            age = _older_origin_age(landed=landed, days_before_build=days)
             p = _build_preview(_preview_dossier(actionable_origin_age=age))
             c = p["comment"]
             self.assertIn("- The failing code was last changed in [507a4c21a8eb](", c)

@@ -29,10 +29,10 @@ def _lead():
     return d
 
 
-def _preview(dossier, fixes, owner="owner@moz.example", found=None):
+def _preview(dossier, fixes=50, owner="owner@moz.example", found=None, **kwargs):
     with mock.patch.object(report_bug, "_person_for_account",
                            return_value=dict(_OWNER) if found is None else found):
-        return tav._build_preview(dossier, owner=owner, fixes=fixes)
+        return tav._build_preview(dossier, owner=owner, fixes=fixes, **kwargs)
 
 
 class TestRecentFixes(unittest.TestCase):
@@ -160,6 +160,54 @@ class TestTheAsk(unittest.TestCase):
                 p = _preview(_lead(), **over)
                 self.assertEqual(p["needinfo_email"], "bob@x.com")
                 self.assertEqual(p["needinfo"], _AUTHOR_ASK)
+
+    def test_an_older_sibling_asks_the_triage_owner_and_ccs_the_author(self):
+        p = _preview(tav._preview_dossier(actionable_origin_age=tav._older_origin_age()))
+        self.assertEqual((p["needinfo_email"], p["needinfo"]), ("owner@moz.example", _OWNER_ASK))
+        self.assertEqual(p["cc"], ["bob@x.com"])
+        self.assertIn("by :bobowen, which landed on 2023-08-16; `[@ mozilla::EventListenerManager"
+                      "::MarkForCC]`", p["comment"])
+        self.assertNotIn(_AUTHOR_ASK, p["comment"])
+        with mock.patch.object(report_bug, "security_group", return_value="core-security"):
+            self.assertEqual(report_bug.restrict_preview(p)["cc"],
+                             ["owner@moz.example", "bob@x.com"])
+
+    def test_the_author_is_ccd_whichever_rule_picked_the_owner(self):
+        for name, days, active, fixes in (("an old origin by a quiet author", 1000.0, False, 50),
+                                          ("an inactive author", 30.0, True, 0)):
+            for sibling in (True, False):
+                with self.subTest(name, sibling=sibling):
+                    age = tav._older_origin_age(days_before_build=days)
+                    if not sibling:
+                        age.pop("older_sibling")
+                    p = _preview(tav._preview_dossier(actionable_origin_age=age),
+                                 active=active, fixes=fixes)
+                    self.assertEqual((p["needinfo_email"], p["needinfo"]),
+                                     ("owner@moz.example", _OWNER_ASK))
+                    self.assertEqual(p["cc"], ["bob@x.com"] if sibling else [])
+
+    def test_an_unconfirmed_author_address_is_not_ccd(self):
+        # A failed lookup retains the unverified hg address.
+        failed = {"exists": True, "nick": "", "real": "", "askable": True, "unverified": True}
+        with mock.patch.object(report_bug, "_bug_people", return_value={}):
+            p = _preview(tav._preview_dossier(actionable_origin_age=tav._older_origin_age()),
+                         users={"bob@x.com": failed})
+        self.assertEqual(p["needinfo_email"], "owner@moz.example")
+        self.assertEqual(p["cc"], [])
+
+    def test_what_keeps_the_author_despite_an_older_sibling(self):
+        cases = {
+            "the signature itself is older": ({"predates_signature": False}, {}),
+            "no older sibling": ({"older_sibling": None}, {}),
+            "no askable owner": ({}, {"found": {}}),
+            "no owner": ({}, {"owner": ""}),
+        }
+        for name, (over, kw) in cases.items():
+            with self.subTest(name):
+                age = tav._older_origin_age(**over)
+                p = _preview(tav._preview_dossier(actionable_origin_age=age), **kw)
+                self.assertEqual((p["needinfo_email"], p["needinfo"]), ("bob@x.com", _AUTHOR_ASK))
+                self.assertEqual(p["cc"], [])
 
     def test_an_away_author_asks_the_triage_owner(self):
         with mock.patch.object(report_bug, "_away",
