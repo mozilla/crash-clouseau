@@ -384,6 +384,7 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "bug_comment_facts",
         # Retain the brief's fault-address counts as diagnostics.
         "fault_address_population",
+        "poison_population",
     }
 
     def test_the_write_only_set_is_exactly_this(self):

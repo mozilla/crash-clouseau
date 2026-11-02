@@ -18,6 +18,7 @@ The predicate is easy; remembering it exists when a fifth surface is added is th
 """
 import os
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -122,40 +123,138 @@ class TestThePredicate(unittest.TestCase):
 
 
 class TestTheRecorder(unittest.TestCase):
-    def _dossier(self):
-        return mock.MagicMock(corroborations=None)
-
     def test_it_records_the_flag_and_the_reason(self):
         from crashclouseau.agent import orchestrator
-        d = self._dossier()
+        d = SimpleNamespace(corroborations=None)
         orchestrator._record_sensitivity(d, {"raw_crash": _POISON_RAW, "uuid": "u-1"})
         self.assertTrue(d.corroborations["memory_unsafe"])
         self.assertTrue(d.corroborations["memory_unsafe_signals"])
 
     def test_it_writes_nothing_for_an_ordinary_crash(self):
         from crashclouseau.agent import orchestrator
-        d = self._dossier()
+        d = SimpleNamespace(corroborations=None)
         orchestrator._record_sensitivity(d, {"raw_crash": {"address": "0x0"}, "uuid": "u-1"})
         self.assertIsNone(d.corroborations)
 
     def test_it_fails_SENSITIVE_when_the_check_itself_breaks(self):
-        """Inverts this codebase's usual swallow-and-continue. A withheld page costs a click; a
-        published use-after-free cannot be taken back."""
         from crashclouseau.agent import orchestrator
-        d = self._dossier()
+        d = SimpleNamespace(corroborations=None)
         with mock.patch.object(sensitive, "memory_unsafe_signals",
                                side_effect=RuntimeError("boom")):
             orchestrator._record_sensitivity(d, {"raw_crash": _POISON_RAW, "uuid": "u-1"})
         self.assertTrue(d.corroborations["memory_unsafe"])
 
-    def test_it_moves_no_rung_and_blocks_no_filing(self):
-        """A RECORDER. If this ever starts touching the verdict it has become a gate, and the
-        filing consequences (which are item 2, not this) would ride along unmeasured."""
+    def test_it_does_not_change_the_verdict(self):
         from crashclouseau.agent import orchestrator
         import inspect
         src = inspect.getsource(orchestrator._record_sensitivity)
         for forbidden in ("verdict", "confidence", "Decision", "decision"):
             self.assertNotIn(forbidden, src, forbidden)
+
+
+_UNHOOK_POP = {"days": 182, "reports": 73, "poison": 9, "names": 0}
+
+
+class TestThePopulationRule(unittest.TestCase):
+    def test_a_population_above_both_thresholds_fires(self):
+        signal = sensitive.population_signal(_UNHOOK_POP)
+        self.assertIn("9 of 73", signal)
+        self.assertIn("allocator poison", signal)
+
+    def test_at_least_two_reports_and_five_percent_are_required(self):
+        cases = ((1, 2, False), (2, 40, True), (2, 41, False), (11, 5181, False))
+        for poison, reports, withheld in cases:
+            with self.subTest(poison=poison, reports=reports):
+                population = dict(_UNHOOK_POP, poison=poison, reports=reports)
+                self.assertEqual(bool(sensitive.population_signal(population)), withheld)
+
+    def test_no_counts_do_not_fire(self):
+        for pop in (None, {}, {"poison": 0, "reports": 0}):
+            with self.subTest(pop=pop):
+                self.assertIsNone(sensitive.population_signal(pop))
+
+    def test_the_other_names_are_counted_in_the_reason(self):
+        self.assertIn("and 3 other names for the same crash",
+                      sensitive.population_signal(dict(_UNHOOK_POP, names=3)))
+
+    def test_the_recorder_preserves_counts_and_combines_the_signals(self):
+        from crashclouseau.agent import orchestrator
+        clean = {"address": "0x34ccd3c5c0000080"}
+        low = dict(_UNHOOK_POP, poison=1)
+        for raw, population, count in ((clean, _UNHOOK_POP, 1), (_POISON_RAW, _UNHOOK_POP, 2),
+                                       (clean, low, 0)):
+            with self.subTest(raw=raw, population=population):
+                d = SimpleNamespace(corroborations={"existing": True})
+                orchestrator._record_sensitivity(d, {"raw_crash": raw,
+                                                     "poison_population": population})
+                self.assertTrue(d.corroborations["existing"])
+                self.assertEqual(d.corroborations["poison_population"], population)
+                self.assertEqual(bool(d.corroborations.get("memory_unsafe")), bool(count))
+                signals = d.corroborations.get("memory_unsafe_signals", [])
+                self.assertEqual(len(signals), count)
+                if count:
+                    self.assertIn("9 of 73", signals[-1])
+
+
+class TestThePoisonQuery(unittest.TestCase):
+    SIG, VAR = "mozilla::EventListenerManager::MarkForCC", "nsTArray_Impl<T>::end | MarkForCC"
+    REPORTS = {"facets": {"signature": [{"term": SIG, "count": 157}, {"term": VAR, "count": 448},
+                                        {"term": "unrelated", "count": 9}]}}
+    POISON = {"facets": {
+        "cardinality_install_time": {"value": 41},
+        "signature": [
+            {"term": SIG, "count": 15, "facets": {"address": [
+                {"term": "0xe5e5e5e5e5e5e5f4", "count": 13},
+                # Matches the query prefix but fails the poison predicate.
+                {"term": "0xe5e5e57974697679", "count": 1},
+                {"term": "0xe5e5e5e5", "count": 1}]}},
+            {"term": VAR, "count": 29, "facets": {"address": [
+                {"term": "0xe5e5e5e5e5e5e5f4", "count": 28}, {"term": "0xcccccccccccccccc", "count": 1}]}},
+            {"term": "unrelated", "count": 5, "facets": {"address": [
+                {"term": "0xe5e5e5e5e5e5e5e5", "count": 5}]}}]}}
+
+    def _run(self, reports=REPORTS, poison=POISON, fail=False):
+        from crashclouseau import sigfamily
+        seen = []
+
+        def run(queries):
+            if fail:
+                raise RuntimeError("socorro is down")
+            for q in queries:
+                seen.append(q.params)
+                key = "poison" if "address" in q.params else "reports"
+                q.handler({"reports": reports, "poison": poison}[key], q.handlerdata)
+        with mock.patch.object(sigfamily, "_run", side_effect=run):
+            return sigfamily.poison_reports(self.SIG, [self.VAR], "Firefox"), seen
+
+    def test_it_counts_poison_across_the_names(self):
+        got, _ = self._run()
+        self.assertEqual((got["reports"], got["poison"], got["installs"], got["names"]),
+                         (157 + 448, 13 + 1 + 28 + 1, 41, 1))
+        self.assertEqual(got["addresses"][0], ["0xe5e5e5e5e5e5e5f4", 41])
+
+    def test_the_queries_select_access_faults_without_a_moz_crash_reason(self):
+        _, seen = self._run()
+        for params in seen:
+            self.assertEqual(params["moz_crash_reason"], "__null__")
+            self.assertEqual(params["signature"], ["=" + self.SIG, "=" + self.VAR])
+            self.assertNotIn("cpu_arch", params)
+        poison = next(p for p in seen if "address" in p)
+        self.assertIn("^0xe5e5", poison["address"])
+
+    def test_a_failed_or_unusable_answer_is_none(self):
+        self.assertIsNone(self._run(fail=True)[0])
+        self.assertIsNone(self._run(poison={"error": "x"})[0])
+
+    def test_the_seed_passes_frame_variants_but_not_pushed_down_names(self):
+        from crashclouseau.agent import orchestrator
+        family = {"signature_predecessors": [], "signature_siblings": [
+            {"signature": self.VAR, "relation": "frame-variant", "status": "older"},
+            {"signature": "MarkForCC", "relation": "pushed-down", "status": "undecided"}]}
+        with mock.patch("crashclouseau.sigfamily.poison_reports", return_value={}) as pr:
+            orchestrator._poison_population({"signature": self.SIG, "product": "Firefox"}, {},
+                                            family)
+        pr.assert_called_once_with(self.SIG, [self.VAR], "Firefox")
 
 
 class TestTheChokepoint(unittest.TestCase):

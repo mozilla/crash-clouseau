@@ -763,6 +763,8 @@ def _minimal_seed(uuid, uuid_info, esc):
                 esc.buildid)))
         except Exception as exc:  # pragma: no cover - the lookup never raises
             logger.warning("spike: signature family lookup failed for %s: %s", esc.signature, exc)
+    # Apply the population check to fallback seeds too.
+    seed["poison_population"] = orchestrator._poison_population(info, uuid_info, seed)
     return seed
 
 
@@ -852,6 +854,7 @@ def build_spike_brief(esc, light=False):
         "is_hang": spike_report.is_hang(esc.signature, seed.get("raw_crash")),
         "pin_rev": seed.get("pin_rev") or (uuid_info or {}).get("node") or "",
         "raw_crash": seed.get("raw_crash"),
+        "poison_population": seed.get("poison_population"),
         "stack_frames": {"frames": seed.get("frames") or [], "java": bool(seed.get("java"))},
         "facts": triage._crash_facts(seed),
         "stacks": [{"uuid": uuid, "stack": seed.get("stack") or ""}],
@@ -1498,6 +1501,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         signals = sensitive.memory_unsafe_signals(raw) if raw else []
     except Exception:
         signals = []
+    population = sensitive.population_signal(brief.get("poison_population"))
+    if population:
+        signals.append(population)
     try:
         details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
     except Exception:

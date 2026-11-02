@@ -916,6 +916,30 @@ def _near_null_prefix(address):
     return "0x" + "0" * (len(text) - 2 - free)
 
 
+def _access_fault_params(signatures, product, since, until):
+    """Common population for address queries: access faults without a MOZ_CRASH reason."""
+    return {
+        "signature": ["=" + s for s in signatures],
+        "product": product or "Firefox",
+        "moz_crash_reason": "__null__",
+        "reason": ["^" + r for r in utils.ACCESS_FAULT_REASONS],
+        "date": _date_range(since, until),
+        "_results_number": 0,
+        "_facets": "signature",
+        "_facets_size": _ADDRESS_FACETS,
+    }
+
+
+def _address_terms(row):
+    """Parse an address facet, merging different spellings of the same address."""
+    counts = {}
+    for term in (row.get("facets") or {}).get("address") or []:
+        address = parse_address(term.get("term"))
+        if address is not None:
+            counts[address] = counts.get(address, 0) + int(term.get("count") or 0)
+    return counts
+
+
 def fault_addresses(signature, address, names=(), product="Firefox", cpu_arch=None, until=None):
     """Query memory-access reports without a MOZ_CRASH reason, across all channels.
 
@@ -930,16 +954,7 @@ def fault_addresses(signature, address, names=(), product="Firefox", cpu_arch=No
     sigs = list(dict.fromkeys(s for s in [signature, *(names or ())] if s))
     until = until or datetime.now(timezone.utc)
     since = until - timedelta(days=int(config.get_agent_signature_family()["days"]))
-    common = {
-        "signature": ["=" + s for s in sigs],
-        "product": product or "Firefox",
-        "moz_crash_reason": "__null__",
-        "reason": ["^" + r for r in utils.ACCESS_FAULT_REASONS],
-        "date": _date_range(since, until),
-        "_results_number": 0,
-        "_facets": "signature",
-        "_facets_size": _ADDRESS_FACETS,
-    }
+    common = _access_fault_params(sigs, product, since, until)
     if cpu_arch:
         common["cpu_arch"] = cpu_arch
     got = {}
@@ -960,14 +975,57 @@ def fault_addresses(signature, address, names=(), product="Firefox", cpu_arch=No
         sig, n = row.get("term"), int(row.get("count") or 0)
         if sig not in sigs or n <= 0:
             continue
-        counts = {}
-        for t in (row.get("facets") or {}).get("address") or []:
-            a = parse_address(t.get("term"))
-            if a is not None:
-                counts[a] = counts.get(a, 0) + int(t.get("count") or 0)
         rows[sig] = {"reports": n, "at": at.get(sig, 0), "near_null": near.get(sig, 0),
-                     "addresses": counts}
+                     "addresses": _address_terms(row)}
     return {"since": _day(since), "rows": rows}
+
+
+_MAX_POISON_LISTED = 8
+
+
+def poison_reports(signature, names=(), product="Firefox", until=None):
+    """Count access faults and poison matches across all channels and CPUs.
+
+    Prefix filtering and capped address facets make ``poison`` a lower bound.
+    ``installs`` is the estimated distinct install_time count for prefix matches,
+    including addresses rejected by ``looks_poison``; it is not an installation ID count.
+    Return ``{since, days, reports, poison, installs, names, addresses}``, or None on query failure.
+    """
+    from crashclouseau import sensitive
+
+    sigs = list(dict.fromkeys(s for s in [signature, *(names or ())] if s))
+    if not sigs:
+        return None
+    days = int(config.get_agent_signature_family()["days"])
+    until = until or datetime.now(timezone.utc)
+    since = until - timedelta(days=days)
+    common = _access_fault_params(sigs, product, since, until)
+    prefixes = ["^0x{:02x}{:02x}".format(b, b) for b in sorted(sensitive.POISON_BYTES)]
+    got = {}
+    queries = [_query(common, got, "reports"),
+               _query({**common, "address": prefixes, "_aggs.signature": "address",
+                       "_facets": ["signature", "_cardinality.install_time"]}, got, "poison")]
+    try:
+        _run(queries)
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("sigfamily: poison counts failed: %s", exc)
+        return None
+    if not all(_usable(got.get(k)) for k in ("reports", "poison")):
+        return None
+    reports = sum(n for s, n in _facet_terms(got["reports"], "signature").items() if s in sigs)
+    merged = {}
+    for row in got["poison"]["facets"].get("signature") or []:
+        if row.get("term") not in sigs:
+            continue
+        for address, count in _address_terms(row).items():
+            if sensitive.looks_poison(address):
+                merged[address] = merged.get(address, 0) + count
+    installs = ((got["poison"]["facets"].get("cardinality_install_time") or {}).get("value"))
+    listed = sorted(merged.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAX_POISON_LISTED]
+    return {"since": _day(since), "days": days, "reports": reports,
+            "poison": sum(merged.values()),
+            "installs": int(installs) if installs is not None else None,
+            "names": len(sigs) - 1, "addresses": [[hex(a), n] for a, n in listed]}
 
 
 def address_counts(rows, address):

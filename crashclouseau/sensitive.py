@@ -179,6 +179,25 @@ def memory_unsafe_signals(raw_crash) -> list[str]:
     return out
 
 
+# Check other reports even when the analysed report has no poison address.
+POPULATION_MIN_POISON = 2
+POPULATION_MIN_SHARE = 0.05
+
+
+def population_signal(population):
+    """Return a withholding reason when poison counts meet both thresholds, else None."""
+    if not population:
+        return None
+    poison = int(population.get("poison") or 0)
+    reports = int(population.get("reports") or 0)
+    if poison < POPULATION_MIN_POISON or poison < POPULATION_MIN_SHARE * reports:
+        return None
+    names = int(population.get("names") or 0)
+    scope = f" and {names} other name{'s' if names != 1 else ''} for the same crash" if names else ""
+    return (f"{poison} of {reports} memory-access reports for this signature{scope} "
+            f"over the last {population.get('days')} days fault at allocator poison")
+
+
 def is_withheld(corroborations) -> bool:
     """Whether the persisted flag says to withhold this dossier's analysis.
 

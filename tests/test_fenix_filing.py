@@ -24,7 +24,7 @@ import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, config, feedback, models, report_bug, sigage  # noqa: E402
-from crashclouseau import inspector  # noqa: E402
+from crashclouseau import inspector, sigfamily  # noqa: E402
 from crashclouseau.agent import orchestrator, spike_escalation as se  # noqa: E402
 from crashclouseau.logger import logger  # noqa: E402
 from tests.test_autofile import _INFO, _Base, _bug  # noqa: E402
@@ -365,6 +365,8 @@ class TestTheSpikeBriefKnowsAJavaStack(unittest.TestCase):
             mock.patch.object(orchestrator, "_hardware_noise", return_value={}),
             mock.patch.object(sigage, "signature_history", return_value={}),
             mock.patch.object(sigage, "first_seen_ever", return_value={}),
+            mock.patch.object(sigfamily, "lookup", return_value={}),
+            mock.patch.object(orchestrator, "_poison_population", return_value=None),
         ]
         for p in patches:
             p.start()

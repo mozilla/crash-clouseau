@@ -367,11 +367,9 @@ REGISTRY = {
     # -- sensitivity ----------------------------------------------------------------------------
     "memory_unsafe": (
         "evidence", ("sensitive.py",),
-        "The crash report itself proves the process touched freed/poisoned memory, so the "
-        "ANALYSIS is withheld from every unauthenticated surface. Read by `sensitive.is_withheld`, "
-        "which `bugzilla_apply.build_evidence` and `html._draft_evidence` gate on. Reads as "
-        "`evidence` and not `suppression` on purpose: it moves no rung and blocks no filing, it "
-        "only decides who may read the mechanism."),
+        "Withhold public analysis when the report or its population matches the poison rules. "
+        "Read by `sensitive.is_withheld` for publishing and filing restrictions; "
+        "does not change the verdict."),
     "memory_unsafe_signals": (
         "evidence", ("bugzilla_apply.py",),
         "Which deterministic test fired, so a withheld page can say why without re-deriving it."),
@@ -550,6 +548,10 @@ REGISTRY = {
         "diagnostic", (),
         "Stores all sibling facts used by the brief, which displays at most five rows, for "
         "later comparison with the verdict. No gate or filer reads this diagnostic."),
+    "poison_population": (
+        "diagnostic", (),
+        "Access-fault and poison counts for the signature and its frame variants or spellings, "
+        "retained for calibration. The sensitivity check reads the seed's copy."),
     "fault_address_population": (
         "diagnostic", (),
         "Fault-address counts shown in the brief, retained for comparison with "

@@ -872,6 +872,7 @@ def build_seed(uuid):
         logger.warning("agent: sibling report counts failed for %s: %s", uuid, exc)
         sibling_reports = None
     fault_address_population = _fault_address_population(info, uuid_info, raw_crash, family_facts)
+    poison_population = _poison_population(info, uuid_info, family_facts)
     # The gate needs the CHOSEN candidate's landing date, which is only known after the agent
     # runs — so hand it the map for every seeded candidate. Both candidate builders already
     # carry `pushdate` (DB datetime on-stack, hg [epoch, tz] off-stack), so this costs nothing.
@@ -956,6 +957,8 @@ def build_seed(uuid):
         "signature_sibling_reports": sibling_reports,
         # Fault-address counts for the brief, or None when unavailable or ineligible.
         "fault_address_population": fault_address_population,
+        # Population evidence for the sensitivity check; None when unavailable.
+        "poison_population": poison_population,
         "candidate_pushdates": candidate_pushdates,
         # Learned crash archetypes that match this crash (`models.Archetype`): a recurring
         # shape plus what a reviewer told us to check when we see it. Handed to the agent as a
@@ -1761,20 +1764,19 @@ def _looks_poison_dominant_only(fault) -> bool:
 
 
 def _record_sensitivity(dossier, seed):
-    """Record whether this crash's ANALYSIS is too sensitive to publish. A RECORDER, not a gate.
-
-    On 2026-08-20 we filed bug 2065051 from a crash whose fault address was mozjemalloc's
-    ``kAllocPoison``; a human made it a security bug, and :mccr8 asked for poison crashes to be
-    filed as security issues from the start. Restricting the bug would not have contained it:
-    four days later our own ``crashstack.html`` still served the address, "Use-after-free" and
-    the suspected regressor to an anonymous request. This flag is what the publishing surfaces
-    read. Mutates ``dossier`` in place."""
+    """Record poison signals and population counts for publication checks."""
     from crashclouseau import sensitive
+    population = (seed or {}).get("poison_population")
+    if population:
+        # Retain counts below the threshold for calibration.
+        dossier.corroborations = {**(dossier.corroborations or {}), "poison_population": population}
     try:
         signals = sensitive.memory_unsafe_signals(seed.get("raw_crash"))
+        signal = sensitive.population_signal(population)
+        if signal:
+            signals.append(signal)
     except Exception:                                       # pragma: no cover - defensive
-        # Fail SENSITIVE, inverting this codebase's usual swallow-and-continue: a withheld page
-        # costs a click, a published use-after-free cannot be taken back.
+        # Withhold analysis if the sensitivity check fails.
         logger.warning("agent: sensitivity check failed; withholding", exc_info=True)
         signals = ["sensitivity check failed"]
     if not signals:
@@ -3841,6 +3843,27 @@ def _fault_address_population(info, uuid_info, raw_crash, family_facts):
         return None
 
 
+def _poison_population(info, uuid_info, family_facts):
+    """Count poison faults for the signature and known frame variants or spellings.
+
+    Runs regardless of this report's reason or the family-discovery switch.
+    Returns None on failure, leaving the population check inactive.
+    """
+    from crashclouseau import sigfamily
+
+    signature = (info or {}).get("signature") or ""
+    if not signature:
+        return None
+    try:
+        product = (info or {}).get("product") or (uuid_info or {}).get("product", "") or "Firefox"
+        names = [n for n in sigfamily.same_crash_names(sigfamily.family_from_seed(family_facts))
+                 if n != signature]
+        return sigfamily.poison_reports(signature, names, product)
+    except Exception as exc:  # pragma: no cover - defensive; never break a seed
+        logger.warning("agent: poison counts failed for %s: %s", signature, exc)
+        return None
+
+
 def _record_fault_address_population(dossier, seed):
     """Store the brief's fault-address counts as diagnostics."""
     data = (seed or {}).get("fault_address_population")
@@ -4973,12 +4996,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         # `autofile.min_confidence` and the "soft lead" was a silent suppression.
         if offstack_cfg is None or offstack_cfg["exposer_classifier"]:
             _classify_exposer(result.dossier, seed)
-        # SENSITIVITY, recorded and never acted on here. Deliberately NOT folded into
-        # `_classify_exposer`: that gate mixes model fields in and it MOVES THE RUNG, and this
-        # answer must stay a pure statement about the crash report so the surfaces that publish
-        # the analysis can be gated on it without inheriting a confidence policy. It changes no
-        # verdict, no rung and no filing -- see `crashclouseau/sensitive.py` for why its address
-        # read and byte rule are its own rather than `_looks_poison`'s.
+        # Record publication restrictions independently of confidence classification.
         _record_sensitivity(result.dossier, seed)
         # The awaited work of a shutdown hang (bug 2073349): recorded before the gates, because
         # `_apply_hang_wait_gate` reads it and the bug prints it. See `_record_hang_awaited_work`.

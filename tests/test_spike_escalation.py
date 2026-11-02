@@ -545,6 +545,33 @@ def _esc(**over):
     return SimpleNamespace(**base)
 
 
+class TestTheFallbackSeedCarriesThePoisonCounts(unittest.TestCase):
+    """Fallback seeds must pass population counts to the spike filer."""
+    def test_build_spike_brief_passes_the_counts_to_the_filer(self):
+        from crashclouseau import inspector, sigage, sigfamily
+        from crashclouseau.agent import orchestrator
+        population = {"reports": 73, "poison": 9, "names": 1, "days": 182}
+        variant = "Foo::Bar | mozilla::Foo::Bar"
+        family = {"predecessors": [], "siblings": [
+            {"signature": variant, "relation": "frame-variant", "status": "older"}],
+            "lookup": "ok"}
+        with (
+            mock.patch.object(orchestrator, "build_seed", return_value=None),
+            mock.patch.object(models.CrashStack, "get_by_uuid", return_value=({}, {"node": ""})),
+            mock.patch.object(inspector, "get_crash_data", return_value={"address": "0x0"}),
+            mock.patch.object(orchestrator, "_signature_trend", return_value={}),
+            mock.patch.object(orchestrator, "_version_rates", return_value={}),
+            mock.patch.object(orchestrator, "_hardware_noise", return_value={}),
+            mock.patch.object(sigage, "signature_history", return_value={}),
+            mock.patch.object(sigage, "first_seen_ever", return_value={}),
+            mock.patch.object(sigfamily, "lookup", return_value=family),
+            mock.patch.object(sigfamily, "poison_reports", return_value=population) as query,
+        ):
+            brief = se.build_spike_brief(_esc(), light=True)
+        query.assert_called_once_with("mozilla::Foo::Bar", [variant], "Firefox")
+        self.assertEqual(brief["poison_population"], population)
+
+
 class _FilerBase(unittest.TestCase):
     def setUp(self):
         self.created = []

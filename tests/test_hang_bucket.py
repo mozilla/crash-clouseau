@@ -1159,6 +1159,16 @@ class TestTheSpikeFilerBucketMode(_FilerBase):
                 self.assertEqual(self.created, [])
                 self.assertIn("crash volume spiked", self.comments[0][1])
 
+    def test_a_spike_whose_population_faults_at_poison_is_not_posted_publicly(self):
+        self.brief["raw_crash"] = {"address": "0x34ccd3c5c0000080"}
+        self.brief["poison_population"] = {"reports": 73, "poison": 9, "names": 0, "days": 182}
+        with self._held():
+            res = se.file_spike_bug(_esc(), self.brief, None, grounded=False)
+        self.assertFalse(res["filed"])
+        self.assertIn("9 of 73", res["memory_unsafe_signals"][0])
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.created, [])
+
     def test_an_unnamed_memory_safety_spike_is_not_posted_to_the_public_tracker(self):
         self.brief["raw_crash"] = {
             "json_dump": {"crash_info": {"address": "0xe5e5e5e5e5e5e5e5"}}}
