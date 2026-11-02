@@ -19,7 +19,6 @@ import time
 
 import pytz
 import requests
-import six
 
 from . import buildhub, hgedge, models, net, utils
 from .logger import logger
@@ -343,7 +342,7 @@ def get(min_buildid, channel, prods="Fenix", max_buildid=None):
     ``{}`` when nothing. One namespace POST per UTC day, one leaf GET per child in range, one
     task GET + one Buildhub POST per shipped build. A build whose revision or version cannot
     be resolved is skipped and logged, never raised on."""
-    if isinstance(prods, six.string_types):
+    if isinstance(prods, str):
         prods = [prods]
     lo = _as_buildid(min_buildid)
     hi = _as_buildid(max_buildid) if max_buildid else _as_buildid(datetime.now(pytz.utc))

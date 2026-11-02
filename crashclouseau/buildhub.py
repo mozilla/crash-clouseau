@@ -8,7 +8,6 @@ from functools import partial
 import json
 from . import config
 from . import net
-import six
 import time
 from . import utils
 from .logger import logger
@@ -79,7 +78,7 @@ def get(
     min_buildid, channel, prods=["firefox", "fennec", "thunderbird"], max_buildid=None
 ):
     """Get all builds info for buildids >= min_build"""
-    if isinstance(prods, six.string_types):
+    if isinstance(prods, str):
         prods = [prods]
     prods = [PRODS.get(x, x) for x in prods]
     r = {}

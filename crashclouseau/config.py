@@ -361,6 +361,17 @@ def get_database():
     return _get_local().get("database", "")
 
 
+def sqlalchemy_url(uri):
+    """Point a Postgres URL at psycopg2, the driver we ship.
+
+    Heroku hands out ``postgres://``, which SQLAlchemy rejects, and SQLAlchemy 2.1 maps a bare
+    ``postgresql://`` to psycopg 3, which is not installed. A URL naming its driver is kept."""
+    for prefix in ("postgres://", "postgresql://"):
+        if uri.startswith(prefix):
+            return "postgresql+psycopg2://" + uri[len(prefix):]
+    return uri
+
+
 def get_redis():
     return _get_local().get("redis", "")
 

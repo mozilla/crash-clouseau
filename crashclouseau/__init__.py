@@ -37,10 +37,7 @@ app.config.update(
 Socorro.TOKEN = os.getenv("SOCORRO_TOKEN", config.get_socorro())
 
 uri = os.getenv("DATABASE_URL", config.get_database())
-# Workaround for Heroku
-if uri.startswith("postgres://"):
-    uri = uri.replace("postgres://", "postgresql://", 1)
-app.config["SQLALCHEMY_DATABASE_URI"] = uri
+app.config["SQLALCHEMY_DATABASE_URI"] = config.sqlalchemy_url(uri)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 # Test each pooled connection with a `SELECT 1` on checkout and reconnect if it is dead.
 # Measured 2026-09-06: Heroku Postgres went away for ~4 minutes (SSL EOF, then connection

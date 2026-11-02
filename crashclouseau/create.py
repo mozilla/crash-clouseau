@@ -7,7 +7,6 @@ from dateutil.relativedelta import relativedelta
 import json
 from libmozdata import utils as lmdutils
 import pytz
-import six
 from sqlalchemy import inspect as sa_inspect
 from . import config, java, models, update
 from .logger import logger
@@ -67,7 +66,7 @@ def create(date=None, extra={}, hgauthors={}, force=False):
         for prod in config.get_products():
             update.update_builds(start_date + relativedelta(days=1), chan, prod)
 
-    if isinstance(extra, six.string_types):
+    if isinstance(extra, str):
         extra = json.loads(extra)
 
     for build in extra.get("builds", []):

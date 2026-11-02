@@ -21,6 +21,8 @@ dependencies = [
     "pyparsing>=3.3.2",
     "cycler>=0.12.1",
     "parsepatch>=0.1.3",
+    # parsepatch 0.1.3 imports six without declaring it; python-dateutil 4 no longer brings it.
+    "six>=1.17.0",
     "requests>=2.34.2",
     "validate_email>=1.3",
     "pydantic>=2.6",

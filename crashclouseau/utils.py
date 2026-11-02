@@ -9,7 +9,6 @@ import hashlib
 import re
 from libmozdata import socorro
 import pytz
-import six
 import cpp_demangle
 from . import config
 
@@ -369,7 +368,7 @@ def is_interesting_file(filename):
 
 def get_build_date(bid):
     """Get a date (UTC) from a buildid"""
-    if isinstance(bid, six.string_types):
+    if isinstance(bid, str):
         Y = int(bid[0:4])
         m = int(bid[4:6])
         d = int(bid[6:8])
