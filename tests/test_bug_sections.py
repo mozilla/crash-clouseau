@@ -39,6 +39,18 @@ class TestCodeFences(unittest.TestCase):
         for text in ("no code here", "```\nconst a = 1;", "", None):
             self.assertEqual(utils.tag_code_fences(text), text)
 
+    def test_languages_bmo_cannot_colour_get_a_grammar_it_can(self):
+        kotlin = "override fun onCreate() {\n  val x = 1\n}"
+        call = "  withContext(mainDispatcher) {\n      request()\n  }"
+        for text, want in (
+                ("```\n" + kotlin + "\n```", "```clike kotlin\n" + kotlin + "\n```"),
+                ("- Wrap it:\n  ```kotlin\n" + call + "\n  ```",
+                 "- Wrap it:\n  ```clike kotlin\n" + call + "\n  ```"),
+                ("```Java\nfoo();\n```", "```clike Java\nfoo();\n```"),
+                ("```shell\n./mach run\n```", "```shell\n./mach run\n```")):
+            self.assertEqual(utils.tag_code_fences(text), want)
+            self.assertEqual(utils.tag_code_fences(want), want)
+
     def test_a_tagged_block_can_contain_shorter_fences(self):
         text = "````text\n```\nexample\n```\n````\n\n```\n" + GTEST + "\n```"
         tagged = "````text\n```\nexample\n```\n````\n\n```cpp\n" + GTEST + "\n```"

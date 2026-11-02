@@ -147,10 +147,20 @@ def code_language(code):
     return "text"
 
 
-def tag_code_fences(text):
-    """Guess language tags for closed, unlabelled backtick blocks.
+# BMO's Prism bundle has no grammar for these (bug 2087960); Prism's own ones extend `clike`.
+# BMO only reads the info string's first word, so the real name can follow it.
+_BMO_FALLBACK_LANGUAGES = {"kotlin": "clike", "kt": "clike", "kts": "clike", "java": "clike"}
 
-    Leave tagged and unclosed blocks unchanged."""
+
+def _bmo_fence_info(info):
+    """Put a grammar BMO has in front of a language it cannot colour."""
+    fallback = _BMO_FALLBACK_LANGUAGES.get(info.split()[0].lower())
+    return "{} {}".format(fallback, info) if fallback else info
+
+
+def tag_code_fences(text):
+    """Tag closed backtick blocks with a guessed language when they have none, and give
+    the languages BMO cannot colour a grammar it can. Leave unclosed blocks unchanged."""
     if not text or "```" not in text:
         return text
     lines = text.split("\n")
@@ -162,9 +172,8 @@ def tag_code_fences(text):
                 indent, fence, language = match.groups()
                 opening = i
         elif line.strip() == fence:
-            if not language.strip():
-                body = "\n".join(lines[opening + 1:i])
-                lines[opening] = indent + fence + code_language(body)
+            info = language.strip() or code_language("\n".join(lines[opening + 1:i]))
+            lines[opening] = indent + fence + _bmo_fence_info(info)
             opening = None
     return "\n".join(lines)
 
