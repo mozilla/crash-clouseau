@@ -1533,6 +1533,12 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
             link += " by {}".format(who)
         origin = corroborations.get("hang_awaited_origin") or {}
         age = corroborations.get("actionable_origin_age") or {}
+        older = (age.get("older_sibling") or {}).get("signature")
+        prior_reports = None
+        if age.get("predates_signature") is False:
+            prior_reports = "this signature is also reported"
+        elif age.get("predates_signature") and older:
+            prior_reports = "`[@ {}]`, which shares frames with this signature, is reported".format(older)
         if origin.get("node") and str(origin["node"])[:12].lower() == str(
                 candidate["node"])[:12].lower():
             # A hang bucket is routed by the blame of the awaited work's frame, and blame is
@@ -1545,10 +1551,10 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
                        else "The work the main thread waits for")
             facts.append("- {} -- {} -- was last changed by {}."
                          .format(subject, where, link))
-        elif age.get("predates_signature") is False and age.get("landed"):
+        elif age.get("landed") and prior_reports:
             facts.append("- The failing code was last changed in {}{}, which landed on {}; "
-                         "this signature is also reported on builds made before that date."
-                         .format("this bug: " if own else "", link, age["landed"]))
+                         "{} on builds made before that date."
+                         .format("this bug: " if own else "", link, age["landed"], prior_reports))
         elif own:
             facts.append("- The failing code was added in this bug: {}{}.".format(
                 link, _fresh_origin_clause(corroborations, fresh_limit)))

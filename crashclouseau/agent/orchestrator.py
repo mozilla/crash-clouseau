@@ -2331,12 +2331,9 @@ def _frequency_regression_reasons(seed):
 def _actionable_origin_age_facts(seed, first_seen, pushdate):
     """Return the candidate's landing date and age relative to the crash build.
 
-    ``predates_signature`` compares the landing timestamp with every parseable first-seen
-    build: the age gate's windowed/family value, ``SignatureFirstDate``, and the unfloored
-    all-channel value. These are build timestamps, not report dates; missing history does
-    not prove the crash is new. Return ``{}`` if either date or all first-seen values are
-    unavailable. The age is rounded to 0.1 days, regardless of the filer's recency limit;
-    ``report_bug.fresh_origin_days`` decides whether it qualifies for the floor waiver."""
+    ``predates_signature`` compares landing with every available first-seen build.
+    Sibling builds are recorded separately and excluded from that comparison.
+    Return ``{}`` without a landing, crash build, or parseable first-seen build."""
     from crashclouseau import sigage
 
     s = seed or {}
@@ -2350,11 +2347,35 @@ def _actionable_origin_age_facts(seed, first_seen, pushdate):
     clocks = [c for c in clocks if c is not None]
     if not clocks:
         return {}
-    return {"actionable_origin_age": {
+    age = {
         "landed": push_dt.strftime("%Y-%m-%d"),
         "days_before_build": round((build_dt - push_dt).total_seconds() / 86400.0, 1),
         "predates_signature": all(push_dt <= c for c in clocks),
-    }}
+    }
+    older = _older_sibling(s, push_dt)
+    if older:
+        age["older_sibling"] = older
+    return {"actionable_origin_age": age}
+
+
+def _older_sibling(seed, landed):
+    """Return the earliest frame variant or spelling with a first build before *landed*.
+
+    Return ``{signature, first_build, first_date}``, or ``None`` if none qualifies."""
+    from crashclouseau import sigage, sigfamily
+
+    rows = ((seed or {}).get("signature_sibling_reports") or {}).get("rows") or []
+    same = set(sigfamily.same_crash_names({"siblings": rows}))
+    older = []
+    for r in rows:
+        built = sigage.to_datetime(str(r.get("first_seen_ever") or ""))
+        if r.get("signature") in same and built is not None and built < landed:
+            older.append((built, r["signature"], r))
+    if not older:
+        return None
+    _built, sig, r = min(older, key=lambda x: (x[0], x[1]))
+    return {"signature": sig, "first_build": str(r["first_seen_ever"]),
+            "first_date": r.get("first_seen_ever_date")}
 
 
 def _apply_signature_age_gate(dossier, seed):

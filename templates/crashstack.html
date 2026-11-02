@@ -312,6 +312,9 @@
         {% else -%}
         <span class="corrob-chip refute" title="At least one first-seen build predates the cited changeset's landing, so this origin does not qualify for the filing waiver.">the cited changeset landed {{ oa.get('landed','')|e }}, {{ oa.get('days_before_build', 0)|round|int }}d before this build; an available first-seen build predates it</span>
         {% endif -%}
+        {% if oa.get('older_sibling') -%}
+        <span class="corrob-chip refute" title="Sibling history changes the origin wording to 'last changed in', without affecting waiver eligibility.">[@ {{ oa['older_sibling'].get('signature','')|e }}] was first reported on build {{ oa['older_sibling'].get('first_build','')|e }}, before that landing</span>
+        {% endif -%}
       </div>
       {% endif -%}
       {% if is_lead -%}
@@ -372,7 +375,9 @@
 
       {% if has_cand -%}
       <div class="evidence-section">
-        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% elif is_actionable and (corrob.get('actionable_origin_age') or {}).get('predates_signature') is sameas false %}Last change to the failing code{% elif is_actionable %}Where the failing code comes from{% else %}Suspected regressor{% endif %}</h3>
+        {% with age = corrob.get('actionable_origin_age') or {} -%}
+        <h3>{% if is_abstain %}Changeset examined &mdash; not reported{% elif is_lead %}Possibly-related changeset{% elif is_actionable and (age.get('predates_signature') is sameas false or age.get('older_sibling')) %}Last change to the failing code{% elif is_actionable %}Where the failing code comes from{% else %}Suspected regressor{% endif %}</h3>
+        {% endwith -%}
         <p>
           <a href="{{ repo_url }}/rev?node={{ cand['node'] }}" target="_blank" rel="noopener"><code>{{ cand['node'] }}</code></a>
           {% if cand.get('bug') %} &mdash; <a href="https://bugzilla.mozilla.org/{{ cand['bug'] }}" target="_blank" rel="noopener">bug {{ cand['bug'] }}</a>{% endif %}

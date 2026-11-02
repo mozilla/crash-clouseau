@@ -158,10 +158,9 @@ REGISTRY = {
         "count, to read once the outcome has a month of runs (2026-09-17)."),
     "actionable_origin_age": (
         "evidence", ("report_bug.py", "templates/crashstack.html"),
-        "Candidate timing: `{landed, days_before_build, predates_signature}`, recorded by "
-        "`orchestrator._actionable_origin_age_facts` when the age gate reaches that check and "
-        "the required dates are available. `report_bug.fresh_origin_days` reads it for the "
-        "filer's installation-floor waiver and the bug's timing clause; the page displays it."),
+        "Candidate timing: `{landed, days_before_build, predates_signature, older_sibling?}` "
+        "from `orchestrator._actionable_origin_age_facts`. The filer checks this timing for "
+        "the installation-floor waiver; sibling builds are excluded from `predates_signature`."),
 
     # -- signature crash RATE (`sigtrend.trend_facts`) -----------------------------------------
     # The quantity the build-day spike rule structurally cannot compute, and the reason bug

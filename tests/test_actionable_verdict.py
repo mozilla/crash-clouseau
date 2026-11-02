@@ -211,6 +211,31 @@ class TestWhatTheGatesDoWithIt(unittest.TestCase):
                                            "signature_first_seen_any": _FIRST_SEEN})
         self.assertTrue(d.corroborations["actionable_origin_age"]["predates_signature"])
 
+    def test_an_older_same_crash_sibling_is_recorded_but_is_not_a_clock(self):
+        def row(sig, relation, build):
+            date = "{}-{}-{}".format(build[:4], build[4:6], build[6:8]) if build else None
+            return {"signature": sig, "relation": relation, "first_seen_ever": build,
+                    "first_seen_ever_date": date}
+        rows = [row("Deeper", "pushed-down", "20100101000000"),
+                row("Variant", "frame-variant", "20170101000000"),
+                row("Spelling", "spelling", "20140608211132"),
+                row("Newer", "frame-variant", "20260105000000"),
+                row("Unknown", "frame-variant", None)]
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN,
+                                           "signature_sibling_reports": {"rows": rows}})
+        age = d.corroborations["actionable_origin_age"]
+        self.assertTrue(age["predates_signature"])
+        self.assertEqual(age["older_sibling"], {"signature": "Spelling",
+                                                "first_build": "20140608211132",
+                                                "first_date": "2014-06-08"})
+        # Ignore pushed-down, newer, and undated siblings.
+        d = _actionable()
+        orch._apply_signature_age_gate(d, {**_seed(-6.5), "buildid": _FIRST_SEEN,
+                                           "signature_sibling_reports": {"rows": [
+                                               rows[0], rows[3], rows[4]]}})
+        self.assertNotIn("older_sibling", d.corroborations["actionable_origin_age"])
+
     def test_the_origin_age_is_recorded_before_the_gate_returns_and_on_nothing_else(self):
         # Timing is recorded even when the age gate subsequently changes the verdict to abstain.
         d = _actionable()
@@ -357,6 +382,56 @@ class TestTheBugItFiles(unittest.TestCase):
         self.assertEqual(p["needinfo_email"], "bob@x.com")
         for phrase in _FORBIDDEN:
             self.assertNotIn(phrase, c, phrase)
+
+    def test_an_older_sibling_names_the_origin_as_the_last_change(self):
+        older = {"signature": "mozilla::EventListenerManager::MarkForCC",
+                 "first_build": "20140608211132", "first_date": "2014-06-12"}
+        # Cover both sides of the waiver's age limit.
+        for landed, days in (("2024-04-22", 900.0), ("2026-09-12", 6.5)):
+            age = {"landed": landed, "days_before_build": days, "predates_signature": True,
+                   "older_sibling": older}
+            p = _build_preview(_preview_dossier(actionable_origin_age=age))
+            c = p["comment"]
+            self.assertIn("- The failing code was last changed in [507a4c21a8eb](", c)
+            self.assertIn("(bug 2010557) by :bobowen, which landed on {}; `[@ mozilla::"
+                          "EventListenerManager::MarkForCC]`, which shares frames with this "
+                          "signature, is reported on builds made before that date.".format(landed),
+                          c)
+            self.assertNotIn("comes from", c)
+            self.assertNotIn("first-seen data contains no build", c)
+            self.assertEqual(p["needinfo_email"], "bob@x.com")
+            for phrase in _FORBIDDEN:
+                self.assertNotIn(phrase, c, phrase)
+        self.assertEqual(report_bug.fresh_origin_days({"actionable_origin_age": age}, 14), 6.5)
+        # Prefer the signature's own earlier builds over sibling history.
+        age = dict(age, predates_signature=False)
+        c = _build_preview(_preview_dossier(actionable_origin_age=age))["comment"]
+        self.assertIn("this signature is also reported on builds made before that date.", c)
+        self.assertNotIn("shares frames", c)
+
+    def test_the_page_names_the_older_sibling(self):
+        import pathlib
+
+        import jinja2
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates"
+                / "crashstack.html").read_text()
+        start = page.index("{% if is_actionable and corrob.get('actionable_origin_age') -%}")
+        chips = page[start:page.index("</div>", start)] + "</div>{% endif %}"
+        start = page.index("{% with age = corrob.get('actionable_origin_age') or {} -%}")
+        heading = page[start:page.index("{% endwith -%}", start)] + "{% endwith %}"
+        env = jinja2.Environment(autoescape=True)
+        age = {"landed": "2023-08-16", "days_before_build": 1172.5, "predates_signature": True,
+               "older_sibling": {"signature": "a::B<T>", "first_build": "20140608211132",
+                                 "first_date": "2014-06-12"}}
+        ctx = {"is_actionable": True, "is_abstain": False, "is_lead": False,
+               "corrob": {"actionable_origin_age": age}}
+        out = env.from_string(chips).render(**ctx)
+        self.assertIn("[@ a::B&lt;T&gt;] was first reported on build 20140608211132", out)
+        self.assertIn("Last change to the failing code", env.from_string(heading).render(**ctx))
+        del age["older_sibling"]
+        self.assertNotIn("first reported on build", env.from_string(chips).render(**ctx))
+        self.assertIn("Where the failing code comes from",
+                      env.from_string(heading).render(**ctx))
 
     def test_the_origins_own_bug_is_named_as_the_last_change_too(self):
         late = {"landed": "2024-04-22", "days_before_build": 900.0, "predates_signature": False}
