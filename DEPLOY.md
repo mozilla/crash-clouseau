@@ -563,7 +563,7 @@ The normal filing gates still apply; this setting overrides `comment_on_existing
 `bugzilla_apply._wake_stale_bug` targets the most discussed open same-application, non-meta bug
 when:
 
-- all such bugs pass the `wake_stale_days` threshold (default 180). Activity is the last
+- all such bugs pass the `wake_stale_days` threshold (default 15). Activity is the last
   anonymously visible comment whose creator does not match `_is_automation` (`bot@` or a
   `.tld` suffix), falling back to comment 0;
 - none has a comment with `clouseau` in the creator login or the repository URL in its text;

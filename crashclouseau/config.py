@@ -1201,7 +1201,7 @@ def get_agent_autofile(channel=None, product=None):
         "needinfo_away_days": a.get("needinfo_away_days", 90),
         # Stale-bug eligibility is checked by `bugzilla_apply._wake_stale_bug`.
         "wake_stale": wake_mode(a.get("wake_stale")),
-        "wake_stale_days": a.get("wake_stale_days") or 180,
+        "wake_stale_days": a.get("wake_stale_days") or 15,
         # Channel overlays enable the release/ESR title prefix and tracking nomination. New bugs
         # also carry `affected` fields for the crash's own train and the live trains on which
         # Socorro reports its signature. See `report_bug._train_flag` and

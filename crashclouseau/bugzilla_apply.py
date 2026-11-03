@@ -2815,7 +2815,7 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
         return {"file_new": True}
     venue = chosen
     ruled_out = {d["bug"] for d in different}
-    days = cfg.get("wake_stale_days") or 180
+    days = cfg.get("wake_stale_days") or 15
     now = datetime.now(timezone.utc)
     for bug in existing:
         activity = activities[bug["id"]]

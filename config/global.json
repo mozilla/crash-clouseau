@@ -337,7 +337,7 @@
             "daily_cap": null,
             "comment_on_existing": "comment",
             "wake_stale": "comment",
-            "wake_stale_days": 180,
+            "wake_stale_days": 15,
             "population_days": 30,
             "author_active_days": 365,
             "author_fixed_days": 182,

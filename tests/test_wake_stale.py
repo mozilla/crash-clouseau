@@ -57,7 +57,7 @@ class _WakeBase(_Base):
         report_bug.build_bug_preview.return_value = _STALE_PREVIEW
 
     def _wake(self, mode="shadow", dossier=None, **over):
-        over = dict({"wake_stale": mode, "wake_stale_days": 180}, **over)
+        over = dict({"wake_stale": mode, "wake_stale_days": 15}, **over)
         return self._file(verdict="actionable", confidence=70,
                           dossier=dossier or {"candidate": {"node": "c065adeeac27", "bug": 1}},
                           **over)
@@ -190,8 +190,8 @@ class TestTheConditions(_WakeBase):
                          "{}".format(_ago(12).date().isoformat()))
 
     def test_the_threshold_is_the_configured_days(self):
-        self.activity[1961865]["last_human"] = _ago(100)
-        self.assertIn("comment", self._wake(wake_stale_days=90)["wake_stale"])
+        self.activity[1961865]["last_human"] = _ago(12)
+        self.assertIn("comment", self._wake(wake_stale_days=10)["wake_stale"])
 
     def test_every_open_bug_must_be_stale(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865), _bug(2000000)]
@@ -664,9 +664,9 @@ class TestTheConfig(unittest.TestCase):
     def test_defaults_and_the_shipped_value(self):
         with mock.patch.object(config, "get_agent", return_value={"autofile": {}}):
             cfg = config.get_agent_autofile("nightly")
-        self.assertEqual((cfg["wake_stale"], cfg["wake_stale_days"]), ("off", 180))
+        self.assertEqual((cfg["wake_stale"], cfg["wake_stale_days"]), ("off", 15))
         shipped = config.get_agent_autofile("nightly", product="Fenix")
-        self.assertEqual((shipped["wake_stale"], shipped["wake_stale_days"]), ("comment", 180))
+        self.assertEqual((shipped["wake_stale"], shipped["wake_stale_days"]), ("comment", 15))
 
 
 class TestTheDeclineRecord(unittest.TestCase):
