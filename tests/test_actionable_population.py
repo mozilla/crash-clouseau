@@ -11,6 +11,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply, report_bug  # noqa: E402
@@ -517,6 +518,235 @@ class TestBugzillaReads(unittest.TestCase):
         for resp in (_Response({}, fail=True), _Response({"error": 1, "code": 51})):
             with mock.patch.object(report_bug.net, "get", return_value=resp):
                 self.assertIsNone(report_bug._component_triage_owner("Core", "Nope"))
+
+
+_RULE = dict(report_bug.config.ONSET_DEFAULT)
+
+
+def _day(date, **counts):
+    return {"term": date + "T00:00:00Z", "count": sum(counts.values()), "facets": {
+        "release_channel": [{"term": t, "count": n} for t, n in counts.items()]}}
+
+
+class TestChannelOnsets(unittest.TestCase):
+    def setUp(self):
+        report_bug._ONSET_CACHE.clear()
+
+    def _fetch(self, window, days, fail=False):
+        seen = []
+
+        def search(params, handler, handlerdata):
+            seen.append(params)
+            if fail:
+                raise RuntimeError("socorro down")
+            response = days if "_histogram.date" in params else window
+            if response is not None:
+                handler(response, handlerdata)
+            return mock.Mock()
+
+        with mock.patch.object(report_bug.socorro, "SuperSearch", side_effect=search):
+            got = report_bug.fetch_channel_onsets(
+                {"signature": "Foo::Bar", "product": "Firefox"}, 24, 28)
+        return got, seen
+
+    def test_channels_merge_and_take_their_busiest_earlier_day(self):
+        got, seen = self._fetch(
+            {"facets": {"release_channel": [
+                _row("release", 20, 18), _row("esr", 4, 4), _row("esr153", 3, 3),
+                _row("aurora", 3, 3), _row("beta", 1, 1), _row("Bosch", 9, 9)]}},
+            {"facets": {"histogram_date": [
+                _day("2026-10-12", release=1), _day("2026-10-20", esr140=2, nightly=4),
+                _day("2026-10-21", esr=1, esr140=1)]}})
+        self.assertEqual(got, {"release": {"reports": 20, "installs": 18, "busiest_day": 1},
+                               "esr": {"reports": 7, "installs": 7, "busiest_day": 2},
+                               "beta": {"reports": 4, "installs": 4, "busiest_day": 0}})
+        window, days = seen
+        self.assertEqual((window["signature"], window["product"]), ("=Foo::Bar", "Firefox"))
+        start, end = (datetime.fromisoformat(d.lstrip("<>=")) for d in window["date"])
+        hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+        self.assertEqual((start, end), (hour - timedelta(hours=24), hour))
+        self.assertEqual(window["_aggs.release_channel"], "_cardinality.install_time")
+        self.assertEqual(days["date"], [">=" + (start - timedelta(days=28)).isoformat(),
+                                        "<" + start.isoformat()])
+        self.assertEqual((days["_histogram.date"], days["_histogram_interval.date"]),
+                         ("release_channel", "1d"))
+
+    def test_the_answer_is_cached_for_the_hour(self):
+        self._fetch({"facets": {"release_channel": [_row("release", 20, 18)]}},
+                    {"facets": {"histogram_date": []}})
+        got, seen = self._fetch(None, None)
+        self.assertEqual(got, {"release": {"reports": 20, "installs": 18, "busiest_day": 0}})
+        self.assertEqual(seen, [])
+
+    def test_an_unread_answer_is_unknown_and_not_cached(self):
+        for window, days, fail in ((None, {"facets": {"histogram_date": []}}, False),
+                                   ({"facets": {"release_channel": []}}, None, False),
+                                   (None, None, True)):
+            with self.subTest(window=window, days=days, fail=fail):
+                got, _ = self._fetch(window, days, fail=fail)
+                self.assertIsNone(got)
+        self.assertEqual(report_bug._ONSET_CACHE, {})
+
+    def test_errors_or_a_missing_facet_are_unread_and_an_empty_list_is_zero(self):
+        rising = {"errors": [], "facets": {"release_channel": [_row("release", 5, 5)]}}
+        empty = {"errors": [], "facets": {"histogram_date": []}}
+        for window, days in ((rising, {"errors": ["shard failed"], "facets": {}}),
+                             (rising, {"errors": [], "facets": {}}),
+                             (rising, {"errors": ["shard failed"], "facets": {"histogram_date": []}}),
+                             ({"errors": ["shard failed"], "facets": {}}, empty),
+                             ({"errors": [], "facets": {}}, empty)):
+            with self.subTest(window=window, days=days):
+                got, _ = self._fetch(window, days)
+                self.assertIsNone(got)
+                self.assertEqual(report_bug._ONSET_CACHE, {})
+        got, _ = self._fetch(rising, empty)
+        self.assertEqual(got,
+                         {"release": {"reports": 5, "installs": 5, "busiest_day": 0}})
+        report_bug._ONSET_CACHE.clear()
+        got, _ = self._fetch({"facets": {"release_channel": []}}, empty)
+        self.assertEqual(got, {})
+
+    def test_missing_inputs_ask_nothing(self):
+        with mock.patch.object(report_bug.socorro, "SuperSearch") as search:
+            for info, hours, days in (({"product": "Firefox"}, 24, 28),
+                                      ({"signature": "Foo::Bar"}, 24, 28),
+                                      ({"signature": "Foo::Bar", "product": "Firefox"}, 0, 28),
+                                      ({"signature": "Foo::Bar", "product": "Firefox"}, 24, None)):
+                self.assertIsNone(report_bug.fetch_channel_onsets(info, hours, days))
+        search.assert_not_called()
+
+
+class TestTheRiseRule(unittest.TestCase):
+    def test_each_bar(self):
+        onsets = {"release": {"reports": 20, "installs": 18, "busiest_day": 1},
+                  "esr": {"reports": 7, "installs": 7, "busiest_day": 0},
+                  "beta": {"reports": 4, "installs": 4, "busiest_day": 0},
+                  "nightly": {"reports": 9, "installs": 2, "busiest_day": 0}}
+        self.assertEqual(report_bug.channels_with_onset(onsets, _RULE), ["esr", "release"])
+
+    def test_the_ratio_is_against_the_busiest_day(self):
+        steady = {"release": {"reports": 34, "installs": 30, "busiest_day": 7}}
+        self.assertEqual(report_bug.channels_with_onset(steady, _RULE), [])
+        steady["release"]["reports"] = 35
+        self.assertEqual(report_bug.channels_with_onset(steady, _RULE), ["release"])
+
+    def test_nothing_known_or_no_rule_is_no_rise(self):
+        row = {"release": {"reports": 20, "installs": 18, "busiest_day": 0}}
+        self.assertEqual(report_bug.channels_with_onset(None, _RULE), [])
+        self.assertEqual(report_bug.channels_with_onset(row, None), [])
+
+    def test_socorro_is_asked_only_when_the_month_can_pass(self):
+        info = {"signature": "Foo::Bar", "product": "Firefox"}
+        rising = {"release": {"reports": 20, "installs": 18, "busiest_day": 1}}
+        with mock.patch.object(report_bug, "fetch_channel_onsets", return_value=rising) as fetch:
+            self.assertEqual(report_bug.recent_onsets(
+                info, {"nightly": {"count": 9, "installs": 4}}, _RULE), (None, []))
+            self.assertEqual(report_bug.recent_onsets(info, None, _RULE), (None, []))
+            self.assertEqual(report_bug.recent_onsets(info, _RECENT, None), (None, []))
+            fetch.assert_not_called()
+            self.assertEqual(report_bug.recent_onsets(info, _RECENT, _RULE),
+                             (rising, ["release"]))
+            fetch.assert_called_once_with(info, 24, 28)
+
+    def test_the_sentence(self):
+        onsets = {"release": {"reports": 20, "installs": 18, "busiest_day": 1},
+                  "beta": {"reports": 5, "installs": 1, "busiest_day": 0}}
+        self.assertEqual(
+            report_bug.build_onset_sentence(onsets, ["beta", "release"], "Firefox", _RULE),
+            "On release, this signature has 20 crashes (from 18 installations) in the last 24 "
+            "hours, against at most 1 a day over the previous 28 days. On beta/DevEdition, this "
+            "signature has 5 crashes (from 1 installation) in the last 24 hours, against none "
+            "over the previous 28 days.")
+        self.assertIsNone(report_bug.build_onset_sentence(onsets, [], "Firefox", _RULE))
+
+
+class TestTheSuddenRise(_Base):
+    _BELOW = {"nightly": {"count": 1, "installs": 1}, "release": {"count": 21, "installs": 19}}
+    _RISING = {"release": {"reports": 20, "installs": 18, "busiest_day": 1},
+               "nightly": {"reports": 1, "installs": 1, "busiest_day": 0}}
+
+    def setUp(self):
+        super().setUp()
+        for p in (
+            mock.patch.object(report_bug, "fetch_signature_stats",
+                              return_value=(True, {"count": 1, "installs": 1})),
+            mock.patch.object(report_bug, "fetch_recent_channel_stats",
+                              return_value=self._BELOW),
+            mock.patch.object(report_bug, "fetch_channel_onsets", return_value=self._RISING),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _actionable(self, **over):
+        return self._file(verdict="actionable", confidence=70,
+                          **dict({"population_days": 30, "onset": dict(_RULE)}, **over))
+
+    def _declined(self, res):
+        floor = bugzilla_apply.config.get_spike("real_installs", "Firefox", "nightly")
+        self.assertFalse(res["filed"])
+        self.assertEqual(res["skipped"], "1 installation on this signature, below the actionable "
+                                         "floor of {}, and no channel reached its floor in the "
+                                         "last 30 days".format(floor))
+        self.assertEqual(self.created, [])
+
+    def test_a_rise_on_another_channel_files(self):
+        res = self._actionable()
+        self.assertTrue(res["filed"], res)
+        self.assertEqual(len(self.created), 1)
+        report_bug.fetch_channel_onsets.assert_called_with(mock.ANY, 24, 28)
+
+    def test_a_steady_channel_declines(self):
+        report_bug.fetch_channel_onsets.return_value = {
+            "release": {"reports": 20, "installs": 18, "busiest_day": 7}}
+        self._declined(self._actionable())
+
+    def test_an_unread_rise_declines(self):
+        report_bug.fetch_channel_onsets.return_value = None
+        self._declined(self._actionable())
+
+    def test_the_rule_is_a_knob(self):
+        self._declined(self._actionable(onset=None))
+        report_bug.fetch_channel_onsets.assert_not_called()
+
+    def test_a_channel_over_its_floor_does_not_ask(self):
+        report_bug.fetch_recent_channel_stats.return_value = _RECENT
+        self.assertTrue(self._actionable()["filed"])
+        report_bug.fetch_channel_onsets.assert_not_called()
+
+
+class TestTheRiseInTheBug(unittest.TestCase):
+    _LINE = ("On release, this signature has 20 crashes (from 18 installations) in the last 24 "
+             "hours, against at most 1 a day over the previous 28 days.")
+
+    def test_the_comment_says_why_a_rise_was_filed(self):
+        rising = {"release": {"reports": 20, "installs": 18, "busiest_day": 1}}
+        c = tav._build_preview(tav._preview_dossier(), recent=_RECENT, onsets=rising)["comment"]
+        recent = "1 crash on nightly with this signature. "
+        self.assertIn(recent + self._LINE, c)
+
+    def test_no_rise_says_nothing(self):
+        steady = {"release": {"reports": 20, "installs": 18, "busiest_day": 7}}
+        for onsets in (steady, None):
+            with self.subTest(onsets=onsets):
+                c = tav._build_preview(tav._preview_dossier(), recent=_RECENT,
+                                       onsets=onsets)["comment"]
+                self.assertNotIn("in the last 24 hours", c)
+                self.assertIn("1 crash on nightly with this signature.", c)
+
+
+class TestTheRiseConfig(unittest.TestCase):
+    def test_the_default_the_shipped_value_and_the_off_switch(self):
+        config = report_bug.config
+        with mock.patch.object(config, "get_agent", return_value={"autofile": {}}):
+            self.assertEqual(config.get_agent_autofile("nightly")["onset"], _RULE)
+        with mock.patch.object(config, "get_agent",
+                               return_value={"autofile": {"onset": {"ratio": 3}}}):
+            self.assertEqual(config.get_agent_autofile("nightly")["onset"],
+                             dict(_RULE, ratio=3))
+        for off in (None, {}, False):
+            with mock.patch.object(config, "get_agent", return_value={"autofile": {"onset": off}}):
+                self.assertIsNone(config.get_agent_autofile("nightly")["onset"])
+        self.assertEqual(config.get_agent_autofile("nightly", product="Firefox")["onset"], _RULE)
 
 
 if __name__ == "__main__":

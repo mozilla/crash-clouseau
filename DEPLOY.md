@@ -604,6 +604,17 @@ Both windows are policy defaults; `0` or `null` disables the respective rule.
 Tests: `tests/test_actionable_population.py`. After deploy, check `passed on ...` logs and
 the resulting filings.
 
+## Actionable filings on a channel-wide rise (2026-11-03)
+
+`agent.autofile.onset` can waive the actionable installation floor when a channel has at
+least 5 reports from 5 installations in 24 hours and 5 times its busiest earlier UTC day
+in a 28-day baseline. Counts span builds and end at the start of the current UTC hour.
+These thresholds are configurable; `null` disables the rule. Recent population counts
+must be readable and contain enough installations to attempt the onset lookup.
+
+Failed lookups do not waive the floor. Bug comments include the rising channel's counts.
+Tests: `tests/test_actionable_population.py`. Check `passed on a sudden rise` logs.
+
 ## OOM aborts and the `actionable` verdict (2026-09-21)
 
 Bug 2073760 filed a `Zone::New` OOM-unsafe abort as actionable. :iain closed it WONTFIX and noted

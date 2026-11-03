@@ -3039,6 +3039,15 @@ def _actionable_floor_decline(uuid, uuid_info, dossier, product, channel, cfg, f
                                            "not be read{}".format(below, days, unconfirmed)}
     over = report_bug.channels_over_floor(recent, product)
     if not over:
+        # A channel-wide rise can qualify below the installation floors.
+        onsets, rising = report_bug.recent_onsets(uuid_info, recent, cfg.get("onset"))
+        if rising:
+            logger.info("autofile: %s -- %s, passed on a sudden rise on %s (%s)", uuid, below,
+                        ", ".join(rising), ", ".join(
+                            "{} {} reports from {} installs, busiest earlier day {}".format(
+                                ch, onsets[ch]["reports"], onsets[ch]["installs"],
+                                onsets[ch]["busiest_day"]) for ch in rising))
+            return None
         return {"filed": False, "skipped": "{}, and no channel reached its floor in "
                                            "the last {} days{}".format(below, days,
                                                                        unconfirmed)}

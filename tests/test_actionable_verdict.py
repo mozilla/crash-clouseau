@@ -287,7 +287,7 @@ def _older_origin_age(**over):
 
 
 def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=50,
-                   details=None, users=None):
+                   details=None, users=None, onsets=None):
     """Render with stubbed crash counts and recipient lookups; ``users`` overrides
     ``_bugzilla_user`` per address."""
     details = details or {"reason": "EXCEPTION_BREAKPOINT", "address": "0x7ff6fb034c43"}
@@ -301,6 +301,7 @@ def _build_preview(dossier, ui=_UI, recent=None, active=True, owner=None, fixes=
             mock.patch.object(report_bug, "_bugzilla_user",
                               side_effect=lambda e: (users or {}).get(e, found)), \
             mock.patch.object(report_bug, "fetch_recent_channel_stats", return_value=recent), \
+            mock.patch.object(report_bug, "fetch_channel_onsets", return_value=onsets), \
             mock.patch.object(report_bug, "_component_activity", return_value=active), \
             mock.patch.object(report_bug, "_recent_fixes", return_value=fixes), \
             mock.patch.object(report_bug, "_component_triage_owner", return_value=owner):

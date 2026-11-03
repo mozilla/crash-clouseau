@@ -660,6 +660,115 @@ def channels_over_floor(recent, product):
                   if (row.get("installs") or 0) >= config.get_spike("real_installs", product, ch))
 
 
+_ONSET_CACHE: dict = {}
+
+
+def _socorro_time(when):
+    return when.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def fetch_channel_onsets(info, hours, baseline_days, asof=None):
+    """Return across-build channel counts ending at hour-rounded ``asof`` (default now).
+
+    Count the preceding ``hours`` and find the busiest UTC day in the baseline window.
+    Cache by hour; return None for missing inputs or unread query results.
+    """
+    signature = ((info or {}).get("signature") or "").strip()
+    product = (info or {}).get("product")
+    if not (hours and baseline_days and signature and product):
+        return None
+    now = (asof or datetime.now(timezone.utc)).replace(minute=0, second=0, microsecond=0)
+    key = (signature, product, int(hours), int(baseline_days), now)
+    if key in _ONSET_CACHE:
+        return _ONSET_CACHE[key]
+    start = now - timedelta(hours=int(hours))
+    base = {"signature": "=" + signature, "product": product, "_results_number": 0}
+    window, days = {}, {}
+
+    def handler(json, data):
+        data.update(json)
+
+    try:
+        socorro.SuperSearch(
+            params=dict(base, date=[">=" + _socorro_time(start), "<" + _socorro_time(now)],
+                        _facets="release_channel",
+                        **{"_aggs.release_channel": "_cardinality.install_time"}),
+            handler=handler, handlerdata=window).wait()
+        socorro.SuperSearch(
+            params=dict(base, date=[
+                ">=" + _socorro_time(start - timedelta(days=int(baseline_days))),
+                "<" + _socorro_time(start)],
+                **{"_histogram.date": "release_channel", "_histogram_interval.date": "1d"}),
+            handler=handler, handlerdata=days).wait()
+    except Exception:
+        logger.warning("bug preview: channel onset lookup failed", exc_info=True)
+        return None
+    # Missing facets are unknown; explicit empty lists mean zero reports.
+    if (window.get("errors") or days.get("errors")
+            or "release_channel" not in (window.get("facets") or {})
+            or "histogram_date" not in (days.get("facets") or {})):
+        return None
+    out: dict = {}
+    for row in window["facets"]["release_channel"]:
+        channel = _RECENT_CHANNELS.get(config.channel_family(row.get("term")))
+        if not channel:
+            continue
+        entry = out.setdefault(channel, {"reports": 0, "installs": 0, "busiest_day": 0})
+        entry["reports"] += int(row.get("count") or 0)
+        entry["installs"] += int((((row.get("facets") or {}).get("cardinality_install_time")
+                                   or {}).get("value")) or 0)
+    for day in days["facets"]["histogram_date"]:
+        per_day: dict = {}
+        for row in (day.get("facets") or {}).get("release_channel") or []:
+            channel = _RECENT_CHANNELS.get(config.channel_family(row.get("term")))
+            if channel:
+                per_day[channel] = per_day.get(channel, 0) + int(row.get("count") or 0)
+        for channel, count in per_day.items():
+            if channel in out:
+                out[channel]["busiest_day"] = max(out[channel]["busiest_day"], count)
+    _ONSET_CACHE[key] = out
+    return out
+
+
+def meets_onset(reports, installs, busiest_day, rule):
+    """Whether a channel clears the volume and rise thresholds."""
+    return (reports >= rule["reports"] and installs >= rule["installs"]
+            and reports >= rule["ratio"] * busiest_day)
+
+
+def channels_with_onset(onsets, rule):
+    """Return sorted channels meeting the volume and rise thresholds."""
+    if not onsets or not rule:
+        return []
+    return sorted(ch for ch, row in onsets.items() if meets_onset(
+        row["reports"], row["installs"], row["busiest_day"], rule))
+
+
+def recent_onsets(info, recent, rule):
+    """Return counts and rising channels; skip queries if recent installs are below the bar."""
+    if not rule or not any((row.get("installs") or 0) >= rule["installs"]
+                           for row in (recent or {}).values()):
+        return None, []
+    onsets = fetch_channel_onsets(info, rule["hours"], rule["baseline_days"])
+    return onsets, channels_with_onset(onsets, rule)
+
+
+def build_onset_sentence(onsets, channels, product, rule):
+    """Describe each channel's sudden rise, largest first; return ``None`` without one."""
+    parts = []
+    for ch in sorted(channels, key=lambda c: (-onsets[c]["reports"], c)):
+        row = onsets[ch]
+        label = "beta/DevEdition" if ch == "beta" and product == "Firefox" else ch
+        before = ("none" if not row["busiest_day"] else
+                  "at most {} a day".format(row["busiest_day"]))
+        parts.append("On {}, this signature has {} crashes (from {} installation{}) in the last "
+                     "{} hours, against {} over the previous {} days.".format(
+                         label, row["reports"], row["installs"],
+                         "" if row["installs"] == 1 else "s", rule["hours"], before,
+                         rule["baseline_days"]))
+    return " ".join(parts) or None
+
+
 def _recent_adds(recent, stats, channel):
     """Whether the recent counts cover another channel, or more reports or installations
     than ``stats``."""
@@ -3190,6 +3299,11 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
             recent_note = build_recent_channels_sentence(
                 recent, uuid_info.get("product"), days,
                 reason=details.get("moz_crash_reason"))
+        rule = policy.get("onset")
+        onsets, rising = recent_onsets(uuid_info, recent, rule)
+        if rising:
+            onset_note = build_onset_sentence(onsets, rising, uuid_info.get("product"), rule)
+            recent_note = " ".join(n for n in (recent_note, onset_note) if n)
     preview = {
         # Match Socorro's crash-bug summary verbatim: "Crash in [@ signature]". The
         # ``[@ ...]`` is Bugzilla's crash-signature syntax, so an identical title keeps

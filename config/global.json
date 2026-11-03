@@ -339,6 +339,7 @@
             "wake_stale": "comment",
             "wake_stale_days": 15,
             "population_days": 30,
+            "onset": {"hours": 24, "baseline_days": 28, "reports": 5, "installs": 5, "ratio": 5},
             "author_active_days": 365,
             "author_fixed_days": 182,
             "author_fixed_min": 7,

@@ -992,6 +992,17 @@ def wake_mode(value):
     return text if text in WAKE_STALE else "off"
 
 
+# Across-build channel counts compared with the busiest earlier UTC day.
+ONSET_DEFAULT = {"hours": 24, "baseline_days": 28, "reports": 5, "installs": 5, "ratio": 5}
+
+
+def _onset_rule(value):
+    """Return the ``onset`` rule with defaults for missing keys, or ``None`` when disabled."""
+    if not isinstance(value, dict) or not value:
+        return None
+    return {**ONSET_DEFAULT, **value}
+
+
 def autofile_globally_enabled():
     """The GLOBAL half of the filing switch alone: ``AUTOFILE_BUGS`` over the top-level
     ``agent.autofile.enabled``, with no per-channel veto applied.
@@ -1190,6 +1201,8 @@ def get_agent_autofile(channel=None, product=None):
         "fresh_origin_days": a.get("fresh_origin_days", 14),
         # Recent-report window for the alternative population check. 0/null disables it.
         "population_days": a.get("population_days", 30),
+        # A channel-wide rise can also pass the floor; null disables this rule.
+        "onset": _onset_rule(a.get("onset", ONSET_DEFAULT)),
         # Minimum confidence eligible for confirmation below the filing threshold; null disables.
         "confirm_min_confidence": a.get("confirm_min_confidence", 50),
         # Origin-age and author-activity limit for `_owner_for_old_origin`. 0/null disables it.
