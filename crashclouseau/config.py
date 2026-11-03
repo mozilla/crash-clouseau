@@ -1003,6 +1003,24 @@ def _onset_rule(value):
     return {**ONSET_DEFAULT, **value}
 
 
+# Two-channel onset selection (`onset.find`).
+ONSET_SELECTION_DEFAULT = {
+    "hours": 24, "baseline_days": 28,
+    "first": {"reports": 5, "installs": 5, "ratio": 5},
+    "second": {"reports": 3, "installs": 3, "ratio": 3},
+    "per_day": 2,
+    "channels": {"Firefox": ["release", "esr", "beta"], "Fenix": ["release", "beta"]},
+}
+
+
+def get_onset_selection():
+    """Merge top-level selection defaults; return ``None`` when disabled."""
+    value = _get_global().get("onset_selection", ONSET_SELECTION_DEFAULT)
+    if not isinstance(value, dict) or not value:
+        return None
+    return {**ONSET_SELECTION_DEFAULT, **value}
+
+
 def autofile_globally_enabled():
     """The GLOBAL half of the filing switch alone: ``AUTOFILE_BUGS`` over the top-level
     ``agent.autofile.enabled``, with no per-channel veto applied.

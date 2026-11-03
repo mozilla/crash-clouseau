@@ -957,3 +957,23 @@ filing is held (`agent.autofile.products.<product>.enabled: false`): that run is
 declines with `autofile held for product '<product>' (triage-only)`. A Java-only crash
 whose frames are all outside `java.packages` is refused as `no usable stack`, like a native crash
 Socorro has no `json_dump` for.
+
+## Two-channel onset selection (2026-11-03)
+
+`onset_selection` adds a selection path for rises spread across builds. By default, one
+channel must have 5 reports from 5 installations and 5 times its busiest baseline day;
+a second must have 3 reports from 3 installations and 3 times its busiest baseline day.
+The report window is 24 hours and the preceding baseline is 28 days. `null` disables it.
+
+The leading channel picks a signature declined by the spike test, on its newest build
+with an installation. Redis shares scan results by product and UTC hour for 3 hours;
+callers skip a tick when another scan holds the lock. Without Redis, each call scans.
+Failed scans are not cached.
+
+`onset_picks` records pick times for the daily budget (2 per product/channel) and 7-day
+onset deduplication across channels. Selections on recent build-days also exclude a
+signature. Unrecorded picks are skipped. The release-phase `models.create()` adds the
+table. The selection outcome is `cross_channel_onset`; its counts span builds.
+
+Tests: `tests/test_onset.py`. Check `Onset for` / `onset:` logs and
+`/api/selection?outcome=cross_channel_onset`.

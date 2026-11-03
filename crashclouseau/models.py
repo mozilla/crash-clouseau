@@ -1158,14 +1158,19 @@ SELECTION_OUTCOMES = frozenset(
         utils.IMMATURE,
         utils.DROPPED_NO_USERS,
         utils.RISING_RATE,
+        utils.CROSS_CHANNEL_ONSET,
         utils.IGNORED,
         utils.NO_STACK,
         utils.NO_PROTOS,
     }
 )
-# The outcomes that mean "we analysed this pair" -- what `ever_selected` records and what the
-# rate path treats as already covered.
-SELECTED_OUTCOMES = frozenset({utils.SELECTED, utils.RISING_RATE})
+# Picked outcomes set ever_selected for deduplication and escalation.
+SELECTED_OUTCOMES = frozenset({utils.SELECTED, utils.RISING_RATE, utils.CROSS_CHANNEL_ONSET})
+
+
+def _matching_signatures(signatures, stored):
+    """Map stored 512-character keys back to input signatures."""
+    return {s for s in signatures if s[:512] in stored}
 
 
 class Selection(db.Model):
@@ -1196,8 +1201,7 @@ class Selection(db.Model):
     product = db.Column(db.String(32), nullable=False)
     channel = db.Column(db.String(16), nullable=False)
     build_day = db.Column(db.Date, nullable=False)
-    # selected | untestable_prefix | below_install_threshold | immature | not_spiking
-    # | dropped_no_users | rising_rate
+    # Values from SELECTION_OUTCOMES.
     outcome = db.Column(db.String(24), nullable=False)
     number = db.Column(db.Integer, nullable=False, default=0)
     # Position in the build-day series and whether that position is testable at all
@@ -1373,13 +1377,10 @@ class Selection(db.Model):
 
     @staticmethod
     def covered_recently(product, channel, signatures, days=7):
-        """The subset of *signatures* the pipeline has ANALYSED in the last ``days`` -- a pair
-        the spike test selected on a recent build-day, or one the rate path already took.
+        """Return signatures selected on build-days within ``days``.
 
-        What keeps the rate path from paying twice: a rising signature stays rising for about
-        as long as the window it is measured over, so without this it would be re-selected on
-        every tick for a week. Fails toward "covered": a lookup that cannot be done must not
-        turn into spend."""
+        Return all input signatures if the lookup fails, preventing duplicate picks.
+        """
         if not signatures:
             return set()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
@@ -1397,7 +1398,7 @@ class Selection(db.Model):
                 .distinct()
                 .all()
             )
-            return {r[0] for r in rows}
+            return _matching_signatures(signatures, {r[0] for r in rows})
         except Exception:
             logger.error("Cannot read the selection log", exc_info=True)
             db.session.rollback()
@@ -4836,7 +4837,8 @@ def _prune_daily(model, days):
 
 
 _ADDED_TABLES = ("archetypes", "chandaily", "feedback", "hot_engine_audit", "impact",
-                 "reviewnote", "selection", "sigdaily", "spike_escalations", "sweepmarks")
+                 "onset_picks", "reviewnote", "selection", "sigdaily", "spike_escalations",
+                 "sweepmarks")
 
 
 class SpikeEscalation(db.Model):
@@ -5345,6 +5347,85 @@ class HotEngineAudit(db.Model):
                  "age_days": r.age_days, "holdout": bool(r.holdout), "verdict": r.verdict,
                  "created": r.created}
                 for r in db.session.query(HotEngineAudit).order_by(HotEngineAudit.created)]
+
+
+class OnsetPick(db.Model):
+    """Onset picks by pick time, independent of build age and selection-log updates."""
+
+    __tablename__ = "onset_picks"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    signature = db.Column(db.String(512), nullable=False, index=True)
+    product = db.Column(db.String(32), nullable=False)
+    channel = db.Column(db.String(16), nullable=False)
+    buildid = db.Column(db.String(14), nullable=True)
+    onsets = db.Column(pg.JSONB, nullable=False, default=dict)
+    picked_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, server_default=db.func.now()
+    )
+
+    @staticmethod
+    def record(row):
+        """Insert one pick; return False on a database error."""
+        try:
+            db.session.add(OnsetPick(
+                signature=row["signature"][:512], product=row["product"],
+                channel=row["channel"], buildid=row.get("buildid"),
+                onsets=row.get("onsets") or {}))
+            db.session.commit()
+            return True
+        except Exception:
+            logger.error("Cannot record the onset pick of %s", row.get("signature"),
+                         exc_info=True)
+            db.session.rollback()
+            return False
+
+    @staticmethod
+    def picked_since(product, signatures, since):
+        """Return input signatures picked since ``since``, across channels; all on failure."""
+        if not signatures:
+            return set()
+        try:
+            rows = (
+                db.session.query(OnsetPick.signature)
+                .filter(OnsetPick.product == product,
+                        OnsetPick.signature.in_(sorted({s[:512] for s in signatures})),
+                        OnsetPick.picked_at >= since)
+                .distinct()
+                .all()
+            )
+            return _matching_signatures(signatures, {r[0] for r in rows})
+        except Exception:
+            logger.error("Cannot read the onset picks", exc_info=True)
+            db.session.rollback()
+            return set(signatures)
+
+    @staticmethod
+    def count_since(product, channel, since):
+        """Count product/channel picks since ``since``; treat failure as exhausted budget."""
+        try:
+            return (
+                db.session.query(func.count(OnsetPick.id))
+                .filter(OnsetPick.product == product, OnsetPick.channel == channel,
+                        OnsetPick.picked_at >= since)
+                .scalar()
+            ) or 0
+        except Exception:
+            logger.error("Cannot count the onset picks", exc_info=True)
+            db.session.rollback()
+            return 10 ** 6
+
+    @staticmethod
+    def prune(days=60):
+        """Delete picks older than ``days``."""
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            db.session.query(OnsetPick).filter(OnsetPick.picked_at < cutoff).delete(
+                synchronize_session=False)
+            db.session.commit()
+        except Exception:
+            logger.error("Cannot prune the onset picks", exc_info=True)
+            db.session.rollback()
 
 
 def _ensure_tables():

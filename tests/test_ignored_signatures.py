@@ -174,6 +174,7 @@ class TestTheSelector(unittest.TestCase):
                 mock.patch.object(dc, "get_proto_big"), \
                 mock.patch.object(dc, "get_uuids_java"), \
                 mock.patch.object(dc, "_rising_picks", rising), \
+                mock.patch.object(dc, "_onset_picks", return_value={}), \
                 mock.patch.object(dc, "get_builds", return_value=(list(builds), ">=2026-09-11")):
             data, selection = dc.get_new_signatures("Fenix", "nightly", datetime(2026, 9, 14))
         return data, selection, rising

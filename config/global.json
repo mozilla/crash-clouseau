@@ -87,6 +87,15 @@
             }
         }
     },
+    "onset_selection":
+    {
+        "hours": 24,
+        "baseline_days": 28,
+        "first": {"reports": 5, "installs": 5, "ratio": 5},
+        "second": {"reports": 3, "installs": 3, "ratio": 3},
+        "per_day": 2,
+        "channels": {"Firefox": ["release", "esr", "beta"], "Fenix": ["release", "beta"]}
+    },
     "spike":
     {
         "floor":

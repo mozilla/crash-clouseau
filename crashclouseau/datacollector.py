@@ -12,7 +12,7 @@ from libmozdata.connection import Connection, Query
 import pytz
 import re
 import requests
-from . import config, models, sigtrend, utils
+from . import config, models, onset, sigtrend, utils
 from .logger import logger
 
 
@@ -477,30 +477,34 @@ def get_new_signatures(product, channel, date):
         product, channel, date, declined,
         set(big_data) | set(small_data) | ignored | empty, threshold, selection,
     )
+    onset_data = _onset_picks(
+        product, channel, date, declined,
+        set(big_data) | set(small_data) | set(rising_data) | ignored | empty, selection,
+    )
+    # Rate and onset picks use the same report cap and fetch path.
+    extra_data = rising_data | onset_data
     del data
     del declined
 
     logger.info("Get crash numbers for {}-{}: finished.".format(product, channel))
-    # What the spike test and the rate path KEPT, before Socorro is asked for reports. A pair
-    # that comes back without one cluster is removed by its fetcher (`drop_unresolved`) and its
-    # record is rewritten below.
-    kept = set(big_data) | set(small_data) | set(rising_data)
+    # Retain the picks so missing reports can be logged as no_protos below.
+    kept = set(big_data) | set(small_data) | set(extra_data)
     # A Java signature has no proto_signature facet -- the two columns are mutually exclusive
     # (Fenix nightly, 14 d: 17,143 reports with java_stack_trace, 7,764 with proto_signature,
     # 0 with both; plans/16 §5) -- so it is read from the java_stack_trace column instead,
     # under the cap its pick kind gives a native signature.
     java_data = _split_java(big_data)
     java_data.update(_split_java(small_data))
-    java_rising = _split_java(rising_data)
+    java_extra = _split_java(extra_data)
     if big_data:
         get_proto_big(product, big_data, search_date, channel)
 
     if small_data:
         get_proto_small(product, small_data, search_date, channel)
 
-    if rising_data:
+    if extra_data:
         get_proto_small(
-            product, rising_data, search_date, channel,
+            product, extra_data, search_date, channel,
             proto_cap=config.get_spike("rising_protos", product, channel),
         )
 
@@ -510,14 +514,14 @@ def get_new_signatures(product, channel, date):
             config.get_threshold("protos", product, channel),
         )
 
-    if java_rising:
+    if java_extra:
         get_uuids_java(
-            product, java_rising, search_date, channel,
+            product, java_extra, search_date, channel,
             config.get_spike("rising_protos", product, channel),
         )
 
     data = {}
-    for part in (small_data, big_data, rising_data, java_data, java_rising):
+    for part in (small_data, big_data, extra_data, java_data, java_extra):
         data.update(part)
     declare_no_protos(kept - set(data), selection, product, channel)
 
@@ -579,6 +583,27 @@ def declare_no_protos(signatures, selection, product, channel):
     return rewritten
 
 
+def _selection_pick(signature, numbers, latest, outcome, **facts):
+    """The report-fetch input and selection record for a rate or onset pick."""
+    day, bid, count = latest
+    data = {"bids": {bid: count}, "protos": {bid: []}, "installs": {bid: 0}}
+    record = {
+        "signature": signature,
+        "day": day,
+        "count": numbers[day]["count"],
+        "index": sorted(numbers).index(day),
+        "baseline": [],
+        "evaluable": True,
+        "spiked": False,
+        "bids": dict(numbers[day]["bids"]),
+        "installs": dict(numbers[day]["installs"]),
+        "picked": bid,
+        "outcome": outcome,
+        **facts,
+    }
+    return data, record
+
+
 def _rising_picks(product, channel, date, declined, already, threshold, selection):
     """The RATE path: among the signatures the spike test declined, the ones whose
     exposure-normalised daily rate is rising (``sigtrend.rising_candidates``), within today's
@@ -625,24 +650,14 @@ def _rising_picks(product, channel, date, declined, already, threshold, selectio
         if not chosen:
             continue
         room -= 1
-        for m, (numbers, (day, bid, n)) in chosen.items():
-            picks[m] = {"bids": {bid: n}, "protos": {bid: []}, "installs": {bid: 0}}
-            selection.append({
-                "signature": m,
-                "day": day,
-                "count": numbers[day]["count"],
-                "index": sorted(numbers).index(day),
-                "baseline": [],
-                "evaluable": True,
-                "spiked": False,
-                "bids": dict(numbers[day]["bids"]),
-                "installs": dict(numbers[day]["installs"]),
-                "picked": bid,
-                "outcome": utils.RISING_RATE,
-                "trend_ratio": facts.get("signature_trend_ratio"),
-                "trend_installs": facts.get("signature_trend_installs"),
-                "merged_with": [o for o in members if o != m],
-            })
+        for m, (numbers, latest) in chosen.items():
+            picks[m], record = _selection_pick(
+                m, numbers, latest, utils.RISING_RATE,
+                trend_ratio=facts.get("signature_trend_ratio"),
+                trend_installs=facts.get("signature_trend_installs"),
+                merged_with=[o for o in members if o != m],
+            )
+            selection.append(record)
         logger.info(
             "Rising rate for {}-{}: selecting {} ({}x, {} installs in {} days) on {}".format(
                 product, channel, family, facts.get("signature_trend_ratio"),
@@ -650,6 +665,59 @@ def _rising_picks(product, channel, date, declined, already, threshold, selectio
                 ", ".join(utils.get_buildid(latest[1]) for _, latest in chosen.values()),
             )
         )
+    return picks
+
+
+def _onset_picks(product, channel, date, declined, already, selection):
+    """Pick declined signatures with a two-channel rise led by this channel.
+
+    Use the newest build with an installation, within the daily budget. Skip recent
+    onset picks and selections on recent build-days across channels. Record each
+    onset pick before returning it.
+    """
+    rule = config.get_onset_selection()
+    if not rule or not declined:
+        return {}
+    now = datetime.now(pytz.utc)
+    try:
+        rises = [r for r in onset.find(product, asof=date)
+                 if r["first"] == config.channel_family(channel)
+                 and r["signature"] in declined and r["signature"] not in already]
+        if not rises:
+            return {}
+        sgns = [r["signature"] for r in rises]
+        room = rule["per_day"] - models.OnsetPick.count_since(
+            product, channel, now.replace(hour=0, minute=0, second=0, microsecond=0))
+        covered = models.OnsetPick.picked_since(product, sgns, now - relativedelta(days=7))
+        for label in config.get_channels():
+            covered |= models.Selection.covered_recently(product, label, sgns)
+    except Exception:
+        logger.error("Cannot pick onsets for %s-%s", product, channel, exc_info=True)
+        return {}
+    picks = {}
+    for rise in rises:
+        sgn = rise["signature"]
+        if room <= 0:
+            break
+        if sgn in covered:
+            continue
+        numbers = declined[sgn]
+        latest = utils.pick_latest_build(numbers, 1)
+        if not latest:
+            continue
+        bid = latest[1]
+        if not models.OnsetPick.record({"signature": sgn, "product": product, "channel": channel,
+                                        "buildid": utils.get_buildid(bid),
+                                        "onsets": rise["onsets"]}):
+            continue
+        room -= 1
+        picks[sgn], record = _selection_pick(sgn, numbers, latest, utils.CROSS_CHANNEL_ONSET)
+        selection.append(record)
+        logger.info("Onset for {}-{}: selecting {} on {} ({})".format(
+            product, channel, sgn, utils.get_buildid(bid), ", ".join(
+                "{} {} reports from {} installs, busiest earlier day {}".format(
+                    ch, row["reports"], row["installs"], row["busiest_day"])
+                for ch, row in rise["onsets"].items())))
     return picks
 
 

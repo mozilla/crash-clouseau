@@ -289,6 +289,9 @@ def crash_spike(signature, product, channel, buildid, trend):
     row = next((r for r in rows if r.get("build_day") == day), None)
     if row is None:
         raise LookupError("no selection row for {} on {}".format(signature, day))
+    if row.get("outcome") == utils.CROSS_CHANNEL_ONSET:
+        # Onset counts span builds.
+        return None
     if row.get("outcome") == utils.RISING_RATE:
         # Rate picks have no build-day baseline.
         if not trend:

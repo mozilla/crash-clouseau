@@ -46,7 +46,7 @@ class TestSchemaDefinition(unittest.TestCase):
         known = {
             "archetypes", "builds", "changesets", "chandaily", "crashstack", "dossiers",
             "feedback", "files", "hgauthors", "hot_engine_audit", "impact", "lastdate", "nodes",
-            "reviewnote",
+            "onset_picks", "reviewnote",
             "scores",
             "selection", "sigdaily", "signatures", "spike_escalations", "stats", "sweepmarks",
             "uuids", "verdicts",

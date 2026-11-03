@@ -387,6 +387,7 @@ def put_crashes(date, channel, product):
     # trace at all. Failure here is swallowed inside record_many/prune.
     models.Selection.record_many(selection, product, channel, run_date=date)
     models.Selection.prune()
+    models.OnsetPick.prune()
     models.SignatureDaily.prune()
     models.ChannelDaily.prune()
 

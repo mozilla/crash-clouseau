@@ -459,6 +459,8 @@ DROPPED_NO_USERS = "dropped_no_users"
 # ``QuotaManager::Shutdown::<T>::operator()`` tripled on nightly between 2026-07-16 and 07-21,
 # its loudest build-day was 2.25x, and the 7-day rate read 3.7-4.7x for a week.
 RISING_RATE = "rising_rate"
+# Selected for a rise on two channels (`datacollector._onset_picks`).
+CROSS_CHANNEL_ONSET = "cross_channel_onset"
 # A signature `config.ignored_signatures` names -- a deliberate test crash -- removed from the
 # series before any test could pick it. Logged per build-day it was reported on, so "why was
 # CrashChannel::OpenContentStream not analysed" has an answer in the selection log.

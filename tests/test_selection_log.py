@@ -157,6 +157,7 @@ class TestOutcomeVocabulary(unittest.TestCase):
                     utils.IMMATURE,
                     utils.DROPPED_NO_USERS,
                     utils.RISING_RATE,
+                    utils.CROSS_CHANNEL_ONSET,
                     utils.IGNORED,
                     utils.NO_STACK,
                     utils.NO_PROTOS,
@@ -208,6 +209,7 @@ class TestIgnoredSignatures(unittest.TestCase):
                 mock.patch.object(dc, "get_proto_small"), \
                 mock.patch.object(dc, "get_proto_big"), \
                 mock.patch.object(dc, "_rising_picks", rising), \
+                mock.patch.object(dc, "_onset_picks", return_value={}), \
                 mock.patch.object(dc, "get_builds", return_value=(list(builds), ">=2026-09-01")):
             data, selection = dc.get_new_signatures("Firefox", "nightly", datetime(2026, 9, 4))
         return data, selection, rising

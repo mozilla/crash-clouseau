@@ -118,7 +118,7 @@ def _signature_facets(population, bid):
         for sgn, (count, installs) in population.get(bid, {}).items()]}}
 
 
-def _select(population, product="Fenix", rising=None, respond_more=None):
+def _select(population, product="Fenix", rising=None, respond_more=None, onsets=None):
     """Drive the real ``get_new_signatures`` over ``{buildid: {signature: (count, installs)}}``
     with every fetcher mocked, unless ``respond_more(params)`` answers a fetcher's query (then
     that fetcher runs for real). Returns ``(data, selection, mocks)``."""
@@ -135,6 +135,7 @@ def _select(population, product="Fenix", rising=None, respond_more=None):
         mock.patch.object(dc.socorro, "SuperSearch", _fake_search(respond)),
         mock.patch.object(dc, "get_proto_big", mocks.big),
         mock.patch.object(dc, "_rising_picks", mocks.rising),
+        mock.patch.object(dc, "_onset_picks", return_value=onsets or {}),
         mock.patch.object(dc, "get_builds", return_value=(list(BIDS), ">=2026-09-01")),
     ]
     if respond_more is None:
@@ -201,6 +202,22 @@ class TestEmptySignaturesAreDeclinedBeforeTheSpikeTest(unittest.TestCase):
 
 
 class TestJavaSignaturesTakeTheColumnPath(unittest.TestCase):
+    def test_rate_and_onset_picks_share_fetchers_and_caps(self):
+        def picks(*signatures):
+            return {sgn: {"bids": {NEWEST: 3}, "protos": {NEWEST: []},
+                          "installs": {NEWEST: 0}} for sgn in signatures}
+
+        data, _, mocks = _select({}, rising=picks(NATIVE, JAVA_RISING),
+                                 onsets=picks(OTHER, JAVA))
+        self.assertEqual(set(data), {NATIVE, OTHER, JAVA, JAVA_RISING})
+        mocks.small.assert_called_once()
+        mocks.java.assert_called_once()
+        self.assertEqual(set(mocks.small.call_args.args[1]), {NATIVE, OTHER})
+        self.assertEqual(set(mocks.java.call_args.args[1]), {JAVA, JAVA_RISING})
+        cap = config.get_spike("rising_protos", "Fenix", "nightly")
+        self.assertEqual(mocks.small.call_args.kwargs["proto_cap"], cap)
+        self.assertEqual(mocks.java.call_args.args[4], cap)
+
     def test_a_java_spike_goes_to_get_uuids_java_under_the_protos_cap(self):
         data, selection, mocks = _select(_spiking(NATIVE, JAVA))
         self.assertEqual(set(data), {NATIVE, JAVA})

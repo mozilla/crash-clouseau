@@ -306,6 +306,7 @@ def _collect(population, channel="beta", date=datetime(2026, 8, 18), builds=None
         # The rate path reads the daily rollup and the selection log (`test_frequency_regression`
         # covers it); here only the spike test is under test.
         mock.patch.object(dc, "_rising_picks", return_value={}),
+        mock.patch.object(dc, "_onset_picks", return_value={}),
     ]
     if builds is not None:
         patches.append(

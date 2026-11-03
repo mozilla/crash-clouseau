@@ -108,6 +108,7 @@ def run_selector(pop, bids=BIDS, channel="nightly", when=datetime(2026, 8, 15), 
         mock.patch.object(dc, "get_proto_small", proto_small),
         mock.patch.object(dc, "get_proto_big"),
         mock.patch.object(dc, "get_builds", return_value=(list(bids), ">=2026-08-10")),
+        mock.patch.object(dc, "_onset_picks", return_value={}),
     ]
     patches.extend(extra)
     with contextlib.ExitStack() as stack:
