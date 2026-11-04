@@ -217,7 +217,7 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=
             continue
         models.CrashStack.put_frames(uuid, stack, is_java, channel=channel)
         useless = False
-        has_source = has_source or inspector.has_source_frame(stack["frames"], is_java)
+        has_source = has_source or any(is_java or f.get("original") for f in stack["frames"])
 
     models.UUID.add_stack_hash(uuid, native_stack.get("hash", ""), java_stack.get("hash", ""))
     models.UUID.set_analyzed(uuid, useless)
@@ -226,15 +226,16 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=
         return not useless
     if not has_source:
         logger.info("%s: no frame has a source file; not enqueuing the evidence agent", uuid)
-    else:
-        # Import lazily to keep the agent SDK out of ingestion and web startup.
-        try:
-            from .agent.orchestrator import enqueue_agent
+        return True
 
-            enqueue_agent(uuid, channel, product=product)
-        except Exception as e:
-            logger.warning("could not enqueue evidence agent for %s: %s", uuid, e)
-    return not useless
+    # Keep agent imports out of ingestion startup.
+    try:
+        from .agent.orchestrator import enqueue_agent
+
+        enqueue_agent(uuid, channel, product=product)
+    except Exception as e:
+        logger.warning("could not enqueue evidence agent for %s: %s", uuid, e)
+    return True
 
 
 def analyze_one_report(uuid=None):

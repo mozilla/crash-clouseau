@@ -156,11 +156,6 @@ def get_crash_info(
     return res
 
 
-def has_source_frame(frames, java=False):
-    """Accept nonempty Java stacks or native stacks with a source file."""
-    return bool(frames) and (java or any(f.get("original") for f in frames))
-
-
 def get_simplified_hash(frames, java=False):
     """Hash frame locations, skipping frames with line -1.
 

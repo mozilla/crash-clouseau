@@ -198,12 +198,14 @@ class TestPutReportStoresAndEnqueues(unittest.TestCase):
         self.to_analyze.return_value = []
         self.is_stackhash_existing.return_value = False
 
-    def _put(self, res):
-        self.get_crash.return_value = res
+    def _put(self, frames, java_frames=None):
+        self.get_crash.return_value = {"nonjava": {"hash": "h1", "frames": frames}}
+        if java_frames is not None:
+            self.get_crash.return_value["java"] = {"hash": "j1", "frames": java_frames}
         return update.put_report("u-1", self.BUILD, "nightly", "Firefox", "abc")
 
     def test_a_new_source_stack_is_stored_and_enqueued(self):
-        self.assertTrue(self._put({"nonjava": {"hash": "h1", "frames": [_SOURCE]}}))
+        self.assertTrue(self._put([_SOURCE]))
         self.is_stackhash_existing.assert_called_once_with("u-1", "h1", False)
         self.put_frames.assert_called_once()
         self.add_stack_hash.assert_called_once_with("u-1", "h1", "")
@@ -214,14 +216,12 @@ class TestPutReportStoresAndEnqueues(unittest.TestCase):
         for frames in ([], [_NO_SOURCE, {}], [{"original": ""}]):
             with self.subTest(frames=frames):
                 self.put_frames.reset_mock()
-                self.assertTrue(self._put({"nonjava": {"hash": "h1", "frames": frames}}))
+                self.assertTrue(self._put(frames))
                 self.put_frames.assert_called_once()
                 self.enqueue.assert_not_called()
 
     def test_a_java_stack_is_a_source_stack(self):
-        res = {"nonjava": {"hash": "h1", "frames": [_NO_SOURCE]},
-               "java": {"hash": "j1", "frames": [_NO_SOURCE]}}
-        self.assertTrue(self._put(res))
+        self.assertTrue(self._put([_NO_SOURCE], java_frames=[_NO_SOURCE]))
         self.is_stackhash_existing.assert_has_calls([
             mock.call("u-1", "h1", False), mock.call("u-1", "j1", True)])
         self.add_stack_hash.assert_called_once_with("u-1", "h1", "j1")
@@ -229,14 +229,14 @@ class TestPutReportStoresAndEnqueues(unittest.TestCase):
 
     def test_a_duplicate_stack_is_neither_stored_nor_enqueued(self):
         self.is_stackhash_existing.return_value = True
-        self.assertFalse(self._put({"nonjava": {"hash": "h1", "frames": [_SOURCE]}}))
+        self.assertFalse(self._put([_SOURCE]))
         self.put_frames.assert_not_called()
         self.set_analyzed.assert_called_once_with("u-1", True)
         self.enqueue.assert_not_called()
 
 
-class TestTheStackCheckIsPerSignature(unittest.TestCase):
-    """The deduplication query only reads UUID rows."""
+class TestStackDeduplication(unittest.TestCase):
+    HASH = "db30bb68"
 
     def setUp(self):
         engine = create_engine("sqlite://")
@@ -245,47 +245,42 @@ class TestTheStackCheckIsPerSignature(unittest.TestCase):
         session = self.enterContext(Session(engine))
         self.enterContext(mock.patch.object(db, "session", session))
 
-    def _uuid(self, name, sig=1, stackhash=None, buildid=1, java=False):
+    def _uuid(self, name, sig=1, stackhash=HASH, buildid=1, java=False, useless=False):
         u = models.UUID(name, sig, "proto-" + name, buildid)
+        u.useless = useless
         if java:
             u.jstackhash = stackhash
         else:
             u.stackhash = stackhash
         db.session.add(u)
-        db.session.commit()
-
-    def _exists(self, name, java=False):
-        return models.UUID.is_stackhash_existing(name, "db30bb68", java)
-
-    def test_another_signatures_stack_does_not_count(self):
-        self._uuid("other", sig=2, stackhash="db30bb68")
-        self._uuid("current")
-        self.assertFalse(self._exists("current"))
-
-    def test_the_same_signatures_stack_counts(self):
-        self._uuid("other", stackhash="db30bb68")
-        self._uuid("current")
-        self.assertTrue(self._exists("current"))
 
     def test_a_report_does_not_match_itself(self):
-        self._uuid("current", stackhash="db30bb68")
-        self.assertFalse(self._exists("current"))
-
-    def test_another_builds_stack_does_not_count(self):
-        self._uuid("other", stackhash="db30bb68", buildid=2)
         self._uuid("current")
-        self.assertFalse(self._exists("current"))
+        self.assertFalse(models.UUID.is_stackhash_existing("current", self.HASH, False))
 
-    def test_java_and_native_hashes_are_checked_separately(self):
-        self._uuid("other", stackhash="db30bb68", java=True)
-        self._uuid("current")
-        self.assertTrue(self._exists("current", java=True))
-        self.assertFalse(self._exists("current"))
-
-    def test_null_signatures_still_match(self):
-        self._uuid("other", sig=None, stackhash="db30bb68")
-        self._uuid("current", sig=None)
-        self.assertTrue(self._exists("current"))
+    def test_only_stored_stacks_in_the_same_signature_and_build_match(self):
+        cases = (
+            (1, {}, True),
+            (1, {"sig": 2}, False),
+            (1, {"buildid": 2}, False),
+            (1, {"useless": True}, False),
+            (1, {"stackhash": "different"}, False),
+            (None, {"sig": None}, True),
+            (None, {}, False),
+        )
+        for java in (False, True):
+            for sig, other, expected in cases:
+                with self.subTest(java=java, sig=sig, other=other):
+                    db.session.rollback()
+                    self._uuid("current", sig=sig, java=java)
+                    self._uuid("other", java=java, **other)
+                    self.assertEqual(
+                        models.UUID.is_stackhash_existing("current", self.HASH, java),
+                        expected,
+                    )
+                    self.assertFalse(
+                        models.UUID.is_stackhash_existing("current", self.HASH, not java)
+                    )
 
 
 if __name__ == "__main__":

@@ -929,7 +929,6 @@ class TestUpdatePairsFenixWithItsChannels(unittest.TestCase):
         self.assertEqual(crash.call_args.args[3], buildid - relativedelta(days=config.get_ndays()))
 
     def test_a_scored_report_enqueues_the_agent_with_its_product(self):
-        """Pass the product so enqueue_agent can apply its product filter."""
         buildid = utils.get_build_date("20260914002721")
         frames = {"hash": "deadbeef", "frames": [{"original": "git:github.com/x:a.cpp:abc"}]}
         with mock.patch.object(update.inspector, "get_crash", return_value={"nonjava": frames}), \

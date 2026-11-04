@@ -127,7 +127,6 @@ class _TwoChannelFixture(unittest.TestCase):
         u.created = datetime.now(timezone.utc) - timedelta(hours=age_h)
         db.session.add(u)
         db.session.flush()
-        # Keep this fixture eligible for the sweep.
         db.session.add(models.CrashStack(
             u.id, 0, False, "hg:hg.mozilla.org/mozilla-central:dom/Foo.cpp:abcdef", "xul.dll",
             "dom/Foo.cpp", "f", 1, "abcdef", True))

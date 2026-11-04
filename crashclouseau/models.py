@@ -2235,22 +2235,21 @@ class UUID(db.Model):
 
     @staticmethod
     def is_stackhash_existing(uuid, stackhash, java):
-        """Whether another report in uuid's signature and build has this stackhash.
+        """Check for another non-useless report with the same hash, build and signature.
 
-        Native hashes omit inline frames, so different signatures can share a hash.
+        Native hashes ignore inline frames. Discarded reports retain their hashes.
         """
-        report = aliased(UUID)
+        current = aliased(UUID)
         column = UUID.jstackhash if java else UUID.stackhash
         return (
             db.session.query(UUID.id)
-            .join(report, and_(
-                UUID.buildid == report.buildid,
-                UUID.signatureid.is_not_distinct_from(report.signatureid),
-            ))
+            .join(current, current.uuid == uuid)
             .filter(
-                report.uuid == uuid,
+                UUID.buildid == current.buildid,
+                UUID.signatureid.is_not_distinct_from(current.signatureid),
                 column == stackhash,
                 UUID.uuid != uuid,
+                UUID.useless.is_(False),
             )
             .first()
         ) is not None
@@ -2376,7 +2375,7 @@ class CrashStack(db.Model):
 
     @staticmethod
     def has_source():
-        """SQL predicate for a Java frame or a nonempty source file."""
+        """Accept Java frames or a nonempty source URI."""
         return or_(CrashStack.java.is_(True), func.coalesce(CrashStack.original, "") != "")
 
     @staticmethod
