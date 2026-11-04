@@ -216,6 +216,16 @@ _ACTIONABLE_SKEPTIC = (
     "citations is. "
 )
 
+# Test the premise of a path to a state the code treats as impossible.
+_IMPOSSIBLE_STATE = (
+    "When an `actionable` chain explains how the code reached a state it treats as impossible, "
+    "also test the premise the chain needs: where the rejected property is fixed (where the "
+    "key is created, the constructor, the check on the way in) and whether the state can "
+    "differ the way the crash requires. A step that cannot happen does not fail the "
+    "mechanism, whose failing check this report shows: `pass` the failing check and name the "
+    "rejected step in the note; that pass does not cover how the state arose. "
+)
+
 # Panel, 2026-10-06: in 10 of the 12 FIXED filings where a crash read state set or reset
 # elsewhere, the dossier already named the right writer or lifecycle phase. Both misses (bugs
 # 2073079 and 2073442) explained the state through the candidate's own writer and stopped there.
@@ -227,6 +237,15 @@ _STATE_AUDIT = (
     "initialization, after teardown, re-entrancy, an async release, a cached object, a failure "
     "path), leaves the value the crash found. A value computed inside the crashing function has "
     "no writers to audit. "
+)
+
+# Also check whether any writer can break what the check demands.
+_GUARANTEE = (
+    "Read where the property the crash finds broken is fixed for this object (its "
+    "constructor, a check on the way in, or where the key it is found by is created and "
+    "whether one key can name values of different kinds): if no writer can break it, say "
+    "that no path in correct code leaves that value, and do not offer the least unlikely "
+    "writer as the cause. "
 )
 
 # Reserve `fail` for contradictions: Dossier._skeptic_veto can suppress a lead.
@@ -345,7 +364,7 @@ _ROLES: dict[str, dict] = {
         "refcount/lifetime changes, task dispatch ordering, IPC actor teardown, GC "
         "marking/tracing, shutdown ordering, assertion invariant changes, thread/race "
         "assumptions, Rust panic paths, and FFI boundary changes; the other threads of this "
-        "report are readable with `mcp__crash__threads`. " + _STATE_AUDIT + "Return a cited "
+        "report are readable with `mcp__crash__threads`. " + _STATE_AUDIT + _GUARANTEE + "Return a cited "
         "hypothesis or 'insufficient'. End with one fenced ```json block only when "
         "you have at least one citation for the hypothesis, shaped like: {\"summary\":"
         "\"...\",\"object_name\":\"...\",\"operation\":\"free|mutate|null_deref|uaf|"
@@ -371,7 +390,7 @@ _ROLES: dict[str, dict] = {
         "mechanism you simply cannot verify end-to-end is `unverifiable` (it lowers confidence "
         "but KEEPS the lead) — NOT `fail`: a credible-but-unproven clue is exactly what we "
         "want to surface. Use `unverifiable` for searchfox holes such as virtual/IPC/FFI/"
-        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + _RELEVANCE + _ACTIONABLE_SKEPTIC + "A claim "
+        "macro/template edges. " + _COMPILED_OUT + _PRESENCE + _RELEVANCE + _ACTIONABLE_SKEPTIC + _IMPOSSIBLE_STATE + "A claim "
         "without a fresh citation cannot pass. A fault-address↔field "
         "claim is NOT a searchfox hole: re-run `mcp__searchfox__field_layout` on the "
         "FULLY-QUALIFIED containing type (with namespaces, no template `<...>` args — "

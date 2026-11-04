@@ -268,7 +268,20 @@ good ones. So make TWO decisions, in order:
    is not part of this decision: the filer reads the population from crash-stats and applies its
    own floor, and the hardware facts are where a failing machine shows. Do not abstain, or lower
    confidence, because the crash is rare or old: an old crash whose mechanism you established is
-   `actionable`, with blame on the failing line as its candidate. Write `mechanism.statement`
+   `actionable`, with blame on the failing line as its candidate.
+   When the check rejects state the code guarantees (a type, a range, an invariant), first find
+   what guarantees it for this object: its constructor, a check on the way in, or, for state
+   found by a key, where that key is created and whether one key can name values of different
+   kinds. A step that needs a key reused or an object re-created cites where that happens, or
+   is not a step. A skeptic `pass` on the failing check does not pass how the state arose:
+   remove each step a note rejects and recheck what remains. If no path in correct code breaks
+   the guarantee, the mechanism says so: the failing check, what guarantees it, and what
+   remains (memory corruption, a write outside the lock, bad input from another process), not
+   the least unlikely writer. `confirm` then proposes no test that needs the unreachable path;
+   a diagnostic that tells the remaining causes apart (record the rejected value, or which half
+   of the check failed) is welcome. Decision and confidence do not change, and this is no
+   `hardware` abstain without the report's hardware facts.
+   Write `mechanism.statement`
    as the
    AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which
    condition and what the owner should look at first. `consistency.statement` remains cited
