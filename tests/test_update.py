@@ -6,9 +6,13 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import contextlib  # noqa: E402
 import unittest  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import update  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from crashclouseau import db, models, update  # noqa: E402
 
 
 class TestUpdateAllChannels(unittest.TestCase):
@@ -172,6 +176,116 @@ class TestUpdateRefusesAProductOrPairingTheDeploymentDoesNotIngest(unittest.Test
                          ["put_filelog", "update_builds", "put_crashes", "analyze_reports"])
         self.assertEqual(self._run("beta", "Firefox"),
                          ["put_filelog", "update_builds", "put_crashes", "analyze_reports"])
+
+
+_SOURCE = {"original": "git:github.com/mozilla-firefox/firefox:js/src/gc/Marking.cpp:ff3b300c"}
+_NO_SOURCE = {"original": None}
+
+
+class TestPutReportStoresAndEnqueues(unittest.TestCase):
+    BUILD = datetime(2026, 10, 27, 21, 25, 43, tzinfo=timezone.utc)
+
+    def setUp(self):
+        for target, names in (
+            (update.inspector, ("get_crash",)),
+            (models.Changeset, ("to_analyze",)),
+            (models.UUID, ("is_stackhash_existing", "add_stack_hash", "set_analyzed")),
+            (models.CrashStack, ("put_frames",)),
+        ):
+            for name in names:
+                setattr(self, name, self.enterContext(mock.patch.object(target, name)))
+        self.enqueue = self.enterContext(mock.patch("crashclouseau.agent.orchestrator.enqueue_agent"))
+        self.to_analyze.return_value = []
+        self.is_stackhash_existing.return_value = False
+
+    def _put(self, res):
+        self.get_crash.return_value = res
+        return update.put_report("u-1", self.BUILD, "nightly", "Firefox", "abc")
+
+    def test_a_new_source_stack_is_stored_and_enqueued(self):
+        self.assertTrue(self._put({"nonjava": {"hash": "h1", "frames": [_SOURCE]}}))
+        self.is_stackhash_existing.assert_called_once_with("u-1", "h1", False)
+        self.put_frames.assert_called_once()
+        self.add_stack_hash.assert_called_once_with("u-1", "h1", "")
+        self.set_analyzed.assert_called_once_with("u-1", False)
+        self.enqueue.assert_called_once_with("u-1", "nightly", product="Firefox")
+
+    def test_a_stack_without_a_source_frame_is_stored_but_not_enqueued(self):
+        for frames in ([], [_NO_SOURCE, {}], [{"original": ""}]):
+            with self.subTest(frames=frames):
+                self.put_frames.reset_mock()
+                self.assertTrue(self._put({"nonjava": {"hash": "h1", "frames": frames}}))
+                self.put_frames.assert_called_once()
+                self.enqueue.assert_not_called()
+
+    def test_a_java_stack_is_a_source_stack(self):
+        res = {"nonjava": {"hash": "h1", "frames": [_NO_SOURCE]},
+               "java": {"hash": "j1", "frames": [_NO_SOURCE]}}
+        self.assertTrue(self._put(res))
+        self.is_stackhash_existing.assert_has_calls([
+            mock.call("u-1", "h1", False), mock.call("u-1", "j1", True)])
+        self.add_stack_hash.assert_called_once_with("u-1", "h1", "j1")
+        self.enqueue.assert_called_once()
+
+    def test_a_duplicate_stack_is_neither_stored_nor_enqueued(self):
+        self.is_stackhash_existing.return_value = True
+        self.assertFalse(self._put({"nonjava": {"hash": "h1", "frames": [_SOURCE]}}))
+        self.put_frames.assert_not_called()
+        self.set_analyzed.assert_called_once_with("u-1", True)
+        self.enqueue.assert_not_called()
+
+
+class TestTheStackCheckIsPerSignature(unittest.TestCase):
+    """The deduplication query only reads UUID rows."""
+
+    def setUp(self):
+        engine = create_engine("sqlite://")
+        self.addCleanup(engine.dispose)
+        models.UUID.__table__.create(engine)
+        session = self.enterContext(Session(engine))
+        self.enterContext(mock.patch.object(db, "session", session))
+
+    def _uuid(self, name, sig=1, stackhash=None, buildid=1, java=False):
+        u = models.UUID(name, sig, "proto-" + name, buildid)
+        if java:
+            u.jstackhash = stackhash
+        else:
+            u.stackhash = stackhash
+        db.session.add(u)
+        db.session.commit()
+
+    def _exists(self, name, java=False):
+        return models.UUID.is_stackhash_existing(name, "db30bb68", java)
+
+    def test_another_signatures_stack_does_not_count(self):
+        self._uuid("other", sig=2, stackhash="db30bb68")
+        self._uuid("current")
+        self.assertFalse(self._exists("current"))
+
+    def test_the_same_signatures_stack_counts(self):
+        self._uuid("other", stackhash="db30bb68")
+        self._uuid("current")
+        self.assertTrue(self._exists("current"))
+
+    def test_a_report_does_not_match_itself(self):
+        self._uuid("current", stackhash="db30bb68")
+        self.assertFalse(self._exists("current"))
+
+    def test_another_builds_stack_does_not_count(self):
+        self._uuid("other", stackhash="db30bb68", buildid=2)
+        self._uuid("current")
+        self.assertFalse(self._exists("current"))
+
+    def test_java_and_native_hashes_are_checked_separately(self):
+        self._uuid("other", stackhash="db30bb68", java=True)
+        self._uuid("current")
+        self.assertTrue(self._exists("current", java=True))
+        self.assertFalse(self._exists("current"))
+
+    def test_null_signatures_still_match(self):
+        self._uuid("other", sig=None, stackhash="db30bb68")
+        self._uuid("current", sig=None)
+        self.assertTrue(self._exists("current"))
 
 
 if __name__ == "__main__":

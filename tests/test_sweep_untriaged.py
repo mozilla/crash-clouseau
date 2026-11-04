@@ -219,19 +219,17 @@ class TestUntriagedSelection(unittest.TestCase):
     def tearDown(self):
         self._clean()
 
-    def _uuid(self, name, proto="protoS", age_h=48, useless=False, analyzed=True):
+    def _uuid(self, name, proto="protoS", age_h=48, useless=False, analyzed=True,
+              original="hg:hg.mozilla.org/mozilla-central:dom/Foo.cpp:abcdef", java=False):
         u = models.UUID(name, self.sig, proto, self.build.id)
         u.useless = useless
         u.analyzed = analyzed
+        u.created = datetime.now(timezone.utc) - timedelta(hours=age_h)
         db.session.add(u)
+        db.session.flush()
+        db.session.add(models.CrashStack(u.id, 0, java, original, "xul.dll", "", "f", 1, "", True))
         db.session.commit()
-        # `created` has a server default, so backdating is a second write.
-        db.session.query(models.UUID).filter(models.UUID.uuid == name).update(
-            {"created": datetime.now(timezone.utc) - timedelta(hours=age_h)},
-            synchronize_session=False,
-        )
-        db.session.commit()
-        return db.session.query(models.UUID.id).filter(models.UUID.uuid == name).scalar()
+        return u.id
 
     def _find(self, after=0, min_age_s=21600, max_age_s=1209600, limit=10):
         return models.UUID.untriaged(after, min_age_s, max_age_s, limit)
@@ -333,6 +331,15 @@ class TestUntriagedSelection(unittest.TestCase):
             [r[0] for r in models.UUID.untriaged(0, 21600, 1209600, 10, channels=["nightly"])],
             [uid],
         )
+
+    def test_a_crash_without_a_source_frame_is_skipped(self):
+        self._uuid("sweep-0017-aaaa-bbbb-ccccddddeeee", original=None)
+        self._uuid("sweep-0018-aaaa-bbbb-ccccddddeeee", original="")
+        self.assertEqual(self._find(), [])
+
+    def test_a_java_frame_counts_as_a_source_frame(self):
+        uid = self._uuid("sweep-0019-aaaa-bbbb-ccccddddeeee", original=None, java=True)
+        self.assertEqual([r[0] for r in self._find()], [uid])
 
     def test_a_protoless_crash_is_skipped(self):
         # No protohash means no cluster to reason about; UUID.add would not have written one.

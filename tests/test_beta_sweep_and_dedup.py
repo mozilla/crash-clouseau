@@ -124,16 +124,15 @@ class _TwoChannelFixture(unittest.TestCase):
         u = models.UUID(name, self.sig, utils.hash(proto), build.id)
         u.useless = False
         u.analyzed = True
+        u.created = datetime.now(timezone.utc) - timedelta(hours=age_h)
         db.session.add(u)
+        db.session.flush()
+        # Keep this fixture eligible for the sweep.
+        db.session.add(models.CrashStack(
+            u.id, 0, False, "hg:hg.mozilla.org/mozilla-central:dom/Foo.cpp:abcdef", "xul.dll",
+            "dom/Foo.cpp", "f", 1, "abcdef", True))
         db.session.commit()
-        # `created` has a server default, so backdating past the sweep's grace period is a second
-        # write.
-        db.session.query(models.UUID).filter(models.UUID.uuid == name).update(
-            {"created": datetime.now(timezone.utc) - timedelta(hours=age_h)},
-            synchronize_session=False,
-        )
-        db.session.commit()
-        return db.session.query(models.UUID.id).filter(models.UUID.uuid == name).scalar()
+        return u.id
 
 
 @unittest.skipUnless(_is_postgres(), "the cluster predicate needs a disposable Postgres backend")

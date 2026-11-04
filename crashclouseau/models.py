@@ -1968,6 +1968,10 @@ class UUID(db.Model):
                                    Build.product)
                 .filter(not_(_unusable_verdict()))
                 .exists(),
+                # Match put_report's source-frame gate.
+                db.select(CrashStack.id)
+                .where(CrashStack.uuidid == UUID.id, CrashStack.has_source())
+                .exists(),
             )
         )
         if products is not None:
@@ -2230,32 +2234,26 @@ class UUID(db.Model):
         )
 
     @staticmethod
-    def is_stackhash_existing(stackhash, buildid, channel, product, java):
-        if java:
-            r = (
-                db.session.query(UUID.id)
-                .join(Build)
-                .filter(
-                    UUID.jstackhash == stackhash,
-                    Build.buildid == buildid,
-                    Build.channel == channel,
-                    Build.product == product,
-                )
-                .first()
+    def is_stackhash_existing(uuid, stackhash, java):
+        """Whether another report in uuid's signature and build has this stackhash.
+
+        Native hashes omit inline frames, so different signatures can share a hash.
+        """
+        report = aliased(UUID)
+        column = UUID.jstackhash if java else UUID.stackhash
+        return (
+            db.session.query(UUID.id)
+            .join(report, and_(
+                UUID.buildid == report.buildid,
+                UUID.signatureid.is_not_distinct_from(report.signatureid),
+            ))
+            .filter(
+                report.uuid == uuid,
+                column == stackhash,
+                UUID.uuid != uuid,
             )
-        else:
-            r = (
-                db.session.query(UUID.id)
-                .join(Build)
-                .filter(
-                    UUID.stackhash == stackhash,
-                    Build.buildid == buildid,
-                    Build.channel == channel,
-                    Build.product == product,
-                )
-                .first()
-            )
-        return r is not None
+            .first()
+        ) is not None
 
     @staticmethod
     def get_buildids_from_pc(product, channel):
@@ -2375,6 +2373,11 @@ class CrashStack(db.Model):
         self.line = line
         self.node = node
         self.internal = internal
+
+    @staticmethod
+    def has_source():
+        """SQL predicate for a Java frame or a nonempty source file."""
+        return or_(CrashStack.java.is_(True), func.coalesce(CrashStack.original, "") != "")
 
     @staticmethod
     def delete(ids):

@@ -207,28 +207,27 @@ def put_report(uuid, buildid, channel, product, chgset, signature=None, enqueue=
             continue
         models.Changeset.add_analyzis(data, nodeid, channel)
 
-    frames = res.get("nonjava")
-    sh = jsh = ""
-    if frames:
-        sh = frames["hash"]
-        if force or not models.UUID.is_stackhash_existing(sh, buildid, channel, product, False):
-            models.CrashStack.put_frames(uuid, frames, False, commit=True, channel=channel)
-            useless = False
+    native_stack = res.get("nonjava") or {}
+    java_stack = res.get("java") or {}
+    has_source = False
+    for is_java, stack in ((False, native_stack), (True, java_stack)):
+        if not stack:
+            continue
+        if not force and models.UUID.is_stackhash_existing(uuid, stack["hash"], is_java):
+            continue
+        models.CrashStack.put_frames(uuid, stack, is_java, channel=channel)
+        useless = False
+        has_source = has_source or inspector.has_source_frame(stack["frames"], is_java)
 
-    jframes = res.get("java")
-    if jframes:
-        jsh = jframes["hash"]
-        if force or not models.UUID.is_stackhash_existing(jsh, buildid, channel, product, True):
-            models.CrashStack.put_frames(uuid, jframes, True, commit=True, channel=channel)
-            useless = False
-
-    models.UUID.add_stack_hash(uuid, sh, jsh)
+    models.UUID.add_stack_hash(uuid, native_stack.get("hash", ""), java_stack.get("hash", ""))
     models.UUID.set_analyzed(uuid, useless)
 
-    if not useless and enqueue:
-        # Fire the evidence agent for a scored report. Lazy import keeps
-        # claude-agent-sdk out of the ingestion/web import path; wrapped so an
-        # enqueue failure can never break ingestion.
+    if useless or not enqueue:
+        return not useless
+    if not has_source:
+        logger.info("%s: no frame has a source file; not enqueuing the evidence agent", uuid)
+    else:
+        # Import lazily to keep the agent SDK out of ingestion and web startup.
         try:
             from .agent.orchestrator import enqueue_agent
 

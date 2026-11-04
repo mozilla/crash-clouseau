@@ -280,7 +280,8 @@ class TestPutReportFlags(unittest.TestCase):
         self.frames = []
         self.enqueued = []
         patches = [
-            mock.patch.object(update.inspector, "get_crash", return_value={"nonjava": {"hash": "h1"}}),
+            mock.patch.object(update.inspector, "get_crash", return_value={"nonjava": {
+                "hash": "h1", "frames": [{"original": "hg:hg.mozilla.org/mozilla-central:a.cpp:abc"}]}}),
             mock.patch.object(models.Changeset, "to_analyze", return_value=[]),
             mock.patch.object(models.UUID, "is_stackhash_existing", return_value=True),
             mock.patch.object(models.CrashStack, "put_frames",
