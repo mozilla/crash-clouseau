@@ -442,7 +442,7 @@ def _fixed_before_spending(signature, siblings, product, buildid):
     bug outranks it -- the filer's precedence, asked before the run instead of after it.
     ``None`` when there is none, or when Bugzilla could not be read: a lookup that failed must
     not turn into a run that was never made, and the filer asks again with the same rules."""
-    existing = bugzilla_apply._open_bugs_for_signature(signature)
+    existing = bugzilla_apply._open_bugs_for_signature(signature, product=product)
     if existing is None:
         return None
     existing, _other_app = bugzilla_apply._split_by_application(existing, product)
@@ -1560,14 +1560,8 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     # Search family names and the internal caller of an R8 helper.
     family = brief.get("signature_family") or {}
     outline = utils.outline_signature(signature, stack.get("frames"))
-    if outline:
-        existing = bugzilla_apply._open_bugs_for_signature(signature, family=family,
-                                                           product=product, extra=(outline,))
-    else:
-        existing = (bugzilla_apply._open_bugs_for_signature(signature, family=family,
-                                                            product=product)
-                    if bugzilla_apply._family_spelling_map(signature, family)
-                    else bugzilla_apply._open_bugs_for_signature(signature))
+    existing = bugzilla_apply._open_bugs_for_signature(
+        signature, family=family, product=product, extra=(outline,) if outline else ())
     if existing is None:
         return dict(result, retry=True, skipped="signature lookup failed; not risking a duplicate")
     existing, other_app = bugzilla_apply._split_by_application(existing, product)

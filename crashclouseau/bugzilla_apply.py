@@ -166,7 +166,7 @@ def open_venues(signature, product, timeout=_PAGE_HTTP_TIMEOUT):
     nothing else, while dmeehan's bug 2072627 had been open on the signature since the day
     before -- "did you file a bug for this?" had to be answered by hand. And a bug a human files
     AFTER our run is invisible to any record, however complete. ``timeout`` is per request."""
-    existing = _open_bugs_for_signature(signature, timeout=timeout)
+    existing = _open_bugs_for_signature(signature, timeout=timeout, product=product)
     if existing is None:
         return None
     venues, other_app = _split_by_application(existing, product)
@@ -832,19 +832,90 @@ def _family_spelling_map(signature, family):
     return out
 
 
-def _signature_search_params(spellings, fields, resolution=None):
-    """Build a substring query for crash-signature fields and bracketed summaries."""
+def _signature_search_params(spellings, fields, resolution=None, cf_only=()):
+    """Search spellings in crash signatures and bracketed summaries; *cf_only* only in signatures."""
     params = {"include_fields": fields, "j_top": "OR"}
     if resolution is not None:
         params["resolution"] = resolution
-    for i, spelling in enumerate(spellings):
-        params["f{}".format(2 * i + 1)] = "cf_crash_signature"
-        params["o{}".format(2 * i + 1)] = "substring"
-        params["v{}".format(2 * i + 1)] = spelling
-        params["f{}".format(2 * i + 2)] = "short_desc"
-        params["o{}".format(2 * i + 2)] = "substring"
-        params["v{}".format(2 * i + 2)] = "[@ " + spelling
+    clauses = []
+    for spelling in spellings:
+        clauses.extend((("cf_crash_signature", spelling), ("short_desc", "[@ " + spelling)))
+    clauses.extend(("cf_crash_signature", spelling) for spelling in cf_only)
+    for i, (field, value) in enumerate(clauses, start=1):
+        params["f{}".format(i)] = field
+        params["o{}".format(i)] = "substring"
+        params["v{}".format(i)] = value
     return params
+
+
+_MAX_TRUNCATIONS = 4
+_MIN_FRAME_KEY = 8
+_CALLS_RE = re.compile(r"(?:::\s*(?:operator\(\)|\{\{closure\}\}|\{closure#\d+\}))+")
+# Generic thread entry points do not distinguish callers.
+_THREAD_ENTRY_RE = re.compile(r"^(?:BaseThreadInitThunk|RtlUserThreadStart|start_thread"
+                              r"|thread_start|__?clone3?|_?_pthread_(?:start|body))$")
+
+
+def _signature_truncations(signature):
+    """Map code-bearing prefixes to an omitted frame, keeping the longest few.
+
+    Prefer the first specific omitted frame, falling back to the first symbol.
+    Exclude thread entries, keys already in the prefix and AsyncShutdownTimeout signatures.
+    """
+    from crashclouseau import sigfamily
+
+    if not sigfamily.family_eligible(signature):
+        return {}
+    frames = sigfamily.frames(signature)
+    truncations = {}
+    for boundary in range(len(frames) - 1, 0, -1):
+        kept = {_frame_key(f) for f in frames[:boundary]}
+        omitted = [f for f in frames[boundary:]
+                   if not _THREAD_ENTRY_RE.match(f) and _frame_key(f) not in kept]
+        cut = next((f for f in omitted if sigfamily.specific_frame(f)), None) \
+            or next((f for f in omitted if sigfamily.symbol_frames(f)), None)
+        short = " | ".join(frames[:boundary])
+        if cut is None or len(_frame_key(cut)) < _MIN_FRAME_KEY \
+                or not sigfamily.symbol_frames(short):
+            continue
+        truncations[short] = cut
+        if len(truncations) >= _MAX_TRUNCATIONS:
+            break
+    return truncations
+
+
+def _fold_frames(text):
+    """Normalize symbols, fold nested lambda/closure calls and lowercase the result."""
+    from crashclouseau import sigfamily
+
+    return _CALLS_RE.sub("::operator()", sigfamily.normalize_frame(text)).lower()
+
+
+def _frame_key(frame):
+    """Keep two scope components, plus the call operator for lambdas and closures."""
+    parts = _fold_frames(frame).strip().split("::")
+    width = 3 if parts[-1] == "operator()" else 2
+    return "::".join(p.strip() for p in parts[-width:])
+
+
+def _names_frame(bug, frame):
+    """Check whether the bug's summary or a frame of its crash signatures names *frame*."""
+    from crashclouseau import sigfamily
+
+    key = _frame_key(frame)
+    if len(key) < _MIN_FRAME_KEY:
+        return False
+    summary = _fold_frames(bug.get("summary") or "")
+    if re.search(r"(?<!\w){}(?!\w)".format(re.escape(key)), summary):
+        return True
+    return any(_frame_key(f) == key
+               for entry in _signature_field_entries(bug.get("cf_crash_signature"))
+               for f in sigfamily.frames(entry))
+
+
+def _truncation_venue(bug, short, cut):
+    """Accept a bug carrying *short* exactly only if it also names *cut*."""
+    return _cf_is_about(bug, short) and _names_frame(bug, cut)
 
 
 def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, product=None,
@@ -859,9 +930,12 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
     in summaries, including lambda variants. Direct family matches record ``via_signature``
     and ``via_relation``; handoffs use the new name's first build as ``venue_since``.
     Mark direct matches ``summary_only`` when no searched name is in ``cf_crash_signature``.
+    Truncation matches record ``via_relation="truncation"`` and the omitted ``via_frame``.
+    Duplicate searches exclude truncations.
 
     Merge duplicate targets, then prefer own-signature venues (including metas) in
-    ``product``'s application over sibling-only matches. Keep handoff matches.
+    ``product``'s application over sibling-only and shorter-signature matches. Keep handoff
+    matches.
 
     Return ``None`` if the direct search fails; duplicate lookup failures leave direct
     matches intact."""
@@ -879,9 +953,13 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
     for spelling in frames:
         others.setdefault(spelling, {"via": spelling, "relation": "outline", "since": None})
     spellings = own + sorted(others)
+    known = {s.lower() for s in spellings}
+    truncations = {s: cut for t, cut in _signature_truncations(sig).items()
+                   for s in sorted(utils.lambda_siblings(t)) if s.lower() not in known}
     params = _signature_search_params(
         spellings, "id,summary,status,resolution,creation_time,product,keywords,"
-                   "cf_crash_signature,regressed_by", resolution="---")
+                   "cf_crash_signature,regressed_by", resolution="---",
+        cf_only=truncations)
     try:
         r = net.get(_bz_rest(), params=params, timeout=timeout)
         r.raise_for_status()
@@ -901,16 +979,24 @@ def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, prod
         row = _venue_row(b)
         if not any(_row_is_about(b, s) for s in own):
             via = next((s for s in ranked_others if _row_is_about(b, s)), None)
-            if via is None:
-                continue
-            match = others[via]
-            row["via_signature"] = match["via"]
-            row["via_relation"] = match["relation"]
-            if match["since"]:
-                row["venue_since"] = match["since"]
+            if via is not None:
+                match = others[via]
+                row["via_signature"] = match["via"]
+                row["via_relation"] = match["relation"]
+                if match["since"]:
+                    row["venue_since"] = match["since"]
+            else:
+                short = next((t for t in truncations
+                              if _truncation_venue(b, t, truncations[t])), None)
+                if short is None:
+                    continue
+                row["via_signature"] = short
+                row["via_relation"] = "truncation"
+                row["via_frame"] = truncations[short]
         if any(_row_is_about(b, s) for s in frames):
             row["carries_frame"] = True
-        if not any(_cf_is_about(b, s) for s in spellings):
+        if not any(_cf_is_about(b, s) for s in spellings) \
+                and row.get("via_relation") != "truncation":
             row["summary_only"] = True
         rows.append(row)
     relations = {s: v["relation"] for s, v in others.items()}
@@ -931,13 +1017,13 @@ def _evicts(row):
 
 
 def _prefer_own_signature(rows, product):
-    """Drop sibling-only matches when a same-application own-signature venue exists.
+    """Prefer same-application own-signature venues over siblings and truncations.
 
     Keep handoff matches. Summary-only rows qualify only if they are metas."""
     foreign = config.get_other_app_products(product)
     if any(not r.get("via_relation") and _evicts(r) and (r.get("product") or "") not in foreign
            for r in rows):
-        return [r for r in rows if r.get("via_relation") != "sibling"]
+        return [r for r in rows if r.get("via_relation") not in ("sibling", "truncation")]
     return rows
 
 
@@ -948,8 +1034,7 @@ def _venue_row(bug):
             "regressed_by": bug.get("regressed_by") or []}
 
 
-# Prefer own-signature matches over handoffs, then siblings.
-_RELATION_RANK = {None: 0, "handoff": 1, "sibling": 2}
+_RELATION_RANK = {None: 0, "handoff": 1, "sibling": 2, "truncation": 3}
 
 
 def _relation_rank(relation):
@@ -1198,8 +1283,8 @@ def _via_clause(venue):
     via = (venue or {}).get("via_signature")
     if not via:
         return ""
-    kind = {"handoff": "earlier name", "outline": "first internal frame"}.get(
-        venue.get("via_relation"), "sibling spelling")
+    kind = {"handoff": "earlier name", "outline": "first internal frame",
+            "truncation": "shorter signature"}.get(venue.get("via_relation"), "sibling spelling")
     return " (on this crash's {} `{}`)".format(kind, via)
 
 
@@ -2046,6 +2131,9 @@ def _venue_via_signature_note(signature, venue, family):
         return ("_Posted here because this crash's {} `{}` is on this bug. Its signature `{}` "
                 "is an R8 outline frame shared by unrelated crashes, so it was not added to "
                 "this bug._".format(what, via, signature))
+    if (venue or {}).get("via_relation") == "truncation":
+        return ("_This bug carries the shorter signature `[@ {}]` and names `{}` from this "
+                "crash's signature `{}`._".format(via, venue.get("via_frame") or via, signature))
     if (venue or {}).get("via_relation") == "handoff":
         since = (" since build {} ({})".format(build, sigage.buildid_day(build)) if build else "")
         return ("_Posted here because this crash reports under the signature `{}`{}: {}. This "
@@ -3401,17 +3489,11 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
     family = _signature_family(dossier)
     spellings = _family_spellings(signature, family)
     own_count = len(utils.lambda_siblings(signature))
-    # Only pass extra lookup arguments when the search is widened.
     widened = {"spellings": spellings} if len(spellings) > own_count else {}
     # Also search by the internal caller when the signature names an R8 helper.
     outline = utils.outline_signature(signature, (stack or {}).get("frames"))
-    if outline:
-        existing = _open_bugs_for_signature(signature, family=family,
-                                            product=uuid_info.get("product"), extra=(outline,))
-    else:
-        existing = (_open_bugs_for_signature(signature, family=family,
-                                             product=uuid_info.get("product")) if widened
-                    else _open_bugs_for_signature(signature))
+    existing = _open_bugs_for_signature(signature, family=family, product=product,
+                                        extra=(outline,) if outline else ())
     if existing is None:
         return {"filed": False, "skipped": "signature lookup failed; not risking a duplicate"}
     # A BUCKET-HOLDER SIGNATURE -- one an open ``[meta]`` tracker carries -- takes one bug PER

@@ -42,7 +42,8 @@ class TestOpenVenues(unittest.TestCase):
         self.assertEqual([b["id"] for b in out["other_app"]], [2])
         self.assertEqual([b["id"] for b in out["metas"]], [3])
         # the PAGE timeout, not the worker's 60 s: one gunicorn worker, router at 30 s
-        search.assert_called_once_with("Foo::bar", timeout=bugzilla_apply._PAGE_HTTP_TIMEOUT)
+        search.assert_called_once_with("Foo::bar", timeout=bugzilla_apply._PAGE_HTTP_TIMEOUT,
+                                       product="Firefox")
         self.assertLess(bugzilla_apply._PAGE_HTTP_TIMEOUT * 2, 30)
 
     def test_the_timeout_reaches_every_request_of_the_search(self):

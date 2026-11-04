@@ -276,7 +276,7 @@ class TestTheTriageFiler(_Base):
     def test_an_ordinary_crash_asks_as_before(self):
         self._file()
         call = bugzilla_apply._open_bugs_for_signature.call_args
-        self.assertNotIn("extra", call.kwargs)
+        self.assertEqual(call.kwargs["extra"], ())
 
 
 class TestTheSpikeFiler(_FilerBase):

@@ -595,6 +595,11 @@ class TestOtherApplications(_Base):
     landed — so the age rule accepted it and the regression was reported into a Thunderbird bug,
     needinfo included."""
 
+    def test_the_venue_search_receives_the_product_without_a_family(self):
+        bugzilla_apply.autofile_bug("u-1", dict(_INFO, product="Fenix"), {}, {"candidate": {"node": "n"}},
+                                    "lead", 70)
+        self.assertEqual(bugzilla_apply._open_bugs_for_signature.call_args.kwargs["product"], "Fenix")
+
     def test_a_thunderbird_bug_is_not_a_venue_for_a_firefox_crash(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [
             _bug(2057980, product="MailNews Core")]

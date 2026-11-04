@@ -646,6 +646,15 @@ class _FilerBase(unittest.TestCase):
 
 
 class TestFiling(_FilerBase):
+    def test_the_venue_search_receives_the_product_without_a_family(self):
+        se.file_spike_bug(_esc(product="Fenix"), self.brief, self.findings)
+        self.assertEqual(bugzilla_apply._open_bugs_for_signature.call_args.kwargs["product"], "Fenix")
+
+    def test_the_fixed_lookup_receives_the_product(self):
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=None) as search:
+            se._fixed_before_spending("mozilla::Foo::Bar", None, "Fenix", "20261101085933")
+        self.assertEqual(search.call_args.kwargs["product"], "Fenix")
+
     def test_a_new_bug_carries_the_volume_the_analysis_and_the_marks(self):
         self.brief["culprit_in_window"] = True
         res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
