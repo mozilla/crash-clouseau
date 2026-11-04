@@ -87,8 +87,7 @@ _RAW_HEAD, _RAW_TAIL = 2000, 8000
 _HEX = frozenset("0123456789abcdef")
 _MIN_NODE = 7
 
-# product -> {component name} of the ACTIVE components, memoised for the process. A missing
-# product reads as unknown (None), never as "no components".
+# Cache known component sets, including empty sets for closed products.
 _COMPONENTS_CACHE: dict = {}
 # Overrides for the default Core :: General fallback.
 _FALLBACK_COMPONENT = {"Fenix": ("Firefox for Android", "General")}
@@ -1119,8 +1118,8 @@ def _pushdate(node, channel):
 # --------------------------------------------------------------------------- #
 # Filing
 # --------------------------------------------------------------------------- #
-def _components_of(product):
-    """Bugzilla's ACTIVE component names for ``product``, or ``None`` when BMO could not say."""
+def _components_of(product, timeout=30):
+    """Return active component names, an empty set for closed products, or None if unknown."""
     if not product:
         return None
     if product in _COMPONENTS_CACHE:
@@ -1130,13 +1129,14 @@ def _components_of(product):
         base = re.sub(r"/bug/?$", "", bugzilla_apply._bz_rest())
         r = net.get("{}/product".format(base),
                     params={"names": product,
-                            "include_fields": "name,components.name,components.is_active"},
-                    timeout=30)
+                            "include_fields": "name,is_active,components.name,components.is_active"},
+                    timeout=timeout)
         r.raise_for_status()
         for p in (r.json().get("products") or []):
             if (p.get("name") or "") == product:
                 names = {c.get("name") for c in (p.get("components") or [])
-                         if c.get("name") and c.get("is_active", True)}
+                         if c.get("name") and c.get("is_active", True)
+                         and p.get("is_active", True)}
     except Exception:  # noqa: BLE001
         logger.warning("spike: could not read the components of %r", product, exc_info=True)
         names = None
@@ -1146,8 +1146,10 @@ def _components_of(product):
 
 
 def _component_from_signature_bugs(signature, crash_product):
-    """The most common product::component among the bugs whose crash-signature field lists this
-    signature, open bugs preferred, other applications excluded. ``(None, None)`` when none."""
+    """Choose a signature's most common filing pair, preferring open bugs.
+
+    Exclude foreign products and known inactive pairs; return (None, None) if none remain.
+    """
     foreign = config.get_other_app_products(crash_product)
     try:
         params = {
@@ -1164,7 +1166,10 @@ def _component_from_signature_bugs(signature, crash_product):
     def usable(b):
         if not bugzilla_apply._row_is_about(b, signature):
             return False
-        return bool(b.get("product") and b.get("component")) and b.get("product") not in foreign
+        if not (b.get("product") and b.get("component")) or b.get("product") in foreign:
+            return False
+        components = _components_of(b["product"])
+        return components is None or b["component"] in components
 
     rows = [b for b in bugs if usable(b)]
     if not rows:

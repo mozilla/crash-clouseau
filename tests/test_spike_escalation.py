@@ -353,6 +353,31 @@ class TestComponent(unittest.TestCase):
                                   return_value=(None, None)):
             self.assertEqual(se.resolve_component(f, "sig", "Firefox")[:2], ("Core", "General"))
 
+    def test_a_closed_product_has_no_components(self):
+        for active, want in ((True, {"A"}), (False, set())):
+            product = {"name": "P", "is_active": active, "components": [
+                {"name": "A", "is_active": True}, {"name": "B", "is_active": False}]}
+            resp = mock.Mock(**{"json.return_value": {"products": [product]}})
+            with self.subTest(active=active), \
+                    mock.patch.dict(se._COMPONENTS_CACHE, clear=True), \
+                    mock.patch.object(se.net, "get", return_value=resp):
+                self.assertEqual(se._components_of("P"), want)
+
+    def test_a_closed_signature_bug_component_is_not_reused(self):
+        def bug(product, component):
+            return {"product": product, "component": component,
+                    "resolution": "FIXED", "cf_crash_signature": "[@ sig]"}
+
+        graveyard = bug("Firefox for Android Graveyard", "Audio/Video")
+        open_components = {"Firefox for Android Graveyard": set(), "Core": {"Audio/Video"}}
+        for bugs, want in (([graveyard], (None, None)),
+                           ([graveyard, graveyard, bug("Core", "Audio/Video")], ("Core", "Audio/Video"))):
+            resp = mock.Mock(**{"json.return_value": {"bugs": bugs}})
+            with self.subTest(bugs=bugs), \
+                    mock.patch.object(se.net, "get", return_value=resp), \
+                    mock.patch.object(se, "_components_of", side_effect=open_components.get):
+                self.assertEqual(se._component_from_signature_bugs("sig", "Fenix"), want)
+
     def test_bugzilla_unreachable_takes_the_investigators_word(self):
         f = SpikeFindings(summary="S", product="Core", component="Graphics")
         with mock.patch.object(se, "_components_of", return_value=None):

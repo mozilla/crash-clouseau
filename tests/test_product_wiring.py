@@ -2200,6 +2200,48 @@ class TestBugPreview(unittest.TestCase):
         fc = {"stack": ["Core", "Layout: Tables"], "changeset": ["Core", "Layout: Tables"]}
         self.assertEqual(self._author_fallback(cand, fc)[0], ("Core", "Layout: Tables"))
 
+    def _resolve_with_components(self, regressor_pc, file_components, components):
+        with mock.patch.object(report_bug, "_product_components", side_effect=components.get), \
+                mock.patch.object(report_bug, "_bugs_product_component",
+                                  return_value={123: regressor_pc}), \
+                mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+            return report_bug.resolve_product_component(
+                {"bug": 123, "node": "n", "author": ""}, "beta", "Fenix",
+                file_components=file_components)
+
+    def test_resolve_pc_leaves_a_closed_regressor_product_for_the_changesets_component(self):
+        fc = {"changeset": ["Core", "Audio/Video"], "stack": ["GeckoView", "General"]}
+        graveyard = ("Firefox for Android Graveyard", "Audio/Video")
+        cases = (
+            ({graveyard[0]: set(), "Core": {"Audio/Video"}}, ("Core", "Audio/Video")),
+            ({graveyard[0]: set(), "Core": set()}, (None, None)),
+            ({}, graveyard),  # Unknown: keep the regressor's pair.
+        )
+        for components, want in cases:
+            with self.subTest(components=components):
+                self.assertEqual(self._resolve_with_components(graveyard, fc, components), want)
+
+    def test_resolve_pc_asks_bugzilla_once_per_product_with_the_service_timeout(self):
+        from crashclouseau import net
+        from crashclouseau.agent import spike_escalation as se
+        from tests import REAL_PRODUCT_COMPONENTS
+
+        with mock.patch.object(report_bug, "_product_components", new=REAL_PRODUCT_COMPONENTS), \
+                mock.patch.object(se, "_components_of", return_value=None) as components, \
+                mock.patch.object(report_bug, "_bugs_product_component",
+                                  return_value={123: ("Core", "General")}):
+            pc = report_bug.resolve_product_component(
+                {"bug": 123, "node": "n"}, "nightly", "Firefox",
+                significant_frame={"component": ["Core", "Graphics"], "function": "f"})
+        self.assertEqual(pc, ("Core", "Graphics"))
+        components.assert_called_once_with("Core", timeout=net.SERVICE_TIMEOUT)
+
+    def test_resolve_pc_skips_a_closed_code_component(self):
+        fc = {"overlap": ["Core", "Retired"]}
+        for names, want in (({"Audio/Video"}, (None, None)), ({"Retired"}, ("Core", "Retired"))):
+            with self.subTest(components=names):
+                self.assertEqual(self._resolve_with_components(None, fc, {"Core": names}), want)
+
     def test_resolve_pc_the_codes_component_needs_overlap_or_agreement(self):
         cand = {"bug": 123, "node": "n", "author": ""}
         for fc in ({"stack": ["Core", "X"]}, {"changeset": ["Core", "X"]},

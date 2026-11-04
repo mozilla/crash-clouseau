@@ -21,6 +21,12 @@ mock.patch.object(bugzilla_apply, "_hidden_duplicate_bug", return_value=None).st
 REAL_PATH_HISTORIES = bugcomponents._path_histories
 mock.patch.object(bugcomponents, "_path_histories", return_value=None).start()
 
+from crashclouseau import report_bug  # noqa: E402
+
+# Disable product lookups unless a test overrides this mock.
+REAL_PRODUCT_COMPONENTS = report_bug._product_components
+mock.patch.object(report_bug, "_product_components", return_value=None).start()
+
 # Prevent model calls unless a test overrides this mock.
 REAL_VENUE_CHECK = venue_judge.check
 mock.patch.object(venue_judge, "check", return_value=None).start()

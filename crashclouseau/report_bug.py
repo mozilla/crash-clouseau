@@ -2177,29 +2177,42 @@ def _first_email(author):
     return author if ("@" in author and " " not in author) else ""
 
 
-def _code_component(file_components, foreign):
-    """The moz.build component of the crashing code, when the code says so unambiguously: the
-    files the candidate changed ON the stack (``overlap``), else the stack's when the
-    changeset's agrees. ``None`` otherwise, and for another application's product."""
+def _product_components(product):
+    """Read active components with the web timeout; None means unknown."""
+    from crashclouseau.agent import spike_escalation
+
+    return spike_escalation._components_of(product, timeout=net.SERVICE_TIMEOUT)
+
+
+def _code_component(file_components, foreign, accepts):
+    """Prefer overlap, then matching stack and changeset components.
+
+    Skip foreign products and known inactive pairs; return None if neither qualifies.
+    """
     fc = file_components or {}
     stack, changeset = fc.get("stack"), fc.get("changeset")
     for pc in (fc.get("overlap"), stack if stack and stack == changeset else None):
-        if pc and pc[0] not in foreign:
+        if pc and pc[0] not in foreign and accepts(pc):
             return tuple(pc)
     return None
 
 
 def resolve_product_component(candidate, channel, product=None, file_components=None,
                               history_components=None, significant_frame=None):
-    """Resolve the filing pair, refining General within the same product.
+    """Resolve a filing pair; refine General using the JVM frame, then file history."""
+    # Cache unknown results too; retry them on the next resolution.
+    components = functools.cache(_product_components)
 
-    Prefer the JVM significant frame's component, then the file-history component.
-    """
-    pc = _resolve_product_component(candidate, channel, product, file_components)
+    def accepts(pc):
+        names = components(pc[0])
+        return names is None or pc[1] in names
+
+    pc = _resolve_product_component(candidate, channel, product, file_components, accepts)
     if pc[1] != "General":
         return pc
     frame = (significant_frame or {}).get("component") or ()
-    if len(frame) == 2 and frame[0] == pc[0] and frame[1] != "General":
+    if len(frame) == 2 and frame[0] == pc[0] and frame[1] != "General" \
+            and accepts(frame):
         logger.info("bug preview: filing in %s :: %s, from %s", frame[0], frame[1],
                     significant_frame.get("function"))
         return tuple(frame)
@@ -2210,23 +2223,12 @@ def resolve_product_component(candidate, channel, product=None, file_components=
     return pc
 
 
-def _resolve_product_component(candidate, channel, product=None, file_components=None):
-    """Resolve a filing component, excluding other applications' products at every step.
+def _resolve_product_component(candidate, channel, product, file_components, accepts):
+    """Prefer the regressor's pair; if inactive, try the changeset's component.
 
-    Prefer the regressor bug's pair. Otherwise, use the most frequent allowed pair from
-    the author's recent patches' bugs only if it matches a ``file_components`` value
-    (changeset, stack or overlap). Otherwise, the code's own moz.build component
-    (``_code_component``). Return ``(None, None)`` if none resolves.
-
-    THE LAST STEP EXISTS FOR AN UNREADABLE REGRESSOR BUG. A security bug is invisible to the
-    bot, and the author tally alone would misfile: crash 15a9fe82 (2026-10-06, bug 2057112
-    restricted) died "product/component unresolved" with every group of its files saying
-    Firefox :: Launcher Process, and on 2026-09-15 seven release leads naming security bugs died
-    the same way, one of them a real regression in ``layout/tables`` (Core :: Layout: Tables,
-    filed by hand as bug 2072310) whose author's tally said CSS Parsing. Stack and changeset
-    that disagree with no overlap still resolve nothing.
-
-    ``product`` is the crash's Socorro product, used by ``config.get_other_app_products``.
+    Then try the author's most common pair if it matches file_components, followed by
+    _code_component. Exclude other applications' products and known inactive pairs.
+    Return (None, None) if unresolved. product is the Socorro application name.
     """
     if not candidate:
         return None, None
@@ -2239,23 +2241,26 @@ def _resolve_product_component(candidate, channel, product=None, file_components
                 logger.info("bug preview: regressor bug %s lives in %s, another application's "
                             "product — not filing a %s crash there", bug, pc[0], product or "?")
                 pc = None
-            if pc:
+            if pc and accepts(pc):
                 return pc
+            if pc:
+                logger.info("bug preview: regressor bug %s lives in %s :: %s, which no longer "
+                            "accepts bugs", bug, pc[0], pc[1])
+                changeset = (file_components or {}).get("changeset")
+                if changeset and changeset[0] not in foreign and accepts(changeset):
+                    return tuple(changeset)
         node = candidate.get("node")
         info = models.Node.authors_for([node], channel).get(node, {}) if node else {}
-        # Use the stored hg email if the local author record and display name yield none.
+        # Fall back to the candidate's stored email.
         email = info.get("email") or _first_email(candidate.get("author"))
         email = email or (candidate.get("author_email") or "").strip()
         if email:
             name = info.get("real") or (candidate.get("author") or "").split("<", 1)[0].strip()
             bugs = models.Node.recent_bugs_by_author(email, channel, name=name)
             pcs = {b: pc for b, pc in _bugs_product_component(bugs).items()
-                   if pc[0] not in foreign}
+                   if pc[0] not in foreign and accepts(pc)}
             if pcs:
-                # Tally in recent_bugs_by_author's NEWEST-FIRST order (not the cache's
-                # cache-hits-first dict order): Counter.most_common breaks a count tie by
-                # first-seen, so this deterministically favours the author's most RECENT
-                # patch, independent of unrelated prior cache state.
+                # Preserve patch order so count ties favor the most recent patch.
                 ordered = [pcs[b] for b in bugs if b in pcs]
                 pc = Counter(ordered).most_common(1)[0][0]
                 if pc in {tuple(v) for v in (file_components or {}).values() if v}:
@@ -2264,7 +2269,7 @@ def _resolve_product_component(candidate, channel, product=None, file_components
                             "component of the changeset or stack (%s)", pc, file_components)
     except Exception:
         logger.warning("bug preview: could not resolve product/component", exc_info=True)
-    pc = _code_component(file_components, foreign)
+    pc = _code_component(file_components, foreign, accepts)
     if pc:
         logger.info("bug preview: filing in %s, the crashing code's moz.build component", pc)
         return pc
