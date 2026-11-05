@@ -237,12 +237,20 @@ def _note_filing_error(uuid, info):
     return {}
 
 
+_PATH_SEGMENTS = re.compile(r"(?:\.{1,2}([\\/])){3,}")
+
+
+def _collapse_relative_paths(text):
+    """Collapse three or more relative path segments, keeping the final separator."""
+    return _PATH_SEGMENTS.sub(r"…\1", text) if text else text
+
+
 def _post_comment(bug_id, text, is_private, token):
     """Post a comment and return its ID.
 
     Screen links, check bug references for public comments, then check rendered links."""
     where = "a comment on bug {}".format(bug_id)
-    text = links.screen_write(text, where)
+    text = _collapse_relative_paths(links.screen_write(text, where))
     if not is_private:
         disclosure.check_public_write(text, bug_id)
     _check_rendered_links(text, where)
@@ -268,6 +276,7 @@ def _put_bug(bug_id, changes, token):
     changes = links.screen_fields(changes, "an update of bug {}".format(bug_id))
     comment = changes.get("comment") or {}
     if comment.get("body"):
+        comment["body"] = _collapse_relative_paths(comment["body"])
         if not comment.get("is_private"):
             disclosure.check_public_write(comment["body"], bug_id)
         _check_rendered_links(comment["body"], "a comment on bug {}".format(bug_id))
@@ -311,6 +320,8 @@ def _create_bug(payload, token):
     summary and description bug references. ``BUGZILLA_REST_URL`` selects the destination.
     """
     payload = links.screen_fields(payload, "a new bug")
+    if payload.get("description"):
+        payload["description"] = _collapse_relative_paths(payload["description"])
     if not payload.get("groups"):
         disclosure.check_public_write("{}\n{}".format(payload.get("summary") or "",
                                                       payload.get("description") or ""))

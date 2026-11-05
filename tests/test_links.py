@@ -136,15 +136,13 @@ class TestTheWriteHelpers(unittest.TestCase):
         self.posts = []
         self.html = "<p>ok</p>"
 
-        def post(url, **kw):
+        def request(url, **kw):
             self.posts.append((url, kw.get("json")))
             if url.endswith("/comment/render"):
                 return _Resp({"html": self.html})
             return _Resp({"id": 7})
-        for p in (mock.patch.object(bugzilla_apply.net, "post", side_effect=post),
-                  mock.patch.object(bugzilla_apply.net, "put",
-                                    side_effect=lambda url, **kw: self.posts.append(
-                                        (url, kw.get("json"))) or _Resp({})),
+        for p in (mock.patch.object(bugzilla_apply.net, "post", side_effect=request),
+                  mock.patch.object(bugzilla_apply.net, "put", side_effect=request),
                   mock.patch("crashclouseau.disclosure.public_bugs",
                              side_effect=lambda ids: {int(i) for i in ids})):
             p.start()
@@ -199,6 +197,22 @@ class TestTheWriteHelpers(unittest.TestCase):
             bugzilla_apply._create_bug({"summary": "s", "description": "d",
                                         "url": "https://evil.example"}, "tok")
         self.assertEqual(self._sent(), [])
+
+    def test_relative_path_runs_are_collapsed_in_every_body(self):
+        text = (r"lambda at .\..\..\..\..\..\checkouts\MozPromise.h" "\n"
+                r"..\..\two is fine, ../../ too" "\n"
+                "#include ../../../a.h")
+        want = (r"lambda at …\checkouts\MozPromise.h" "\n"
+                r"..\..\two is fine, ../../ too" "\n"
+                "#include …/a.h")
+        bugzilla_apply._post_comment(55, text, False, "tok")
+        bugzilla_apply._put_bug(55, {"comment": {"body": text}, "flags": []}, "tok")
+        bugzilla_apply._create_bug({"summary": "s", "description": text}, "tok")
+        self.assertEqual(self._sent(), [{"comment": want, "is_private": False},
+                                        {"comment": {"body": want}, "flags": []},
+                                        {"summary": "s", "description": want}])
+        self.assertEqual([b["text"] for u, b in self.posts if u.endswith("/comment/render")],
+                         [want] * 3)
 
     def test_a_new_bug_is_screened(self):
         bugzilla_apply._create_bug({"summary": "Crash www.evil.example", "groups": ["g"],
