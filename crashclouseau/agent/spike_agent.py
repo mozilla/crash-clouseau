@@ -380,6 +380,28 @@ def _candidate_line(c: dict) -> str:
     return "- " + " ".join(parts)
 
 
+def _version_series_lines(series, spike) -> list[str]:
+    """Format Nightly/Beta shares for both majors and the new major's Nightly builds."""
+    if not series:
+        return []
+    major, prev = spike.get("major"), spike.get("from_major")
+    out = ["", "NIGHTLY/BETA -- this signature's installations per 10,000 crash-reporting installations:"]
+    for channel in ("nightly", "beta"):
+        for m in (prev, major):
+            row = (series.get(channel) or {}).get(str(m)) or {}
+            out.append("- {} {}: {} of {} ({} per 10k)".format(
+                channel, m, row.get("installs", 0), row.get("all_installs", 0),
+                row.get("per_10k")))
+    builds = series.get("builds") or []
+    if builds:
+        out.append("{} nightly builds of {} (buildid: installations of this signature / all "
+                   "installations with a crash report, per 10k):".format(len(builds), major))
+        out += ["  {}: {} / {} ({})".format(b.get("buildid"), b.get("installs", 0),
+                                            b.get("all_installs", 0), b.get("per_10k"))
+                for b in builds]
+    return out
+
+
 def _classic_run_lines(run: dict) -> list[str]:
     verdict = run.get("verdict") or "?"
     head = "- run on {}: {}".format(run.get("uuid", "?"), verdict)
@@ -414,6 +436,7 @@ def _user_prompt(brief: dict) -> str:
     """The brief as the investigator reads it. Everything a section states is a number or a
     fact the pipeline measured; the ask is at the end so it is what the model has last."""
     channel = brief.get("channel", "nightly")
+    spike = brief.get("spike") or {}
     lines = [
         "SPIKE UNDER INVESTIGATION",
         "Signature: {}".format(brief.get("signature", "")),
@@ -425,7 +448,6 @@ def _user_prompt(brief: dict) -> str:
     ]
     if brief.get("spike_sentence"):
         lines += ["", "WHAT FIRED: " + brief["spike_sentence"]]
-        spike = brief.get("spike") or {}
         if spike.get("kind") == "build_day":
             window = "the loudest of the preceding build-days"
             if spike.get("history_days"):
@@ -437,6 +459,26 @@ def _user_prompt(brief: dict) -> str:
                     config.get_spike("ratio", brief.get("product") or "Firefox", channel),
                     window, spike.get("z"), spike.get("z_min"), spike.get("installs"),
                     spike.get("min_installs")))
+        elif spike.get("kind") == "version_step":
+            onset = spike.get("onset") or {}
+            if onset.get("kind") == "boundary":
+                when = ("The higher share appears in the release's first days; this alone "
+                        "does not identify a cause.")
+            elif onset.get("kind") == "later":
+                when = "The higher daily share appears from {}; its cause is unresolved.".format(
+                    onset.get("day"))
+            else:
+                when = "The daily installation counts do not establish the onset."
+            when += " Compare dates across versions and the Nightly/Beta series."
+            if spike.get("version"):
+                when += " Selected version: {}.".format(spike["version"])
+            lines.append(
+                "  (a RELEASE VERSION STEP compares major versions. The bars are {}x the previous major's "
+                "share of installations and z={}, with a floor of {} installations scaled to the "
+                "period. {} The build above is where the representative report "
+                "comes from.)".format(spike.get("ratio_min"), spike.get("z_min"),
+                                      spike.get("min_installs"), when))
+    lines += _version_series_lines(brief.get("version_series"), spike)
     if brief.get("trend_sentence"):
         lines.append("Rate over the last week: " + brief["trend_sentence"])
     if brief.get("daily"):
@@ -494,6 +536,9 @@ def _user_prompt(brief: dict) -> str:
                           cands.get("window_extent") or "previous build to this one",
                           len(window), "" if len(window) == 1 else "s")]
         lines += [_candidate_line(c) for c in window]
+    elif spike.get("kind") == "version_step":
+        lines += ["", "No pushlog window is given. Use the series to narrow the onset, then "
+                      "mcp__history__* and blame to inspect relevant changes."]
     elif not onstack:
         lines += ["", "No candidate changesets could be enumerated for this build (the pushlog "
                       "window was unavailable); use mcp__history__* and blame on the crashing "

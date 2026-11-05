@@ -1525,6 +1525,23 @@ def get_agent_version_rates():
     }
 
 
+def get_version_step():
+    """Release version-step scope, thresholds, scan ages, and record-only prefixes."""
+    a = get_agent().get("version_step", {})
+    return {
+        "enabled": _env_bool("VERSION_STEP_ENABLED", a.get("enabled", True)),
+        "products": list(a.get("products", ["Firefox"])),
+        "channels": list(a.get("channels", ["release"])),
+        "z_min": float(a.get("z_min", 3.62)),
+        "ratio": float(a.get("ratio", 1.3)),
+        "min_installs": int(a.get("min_installs", 200)),
+        "first_day": int(a.get("first_day", 3)),
+        "last_day": int(a.get("last_day", 14)),
+        "facets_size": int(a.get("facets_size", 4000)),
+        "record_only_prefixes": list(a.get("record_only_prefixes", ["OOM |"])),
+    }
+
+
 def get_agent_nimbus_onset():
     """Nimbus lookup limits: report-search days, recipe lookback hours, source-frame count,
     and maximum publication-to-report gap for bug notes and owner routing (``note_hours``)."""

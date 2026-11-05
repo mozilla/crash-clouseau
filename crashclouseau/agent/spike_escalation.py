@@ -73,7 +73,8 @@ from functools import cache
 
 from crashclouseau import (
     app, bugcomponents, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug,
-    samesite, sensitive, sigage, sigtrend, spike_report, spikes, utils, worker,
+    samesite, sensitive, sigage, sigtrend, spike_report, spikes, tools, utils, versionstep,
+    worker,
 )
 from crashclouseau.logger import logger
 
@@ -125,6 +126,7 @@ def sweep_real_spikes():
                     if room <= 0:
                         break
                     n = _sweep_channel(product, channel, cfg, room)
+                    n += _sweep_version_steps(product, channel, cfg, room - n)
                     room -= n
                     enqueued += n
             return enqueued
@@ -273,87 +275,186 @@ def _sweep_channel(product, channel, cfg, room):
         runs = classic_runs(siblings, picked, channel)
         if any(r.get("status") in ("pending", "running") for r in runs):
             continue
-        filed = [r for r in runs if r.get("filed_bug")]
         payload = {"spike": spike, "siblings": siblings,
                    "spike_sentence": spikes.describe(spike, channel, day.isoformat(), picked)}
-        if filed:
-            bug = (filed[0].get("filed_bug") or {}).get("bug")
-            row = models.SpikeEscalation.create(
-                signature, product, channel, day, buildid=picked, uuid=filed[0].get("uuid"),
-                kind=spike["kind"], payload=dict(
-                    payload, skipped="the ordinary triage filed bug {} for this spike".format(bug)))
-            row.set_status("done")
-            logger.info("spike: %s on %s is a real spike and the ordinary triage filed bug %s; "
-                        "nothing to escalate", signature, day, bug)
+        if _triage_filed(signature, product, channel, day, picked, spike, payload, runs):
             continue
-        fixed = _fixed_before_spending(signature, siblings, product, picked)
-        if fixed is not None:
-            reason = _fixed_decline(fixed, picked)
-            row = models.SpikeEscalation.create(
-                signature, product, channel, day, buildid=picked, kind=spike["kind"],
-                payload=dict(payload, filing={"filed": False, "bug": fixed["id"],
-                                              "skipped": reason, "venue_kind": "fixed"}))
-            row.set_status("done")
-            logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
-                        day, reason)
-            continue
-        noise = _raptor_lake_before_spending(signature, product, channel)
-        if noise is not None:
-            reason = _raptor_lake_decline(noise)
-            row = models.SpikeEscalation.create(
-                signature, product, channel, day, buildid=picked, kind=spike["kind"],
-                payload=dict(payload, skipped=reason, hardware_noise=noise))
-            row.set_status("done")
-            logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
-                        day, reason)
-            continue
+        if _escalate(signature, siblings, product, channel, day, picked, spike, payload, runs,
+                     cfg, budget):
+            room -= 1
+            budget -= 1
+            enqueued += 1
+    return enqueued
+
+
+def _triage_filed(signature, product, channel, day, picked, spike, payload, runs):
+    """Return True and record a decline if ordinary triage already filed on this build."""
+    filed = next((r for r in runs if r.get("filed_bug")), None)
+    if filed is None:
+        return False
+    bug = filed["filed_bug"].get("bug")
+    row = models.SpikeEscalation.create(
+        signature, product, channel, day, buildid=picked, uuid=filed.get("uuid"),
+        kind=spike["kind"], payload=dict(
+            payload, skipped="the ordinary triage filed bug {} for this spike".format(bug)))
+    row.set_status("done")
+    logger.info("spike: %s on %s is a real spike and the ordinary triage filed bug %s; "
+                "nothing to escalate", signature, day, bug)
+    return True
+
+
+def _escalate(signature, siblings, product, channel, day, picked, spike, payload, runs, cfg,
+              budget, uuid=None):
+    """Apply pre-spend checks and return whether an investigation was enqueued."""
+    fixed = _fixed_before_spending(signature, siblings, product, picked)
+    if fixed is not None:
+        reason = _fixed_decline(fixed, picked)
+        row = models.SpikeEscalation.create(
+            signature, product, channel, day, buildid=picked, kind=spike["kind"],
+            payload=dict(payload, filing={"filed": False, "bug": fixed["id"],
+                                          "skipped": reason, "venue_kind": "fixed"}))
+        row.set_status("done")
+        logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
+                    day, reason)
+        return False
+    noise = _raptor_lake_before_spending(signature, product, channel)
+    if noise is not None:
+        reason = _raptor_lake_decline(noise)
+        row = models.SpikeEscalation.create(
+            signature, product, channel, day, buildid=picked, kind=spike["kind"],
+            payload=dict(payload, skipped=reason, hardware_noise=noise))
+        row.set_status("done")
+        logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
+                    day, reason)
+        return False
+    if uuid is None:
         uuid = representative_uuid(siblings, picked, channel, product, runs)
-        if uuid is None:
-            row = models.SpikeEscalation.create(
-                signature, product, channel, day, buildid=picked, kind=spike["kind"],
-                payload=dict(payload, skipped="no ingested report with a stack on the build"))
-            row.set_status("done")
-            logger.warning("spike: %s on %s is a real spike but no report with a stack was "
-                           "ingested for build %s", signature, day, picked)
-            continue
-        # A RE-BUCKETING IS NOT A SPIKE. An appearance from zero whose gain is exactly what an
-        # older name of the same crash LOST on the same build (`sigfamily.handoff_for_spike`)
-        # is the crash changing its name, and the pre-LLM decline that would have stopped
-        # 2071620 and 2071606 for $0: the model's own summary called that one "a renamed form
-        # of a longstanding SpiderMonkey OOM abort" and the filer read neither it nor the
-        # status. Recorded `done` with the predecessor and its numbers, so the operator's
-        # table says why nothing was spent.
-        handoff = _handoff_for_spike(signature, uuid, product, channel, picked) \
-            if spike.get("kind") == "build_day" else None
-        if handoff is not None:
-            reason = _handoff_decline(handoff, picked)
-            row = models.SpikeEscalation.create(
-                signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
-                payload=dict(payload, skipped=reason, predecessor=handoff["signature"],
-                             predecessor_before=handoff.get("before"),
-                             predecessor_after=handoff.get("after")))
-            row.set_status("done")
-            logger.info("spike: %s on %s is a %s; not investigated", signature, day, reason)
-            continue
-        payload["classic_runs"] = len(runs)
+    if uuid is None:
+        row = models.SpikeEscalation.create(
+            signature, product, channel, day, buildid=picked, kind=spike["kind"],
+            payload=dict(payload, skipped="no ingested report with a stack on the build"))
+        row.set_status("done")
+        logger.warning("spike: %s on %s is a real spike but no report with a stack was "
+                       "ingested for build %s", signature, day, picked)
+        return False
+    # A RE-BUCKETING IS NOT A SPIKE. An appearance from zero whose gain is exactly what an
+    # older name of the same crash LOST on the same build (`sigfamily.handoff_for_spike`)
+    # is the crash changing its name, and the pre-LLM decline that would have stopped
+    # 2071620 and 2071606 for $0: the model's own summary called that one "a renamed form
+    # of a longstanding SpiderMonkey OOM abort" and the filer read neither it nor the
+    # status. Recorded `done` with the predecessor and its numbers, so the operator's
+    # table says why nothing was spent.
+    handoff = _handoff_for_spike(signature, uuid, product, channel, picked) \
+        if spike.get("kind") == "build_day" else None
+    if handoff is not None:
+        reason = _handoff_decline(handoff, picked)
         row = models.SpikeEscalation.create(
             signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
-            payload=payload)
-        if budget <= 0:
-            row.set_status("deferred")
-            logger.error("spike: %s-%s has queued %d investigations today "
-                         "(breaker_runs_per_day); escalation %s (%s on %s) is deferred",
-                         product, channel, cfg["breaker_runs_per_day"], row.id, signature, day)
-            continue
-        if not _start(row, cfg):
-            continue
-        room -= 1
-        budget -= 1
-        enqueued += 1
-        logger.info("spike: escalating %s on %s-%s build %s (%s; %d ordinary run(s), none "
-                    "filed): escalation %s on %s", signature, product, channel, picked,
-                    payload["spike_sentence"], len(runs), row.id, uuid)
-    return enqueued
+            payload=dict(payload, skipped=reason, predecessor=handoff["signature"],
+                         predecessor_before=handoff.get("before"),
+                         predecessor_after=handoff.get("after")))
+        row.set_status("done")
+        logger.info("spike: %s on %s is a %s; not investigated", signature, day, reason)
+        return False
+    payload["classic_runs"] = len(runs)
+    row = models.SpikeEscalation.create(
+        signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
+        payload=payload)
+    if budget <= 0:
+        row.set_status("deferred")
+        logger.error("spike: %s-%s has queued %d investigations today "
+                     "(breaker_runs_per_day); escalation %s (%s on %s) is deferred",
+                     product, channel, cfg["breaker_runs_per_day"], row.id, signature, day)
+        return False
+    if not _start(row, cfg):
+        return False
+    logger.info("spike: escalating %s on %s-%s build %s (%s; %d ordinary run(s), none "
+                "filed): escalation %s on %s", signature, product, channel, picked,
+                payload["spike_sentence"], len(runs), row.id, uuid)
+    return True
+
+
+# Reuse successful scans for the UTC day; later sweeps handle remaining firings.
+_VERSION_SCANS: dict = {}
+
+
+def _version_scan(product, channel, vcfg):
+    """Cache today's scan; retry failed reads on subsequent calls."""
+    today = datetime.now(timezone.utc).date()
+    for key in [k for k in _VERSION_SCANS if k[2] != today]:
+        del _VERSION_SCANS[key]
+    key = (product, channel, today)
+    if key not in _VERSION_SCANS:
+        result = versionstep.scan(product, channel, today, vcfg)
+        if result is None:
+            return None
+        _VERSION_SCANS[key] = result
+    return _VERSION_SCANS[key]
+
+
+def _sweep_version_steps(product, channel, cfg, room):
+    """Escalate the current release major's version steps; return how many were enqueued.
+
+    Key rows by signature and release day; record-only prefixes skip investigation.
+    """
+    vcfg = config.get_version_step()
+    if (not vcfg["enabled"] or room <= 0 or product not in vcfg["products"]
+            or channel not in vcfg["channels"]):
+        return 0
+    try:
+        result = _version_scan(product, channel, vcfg)
+        if not result or not result.get("fires"):
+            return 0
+        now = datetime.now(timezone.utc)
+        budget = cfg["breaker_runs_per_day"] - models.SpikeEscalation.count_since(
+            product, channel, now.replace(hour=0, minute=0, second=0, microsecond=0))
+        day = result["release_day"]
+        enqueued = 0
+        for fire in result["fires"]:
+            if room <= 0:
+                break
+            signature = fire["signature"]
+            if config.is_ignored_signature(signature):
+                continue
+            if models.SpikeEscalation.for_pair(signature, product, channel, day) is not None:
+                continue
+            siblings = sorted(set(utils.lambda_siblings(signature)) | {signature})
+            since = now - timedelta(days=cfg["once_per_days"])
+            if models.SpikeEscalation.latest_for_signature(siblings, product, channel, since):
+                continue
+            spike = versionstep.spike_facts(result, fire, vcfg)
+            payload = {"spike": spike, "siblings": siblings,
+                       "spike_sentence": spikes.describe(spike, channel)}
+            prefix = next((p for p in vcfg["record_only_prefixes"] if signature.startswith(p)),
+                          None)
+            if prefix is not None:
+                row = models.SpikeEscalation.create(
+                    signature, product, channel, day, kind=spike["kind"], payload=dict(
+                        payload, skipped="recorded only: {!r} signatures are not investigated "
+                        "(agent.version_step.record_only_prefixes)".format(prefix)))
+                row.set_status("done")
+                continue
+            sample = versionstep.sample_uuid(product, channel, siblings, result["major"], day,
+                                             fire.get("version"))
+            if sample is None:
+                continue
+            uuid, picked = sample
+            runs = classic_runs(siblings, picked, channel)
+            if any(r.get("status") in ("pending", "running") for r in runs):
+                continue
+            if _triage_filed(signature, product, channel, day, picked, spike, payload, runs):
+                continue
+            uuid = representative_uuid(siblings, picked, channel, product, runs) or uuid
+            if _escalate(signature, siblings, product, channel, day, picked, spike, payload,
+                         runs, cfg, budget, uuid=uuid):
+                room -= 1
+                budget -= 1
+                enqueued += 1
+        return enqueued
+    except Exception:
+        logger.error("spike: version-step sweep failed for %s %s", product, channel,
+                     exc_info=True)
+        return 0
 
 
 def _restart(product, channel, cfg, limit):
@@ -760,13 +861,14 @@ def _minimal_seed(uuid, uuid_info, esc):
     java = bool((uuid_info or {}).get("java")) or _is_java_report(raw)
     line_numbers_trusted = (not java) or config.java_trust_line_numbers()
     info = {"signature": esc.signature, "product": esc.product, "channel": esc.channel}
+    node = (uuid_info or {}).get("node") or _build_revision(esc)
     seed = {
         "uuid": uuid, "signature": esc.signature, "channel": esc.channel,
         "product": esc.product, "buildid": esc.buildid,
         "version": (raw or {}).get("version"), "frames": frames,
         "stack": _stack_text_for(frames, line_numbers_trusted, java), "candidates": [],
         "experts": [], "raw_crash": raw, "is_offstack": True, "offstack_reason": None,
-        "build_node": (uuid_info or {}).get("node", ""), "pin_rev": (uuid_info or {}).get("node", ""),
+        "build_node": node, "pin_rev": node,
         "prior_regressor_bugs": [], "prior_hints": [], "candidate_pushdates": {},
         "archetypes": [], "install_history": {}, "candidate_window": None,
         "java": java, "line_numbers_trusted": line_numbers_trusted,
@@ -796,6 +898,19 @@ def _minimal_seed(uuid, uuid_info, esc):
     # Apply the population check to fallback seeds too.
     seed["poison_population"] = orchestrator._poison_population(info, uuid_info, seed)
     return seed
+
+
+def _build_revision(esc):
+    """Resolve a build revision when report metadata is missing; return ``""`` on failure."""
+    if not esc.buildid:
+        return ""
+    try:
+        return tools.get_changeset(utils.get_build_date(esc.buildid), esc.channel,
+                                   esc.product) or ""
+    except Exception:
+        logger.warning("spike: cannot resolve the revision of build %s", esc.buildid,
+                       exc_info=True)
+        return ""
 
 
 def _window_for(uuid_info, seed):
@@ -896,7 +1011,13 @@ def build_spike_brief(esc, light=False):
         return brief
     cands = seed.get("candidates") or []
     onstack = [c for c in cands if c.get("score") is not None]
-    window, extent = _window_for(uuid_info, seed)
+    if spike.get("kind") == "version_step":
+        # The sampled release build may not mark the onset; supply cross-channel series instead.
+        window, extent = [], None
+        brief["version_series"] = versionstep.cycle_series(
+            esc.product, siblings, spike.get("major"), esc.build_day)
+    else:
+        window, extent = _window_for(uuid_info, seed)
     brief["candidates"] = {"onstack": onstack, "window": window, "window_extent": extent}
     brief["candidate_nodes"] = {
         str(c.get("node") or "").lower(): c for c in onstack + window if c.get("node")}
@@ -2036,10 +2157,10 @@ _NOT_OURS = ("external", "environment")
 
 
 def _spike_population(esc, signature):
-    """Summarize install_time counts across the spike's stored sibling signatures.
+    """Summarize installation counts within the spike's date/build/major scope.
 
-    Use the build day or recorded rate window. Older rate spikes use the nominal window
-    ending on their creation date. Return None when no readable counts are available."""
+    Legacy rate rows use a window ending on their creation date. Return None on unreadable data.
+    """
     from crashclouseau import population
 
     payload = esc.payload or {}
@@ -2058,6 +2179,9 @@ def _spike_population(esc, signature):
         first = _parse_day(spike.get("window_start")) or last - timedelta(
             days=sigtrend.WINDOW_DAYS - 1)
         params["date"] = [">=" + first.isoformat(), "<" + (last + timedelta(days=1)).isoformat()]
+        if spike.get("kind") == "version_step" and spike.get("major"):
+            # Older majors must not affect this step's concentration check.
+            params["major_version"] = str(spike["major"])
     try:
         found = spikes._search(params)
     except Exception:

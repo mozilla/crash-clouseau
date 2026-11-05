@@ -307,6 +307,20 @@ def describe(spike, channel=None, build_day=None, buildid=None):
     if not spike:
         return None
     where = "{} build".format(channel) if channel else "build"
+    if spike.get("kind") == "version_step":
+        product = spike.get("product") or "Firefox"
+        return (
+            "{} {}, in its first {} days on {} ({} to {}): this signature crashed {:,} of the "
+            "{:,} installations with a crash report ({:,} reports). {} {}, from its release on "
+            "{} to {}'s: {:,} of {:,} ({:,} reports). That is {}x the share of installations "
+            "(binomial excess z = {}, bar {}).".format(
+                product, spike.get("major"), spike.get("age"), channel or "release",
+                spike.get("window_start"), spike.get("window_end"), spike.get("installs") or 0,
+                spike.get("all_installs") or 0, spike.get("reports") or 0, product,
+                spike.get("from_major"), spike.get("from_release_day"), spike.get("major"),
+                spike.get("from_installs") or 0, spike.get("from_all_installs") or 0,
+                spike.get("from_reports") or 0, spike.get("ratio"), spike.get("z"),
+                spike.get("z_min"))) + " " + _onset_sentence(spike)
     if spike.get("kind") == "rate":
         return (
             "{} distinct installations hit this signature in the last {} days ({} reports), "
@@ -340,6 +354,23 @@ def describe(spike, channel=None, build_day=None, buildid=None):
         when += " (buildid {})".format(buildid)
     return "{} reports from {} distinct installations on the {}{}; {}.".format(
         spike.get("count"), spike.get("installs"), where, when, against)
+
+
+def _onset_sentence(spike):
+    """Describe the measured onset and selected dot release without attributing a cause."""
+    onset = spike.get("onset") or {}
+    if onset.get("kind") == "boundary":
+        sentence = "The higher share shows from its first days on {}.".format(
+            spike.get("channel") or "release")
+    elif onset.get("kind") == "later":
+        sentence = ("The higher daily share appears from {}; a release-related cause is "
+                    "not established.".format(onset.get("day")))
+    else:
+        sentence = "The daily counts do not show whether the rise began with the release."
+    version = spike.get("version")
+    if version and version != "{}.0".format(spike.get("major")):
+        sentence += " Selected version: {}.".format(version)
+    return sentence
 
 
 _UPSTREAM = {"release": "beta"}

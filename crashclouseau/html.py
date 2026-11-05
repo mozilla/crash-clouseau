@@ -531,6 +531,11 @@ def _spike_numbers(spike):
     z = spike.get("z")
     z_str = " · z {:.1f}".format(z) if isinstance(z, (int, float)) else ""
     ratio = spike.get("ratio")
+    if spike.get("kind") == "version_step":
+        return "{} inst on {} vs {} on {} · {}x{}".format(
+            spike.get("installs", "?"), spike.get("major", "?"), spike.get("from_installs", "?"),
+            spike.get("from_major", "?"),
+            "{:.2f}".format(ratio) if isinstance(ratio, (int, float)) else "?", z_str)
     if spike.get("kind") == "rate":
         expected = spike.get("expected_installs")
         return "{} inst / {}d vs {} exp · {}x{}".format(

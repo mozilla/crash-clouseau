@@ -132,7 +132,7 @@
               named, if any. Withheld anonymously for a memory-safety filing, as /api/spikes
               does. -#}
           <td class="spike-cell" title="{{ s.spike_sentence }}">
-            <span class="spike-kind">{{ 'rate' if s.kind == 'rate' else 'build-day' }}</span>
+            <span class="spike-kind">{{ {'rate': 'rate', 'version_step': 'version step'}.get(s.kind, 'build-day') }}</span>
             {%- if s.assessment %} <span class="assess assess-{{ s.assessment }}" title="the investigator's assessment of the spike">{{ s.assessment }}</span>{% endif %}
             {%- if s.withheld %} <span class="assess assess-withheld" title="analysis withheld from anonymous viewers">withheld</span>{% endif %}
             {%- if s.culprit_node %} <span class="spike-culprit" title="culprit named by the investigator ({{ s.culprit_confidence }} confidence){% if s.culprit_bug %}, bug {{ s.culprit_bug }}{% endif %}">{{ s.culprit_node[:12] }}</span>{% endif %}

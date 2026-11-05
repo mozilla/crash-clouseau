@@ -39,7 +39,13 @@ def spike_paragraph(brief):
         spike, brief.get("channel"), brief.get("build_day"), brief.get("buildid"))
     if not sentence:
         return None
-    parts = ["**Filed because this signature's crash volume spiked.** " + sentence]
+    if spike.get("kind") == "version_step":
+        head = "**Filed because this signature's crash rate rose {} {} {}.** ".format(
+            "with" if (spike.get("onset") or {}).get("kind") == "boundary" else "on",
+            spike.get("product") or brief.get("product") or "Firefox", spike.get("major"))
+    else:
+        head = "**Filed because this signature's crash volume spiked.** "
+    parts = [head + sentence]
     if spike.get("kind") == "build_day":
         window = "the loudest of the preceding build-days"
         if spike.get("history_days"):
@@ -57,7 +63,7 @@ def spike_paragraph(brief):
     if trend and spike.get("kind") != "rate":
         parts.append("Over the last week the rate reads the same way: " + trend)
     step = (brief.get("version_step") or {})
-    if step.get("version"):
+    if step.get("version") and spike.get("kind") != "version_step":
         # A SHARE of the version's own crash reports, stepped from the version's first days
         # (`sigage.version_rates`): a count per version would read a population shift as a rate.
         parts.append("By version, {} runs at {}x the share of {} from its first days.".format(

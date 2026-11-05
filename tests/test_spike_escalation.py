@@ -1252,6 +1252,21 @@ class TestTheSpikePopulation(unittest.TestCase):
         self.assertEqual(params["signature"], ["=Foo::Bar", "=Foo::Bar::{lambda}"])
         self.assertEqual(params["date"], [">=2026-09-02", "<2026-09-09"])
 
+    def test_a_version_step_reads_only_its_major(self):
+        spike = {"kind": "version_step", "major": 157, "window_start": "2026-09-29",
+                 "window_end": "2026-10-05"}
+        esc = _esc(channel="release", created=datetime(2026, 10, 6, tzinfo=timezone.utc),
+                   payload={"spike": spike, "siblings": ["Foo::Bar"]})
+        _, search = self._read(esc, {"total": 0, "facets": {"install_time": []}})
+        params = search.call_args.args[0]
+        self.assertEqual((params["major_version"], params["date"]),
+                         ("157", [">=2026-09-29", "<2026-10-06"]))
+        self.assertNotIn("build_id", params)
+        rate = _esc(payload={"spike": {"kind": "rate", "window_start": "2026-09-02",
+                                       "window_end": "2026-09-08"}})
+        self.assertNotIn("major_version", self._read(rate, {"total": 0, "facets": {
+            "install_time": []}})[1].call_args.args[0])
+
     def test_an_older_rate_spike_reads_the_nominal_window(self):
         esc = _esc(created=datetime(2026, 9, 10, 15, tzinfo=timezone.utc),
                    payload={"spike": {"kind": "rate", "window_days": 5}})

@@ -36,3 +36,7 @@ from crashclouseau.agent import spike_escalation  # noqa: E402
 # Disable spike backout checks unless a test restores them.
 REAL_CULPRIT_BACKOUT = spike_escalation._culprit_backout
 mock.patch.object(spike_escalation, "_culprit_backout", return_value=None).start()
+
+# Disable release version-step scans unless a test restores them.
+REAL_VERSION_SCAN = spike_escalation._version_scan
+mock.patch.object(spike_escalation, "_version_scan", return_value=None).start()

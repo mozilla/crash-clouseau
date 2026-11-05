@@ -873,6 +873,15 @@ crash or signature the spike path filed shows that bug in its Bug column marked 
 | `AGENT_CHANNELS` | which channels are swept, as for triage |
 | `agent.spike_escalation.breaker_runs_per_day` (20 per product/channel) | counts escalation rows last queued today (UTC); exhausted budget defers new escalations and logs an error. No spike filing cap |
 
+**Release version steps (`agent.version_step`, `crashclouseau/versionstep.py`).** From day 3
+through day 14 of a Firefox release major, the sweep compares each signature's share of
+crash-reporting installations with its share during the previous major's release period
+(z >= 3.62, >= 1.3x, >= 200 installations scaled to the period). A firing escalates as kind
+`version_step` (`build_day` = the major's release day, one per signature and major), with the
+signature's nightly and beta shares for both majors in the brief instead of the release build's
+pushlog window. `OOM |` firings get a `done` row and no investigation. `VERSION_STEP_ENABLED=0`
+stops the scan. Successful scans are cached for the UTC day.
+
 The investigator uses `agent.spike_escalation.model`; its prompt is
 `crashclouseau/agent/prompts/spike.md`. `fallback_model` is `opus` (Opus 4.8).
 `max_cost_usd`, when nonzero, is passed as `ClaudeAgentOptions.max_budget_usd`.

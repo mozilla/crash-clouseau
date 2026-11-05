@@ -407,6 +407,18 @@ Use these population labels separately:
 
 Source history can establish when code changed, not when a crash first occurred.
 
+### A release version step
+
+A RELEASE VERSION STEP compares the signature's share of crash-reporting installations across
+release majors. It does not identify a build or cause.
+
+Use the measured onset, selected version, and Nightly/Beta series to narrow the timing. An
+early rise supports a release-boundary association; a later or unresolved onset requires checking
+dates across versions and channels. Sparse upstream data may not locate the change.
+
+No release-build pushlog window is supplied. Use history and blame around a supported onset.
+Name a culprit only when source and crash evidence connect the change to the regression.
+
 ## Duplicates and history
 
 Within the budget:
