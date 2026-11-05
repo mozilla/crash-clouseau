@@ -49,6 +49,9 @@ THE LOOP, on the clock (``bin/schedule.py``), every few minutes:
    takes precedence and ``resolve_venue_below_public`` returns ``fixed``: a matching bug was
    resolved FIXED after the spiking build. Filing also checks this when no open venue is chosen.
 
+   ``_culprit_backout`` skips filing when a grounded medium-or-higher culprit was backed out
+   on the spike's branch after its build.
+
    ``_raptor_lake_before_spending`` skips investigation when the signature's Raptor Lake share
    meets the ordinary hardware gate's CPU threshold and sample floor, on the same product and
    channel. It ignores bit-flip rates and records hardware declines without spending run budget.
@@ -462,6 +465,34 @@ def _fixed_decline(fixed, buildid):
     return ("bug {} was fixed on {}, after build {} was produced: the spike is the pre-fix "
             "population of a crash already diagnosed and fixed, and there is nothing to add"
             .format(fixed.get("id"), when, buildid))
+
+
+def _culprit_backout(findings, grounded, channel, buildid):
+    """Return a post-build backout for a grounded medium-or-higher culprit, else ``None``.
+
+    Use the branch's push date; central's can predate its arrival on this branch."""
+    if not _names_a_regression(findings, grounded) or not buildid:
+        return None
+    channel = channel or "nightly"
+    try:
+        backout = sigage.backedout_by_for_node(findings.culprit.node, channel)
+        if not backout:
+            return None
+        pushed = sigage.to_datetime(sigage.json_rev(backout, channel).get("pushdate"))
+        build = utils.get_build_date(buildid)
+    except Exception:
+        logger.warning("spike: backout lookup failed for %s", findings.culprit.node,
+                       exc_info=True)
+        return None
+    if pushed is None or pushed <= build:
+        return None
+    return {"node": backout, "pushed": pushed}
+
+
+def _backout_decline(culprit, backout, buildid):
+    return ("the suspected regressor {}{} was backed out by {} on {}, after build {}"
+            .format(culprit.node[:12], " (bug {})".format(culprit.bug) if culprit.bug else "",
+                    backout["node"][:12], backout["pushed"].strftime("%Y-%m-%d"), buildid))
 
 
 def _raptor_lake_before_spending(signature, product, channel):
@@ -1558,6 +1589,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     excluded = bugzilla_apply.skipped_regressor(culprit.bug if culprit is not None else None)
     if excluded:
         return dict(result, skipped=bugzilla_apply._SKIPPED_REGRESSOR.format(excluded))
+    backout = _culprit_backout(findings, grounded, channel, esc.buildid)
+    if backout is not None:
+        return dict(result, culprit_backedout_by=backout["node"],
+                    skipped=_backout_decline(culprit, backout, esc.buildid))
     if screened is None:
         return dict(result, retry=True, skipped=(
             "could not check whether the bugs the analysis names are public; not risking a "

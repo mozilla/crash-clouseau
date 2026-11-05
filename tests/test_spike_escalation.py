@@ -1996,3 +1996,66 @@ class TestAnExcludedCulprit(_FilerBase):
         self.assertEqual((self.created, self.comments), ([], []))
         with mock.patch.object(config, "autofile_skip_regressor_bugs", return_value=frozenset()):
             self.assertTrue(se.file_spike_bug(_esc(), self.brief, self.findings)["filed"])
+
+
+class TestABackedOutCulprit(_FilerBase):
+    BACKOUT = "72f8ce062f6096c1bfac61dfc7f7f87a0eeb21fa"
+    # The fixture build is 2026-09-03 09:31:45 UTC.
+    AFTER, BEFORE = 1788447600, 1788422400
+
+    def setUp(self):
+        super().setUp()
+        from tests import REAL_CULPRIT_BACKOUT
+
+        self.enterContext(mock.patch.object(se, "_culprit_backout", REAL_CULPRIT_BACKOUT))
+        self.lookup = self.enterContext(mock.patch(
+            "crashclouseau.sigage.backedout_by_for_node", return_value=self.BACKOUT))
+        self.revision = self.enterContext(mock.patch(
+            "crashclouseau.sigage.json_rev", return_value={"pushdate": [self.AFTER, 0]}))
+
+    def _file(self, channel="nightly"):
+        return se.file_spike_bug(_esc(channel=channel), self.brief, self.findings)
+
+    def test_a_backout_after_the_build_declines_even_with_an_open_bug(self):
+        self.brief["culprit_in_window"] = True
+        bug = {"id": 2075860, "creation_time": "2026-01-01T00:00:00Z", "assigned_to": "",
+               "regressed_by": []}
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[bug]):
+            out = self._file()
+        self.assertFalse(out["filed"])
+        self.assertEqual(out["culprit_backedout_by"], self.BACKOUT)
+        self.assertEqual(out["skipped"], (
+            "the suspected regressor 2222222bbbbc (bug 22) was backed out by 72f8ce062f60 on "
+            "2026-09-03, after build 20260903093145"))
+        self.assertEqual((self.created, self.comments), ([], []))
+
+    def test_a_backout_before_the_build_files(self):
+        self.revision.return_value = {"pushdate": [self.BEFORE, 0]}
+        out = self._file()
+        self.assertTrue(out["filed"])
+        self.assertNotIn("culprit_backedout_by", out)
+
+    def test_no_backout_or_a_failed_lookup_files(self):
+        for backout in ("", None):
+            with self.subTest(backout=backout):
+                self.lookup.return_value = backout
+                self.assertTrue(self._file()["filed"])
+        self.revision.assert_not_called()
+
+    def test_an_unknown_backout_landing_files(self):
+        self.revision.return_value = {}
+        self.assertTrue(self._file()["filed"])
+
+    def test_the_backout_and_its_landing_use_the_spike_branch(self):
+        self.assertFalse(self._file(channel="beta")["filed"])
+        self.lookup.assert_called_once_with(self.findings.culprit.node, "beta")
+        self.revision.assert_called_once_with(self.BACKOUT, "beta")
+
+    def test_low_confidence_and_ungrounded_culprits_are_not_checked(self):
+        low = self.findings.model_copy(deep=True)
+        low.culprit.confidence = "low"
+        for findings, grounded in ((low, True), (self.findings, False), (None, True)):
+            with self.subTest(findings=findings, grounded=grounded):
+                self.assertIsNone(se._culprit_backout(
+                    findings, grounded, "nightly", self.brief["buildid"]))
+        self.lookup.assert_not_called()
