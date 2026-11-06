@@ -172,6 +172,34 @@ class TestTheAsk(unittest.TestCase):
             self.assertEqual(report_bug.restrict_preview(p)["cc"],
                              ["owner@moz.example", "bob@x.com"])
 
+    def test_a_disputed_origin_asks_the_triage_owner_and_names_both_changes(self):
+        disputed = {"node": "fff000111222", "bug": 1999999}
+        p = _preview(tav._preview_dossier(actionable_origin_disputed=disputed))
+        self.assertEqual((p["needinfo_email"], p["needinfo"]), ("owner@moz.example", _OWNER_ASK))
+        self.assertEqual(p["cc"], ["bob@x.com"])
+        self.assertIn("- The failing code comes from [507a4c21a8eb](", p["comment"])
+        self.assertIn("- A second, independent analysis found the same failing line but traced "
+                      "it to [fff000111222](", p["comment"])
+        self.assertIn("(bug 1999999), so who owns this code is not settled.", p["comment"])
+        self.assertNotIn(_AUTHOR_ASK, p["comment"])
+        plain = _preview(tav._preview_dossier())
+        self.assertEqual(plain["needinfo_email"], "bob@x.com")
+        self.assertNotIn("second, independent analysis", plain["comment"])
+
+    def test_a_disputed_origin_without_a_triage_owner_asks_nobody(self):
+        disputed = {"node": "fff000111222", "bug": 1999999}
+        cases = {"owner unreadable": {"owner": None}, "no owner": {"owner": ""},
+                 "owner is the author": {"owner": "BOB@x.com"},
+                 "owner not askable": {"found": {}}}
+        for name, over in cases.items():
+            with self.subTest(name):
+                p = _preview(tav._preview_dossier(actionable_origin_disputed=disputed), **over)
+                self.assertEqual(p["needinfo_email"], "")
+                self.assertIsNone(p["needinfo"])
+                self.assertNotIn("can you have a look", p["comment"])
+                self.assertEqual(p["cc"], ["bob@x.com"])
+                self.assertIn("so who owns this code is not settled.", p["comment"])
+
     def test_the_author_is_ccd_whichever_rule_picked_the_owner(self):
         for name, days, active, fixes in (("an old origin by a quiet author", 1000.0, False, 50),
                                           ("an inactive author", 30.0, True, 0)):

@@ -5460,13 +5460,59 @@ def _files_on_volume(seed):
             or bool(_java_error_names(signature, raw) & _VOLUME_JAVA_ERRORS))
 
 
-def _same_actionable_origin(first_pass, confirmed):
-    """Whether both passes are ``actionable`` with the same origin changeset."""
-    candidate = confirmed.dossier.candidate if confirmed.dossier else None
+# A Searchfox permalink's repository path and first line: `/source/<path>#L123`,
+# `/rev/<rev>/<path>#123-130`.
+_SEARCHFOX_PATH_LINE_RE = re.compile(r"/(?:source|rev/[0-9A-Fa-f]+)/([^#?\s]+)#L?(\d+)")
+# A Socorro source reference: `hg:hg.mozilla.org/<repo>:<path>:<rev>` or the `git:` form.
+_WRAPPED_SOURCE_RE = re.compile(r"^(?:hg|git):[^:]+:(.+):[0-9A-Fa-f]+$")
+# Tolerance for line-number drift between citations.
+_SAME_LINE_SLACK = 3
+
+
+def _source_path(path):
+    """Normalize a source filename to a lowercase repository path."""
+    path = str(path or "").strip().replace("\\", "/")
+    m = _WRAPPED_SOURCE_RE.match(path)
+    if m:
+        path = m.group(1)
+    return path.removeprefix("./").lstrip("/").lower()
+
+
+def _cited_lines(citations):
+    """Return sorted, distinct ``[path, line]`` pairs from stack and Searchfox citations.
+
+    Keep full paths to distinguish files with the same name."""
+    out = set()
+    for c in citations or []:
+        c = c.model_dump(mode="json") if hasattr(c, "model_dump") else (c or {})
+        if c.get("kind") == "stack_frame" and c.get("line"):
+            path = _source_path(c.get("filename"))
+            if path:
+                out.add((path, int(c["line"])))
+        elif c.get("kind") == "searchfox":
+            m = _SEARCHFOX_PATH_LINE_RE.search(str(c.get("permalink") or ""))
+            if m:
+                out.add((_source_path(m.group(1)), int(m.group(2))))
+    return [list(x) for x in sorted(out)]
+
+
+def _actionable_floor_waiver(first_pass, confirmed):
+    """Classify origin or cited-line agreement for the installation-floor waiver."""
+    first = first_pass or {}
+    verdict = confirmed.dossier.verdict if confirmed.dossier else None
+    if first.get("verdict") != "actionable" or verdict is None or verdict.decision != Decision.actionable:
+        return "disagreed"
+    candidate = confirmed.dossier.candidate
     node = str((candidate.node if candidate else "") or "")[:12].lower()
-    first = str((first_pass or {}).get("candidate") or "")[:12].lower()
-    return bool(node and node == first and (first_pass or {}).get("verdict") == "actionable"
-                and _verdict_row(confirmed)["verdict"] == "actionable")
+    if node and node == str(first.get("candidate") or "")[:12].lower():
+        return "agreed"
+    mechanism = verdict.mechanism
+    final = _cited_lines(mechanism.citations if mechanism else [])
+    if any(path == other_path and abs(line - other_line) <= _SAME_LINE_SLACK
+           for path, line in first.get("citations") or []
+           for other_path, other_line in final):
+        return "same_line"
+    return "disagreed"
 
 
 # Gates that block a confidence increase during filing planning.
@@ -5529,7 +5575,10 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
             "effort": principal.get("effort"), "verdict": row["verdict"],
             "confidence": row["confidence"],
             "candidate": (dossier.get("candidate") or {}).get("node"),
+            "candidate_bug": (dossier.get("candidate") or {}).get("bug"),
             "mechanism": ((dossier.get("verdict") or {}).get("mechanism") or {}).get("statement"),
+            "citations": _cited_lines(
+                ((dossier.get("verdict") or {}).get("mechanism") or {}).get("citations")),
             "cost_usd": result.total_cost_usd, "num_turns": result.num_turns,
         },
     }
@@ -5601,9 +5650,13 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
     _add_usage(confirmed, result)
     confirmation["kept"] = True
     if waivable:
-        confirmation["floor_waiver"] = (
-            "agreed" if _same_actionable_origin(confirmation["first_pass"], confirmed)
-            else "disagreed")
+        first = confirmation["first_pass"]
+        confirmation["floor_waiver"] = _actionable_floor_waiver(first, confirmed)
+        if confirmation["floor_waiver"] == "same_line":
+            confirmed.dossier.corroborations = {
+                **(confirmed.dossier.corroborations or {}),
+                "actionable_origin_disputed": {"node": first.get("candidate"),
+                                               "bug": first.get("candidate_bug")}}
     return confirmed, confirmation
 
 

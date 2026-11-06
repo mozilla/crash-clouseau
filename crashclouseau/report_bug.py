@@ -1678,6 +1678,13 @@ def build_actionable_comment(uuid_info, stack, dossier, details=None, stats=None
         else:
             facts.append("- The failing code comes from {}{}.".format(
                 link, _fresh_origin_clause(corroborations, fresh_limit)))
+        disputed = corroborations.get("actionable_origin_disputed") or {}
+        if disputed.get("node"):
+            other = changeset_links(disputed["node"], channel)
+            if disputed.get("bug"):
+                other += " (bug {})".format(disputed["bug"])
+            facts.append("- A second, independent analysis found the same failing line but "
+                         "traced it to {}, so who owns this code is not settled.".format(other))
     because = ("**This bug looks actionable because:**\n\n" + "\n".join(facts)) if facts else None
     stale = ("This bug has had no comment from a person since {}. Clouseau analysed a recent "
              "crash report on its signature; the analysis is below.".format(stale_since)
@@ -3280,19 +3287,22 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
         role = "the owner of the Nimbus feature `{}`".format(nimbus["feature"])
     else:
         owner = None
-        older = actionable and has_candidate and bool(older_sibling_origin(corro))
-        if actionable and has_candidate and not older:
+        disputed = actionable and has_candidate and bool(corro.get("actionable_origin_disputed"))
+        prefer_owner = disputed or (actionable and has_candidate and bool(older_sibling_origin(corro)))
+        if actionable and has_candidate and not prefer_owner:
             owner = _owner_for_old_origin(person, dossier, product, component,
                                           policy.get("author_active_days"), away)
         if not owner and (
-                older or author_unaskable or _inactive_author(
+                prefer_owner or author_unaskable or _inactive_author(
                     person, policy.get("author_fixed_days"), policy.get("author_fixed_min")) or _away(person, away)):
             owner = _triage_owner_person(product, component, person.get("account"), away)
         # Failed lookups retain the unverified hg address; exclude it from CC.
         account = person.get("account") or ""
-        if owner and older and account and not _bugzilla_user(account).get("unverified"):
+        if account and (disputed or (owner and prefer_owner)) and not _bugzilla_user(account).get(
+                "unverified"):
             cc.append(account)
-        asked = owner or person
+        # Do not fall back to the disputed author when no triage owner is available.
+        asked = owner or ({} if disputed else person)
         role = "triage owner" if owner else ""
     ask = _needinfo_line(asked, role=role)
     details = fetch_crash_reason(uuid)

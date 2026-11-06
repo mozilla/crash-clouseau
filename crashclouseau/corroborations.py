@@ -156,6 +156,11 @@ REGISTRY = {
         "age gate turned the verdict into a `pre_existing` abstain (the age argument's sign flips "
         "when no causation is claimed). The abstain reason carries the sentence; the flag is the "
         "count, to read once the outcome has a month of runs (2026-09-17)."),
+    "actionable_origin_disputed": (
+        "evidence", ("report_bug.py",),
+        "`{node, bug}` of the first pass when actionable passes cite nearby lines but different "
+        "origins. The floor is waived; prefer the triage owner and omit author needinfo if "
+        "unavailable."),
     "actionable_origin_age": (
         "evidence", ("report_bug.py", "templates/crashstack.html"),
         "Candidate timing: `{landed, days_before_build, predates_signature, older_sibling?}` "

@@ -1113,12 +1113,66 @@ class TestConfirmBeforePublishing(unittest.TestCase):
                 self.assertEqual(done.kwargs["payload"]["publish_confirmation"]["floor_waiver"],
                                  "disagreed")
 
+    def test_disputed_origins_need_the_same_failing_line(self):
+        permalink = "https://searchfox.org/firefox-main/source/dom/base/Foo.cpp#L{}"
+        for line, waiver in ((122, "same_line"), (300, "disagreed")):
+            with self.subTest(line=line):
+                first = _actionable_result()
+                confirmed = _actionable_result(node="fff000111222")
+                for result, at in ((first, 120), (confirmed, line)):
+                    result.dossier.verdict.mechanism.citations = [
+                        _SF.model_copy(update={"permalink": permalink.format(at)})]
+                done, _MVerd, _gate, autofile = self._run(first, confirmed)
+                conf = done.kwargs["payload"]["publish_confirmation"]
+                self.assertEqual(conf["floor_waiver"], waiver)
+                self.assertEqual(conf["first_pass"]["citations"], [["dom/base/foo.cpp", 120]])
+                self.assertEqual(conf["first_pass"]["candidate_bug"], 42)
+                corro = autofile.call_args.args[1]["dossier"].get("corroborations") or {}
+                self.assertEqual(corro.get("actionable_origin_disputed"),
+                                 {"node": "abc123def456", "bug": 42} if waiver == "same_line" else None)
+
+    def test_cited_lines_are_crash_side_code(self):
+        cites = [
+            {"kind": "stack_frame", "filename": "hg:hg.mozilla.org/mozilla-central:dom/base/Foo.cpp:abcdef",
+             "line": 12},
+            {"kind": "stack_frame", "filename": "gfx\\wr\\src\\Renderer.rs", "line": 5},
+            {"kind": "searchfox", "permalink": "https://searchfox.org/m/source/gfx/wr/src/gl.rs#3622-3626"},
+            {"kind": "searchfox",
+             "permalink": "https://searchfox.org/m/rev/0123456789abcdef/dom/base/Foo.cpp#L14"},
+            {"kind": "diff_line", "filename": "dom/base/Bar.cpp", "line": 7},
+            {"kind": "searchfox", "permalink": "https://searchfox.org/x#1"},
+            {"kind": "stack_frame", "filename": "", "line": 9},
+        ]
+        self.assertEqual(orch._cited_lines(cites), [
+            ["dom/base/foo.cpp", 12], ["dom/base/foo.cpp", 14], ["gfx/wr/src/gl.rs", 3622],
+            ["gfx/wr/src/renderer.rs", 5]])
+
+    def test_files_sharing_a_name_are_not_the_same_line(self):
+        confirmed = _actionable_result(node="fff000111222")
+        confirmed.dossier.verdict.mechanism.citations = [
+            _SF.model_copy(update={"permalink": "https://searchfox.org/m/source/gfx/example/mod.rs#121"})]
+        first = {"verdict": "actionable", "citations": [["dom/example/mod.rs", 120]]}
+        self.assertEqual(orch._actionable_floor_waiver(first, confirmed), "disagreed")
+        first["citations"] = [["gfx/example/mod.rs", 120]]
+        self.assertEqual(orch._actionable_floor_waiver(first, confirmed), "same_line")
+
+    def test_a_stack_frame_and_a_searchfox_range_of_one_line_agree(self):
+        confirmed = _actionable_result(node="fff000111222")
+        confirmed.dossier.verdict.mechanism.citations = [
+            _SF.model_copy(update={"permalink": "https://searchfox.org/m/source/dom/base/Foo.cpp#L121"})]
+        first = {"verdict": "actionable",
+                 "citations": orch._cited_lines([{"kind": "stack_frame",
+                                                  "filename": "dom/base/Foo.cpp", "line": 120}])}
+        self.assertEqual(orch._actionable_floor_waiver(first, confirmed), "same_line")
+        first["verdict"] = "lead"
+        self.assertEqual(orch._actionable_floor_waiver(first, confirmed), "disagreed")
+
     def test_origins_compare_on_the_short_node(self):
         first = {"verdict": "actionable", "candidate": "ABC123DEF456"}
-        self.assertTrue(orch._same_actionable_origin(
-            first, _actionable_result(node="abc123def4567890abcdef")))
-        self.assertFalse(orch._same_actionable_origin(
-            {"verdict": "actionable", "candidate": None}, _actionable_result(node=None)))
+        self.assertEqual(orch._actionable_floor_waiver(
+            first, _actionable_result(node="abc123def4567890abcdef")), "agreed")
+        self.assertEqual(orch._actionable_floor_waiver(
+            {"verdict": "actionable", "candidate": None}, _actionable_result(node=None)), "disagreed")
 
     def test_a_lead_is_not_offered_the_waiver(self):
         done, _MVerd, _gate, _autofile = self._run(_lead_result(), _strong_result())

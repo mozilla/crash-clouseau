@@ -3119,15 +3119,16 @@ def _actionable_floor_decline(uuid, uuid_info, dossier, product, channel, cfg, f
                     "before the build and no available first-seen build predates it",
                     uuid, below, fresh)
         return None
-    if floor_waiver == "agreed":
+    if floor_waiver in ("agreed", "same_line"):
         logger.info("autofile: %s -- %s, waived: the confirming pass reached the same "
-                    "actionable verdict and origin", uuid, below)
+                    "actionable verdict and %s", uuid, below,
+                    "origin" if floor_waiver == "agreed" else "failing line")
         return None
     if floor_waiver == "pending" and _DRY_RUN.get():
         logger.info("autofile: %s -- %s, waived if the confirming pass agrees", uuid, below)
         return None
-    unconfirmed = ("; the confirming pass did not reach the same actionable verdict "
-                   "and origin" if floor_waiver == "disagreed" else "")
+    unconfirmed = ("; the confirming pass did not reach the same actionable verdict on the "
+                   "same origin or failing line" if floor_waiver == "disagreed" else "")
     # Recent counts can qualify on any channel of this product.
     days = cfg.get("population_days")
     if not days:
@@ -3291,8 +3292,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     without recording them in the DB. The orchestrator uses it to decide whether to confirm
     the analysis. Errors outside the write handlers can propagate to the caller.
 
-    ``floor_waiver="agreed"`` bypasses the actionable installation floor; ``"pending"``
-    only bypasses it during a dry run.
+    ``floor_waiver="agreed"`` or ``"same_line"`` bypasses the actionable installation floor
+    when population is known. ``"pending"`` does so only during a dry run.
 
     ``lock_wait`` overrides the default lock acquisition wait.
     """

@@ -328,6 +328,11 @@ class TestTheConfirmedWaiver(_Base):
         self.assertEqual(len(self.created), 1)
         report_bug.fetch_recent_channel_stats.assert_not_called()
 
+    def test_the_same_failing_line_files_below_the_floor(self):
+        res = self._waiver("same_line")
+        self.assertTrue(res["filed"], res)
+        self.assertEqual(len(self.created), 1)
+
     def test_without_agreement_the_floor_holds(self):
         floor = bugzilla_apply.config.get_spike("real_installs", "Firefox", "nightly")
         below = ("1 installation on this signature, below the actionable floor of {}, and no "
@@ -336,7 +341,7 @@ class TestTheConfirmedWaiver(_Base):
                 (None, below),
                 ("pending", below),
                 ("disagreed", below + "; the confirming pass did not reach the same "
-                                      "actionable verdict and origin")):
+                                      "actionable verdict on the same origin or failing line")):
             with self.subTest(waiver=waiver):
                 res = self._waiver(waiver)
                 self.assertFalse(res["filed"])
