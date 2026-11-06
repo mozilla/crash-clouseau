@@ -364,6 +364,8 @@ def first_seen_ever_facts(signatures):
 # so the two filers cannot disagree about which hardware to distrust. Socorro renders `cpu_info`
 # as a stable "family F model M stepping S", so an exact comparison is the right one.
 BROKEN_CPUS = ("family 6 model 183 stepping 1",)
+# Raptor Lake crash tracker.
+RAPTOR_LAKE_META = 1975808
 
 # Socorro renders `cpu_info` in TWO formats, and comparing against only one of them made every
 # check above blind on 32-bit reports. Measured 2026-08-24 over Firefox nightly: all 12 of the top

@@ -1461,6 +1461,10 @@ def get_agent_spike_escalation():
         "breaker_runs_per_day": int(o.get("breaker_runs_per_day", 20)),
         "max_stacks": int(o.get("max_stacks", 3)),
         "comment_on_existing": comment_mode(o.get("comment_on_existing", "comment")),
+        # Raptor Lake share required for INVALID filing; ``null`` disables this path.
+        "raptor_lake_share": (None if o.get("raptor_lake_share", 0.9) is None
+                              else float(o.get("raptor_lake_share", 0.9))),
+        "raptor_lake_min_reports": int(o.get("raptor_lake_min_reports", 10)),
     }
 
 

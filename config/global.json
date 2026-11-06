@@ -446,7 +446,9 @@
             "max_per_tick": 2,
             "breaker_runs_per_day": 20,
             "max_stacks": 3,
-            "comment_on_existing": "comment"
+            "comment_on_existing": "comment",
+            "raptor_lake_share": 0.9,
+            "raptor_lake_min_reports": 10
         },
         "version_step":
         {

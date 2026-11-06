@@ -75,6 +75,19 @@ def spike_paragraph(brief):
     return " ".join(parts)
 
 
+def raptor_lake_note(brief):
+    """Describe the CPU counts and filing policy, or return ``None`` without counts."""
+    counts = brief.get("raptor_lake") or {}
+    reports = counts.get("reports") or 0
+    if not reports:
+        return None
+    raptor = counts.get("raptor_lake") or 0
+    return ("**Raptor Lake hardware classification.** {:,} of the spike's {:,} reports ({:.0%}) "
+            "have CPU family 6 model 183 stepping 1. This meets Clouseau's threshold for filing "
+            "as INVALID under meta bug {}. Reopen if evidence points to a Firefox defect."
+            .format(raptor, reports, raptor / reports, sigage.RAPTOR_LAKE_META))
+
+
 def population_table(brief):
     """Render measured before/during counts; include Raptor Lake only when present."""
     table = brief.get("population_table") or {}
@@ -379,17 +392,25 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
         _awaited_block(brief),
         spike_paragraph(brief),
         population_table(brief),
-        analysis_section(findings, brief, author_display=author_display,
-                         link_regressor=link_regressor, grounded=grounded),
+        raptor_lake_note(brief) or analysis_section(
+            findings, brief, author_display=author_display, link_regressor=link_regressor,
+            grounded=grounded),
         None if as_comment else venue_note(
             related_bugs, other_app_bugs, meta_bugs, predating_bugs=predating_bugs,
             landing_unresolved=landing_unresolved,
             node=getattr(getattr(findings, "culprit", None), "node", None),
             different_defect=different_defect),
         report_bug._needinfo_line(person) if person else None,
-        report_bug._comment_provenance(channel) if as_comment else report_bug._provenance(channel),
+        _RAPTOR_LAKE_PROVENANCE if brief.get("raptor_lake") else (
+            report_bug._comment_provenance(channel) if as_comment
+            else report_bug._provenance(channel)),
     ]
     return report_bug._unbacktick_bug_refs("\n\n".join(s for s in sections if s))
+
+
+_RAPTOR_LAKE_PROVENANCE = (
+    "_Filed automatically by [Clouseau](https://github.com/mozilla/crash-clouseau) "
+    "from crash-stats counts, without LLM analysis._")
 
 
 def _awaited_block(brief):

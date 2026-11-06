@@ -70,6 +70,7 @@ import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from functools import cache
+from types import SimpleNamespace
 
 from crashclouseau import (
     app, bugcomponents, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug,
@@ -317,7 +318,10 @@ def _escalate(signature, siblings, product, channel, day, picked, spike, payload
         logger.info("spike: %s on %s is a real spike but %s; not investigated", signature,
                     day, reason)
         return False
-    noise = _raptor_lake_before_spending(signature, product, channel)
+    # Check the spike before the signature-wide hardware decline.
+    raptor = _raptor_lake_spike(signature, siblings, product, channel, day, spike, cfg)
+    noise = None if raptor is not None else _raptor_lake_before_spending(
+        signature, product, channel)
     if noise is not None:
         reason = _raptor_lake_decline(noise)
         row = models.SpikeEscalation.create(
@@ -357,6 +361,8 @@ def _escalate(signature, siblings, product, channel, day, picked, spike, payload
         logger.info("spike: %s on %s is a %s; not investigated", signature, day, reason)
         return False
     payload["classic_runs"] = len(runs)
+    if raptor is not None:
+        payload["raptor_lake"] = raptor
     row = models.SpikeEscalation.create(
         signature, product, channel, day, buildid=picked, uuid=uuid, kind=spike["kind"],
         payload=payload)
@@ -372,6 +378,155 @@ def _escalate(signature, siblings, product, channel, day, picked, spike, payload
                 "filed): escalation %s on %s", signature, product, channel, picked,
                 payload["spike_sentence"], len(runs), row.id, uuid)
     return True
+
+
+def _raptor_lake_spike(signature, siblings, product, channel, day, spike, cfg):
+    """Return spike counts meeting the configured Raptor Lake share and report minimum."""
+    share = cfg.get("raptor_lake_share")
+    if share is None:
+        return None
+    scope = SimpleNamespace(product=product, channel=channel, build_day=day,
+                            payload={"spike": spike, "siblings": siblings})
+    (_label, during), _before, end = _spike_scopes(scope, signature)
+    counts = _period_counts(during, product, end)
+    if (not counts or counts["reports"] < cfg["raptor_lake_min_reports"]
+            or counts["raptor_lake"] < share * counts["reports"]):
+        return None
+    return counts
+
+
+def _raptor_lake_signatures():
+    """Read ``{signature: bug}`` for meta blockers; return ``None`` on lookup failure.
+
+    Do not cache: other workers can file blockers."""
+    params = {"f1": "blocked", "o1": "anyexact", "v1": str(sigage.RAPTOR_LAKE_META),
+              "include_fields": "id,cf_crash_signature", "limit": 1000}
+    try:
+        r = net.get(bugzilla_apply._bz_rest(), params=params, timeout=60)
+        r.raise_for_status()
+        bugs = r.json()["bugs"]
+    except Exception:
+        logger.warning("spike: cannot read the Raptor Lake meta bug", exc_info=True)
+        return None
+    out = {}
+    for bug in bugs:
+        for sig in utils.bugzilla_signature_entries(bug.get("cf_crash_signature")):
+            out.setdefault(sig, bug["id"])
+    return out
+
+
+def _filing_disabled_reason(product):
+    """Return the global or product filing veto, or ``None``."""
+    if not config.autofile_globally_enabled():
+        return "autofile disabled"
+    if not config.autofile_product_declared(product) or config.autofile_product_held(product):
+        return "autofile held for product {!r} (triage-only)".format(product)
+    return None
+
+
+def file_raptor_lake_bug(esc, brief):
+    """File an untracked Raptor Lake spike blocking the meta, then resolve it INVALID."""
+    signature = (esc.signature or "").strip()
+    product, channel = esc.product, esc.channel
+    counts = (esc.payload or {}).get("raptor_lake") or {}
+    brief["raptor_lake"] = counts
+    result = {"filed": False, "at": datetime.now(timezone.utc).isoformat(),
+              "signature": signature, "channel": channel, "buildid": esc.buildid,
+              "uuid": esc.uuid, "raptor_lake": counts}
+    disabled = _filing_disabled_reason(product)
+    if disabled:
+        return dict(result, skipped=disabled)
+    token = config.get_bugzilla_token()
+    if not token:
+        return dict(result, skipped="no Bugzilla API token configured")
+    siblings = brief.get("siblings") or [signature]
+    ours = models.SpikeEscalation.raptor_lake_bugs_for(siblings)
+    if ours is None:
+        return dict(result, retry=True, skipped="our Raptor Lake filings could not be read")
+    if ours:
+        return dict(result, bug=ours[-1], skipped=(
+            "our Raptor Lake bug {} already covers this signature".format(ours[-1])))
+    known = _raptor_lake_signatures()
+    if known is None:
+        return dict(result, retry=True, skipped="the Raptor Lake meta bug could not be read")
+    linked = next((known[s] for s in siblings if s in known), None)
+    if linked is not None:
+        return dict(result, bug=linked, skipped=(
+            "a Raptor Lake spike on a known Raptor Lake signature: bug {} blocks meta bug "
+            "{}".format(linked, sigage.RAPTOR_LAKE_META)))
+    family = brief.get("signature_family") or {}
+    existing = bugzilla_apply._open_bugs_for_signature(signature, family=family, product=product)
+    if existing is None:
+        return dict(result, retry=True, skipped="signature lookup failed; not risking a duplicate")
+    existing, _other_app = bugzilla_apply._split_by_application(existing, product)
+    if existing:
+        return dict(result, bug=existing[0]["id"], skipped=(
+            "open bug {} carries the signature; a Raptor Lake spike adds nothing "
+            "there".format(existing[0]["id"])))
+    hidden = bugzilla_apply._hidden_duplicate_bug(
+        signature, product, spellings=bugzilla_apply._family_spellings(signature, family),
+        max_age_days=config.get_agent_autofile(channel, product=product).get(
+            "hidden_duplicate_days"))
+    if hidden:
+        return dict(result, **bugzilla_apply._hidden_duplicate_result(hidden))
+    raw = brief.get("raw_crash") or {}
+    try:
+        signals = sensitive.memory_unsafe_signals(raw) if raw else []
+    except Exception:
+        signals = ["unreadable"]
+    population = sensitive.population_signal(brief.get("poison_population"))
+    if population:
+        signals.append(population)
+    if signals:
+        return dict(result, memory_unsafe_signals=signals, skipped=(
+            "memory-safety signals; a Raptor Lake spike is not filed publicly"))
+    try:
+        details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
+    except Exception:
+        details = {}
+    stack = brief.get("stack_frames") or {}
+    brief["population_table"] = _population_table(esc, signature)
+    bz_product, component, how = resolve_component(None, signature, product, stack,
+                                                   raw_crash=raw)
+    preview = spike_report.build_spike_preview(
+        brief, None, product=bz_product, component=component, details=details, stack=stack,
+        grounded=False)
+    preview["blocked"].append(sigage.RAPTOR_LAKE_META)
+    try:
+        payload = bugzilla_apply._create_payload(preview, "", {})
+        bug_id, dropped = bugzilla_apply._create_bug_keeping_the_bug(payload, token)
+    except Exception as exc:
+        logger.error("spike: Raptor Lake filing failed for escalation %s: %s", esc.id, exc)
+        return dict(result, skipped="bugzilla write failed: {}".format(exc), error=str(exc)[:500])
+    linked = (bugzilla_apply._link_blockers(bug_id, preview["blocked"], token)
+              if "blocks" in dropped else list(preview["blocked"]))
+    result.update({"filed": True, "bug": bug_id, "mode": "raptor_lake_invalid",
+                   "product": bz_product, "component": component, "component_from": how,
+                   "needinfo": None, "blocks": linked,
+                   # Retry missing links even if closing succeeds.
+                   "link_pending": sigage.RAPTOR_LAKE_META not in linked})
+    result.update(_close_raptor_lake_bug(bug_id, token, fresh=True))
+    return result
+
+
+def _close_raptor_lake_bug(bug_id, token, fresh=False):
+    """Resolve INVALID, recording failures for retry.
+
+    Retries close only NEW or UNCONFIRMED bugs."""
+    if not fresh:
+        rows = bugzilla_apply._bugs_by_id([bug_id])
+        if rows is None:
+            return {"close_pending": True, "close_failed": "the bug could not be read"}
+        status = (rows[0] if rows else {}).get("status")
+        if status not in ("NEW", "UNCONFIRMED"):
+            return {"close_pending": False,
+                    "close_skipped": "the bug is {}; not closing it".format(status or "unreadable")}
+    try:
+        bugzilla_apply._put_bug(bug_id, {"status": "RESOLVED", "resolution": "INVALID"}, token)
+    except Exception as exc:
+        logger.error("spike: could not resolve Raptor Lake bug %s: %s", bug_id, exc)
+        return {"close_pending": True, "close_failed": str(exc)[:300]}
+    return {"close_pending": False, "resolution": "INVALID"}
 
 
 # Reuse successful scans for the UTC day; later sweeps handle remaining firings.
@@ -1109,34 +1264,42 @@ def run_spike_escalation(escalation_id):
     if esc.status not in ("pending", "error"):
         logger.info("spike: escalation %s is %s; not running it again", escalation_id, esc.status)
         return
-    from crashclouseau.agent import spike_agent  # lazy: pulls the SDK
-
     esc.attempts = (esc.attempts or 0) + 1
     esc.set_status("running")
+    raptor = bool((esc.payload or {}).get("raptor_lake"))
     try:
-        brief = build_spike_brief(esc)
-        run = asyncio.run(spike_agent.run_spike_agent(brief))
-        esc.add_usage(cost_usd=run.total_cost_usd, input_tokens=run.input_tokens,
-                      output_tokens=run.output_tokens, cache_read_tokens=run.cache_read_tokens,
-                      commit=False)
-        findings, dropped = validate_findings(run.findings, brief)
-        esc.merge_payload({
-            "usage": run.usage(),
-            "tool_calls": run.provenance,
-            "result": _elide(run.result),
-            "run_error": run.error,
-            "grounded": run.grounded,
-            "findings": findings.model_dump() if findings is not None else None,
-            "dropped": dropped,
-            "brief": _public_brief(brief),
-        })
-        logger.info("spike: escalation %s investigated (%s turns, $%.2f, %d tool calls, "
-                    "findings=%s)", esc.id, run.num_turns, run.total_cost_usd or 0.0,
-                    run.tool_calls, "yes" if findings is not None else "none")
+        findings, grounded = None, False
+        brief = build_spike_brief(esc, light=True) if raptor else build_spike_brief(esc)
+        if not raptor:
+            from crashclouseau.agent import spike_agent  # lazy: pulls the SDK
+
+            run = asyncio.run(spike_agent.run_spike_agent(brief))
+            esc.add_usage(cost_usd=run.total_cost_usd, input_tokens=run.input_tokens,
+                          output_tokens=run.output_tokens, cache_read_tokens=run.cache_read_tokens,
+                          commit=False)
+            findings, dropped = validate_findings(run.findings, brief)
+            esc.merge_payload({
+                "usage": run.usage(),
+                "tool_calls": run.provenance,
+                "result": _elide(run.result),
+                "run_error": run.error,
+                "grounded": run.grounded,
+                "findings": findings.model_dump() if findings is not None else None,
+                "dropped": dropped,
+                "brief": _public_brief(brief),
+            })
+            logger.info("spike: escalation %s investigated (%s turns, $%.2f, %d tool calls, "
+                        "findings=%s)", esc.id, run.num_turns, run.total_cost_usd or 0.0,
+                        run.tool_calls, "yes" if findings is not None else "none")
+            grounded = run.grounded
         # Record the filing before unlocking so `_own_prior_bugs` can find it.
         with bugzilla_apply.filing_lock() as held:
-            filing = (file_spike_bug(esc, brief, findings, grounded=run.grounded) if held
-                      else _lock_busy_filing(esc))
+            if not held:
+                filing = _lock_busy_filing(esc)
+            elif raptor:
+                filing = file_raptor_lake_bug(esc, brief)
+            else:
+                filing = file_spike_bug(esc, brief, findings, grounded=grounded)
             esc.merge_payload({"filing": filing})
         esc.set_status("done")
         if filing.get("filed"):
@@ -1145,8 +1308,9 @@ def run_spike_escalation(escalation_id):
         else:
             logger.info("spike: escalation %s not filed -- %s", esc.id, filing.get("skipped"))
         # Record links locally after the filing decision.
-        samesite.record_for_spike(
-            esc, findings.culprit.node if findings is not None and findings.culprit else None)
+        if not raptor:
+            samesite.record_for_spike(
+                esc, findings.culprit.node if findings is not None and findings.culprit else None)
     except Exception as exc:
         logger.error("spike: escalation %s failed", escalation_id, exc_info=True)
         try:
@@ -1690,17 +1854,9 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             result["withdrawn_refs"] = len(withdrawn)
         if screened["findings_withheld"]:
             result["findings_withheld"] = True
-    if not config.autofile_globally_enabled():
-        return dict(result, skipped="autofile disabled")
-    # THE PRODUCT HOLD BINDS THE SPIKE FILER TOO, unlike the per-channel hold (see
-    # `config.autofile_globally_enabled`): "this product writes nothing" is a statement about
-    # the product, not about culprit filings' yield on a channel. Fenix ships held (plans/16
-    # D4); the sweep already skips it, and this is what makes `_retry_filings` -- which re-calls
-    # this function for a row escalated BEFORE the hold, or by hand -- honour it as well. A
-    # product nobody has decided about gets the same answer, in the same direction. Not a
-    # `retry`: a hold clears by a config edit, not by waiting.
-    if not config.autofile_product_declared(product) or config.autofile_product_held(product):
-        return dict(result, skipped="autofile held for product {!r} (triage-only)".format(product))
+    disabled = _filing_disabled_reason(product)
+    if disabled:
+        return dict(result, skipped=disabled)
     token = config.get_bugzilla_token()
     if not token:
         return dict(result, skipped="no Bugzilla API token configured")
@@ -2326,6 +2482,40 @@ def _regression_venue(existing, culprit, esc, signature):
     return venue, for_spike, list(predating or []), landed is None and venue is None
 
 
+def _filing_retry_due(esc, attempts):
+    """Apply the shared attempt limit and minimum wait between filing retries."""
+    if attempts >= _FILING_RETRIES:
+        return False
+    return not esc.updated or (
+        datetime.now(timezone.utc) - _aware(esc.updated)
+    ).total_seconds() >= _FILING_RETRY_AFTER_S
+
+
+def _retry_raptor_lake_fixups(esc, filing):
+    """Retry pending meta links and closures; return 1 if attempted, otherwise 0."""
+    if _filing_disabled_reason(esc.product):
+        return 0
+    attempts = int(filing.get("fixup_attempts") or 1)
+    if not _filing_retry_due(esc, attempts):
+        return 0
+    token = config.get_bugzilla_token()
+    if not token:
+        return 0
+    bug_id = filing["bug"]
+    outcome = {}
+    if filing.get("link_pending"):
+        linked = bugzilla_apply._link_blockers(bug_id, [sigage.RAPTOR_LAKE_META], token)
+        outcome["link_pending"] = sigage.RAPTOR_LAKE_META not in linked
+        if not outcome["link_pending"]:
+            outcome["blocks"] = list(filing.get("blocks") or []) + [sigage.RAPTOR_LAKE_META]
+    if filing.get("close_pending"):
+        outcome.update(_close_raptor_lake_bug(bug_id, token))
+    esc.merge_payload({"filing": dict(filing, fixup_attempts=attempts + 1, **outcome)})
+    logger.info("spike: Raptor Lake fix-up retry %d for bug %s -> %s", attempts + 1, bug_id,
+                outcome)
+    return 1
+
+
 def _retry_filings(cfg):
     """Retry eligible filings using saved findings, without rerunning the investigator."""
     from crashclouseau.agent.spike_agent import SpikeFindings
@@ -2345,12 +2535,13 @@ def _retry_filings(cfg):
     for esc in rows:
         payload = esc.payload or {}
         filing = payload.get("filing") or {}
+        if (filing.get("close_pending") or filing.get("link_pending")) and filing.get("bug"):
+            retried += _retry_raptor_lake_fixups(esc, filing)
+            continue
         if not filing.get("retry") or filing.get("filed"):
             continue
         attempts = int(filing.get("attempts") or 1)
-        if attempts >= _FILING_RETRIES or not esc.uuid:
-            continue
-        if esc.updated and (datetime.now(timezone.utc) - _aware(esc.updated)).total_seconds() < _FILING_RETRY_AFTER_S:
+        if not esc.uuid or not _filing_retry_due(esc, attempts):
             continue
         with bugzilla_apply.filing_lock(_RETRY_LOCK_WAIT_S) as held:
             if not held:
@@ -2361,8 +2552,9 @@ def _retry_filings(cfg):
                             if payload.get("findings") else None)
                 brief = build_spike_brief(esc, light=True)
                 brief["culprit_in_window"] = bool(payload.get("culprit_in_window"))
-                result = file_spike_bug(esc, brief, findings,
-                                        grounded=bool(payload.get("grounded")))
+                result = (file_raptor_lake_bug(esc, brief) if payload.get("raptor_lake")
+                          else file_spike_bug(esc, brief, findings,
+                                              grounded=bool(payload.get("grounded"))))
             except Exception as exc:
                 logger.error("spike: filing retry failed for escalation %s", esc.id,
                              exc_info=True)

@@ -44,3 +44,7 @@ mock.patch.object(spike_escalation, "_version_scan", return_value=None).start()
 # Disable spike population tables unless a test restores them.
 REAL_POPULATION_TABLE = spike_escalation._population_table
 mock.patch.object(spike_escalation, "_population_table", return_value=None).start()
+
+# Disable spike-period Raptor Lake reads unless a test restores them.
+REAL_RAPTOR_LAKE_SPIKE = spike_escalation._raptor_lake_spike
+mock.patch.object(spike_escalation, "_raptor_lake_spike", return_value=None).start()

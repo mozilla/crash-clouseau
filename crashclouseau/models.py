@@ -5025,6 +5025,26 @@ class SpikeEscalation(db.Model):
             return None
 
     @staticmethod
+    def raptor_lake_bugs_for(signatures):
+        """Return saved Raptor Lake bug IDs across channels, or ``None`` on query failure.
+
+        Include pending links and closures to prevent duplicate filings."""
+        if not signatures:
+            return []
+        filing = SpikeEscalation.payload["filing"]
+        try:
+            rows = (db.session.query(filing["bug"].astext)
+                    .filter(SpikeEscalation.signature.in_(sorted({s[:512] for s in signatures})),
+                            filing["filed"].astext == "true",
+                            filing["mode"].astext == "raptor_lake_invalid")
+                    .all())
+        except Exception:
+            logger.error("Cannot read the Raptor Lake filings on %s", signatures[:1], exc_info=True)
+            db.session.rollback()
+            return None
+        return sorted({int(bug) for (bug,) in rows if str(bug or "").isdigit()})
+
+    @staticmethod
     def filings_on_bug(bug_id, exclude_id=None):
         """List successful spike filings on *bug_id* in creation/ID order.
         Include findings and filing mode; return ``None`` on query failure.

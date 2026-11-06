@@ -882,6 +882,15 @@ signature's nightly and beta shares for both majors in the brief instead of the 
 pushlog window. `OOM |` firings get a `done` row and no investigation. `VERSION_STEP_ENABLED=0`
 stops the scan. Successful scans are cached for the UTC day.
 
+**Raptor Lake spikes (`agent.spike_escalation.raptor_lake_share`, 0.9; `raptor_lake_min_reports`,
+10).** Spikes meeting both thresholds skip the investigator and signature-wide hardware decline.
+File a bug blocking meta bug 1975808 and resolve it INVALID, with no needinfo or train flags
+(`filing.mode`: `raptor_lake_invalid`). Skip signatures already covered by our Raptor Lake
+filings, meta blockers or open bugs; also skip reports with memory-safety signals. Failed
+links and closures get up to two retries; closure retries require NEW or UNCONFIRMED status.
+All writes respect the global and product filing switches. Set `raptor_lake_share: null` to
+disable this path.
+
 The investigator uses `agent.spike_escalation.model`; its prompt is
 `crashclouseau/agent/prompts/spike.md`. `fallback_model` is `opus` (Opus 4.8).
 `max_cost_usd`, when nonzero, is passed as `ClaudeAgentOptions.max_budget_usd`.
