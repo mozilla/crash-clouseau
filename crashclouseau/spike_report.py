@@ -75,6 +75,38 @@ def spike_paragraph(brief):
     return " ".join(parts)
 
 
+def population_table(brief):
+    """Render measured before/during counts; include Raptor Lake only when present."""
+    table = brief.get("population_table") or {}
+    columns = table.get("columns") or []
+    if len(columns) != 2:
+        return None
+
+    def cell(col, key):
+        value = col.get(key)
+        if value is None:
+            return "unknown"
+        text = "{:,}".format(value)
+        if key == "installs" and col.get("installs_floor"):
+            return "at least " + text
+        if key in ("busiest", "raptor_lake") and col.get("reports"):
+            text += " ({:.0%})".format(value / col["reports"])
+        return text
+
+    rows = [("Reports", "reports"), ("Distinct install times", "installs"),
+            ("Reports from the busiest install time", "busiest")]
+    if any(col.get("raptor_lake") for col in columns):
+        rows.append(("Reports from Intel Raptor Lake CPUs (family 6 model 183 stepping 1)",
+                     "raptor_lake"))
+    caption = "Crash-stats counts for this signature on {} when this was posted:".format(
+        table.get("channel") or "this channel")
+    lines = [caption, "", "| | {} | {} |".format(columns[0].get("label"), columns[1].get("label")),
+             "|:---|:---:|:---:|"]
+    lines += ["| {} | {} | {} |".format(label, cell(columns[0], key), cell(columns[1], key))
+              for label, key in rows]
+    return "\n".join(lines)
+
+
 def is_new_signature(brief):
     """Is this spike the signature APPEARING -- ``0, 0, 0 -> N`` with no earlier report of it on
     this channel -- rather than an old signature getting loud?
@@ -346,6 +378,7 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
         report_bug.build_frames_block(stack, details=details) if stack else None,
         _awaited_block(brief),
         spike_paragraph(brief),
+        population_table(brief),
         analysis_section(findings, brief, author_display=author_display,
                          link_regressor=link_regressor, grounded=grounded),
         None if as_comment else venue_note(

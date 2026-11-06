@@ -1735,6 +1735,10 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         bucket_title = spike_report.spike_bucket_title(brief, findings)
         if bucket_title:
             bucket_key = spike_report.spike_bucket_key(brief)
+    # Include the counts in drafts used for venue and novelty checks.
+    brief["population_table"] = _population_table(esc, signature)
+    if brief["population_table"]:
+        result["population_table"] = brief["population_table"]
     mode = cfg["comment_on_existing"]
     venue = for_spike = None
     related = []
@@ -2156,32 +2160,58 @@ def _repeat_decline(venue, findings, grounded, escalation_id, culprit_bug=None):
 _NOT_OURS = ("external", "environment")
 
 
-def _spike_population(esc, signature):
-    """Summarize installation counts within the spike's date/build/major scope.
+def _spike_scopes(esc, signature):
+    """Return ``(during, before, end)`` with each scope as ``(label, query)``.
 
-    Legacy rate rows use a window ending on their creation date. Return None on unreadable data.
-    """
-    from crashclouseau import population
-
+    Baselines use earlier builds, baseline days or the previous major's release period.
+    ``before`` is ``None`` when a version step has no prior release date."""
     payload = esc.payload or {}
     spike = payload.get("spike") or {}
     end = _aware(getattr(esc, "created", None)) or datetime.now(timezone.utc)
-    params = {"signature": ["=" + s for s in payload.get("siblings") or [signature]],
-              "product": esc.product, "release_channel": utils.get_search_channel(esc.channel),
-              "_results_number": 0, "_facets": "install_time", "_facets_size": 200}
-    if (spike.get("kind") or getattr(esc, "kind", None)) == "build_day":
+    base = {"signature": ["=" + s for s in payload.get("siblings") or [signature]],
+            "product": esc.product, "release_channel": utils.get_search_channel(esc.channel),
+            "_results_number": 0}
+    kind = spike.get("kind") or getattr(esc, "kind", None)
+    if kind == "build_day":
         day = esc.build_day
-        params["build_id"] = [">=" + day.strftime("%Y%m%d000000"),
-                              "<" + (day + timedelta(days=1)).strftime("%Y%m%d000000")]
-        params["date"] = [">=" + day.isoformat(), "<" + end.isoformat()]
-    else:
-        last = _parse_day(spike.get("window_end")) or end.date()
-        first = _parse_day(spike.get("window_start")) or last - timedelta(
-            days=sigtrend.WINDOW_DAYS - 1)
-        params["date"] = [">=" + first.isoformat(), "<" + (last + timedelta(days=1)).isoformat()]
-        if spike.get("kind") == "version_step" and spike.get("major"):
-            # Older majors must not affect this step's concentration check.
-            params["major_version"] = str(spike["major"])
+        days = int(spike.get("history_days") or 21)
+        start = day - timedelta(days=days)
+        during = dict(base, build_id=[">=" + day.strftime("%Y%m%d000000"),
+                                      "<" + (day + timedelta(days=1)).strftime("%Y%m%d000000")],
+                      date=[">=" + day.isoformat(), "<" + end.isoformat()])
+        before = dict(base, build_id=[">=" + start.strftime("%Y%m%d000000"),
+                                      "<" + day.strftime("%Y%m%d000000")],
+                      date=[">=" + start.isoformat(), "<" + end.isoformat()])
+        return (("Builds of {}".format(day.isoformat()), during),
+                ("Builds of the {} days before".format(days), before), end)
+    last = _parse_day(spike.get("window_end")) or end.date()
+    first = _parse_day(spike.get("window_start")) or last - timedelta(
+        days=sigtrend.WINDOW_DAYS - 1)
+    during = dict(base, date=[">=" + first.isoformat(), "<" + (last + timedelta(days=1)).isoformat()])
+    if kind == "version_step" and spike.get("major"):
+        during["major_version"] = str(spike["major"])
+        prev_first = _parse_day(spike.get("from_release_day"))
+        before = None
+        if prev_first:
+            label = "{} {} ({} to {})".format(
+                esc.product, spike.get("from_major"), prev_first, first - timedelta(days=1))
+            before = (label, dict(base, major_version=str(spike.get("from_major")),
+                                  date=[">=" + prev_first.isoformat(), "<" + first.isoformat()]))
+        return (("{} {} ({} to {})".format(esc.product, spike["major"], first, last), during),
+                before, end)
+    days = int(spike.get("baseline_days") or sigtrend.BASELINE_DAYS)
+    before = dict(base, date=[">=" + (first - timedelta(days=days)).isoformat(),
+                              "<" + first.isoformat()])
+    return (("{} to {}".format(first, last), during),
+            ("The {} days before".format(days), before), end)
+
+
+def _spike_population(esc, signature):
+    """Summarize install-time facets in the spike's date/build/major scope."""
+    from crashclouseau import population
+
+    (_label, params), _before, end = _spike_scopes(esc, signature)
+    params = dict(params, _facets="install_time", _facets_size=200)
     try:
         found = spikes._search(params)
     except Exception:
@@ -2193,6 +2223,47 @@ def _spike_population(esc, signature):
                                 total=found.get("total"), now=end,
                                 min_install_time=population._PRODUCT_MIN_INSTALL_TIME.get(
                                     esc.product))
+
+
+def _period_counts(params, product, end):
+    """Read report, install-time and CPU counts for one query scope.
+
+    With reports but no usable install times, ``installs`` and ``busiest`` are ``None``."""
+    from crashclouseau import population
+
+    try:
+        found = spikes._search(dict(params, _facets=["install_time", "cpu_info"],
+                                    _facets_size=1000))
+        facets = found["facets"]
+        times, cpus, total = facets["install_time"], facets["cpu_info"], int(found["total"])
+    except Exception:
+        logger.warning("spike: cannot read the population of %s", params.get("signature"),
+                       exc_info=True)
+        return None
+    pop = population.summarize(times, total=total, now=end,
+                               min_install_time=population._PRODUCT_MIN_INSTALL_TIME.get(product))
+    # No reports means zero installations; unusable install times mean unknown.
+    unknown = None if total else 0
+    return {"reports": total,
+            "installs": pop["installs"] if pop else unknown,
+            "installs_floor": bool((pop or {}).get("truncated")),
+            "busiest": pop["top_crashes"] if pop else unknown,
+            "raptor_lake": sum(int(t["count"]) for t in cpus
+                               if sigage.cpu_model(t["term"]) in sigage.BROKEN_CPU_MODELS)}
+
+
+def _population_table(esc, signature):
+    """Build the before/during population table; omit it if either read fails."""
+    spike, before, end = _spike_scopes(esc, signature)
+    if before is None:
+        return None
+    columns = []
+    for label, params in (before, spike):
+        counts = _period_counts(params, esc.product, end)
+        if counts is None:
+            return None
+        columns.append(dict(counts, label=label))
+    return {"channel": esc.channel, "columns": columns}
 
 
 def _one_host_external(esc, signature, findings, grounded):

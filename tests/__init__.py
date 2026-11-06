@@ -40,3 +40,7 @@ mock.patch.object(spike_escalation, "_culprit_backout", return_value=None).start
 # Disable release version-step scans unless a test restores them.
 REAL_VERSION_SCAN = spike_escalation._version_scan
 mock.patch.object(spike_escalation, "_version_scan", return_value=None).start()
+
+# Disable spike population tables unless a test restores them.
+REAL_POPULATION_TABLE = spike_escalation._population_table
+mock.patch.object(spike_escalation, "_population_table", return_value=None).start()
