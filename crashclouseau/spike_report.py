@@ -41,7 +41,8 @@ def spike_paragraph(brief):
         return None
     if spike.get("kind") == "version_step":
         head = "**Filed because this signature's crash rate rose {} {} {}.** ".format(
-            "with" if (spike.get("onset") or {}).get("kind") == "boundary" else "on",
+            "with" if ((spike.get("onset") or {}).get("kind") == "boundary"
+                       and not (spike.get("concurrent") or {}).get("rose")) else "on",
             spike.get("product") or brief.get("product") or "Firefox", spike.get("major"))
     else:
         head = "**Filed because this signature's crash volume spiked.** "

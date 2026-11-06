@@ -23,6 +23,7 @@ _BUILD_FACETS = 1000
 
 # Cache successful queries for completed date windows.
 _INSTALLS_CACHE: dict = {}
+_CONCURRENT_Z = 2.0
 
 
 def _query_params(product, channel, start, end, major=None):
@@ -107,9 +108,11 @@ def installs(product, channel, major, start, end, facets_size):
     key = (product, channel, major, start, end, facets_size)
     if key in _INSTALLS_CACHE:
         return _INSTALLS_CACHE[key]
+    total = period_installs(product, channel, major, start, end)
+    if total is None:
+        return None
     base = _query_params(product, channel, start, end, major)
     try:
-        total = spikes._search(dict(base, _facets="_cardinality.install_time"))
         sigs = spikes._search(dict(base, _facets="signature", _facets_size=facets_size,
                                    **{"_aggs.signature": "_cardinality.install_time"}))
     except Exception:
@@ -117,7 +120,7 @@ def installs(product, channel, major, start, end, facets_size):
                        exc_info=True)
         return None
     try:
-        out = {"installs": int(total["facets"]["cardinality_install_time"]["value"]),
+        out = {"installs": total,
                "signatures": {
                    f["term"]: [int(f["count"]),
                                int(f["facets"]["cardinality_install_time"]["value"])]
@@ -151,6 +154,34 @@ def carrier_version(sig_versions, all_versions, a, a_total, z_min, ratio):
         if best is None or z > best[0]:
             best = (z, version)
     return best[1] if best else None
+
+
+def period_installs(product, channel, major, start, end, signatures=None):
+    """Count distinct install times on ``[start, end)``, optionally filtered by signatures.
+
+    Return ``None`` if the count cannot be read."""
+    params = dict(_query_params(product, channel, start, end, major),
+                  _facets="_cardinality.install_time")
+    if signatures:
+        params["signature"] = ["=" + s for s in signatures]
+    try:
+        return int(spikes._search(params)["facets"]["cardinality_install_time"]["value"])
+    except Exception:
+        logger.warning("versionstep: cannot read %s %s %s installations of %s", product,
+                       channel, major, (signatures or ["all"])[:1], exc_info=True)
+        return None
+
+
+def concurrent(a, a_total, b, b_total, ratio):
+    """Compare the previous major's signature share before and during the new release.
+
+    ``a / a_total`` is the baseline; ``b / b_total`` is the concurrent share.
+    ``rose`` requires both the ratio and z thresholds. Unreadable counts return ``None``."""
+    if b is None or not a or not a_total or not b_total:
+        return None
+    z, r = _excess(a, a_total, b, b_total)
+    return {"installs": b, "all_installs": b_total, "ratio": round(r, 2), "z": round(z, 2),
+            "rose": z >= _CONCURRENT_Z and r >= ratio}
 
 
 def score(before, now, z_min, ratio, min_installs):
@@ -211,7 +242,13 @@ def scan(product, channel, today=None, cfg=None):
                  for m, span in spans.items()}
     by_version = _query_params(product, channel, days[cur], today, cur)
     all_versions = _versions(by_version)
+    # Query each signature directly: capped facets can omit nonzero counts.
+    during = period_installs(product, channel, prev, days[cur], today)
     for fire in fires:
+        same = (period_installs(product, channel, prev, days[cur], today, [fire["signature"]])
+                if during else None)
+        fire["concurrent"] = concurrent(fire["from_installs"], before["installs"], same, during,
+                                        cfg["ratio"])
         sig_versions = (_versions(dict(by_version, signature=["=" + fire["signature"]]))
                         if all_versions is not None else None)
         fire["version"] = (carrier_version(sig_versions, all_versions, fire["from_installs"],
@@ -236,6 +273,7 @@ def spike_facts(result, fire, cfg):
             "all_installs": result["installs"], "from_all_installs": result["from_installs"],
             "ratio": fire["ratio"], "z": fire["z"], "ratio_min": cfg["ratio"],
             "onset": fire.get("onset") or {"kind": "unresolved"}, "version": fire.get("version"),
+            "concurrent": fire.get("concurrent"),
             "z_min": cfg["z_min"], "min_installs": cfg["min_installs"],
             "window_start": result["release_day"].isoformat(),
             "window_end": (result["release_day"] + timedelta(days=result["age"] - 1)).isoformat()}

@@ -470,6 +470,15 @@ def _user_prompt(brief: dict) -> str:
             else:
                 when = "The daily installation counts do not establish the onset."
             when += " Compare dates across versions and the Nightly/Beta series."
+            same = spike.get("concurrent") or {}
+            if same:
+                when += (" Over the same dates, the previous major's remaining installations "
+                         "show {}x its own release period (z={}){}.".format(
+                             same.get("ratio"), same.get("z"),
+                             ": the rise is not specific to this major, so look first for a "
+                             "change that reached both majors (an uplift to both, a server-side "
+                             "or Remote Settings change, a rollout, a third-party or OS update)"
+                             if same.get("rose") else ""))
             if spike.get("version"):
                 when += " Selected version: {}.".format(spike["version"])
             lines.append(

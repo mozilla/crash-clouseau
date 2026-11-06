@@ -90,6 +90,8 @@ class TestScan(unittest.TestCase):
             versionstep, "release_days", return_value=self.DAYS))
         self.installs = self.enterContext(mock.patch.object(
             versionstep, "installs", side_effect=[self.BEFORE, self.NOW]))
+        self.during = self.enterContext(mock.patch.object(
+            versionstep, "period_installs", side_effect=[40000, 123]))
         self.daily = self.enterContext(mock.patch.object(
             versionstep, "daily_installs", return_value=None))
         self.versions = self.enterContext(mock.patch.object(
@@ -128,6 +130,22 @@ class TestScan(unittest.TestCase):
         ]
         self.assertEqual(self._scan()["fires"][0]["version"], "157.0.1")
 
+    def test_each_fire_carries_the_previous_major_over_the_same_dates(self):
+        fire, = self._scan()["fires"]
+        self.during.assert_any_call("Firefox", "release", 156, date(2026, 9, 29),
+                                    date(2026, 10, 6))
+        self.during.assert_any_call("Firefox", "release", 156, date(2026, 9, 29),
+                                    date(2026, 10, 6), [SIG])
+        self.assertEqual(fire["concurrent"], {"installs": 123, "all_installs": 40000,
+                                              "ratio": 1.0, "z": 0.01, "rose": False})
+
+    def test_an_unread_previous_major_count_is_unknown_not_zero(self):
+        for counts in ([40000, None], [None]):
+            with self.subTest(counts=counts):
+                self.installs.side_effect = [self.BEFORE, self.NOW]
+                self.during.side_effect = counts
+                self.assertIsNone(self._scan()["fires"][0]["concurrent"])
+
     def test_unreadable_details_do_not_lose_the_firing(self):
         fire, = self._scan()["fires"]
         self.assertIsNone(fire["version"])
@@ -151,6 +169,40 @@ class TestScan(unittest.TestCase):
         self.releases.return_value = {155: date(2026, 9, 1), 157: date(2026, 9, 29)}
         self.assertEqual(self._scan()["fires"], [])
         self.installs.assert_not_called()
+
+
+class TestConcurrent(unittest.TestCase):
+    def _same(self, b, total=30687):
+        return versionstep.concurrent(124, 131147, b, total, 1.3)
+
+    def test_a_rise_on_the_previous_major_over_the_same_dates(self):
+        self.assertEqual(self._same(50), {"installs": 50, "all_installs": 30687, "ratio": 1.72,
+                                          "z": 3.29, "rose": True})
+
+    def test_a_flat_or_small_previous_major_did_not_rise(self):
+        self.assertFalse(self._same(31)["rose"])
+        # A large ratio alone is insufficient with only two installations.
+        self.assertFalse(versionstep.concurrent(2, 131147, 2, 30687, 1.3)["rose"])
+        self.assertFalse(self._same(0)["rose"])
+
+    def test_an_unknown_or_empty_count_is_none(self):
+        self.assertIsNone(self._same(None))
+        self.assertIsNone(self._same(10, total=0))
+        self.assertIsNone(self._same(10, total=None))
+        self.assertIsNone(versionstep.concurrent(0, 131147, 10, 30687, 1.3))
+
+    def test_period_installs_reads_one_cardinality(self):
+        found = {"facets": {"cardinality_install_time": {"value": 52}}}
+        with mock.patch.object(spikes, "_search", return_value=found) as search:
+            self.assertEqual(versionstep.period_installs(
+                "Firefox", "release", 158, date(2026, 10, 28), date(2026, 11, 6), [SIG]), 52)
+        params = search.call_args.args[0]
+        self.assertEqual((params["major_version"], params["signature"], params["_facets"]),
+                         ("158", ["=" + SIG], "_cardinality.install_time"))
+        for bad in (None, {"facets": {}}):
+            with mock.patch.object(spikes, "_search", return_value=bad):
+                self.assertIsNone(versionstep.period_installs(
+                    "Firefox", "release", 158, date(2026, 10, 28), date(2026, 11, 6)))
 
 
 class TestCarrierVersion(unittest.TestCase):
@@ -285,6 +337,36 @@ class TestTheText(unittest.TestCase):
         self.assertIn("The higher daily share appears from 2026-10-03; its cause is unresolved.", text)
         self.assertIn("Compare dates across versions and the Nightly/Beta series.", text)
         self.assertNotIn("so the change is in 157's train", text)
+
+    def test_a_rise_on_the_previous_major_too_is_not_the_release(self):
+        same = {"installs": 50, "all_installs": 30687, "ratio": 1.72, "z": 3.24, "rose": True}
+        fire = dict(_result()["fires"][0], onset={"kind": "boundary"}, concurrent=same)
+        spike = versionstep.spike_facts(_result(), fire, CFG)
+        sentence = spikes.describe(spike, "release")
+        self.assertTrue(sentence.endswith(
+            "Over the same dates, Firefox 156's remaining installations rose too (1.72x, "
+            "z = 3.24), so the rise is not specific to 157."))
+        paragraph = spike_report.spike_paragraph({"spike": spike, "spike_sentence": sentence})
+        self.assertTrue(paragraph.startswith(
+            "**Filed because this signature's crash rate rose on Firefox 157.**"))
+        text = spike_agent._user_prompt({"signature": SIG, "channel": "release", "spike": spike,
+                                         "spike_sentence": sentence})
+        self.assertIn("show 1.72x its own release period (z=3.24): the rise is not specific to "
+                      "this major, so look first for a change that reached both majors", text)
+
+    def test_a_flat_previous_major_is_stated_without_the_hint(self):
+        same = {"installs": 123, "all_installs": 40000, "ratio": 1.0, "z": 0.0, "rose": False}
+        fire = dict(_result()["fires"][0], onset={"kind": "boundary"}, concurrent=same)
+        spike = versionstep.spike_facts(_result(), fire, CFG)
+        sentence = spikes.describe(spike, "release")
+        self.assertNotIn("remaining installations", sentence)
+        self.assertTrue(spike_report.spike_paragraph(
+            {"spike": spike, "spike_sentence": sentence}).startswith(
+            "**Filed because this signature's crash rate rose with Firefox 157.**"))
+        text = spike_agent._user_prompt({"signature": SIG, "channel": "release", "spike": spike,
+                                         "spike_sentence": sentence})
+        self.assertIn("show 1.0x its own release period (z=0.0).", text)
+        self.assertNotIn("reached both majors", text)
 
     def test_the_prompt_shows_where_the_step_began(self):
         spike = versionstep.spike_facts(_result(), _result()["fires"][0], CFG)

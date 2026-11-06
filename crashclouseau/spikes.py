@@ -370,6 +370,12 @@ def _onset_sentence(spike):
     version = spike.get("version")
     if version and version != "{}.0".format(spike.get("major")):
         sentence += " Selected version: {}.".format(version)
+    same = spike.get("concurrent") or {}
+    if same.get("rose"):
+        sentence += (" Over the same dates, {} {}'s remaining installations rose too ({}x, "
+                     "z = {}), so the rise is not specific to {}.".format(
+                         spike.get("product") or "Firefox", spike.get("from_major"),
+                         same.get("ratio"), same.get("z"), spike.get("major")))
     return sentence
 
 
