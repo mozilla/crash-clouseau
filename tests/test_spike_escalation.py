@@ -586,6 +586,7 @@ class TestTheFallbackSeedCarriesThePoisonCounts(unittest.TestCase):
             mock.patch.object(inspector, "get_crash_data", return_value={"address": "0x0"}),
             mock.patch.object(orchestrator, "_signature_trend", return_value={}),
             mock.patch.object(orchestrator, "_version_rates", return_value={}),
+            mock.patch.object(orchestrator, "_os_cohort", return_value={"cohort": None}),
             mock.patch.object(orchestrator, "_hardware_noise", return_value={}),
             mock.patch.object(sigage, "signature_history", return_value={}),
             mock.patch.object(sigage, "first_seen_ever", return_value={}),

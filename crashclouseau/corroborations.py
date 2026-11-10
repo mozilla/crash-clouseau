@@ -415,6 +415,13 @@ REGISTRY = {
         "The OOM gate changed `actionable` to `abstain` / `resource_exhaustion`. "
         "`{kind, reason, memory}` records the size class, crash reason and memory summary; "
         "optional `site` identifies a caller whose size is not the failed request."),
+    "oom_gate_waived": (
+        "diagnostic", (),
+        "The OOM gate kept `actionable`: this report is in a skewed, rising OS cohort. "
+        "Diagnostic only."),
+    "os_cohort": (
+        "diagnostic", (),
+        "OS-cohort diagnostics without the weekly series. The OOM gate reads the seed's copy."),
     "archetypes": (
         "evidence", ("feedback.py",),
         "The slugs that fired, copied onto `Feedback` so `scoreboard()[\"by_archetype\"]` can "

@@ -1337,6 +1337,52 @@ def _fault_address_lines(crash: dict) -> list[str]:
     return out
 
 
+_OS_COHORT_NOTE = (
+    "  Check whether the crashing path is specific to this OS version or distribution before "
+    "treating the crash as generic.")
+_OS_COHORT_RISING = (
+    "  Check for OS-dependent behaviour in our code or platform APIs, including Android "
+    "targetSdkVersion. Inspect source and history beyond this build's window. For OOM, cite "
+    "what our code allocates or retains differently on this version; concentration alone "
+    "does not establish the cause.")
+
+
+def _os_cohort_lines(crash: dict) -> list[str]:
+    """Format cohort facts only when the OS-version share is skewed."""
+    from crashclouseau import oscohort
+
+    facts = crash.get("os_cohort") or {}
+    if not facts.get("skewed"):
+        return []
+    installs = facts.get("installs")
+    out = ["", ("OS VERSION CONCENTRATION: {product} {channel}, last {days} days. {reports:,} of "
+                "this signature's {family_reports:,} {family} reports ({share:.0%}) are on {label}"
+                "{installs}, against {base:.1%} of all {product} {channel} {family} crash "
+                "reports (x{ratio}).").format(
+        product=facts.get("product"), channel=facts.get("channel"), days=facts.get("days"),
+        reports=facts["reports"], family_reports=facts["family_reports"],
+        family=facts.get("family"), share=facts["share"], label=facts.get("label"),
+        installs=" from {:,} installations".format(installs) if installs else "",
+        base=facts["baseline_share"], ratio=facts.get("ratio"))]
+    weekly = facts.get("weekly") or []
+    if weekly:
+        out.append("  reports per week from {}, {} / all other OS versions: {}".format(
+            weekly[0][0], facts.get("label"),
+            ", ".join("{}/{}".format(c, r) for _, c, r in weekly)))
+    if facts.get("rising"):
+        out.append(("  Between the two halves of the window, reports on {} grew x{} and the "
+                    "rest of the signature x{}.").format(
+            facts.get("label"), facts.get("cohort_rise"), facts.get("rest_rise")))
+    mine = ((crash.get("raw_crash") or {}).get("os_pretty_version") or "").strip()
+    inside = mine == facts.get("cohort")
+    if mine:
+        out.append("  This report is on {}{}.".format(
+            oscohort.label(mine), "" if inside else ", outside that version"))
+    out.append(_OS_COHORT_RISING if facts.get("rising") and (inside or not mine)
+               else _OS_COHORT_NOTE)
+    return out
+
+
 def _bug_comment_lines(crash: dict) -> list[str]:
     """Format bug-comment facts as unverified leads; return [] when there are none."""
     data = crash.get("bug_comment_facts") or {}
@@ -1930,6 +1976,7 @@ def _crash_facts(crash: dict) -> list[str]:
     lines += _sibling_lines(crash)
     lines += _fault_address_lines(crash)
     lines += _hardware_noise_lines(crash)
+    lines += _os_cohort_lines(crash)
     # Last of the signature-level block: how old the signature is says whether the crash is new,
     # and this says whether it got WORSE -- the two answers are independent and a rise on an old
     # signature is exactly the case the age lines alone read as uninteresting.

@@ -982,6 +982,8 @@ def build_seed(uuid):
         # (2026-09-06) is why: 155.0.1 ran at ~5x 155.0's rate, its dot-release diff held one
         # cookie change, and the run abstained because nothing said so. All None when unknown.
         "version_rates": _version_rates(info, channel),
+        # OS-version concentration and growth; {"cohort": None} when unavailable.
+        "os_cohort": _os_cohort(info, channel),
         # Check recipe publication dates as well as build changesets.
         "nimbus_onset": _nimbus_onset(info, uuid_info, channel, frames,
                                       _onset_first_ever(sig_first_report_date, family_facts)),
@@ -1046,6 +1048,31 @@ def _version_rates(info, channel):
     except Exception as exc:  # pragma: no cover
         logger.warning("agent: version-rates lookup failed: %s", exc)
         return empty
+
+
+def _os_cohort(info, channel):
+    """Fetch OS-cohort facts for the brief and OOM gate; failures return no cohort."""
+    from crashclouseau import oscohort
+
+    cfg = config.get_agent_os_cohort()
+    if not cfg["enabled"]:
+        return dict(oscohort.NO_OS_COHORT)
+    try:
+        return oscohort.os_cohort(info.get("signature", ""),
+                                  product=info.get("product") or "Firefox",
+                                  channel=channel or "nightly", days=cfg["days"])
+    except Exception as exc:  # pragma: no cover
+        logger.warning("agent: OS cohort lookup failed: %s", exc)
+        return dict(oscohort.NO_OS_COHORT)
+
+
+def _record_os_cohort(dossier, seed):
+    """Record cohort diagnostics without the weekly series."""
+    data = (seed or {}).get("os_cohort") or {}
+    if dossier is None or not data.get("cohort"):
+        return
+    keep = {k: v for k, v in data.items() if k != "weekly"}
+    dossier.corroborations = {**(dossier.corroborations or {}), "os_cohort": keep}
 
 
 def _onset_first_ever(sig_first_report_date, family_facts):
@@ -3207,7 +3234,8 @@ def _apply_oom_gate(dossier, seed):
     """Downgrade unsupported ``actionable`` OOM verdicts to ``resource_exhaustion``.
 
     Covers unknown/small, unhandlable and Java OOMs, plus large OOMs with size-less
-    ``Reporting`` or ``OOM_SIZE_NOT_REQUEST`` callers. Keep the title and claims."""
+    ``Reporting`` or ``OOM_SIZE_NOT_REQUEST`` callers. Keep the title and claims. Waived when
+    the report is on the OS version that carries the signature's rise (``os_cohort``)."""
     v = dossier.verdict if dossier is not None else None
     if v is None or v.decision != Decision.actionable:
         return
@@ -3254,6 +3282,19 @@ def _apply_oom_gate(dossier, seed):
         why = "the Java `OutOfMemoryError` is treated as an unknown-size OOM"
         extra = {"exception": utils.JAVA_OOM}
     else:
+        return
+    cohort = (seed or {}).get("os_cohort") or {}
+    if (cohort.get("skewed") and cohort.get("rising")
+            and raw.get("os_pretty_version") == cohort.get("cohort")):
+        # Allow investigation of an OS-specific cause only for reports in the rising cohort.
+        dossier.corroborations = {
+            **dossier.corroborations,
+            "oom_gate_waived": {"why": "os_cohort", "kind": kind, "cohort": cohort.get("cohort"),
+                                "share": cohort.get("share"), "ratio": cohort.get("ratio")},
+        }
+        logger.info("agent: OOM gate waived for %s: %s holds %s of the signature (x%s), rising",
+                    (seed or {}).get("uuid"), cohort.get("cohort"), cohort.get("share"),
+                    cohort.get("ratio"))
         return
     picture = _memory_picture(raw)
     dossier.corroborations = {
@@ -5073,6 +5114,7 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
         _record_signature_age_facts(result.dossier, seed)
         _record_bug_comment_facts(result.dossier, seed)
         _record_fault_address_population(result.dossier, seed)
+        _record_os_cohort(result.dossier, seed)
         # Nor a gate: whether this signature's install-normalised rate had already changed. The
         # statistic the selector structurally cannot compute, and the one a human triager used to
         # file bug 2063336 off a signature we had selected twenty times.

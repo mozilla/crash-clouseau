@@ -308,7 +308,9 @@ good ones. So make TWO decisions, in order:
    records its argument; verify the actual allocation size in source. Actionable verdicts for
    `OOM | unknown`, `OOM | small`, `[unhandlable oom]`, size-less `Reporting` large, or large
    OOMs at known callers that record a different quantity become `abstain` /
-   `resource_exhaustion` (bugs 2073760, 2074622).
+   `resource_exhaustion` (bugs 2073760, 2074622), unless the crash facts' OS VERSION
+   CONCENTRATION block places this report on a version carrying the rise. Then cite our code
+   that allocates or retains differently on that version.
 
 - SKEPTIC (the trust guardrail): record the skeptic's check of each claim in the `skeptic`
   array. The skeptic's job is to catch NOISE — a coincidental / innocent candidate — NOT to

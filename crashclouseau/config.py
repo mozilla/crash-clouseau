@@ -1515,6 +1515,15 @@ def get_agent_signature_family():
     }
 
 
+def get_agent_os_cohort():
+    """OS-cohort lookup settings."""
+    a = get_agent().get("os_cohort", {})
+    return {
+        "enabled": _env_bool("OS_COHORT_ENABLED", a.get("enabled", True)),
+        "days": int(a.get("days", 56)),
+    }
+
+
 def get_agent_version_rates():
     """Per-version crash-rate facts (``sigage.version_rates``) for the prompt and the
     ``version_step`` corroboration. ``step_ratio`` is what counts as a step between two

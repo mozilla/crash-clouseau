@@ -362,6 +362,7 @@ class TestTheSpikeBriefKnowsAJavaStack(unittest.TestCase):
             mock.patch.object(orchestrator, "_stack_text", side_effect=stack_text),
             mock.patch.object(orchestrator, "_signature_trend", return_value={}),
             mock.patch.object(orchestrator, "_version_rates", return_value={}),
+            mock.patch.object(orchestrator, "_os_cohort", return_value={"cohort": None}),
             mock.patch.object(orchestrator, "_hardware_noise", return_value={}),
             mock.patch.object(sigage, "signature_history", return_value={}),
             mock.patch.object(sigage, "first_seen_ever", return_value={}),

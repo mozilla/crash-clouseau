@@ -384,6 +384,8 @@ class TestWriteOnlyFlagsAreADecision(unittest.TestCase):
         "bug_comment_facts",
         # Retain the brief's fault-address counts as diagnostics.
         "fault_address_population",
+        "oom_gate_waived",
+        "os_cohort",
         "poison_population",
     }
 
