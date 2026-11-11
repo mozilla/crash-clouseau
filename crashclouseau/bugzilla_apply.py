@@ -1203,16 +1203,14 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
     return [out[k] for k in sorted(out)]
 
 
-def _bugs_by_id(ids, timeout=_HTTP_TIMEOUT):
-    """The public BMO rows for *ids*, with what a venue row and a dup hop need; ``None`` when
-    BMO could not be asked. A restricted id comes back in ``faults`` rather than failing the
-    request, so it is simply absent from the result."""
+def _bugs_by_id(ids, timeout=_HTTP_TIMEOUT, fields=None):
+    """Fetch public bugs by ID; return ``None`` on read errors."""
     if not ids:
         return []
     params = {
         "id": ",".join(str(i) for i in ids),
-        "include_fields": "id,status,resolution,dupe_of,cf_last_resolved,creation_time,"
-                          "product,keywords,regressed_by",
+        "include_fields": fields or "id,status,resolution,dupe_of,cf_last_resolved,creation_time,"
+                                    "product,keywords,regressed_by",
     }
     try:
         r = net.get(_bz_rest(), params=params, timeout=timeout)
@@ -2785,6 +2783,21 @@ def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
             "discussion": discussion}
 
 
+def _our_duplicates(bug_id, timeout=_HTTP_TIMEOUT):
+    """Return public duplicate IDs with ``clouseau`` in the creator login.
+
+    Return ``None`` if the bug is missing or either lookup fails.
+    """
+    bugs = _bugs_by_id([bug_id], timeout=timeout, fields="id,duplicates")
+    row = next((b for b in bugs or [] if str(b.get("id")) == str(bug_id)), None)
+    if row is None:
+        return None
+    duplicates = _bugs_by_id(row.get("duplicates") or [], timeout=timeout, fields="id,creator")
+    if duplicates is None:
+        return None
+    return sorted(b["id"] for b in duplicates if _is_ours(b))
+
+
 def _bug_owners(bug_id, timeout=_HTTP_TIMEOUT):
     """Return bug owners and component; absent fields are ``""``, read errors ``None``."""
     fields = ("triage_owner", "assigned_to", "product", "component")
@@ -2872,9 +2885,9 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
                     rejected=None):
     """Comment on an eligible stale bug, or return a decline.
 
-    Prefer the most-discussed eligible venue, preserving input order on ties. Only the
-    origin bug may be a summary-only venue. Collect different-defect verdicts in *rejected*;
-    remaining matches must be stale and have no Clouseau comment.
+    Prefer the most-discussed venue; ties keep input order. Only the origin bug may be
+    a summary-only venue. Append different-defect verdicts to *rejected*. Remaining
+    matches must be stale and have no Clouseau comment or public Clouseau-filed duplicate.
 
     Require a public origin if known, screened text and no memory-safety signal. Ask the assignee,
     origin author or triage owner, in that order. Require novelty unless a spike is detected.
@@ -2922,6 +2935,12 @@ def _wake_stale_bug(uuid, uuid_info, stack, dossier, existing, cfg, token, famil
             continue
         if activity["ours"]:
             return no("bug {} already has a Clouseau comment".format(bug["id"]))
+        ours = _our_duplicates(bug["id"])
+        if ours is None:
+            return no("could not read the duplicates of bug {}".format(bug["id"]))
+        if ours:
+            return no("bug {} has a duplicate filed by Clouseau (bug {})".format(
+                bug["id"], ours[0]))
         if now - activity["last_human"] < timedelta(days=days):
             return no("bug {} has a human comment from {}".format(
                 bug["id"], activity["last_human"].date().isoformat()))

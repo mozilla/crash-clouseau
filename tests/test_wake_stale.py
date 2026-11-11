@@ -39,11 +39,14 @@ class _WakeBase(_Base):
         super().setUp()
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(1961865)]
         self.activity = {1961865: {"last_human": _ago(529), "ours": False, "discussion": 0}}
+        self.our_dups = {}
         for p in (
             mock.patch.object(report_bug, "fetch_signature_stats",
                               return_value=(True, {"count": 160, "installs": 22})),
             mock.patch.object(bugzilla_apply, "_bug_activity",
                               side_effect=lambda b: self.activity.get(b)),
+            mock.patch.object(bugzilla_apply, "_our_duplicates",
+                              side_effect=lambda b: self.our_dups.get(b, [])),
             mock.patch.object(bugzilla_apply, "_bug_owners", return_value=dict(_OWNERS)),
             mock.patch.object(report_bug, "_needinfo_person", return_value={}),
             mock.patch.object(report_bug, "_bugzilla_user", return_value={
@@ -202,6 +205,17 @@ class TestTheConditions(_WakeBase):
         self.activity[1961865]["ours"] = True
         self.assertEqual(self._reason(self._wake()),
                          "bug 1961865 already has a Clouseau comment")
+
+    def test_a_bug_with_our_duplicate(self):
+        # Regression: https://bugzilla.mozilla.org/show_bug.cgi?id=2001346#c34
+        self.our_dups[1961865] = [2069457]
+        self.assertEqual(self._reason(self._wake()),
+                         "bug 1961865 has a duplicate filed by Clouseau (bug 2069457)")
+
+    def test_a_failed_duplicate_read(self):
+        self.our_dups[1961865] = None
+        self.assertEqual(self._reason(self._wake()),
+                         "could not read the duplicates of bug 1961865")
 
     def test_a_failed_comment_read(self):
         self.activity.clear()
@@ -510,11 +524,12 @@ class TestTheTriageOwnerLookup(_WakeBase):
 
 
 class TestTheReads(unittest.TestCase):
+    def _responses(self, *bugs):
+        return mock.patch.object(bugzilla_apply.net, "get", side_effect=[
+            mock.Mock(**{"json.return_value": {"bugs": rows}}) for rows in bugs])
+
     def _activity(self, comments):
-        resp = mock.Mock()
-        resp.raise_for_status.return_value = None
-        resp.json.return_value = {"bugs": {"5": {"comments": comments}}}
-        with mock.patch.object(bugzilla_apply.net, "get", return_value=resp):
+        with self._responses({"5": {"comments": comments}}):
             return bugzilla_apply._bug_activity(5)
 
     def test_bot_comments_are_not_human_activity(self):
@@ -548,23 +563,35 @@ class TestTheReads(unittest.TestCase):
         self.assertTrue(self._activity([human, dict(
             human, text="Filed by [Clouseau](https://github.com/mozilla/crash-clouseau)")])["ours"])
 
+    def _dups(self, *pages):
+        with self._responses(*pages) as get:
+            return bugzilla_apply._our_duplicates(5), get.call_count
+
+    def test_duplicates_filed_by_us(self):
+        self.assertEqual(self._dups([{"id": 5, "duplicates": [7, 8]}],
+                                    [{"id": 7, "creator": "dev@mozilla.com"},
+                                     {"id": 8, "creator": "clouseau-bot@mozilla.tld"}]),
+                         ([8], 2))
+
+    def test_no_duplicates_reads_once(self):
+        self.assertEqual(self._dups([{"id": 5, "duplicates": []}]), ([], 1))
+
+    def test_a_missing_bug_is_a_failed_duplicate_read(self):
+        self.assertEqual(self._dups([]), (None, 1))
+
     def test_no_comments_is_a_failed_read(self):
         self.assertIsNone(self._activity([]))
 
     def test_the_owners(self):
-        resp = mock.Mock()
-        resp.raise_for_status.return_value = None
-        resp.json.return_value = {"bugs": [{"id": 5, "triage_owner": "owner@moz.example",
-                                            "assigned_to": "dev@moz.example", "product": "Core",
-                                            "component": "DOM"}]}
-        with mock.patch.object(bugzilla_apply.net, "get", return_value=resp) as get:
+        with self._responses([{"id": 5, "triage_owner": "owner@moz.example",
+                               "assigned_to": "dev@moz.example", "product": "Core",
+                               "component": "DOM"}]) as get:
             self.assertEqual(bugzilla_apply._bug_owners(5), {
                 "triage_owner": "owner@moz.example", "assigned_to": "dev@moz.example",
                 "product": "Core", "component": "DOM"})
         self.assertEqual(get.call_args.kwargs["params"]["include_fields"],
                          "id,triage_owner,assigned_to,product,component")
-        resp.json.return_value = {"bugs": [{"id": 5, "triage_owner": ""}]}
-        with mock.patch.object(bugzilla_apply.net, "get", return_value=resp):
+        with self._responses([{"id": 5, "triage_owner": ""}]):
             self.assertEqual(bugzilla_apply._bug_owners(5)["triage_owner"], "")
         with mock.patch.object(bugzilla_apply.net, "get", side_effect=TimeoutError("t")):
             self.assertIsNone(bugzilla_apply._bug_owners(5))
