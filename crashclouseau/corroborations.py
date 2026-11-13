@@ -149,6 +149,9 @@ REGISTRY = {
         "candidate landing after the signature's first appearance disproves nothing -- on "
         "2026-08-15 that argument refuted the lead the module owner confirmed the next day (bug "
         "2063892). Write-only until the waiver's rate is read off the persisted dossiers."),
+    "frequency_regression": (
+        "evidence", ("bugzilla_apply.py",),
+        "Rate/step regression signals; `watchdog` is included only alongside one of them."),
     "actionable_origin_postdates_signature": (
         "diagnostic", (),
         "An `actionable` verdict named as the ORIGIN of the failing code a changeset that landed "

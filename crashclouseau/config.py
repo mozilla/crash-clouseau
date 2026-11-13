@@ -1219,6 +1219,8 @@ def get_agent_autofile(channel=None, product=None):
         "fresh_origin_days": a.get("fresh_origin_days", 14),
         # Recent-report window for the alternative population check. 0/null disables it.
         "population_days": a.get("population_days", 30),
+        # Minimum signature age in days for the unreachable-state gate; 0/null disables it.
+        "unreachable_min_age_days": a.get("unreachable_min_age_days", 1095),
         # A channel-wide rise can also pass the floor; null disables this rule.
         "onset": _onset_rule(a.get("onset", ONSET_DEFAULT)),
         # Minimum confidence eligible for confirmation below the filing threshold; null disables.

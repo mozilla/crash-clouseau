@@ -466,6 +466,68 @@ class TestDryRun(_Base):
         self.assertTrue(self.writes)
 
 
+class TestUnreachableStateOnAnOldSignature(_Base):
+    def setUp(self):
+        super().setUp()
+        for name, value in (("fetch_signature_stats", (True, {"count": 50, "installs": 50})),
+                            ("fetch_recent_channel_stats", {"release": {"installs": 300}}),
+                            ("fetch_channel_onsets", {})):
+            self.enterContext(mock.patch.object(report_bug, name, return_value=value))
+
+    def _dossier(self, origin="unreachable_unknown", age=3719.0):
+        return {"candidate": {"node": "n"}, "verdict": {"state_origin": origin},
+                "corroborations": {"signature_age_days_ever": age}}
+
+    def _actionable(self, dossier=None, **cfg_over):
+        cfg_over.setdefault("unreachable_min_age_days", 1095)
+        cfg_over.setdefault("onset", cconfig.ONSET_DEFAULT)
+        return self._file("actionable", 70, dossier or self._dossier(), **cfg_over)
+
+    def test_it_is_declined_whatever_the_volume(self):
+        res = self._actionable()
+        self.assertFalse(res["filed"])
+        self.assertIn("no path in correct code", res["skipped"])
+        self.assertIn("3719 days", res["skipped"])
+        self.assertEqual(self.created, [])
+
+    def test_it_files_as_before_otherwise(self):
+        for name, dossier, cfg in (
+                ("reachable", self._dossier("reachable"), {}),
+                ("suspect named", self._dossier("unreachable_suspect"), {}),
+                ("not stated", self._dossier(None), {}),
+                ("young signature", self._dossier(age=992.0), {}),
+                ("age unknown", self._dossier(age=None), {}),
+                ("disabled", self._dossier(), {"unreachable_min_age_days": None})):
+            with self.subTest(name):
+                self.created.clear()
+                res = self._actionable(dossier, **cfg)
+                self.assertTrue(res["filed"], res)
+                self.assertEqual(len(self.created), 1)
+
+    def test_a_rising_channel_or_unread_counts_file_as_before(self):
+        rising = {"beta": {"reports": 20, "installs": 10, "busiest_day": 1}}
+        for name, target, value in (("rising", "fetch_channel_onsets", rising),
+                                    ("unread counts", "fetch_recent_channel_stats", None),
+                                    ("unread onsets", "fetch_channel_onsets", None)):
+            with self.subTest(name), mock.patch.object(report_bug, target, return_value=value):
+                self.created.clear()
+                self.assertTrue(self._actionable()["filed"])
+
+    def test_counts_below_the_onset_threshold_still_decline(self):
+        with mock.patch.object(report_bug, "fetch_recent_channel_stats",
+                               return_value={"release": {"installs": 4}}):
+            self.assertFalse(self._actionable()["filed"])
+        report_bug.fetch_channel_onsets.assert_not_called()
+
+    def test_a_dry_run_leaves_it_to_the_confirming_pass(self):
+        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(
+            unreachable_min_age_days=1095)
+        res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, self._dossier(), "actionable", 70,
+                                          dry_run=True)
+        self.assertNotIn("no path in correct code", res.get("skipped") or "")
+        self.assertEqual(len(self.created), 1)
+
+
 class TestDuplicates(_Base):
     def test_existing_open_bug_gets_a_comment_not_a_duplicate(self):
         bugzilla_apply._open_bugs_for_signature.return_value = [_bug(12345)]

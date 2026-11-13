@@ -151,6 +151,14 @@ class AbstainKind(str, Enum):
         return cls.other
 
 
+class StateOrigin(str, Enum):
+    """How an actionable verdict attributes the failing state."""
+
+    reachable = "reachable"
+    unreachable_suspect = "unreachable_suspect"
+    unreachable_unknown = "unreachable_unknown"
+
+
 class Confidence(str, Enum):
     low = "low"
     medium = "medium"
@@ -630,6 +638,8 @@ class Verdict(BaseModel):
     # compatible: older persisted dossiers omit it and read back as ``None``, and it rides the
     # dossier JSONB, so counting it needs no migration.
     abstain_kind: AbstainKind | None = None
+    # Unknown values are treated as unstated.
+    state_origin: StateOrigin | None = None
     mechanism: Claim | None = None
     consistency: Claim | None = None
     # WHAT FAILS AND WHERE, AS A BUG SUMMARY. The title a bug filed on a BUCKET-HOLDER signature
@@ -651,6 +661,12 @@ class Verdict(BaseModel):
     def _one_line_title(cls, v):
         text = " ".join(str(v or "").split())
         return text[:200]
+
+    @field_validator("state_origin", mode="before")
+    @classmethod
+    def _known_state_origin(cls, v):
+        s = str(getattr(v, "value", v) or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return s if s in StateOrigin._value2member_map_ else None
 
     @field_validator("fixes", mode="before")
     @classmethod
@@ -718,7 +734,7 @@ def kept_analysis(verdict):
         return {}
     return {"mechanism": verdict.mechanism, "consistency": verdict.consistency,
             "fixes": list(verdict.fixes), "confirm": verdict.confirm,
-            "without_check": verdict.without_check}
+            "without_check": verdict.without_check, "state_origin": verdict.state_origin}
 
 
 class Dossier(BaseModel):

@@ -3721,6 +3721,10 @@ def _record_signature_age_facts(dossier, seed):
         seed.get("version_rates"), seed.get("channel"),
         predecessors=seed.get("signature_predecessors"))
     family = _signature_family_facts(seed)
+    # Actionable verdicts return before the age gate records its frequency waiver.
+    reasons = _frequency_regression_reasons(seed)
+    if reasons:
+        facts["frequency_regression"] = ",".join(reasons)
     if facts or novelty or family:
         dossier.corroborations = {**(dossier.corroborations or {}), **facts, **novelty, **family}
 

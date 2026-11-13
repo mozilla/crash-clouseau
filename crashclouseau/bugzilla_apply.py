@@ -3117,6 +3117,34 @@ def _suppressions(dossier):
     return sorted(k for k in corroborations.suppressions() if flags.get(k))
 
 
+def _unreachable_state_decline(uuid, uuid_info, dossier, cfg):
+    """Decline old signatures with an unexplained unreachable state."""
+    from crashclouseau import report_bug
+    min_age = cfg.get("unreachable_min_age_days")
+    verdict = (dossier or {}).get("verdict") or {}
+    if not min_age or _DRY_RUN.get() or verdict.get("state_origin") != "unreachable_unknown":
+        return None
+    corro = (dossier or {}).get("corroborations") or {}
+    age = corro.get("signature_age_days_ever")
+    if age is None or age < min_age:
+        return None
+    if report_bug.fresh_origin_days(corro, cfg.get("fresh_origin_days")) is not None:
+        return None
+    if corro.get("frequency_regression"):
+        return None
+    recent = report_bug.fetch_recent_channel_stats(uuid_info, cfg.get("population_days") or 30)
+    if recent is None:
+        return None
+    onsets, rising = report_bug.recent_onsets(uuid_info, recent, cfg.get("onset"))
+    if onsets is None or rising:
+        return None
+    logger.info("autofile: %s -- unreachable state, no suspect, signature %.0f days old",
+                uuid, age)
+    return {"filed": False, "skipped": (
+        "no path in correct code reaches the failing state and no suspect is named, on a "
+        "signature first seen {:.0f} days ago with no channel rising").format(age)}
+
+
 def _actionable_floor_decline(uuid, uuid_info, dossier, product, channel, cfg, floor_waiver):
     """Return a population decline, or ``None`` if the floor is met or waived."""
     from crashclouseau import report_bug
@@ -3466,8 +3494,10 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
     actionable = fileable and verdict == "actionable"
     floor_decline = None
     if actionable:
-        floor_decline = _actionable_floor_decline(uuid, uuid_info, dossier, product, channel,
-                                                  cfg, floor_waiver)
+        floor_decline = _unreachable_state_decline(uuid, uuid_info, dossier, cfg)
+        if not floor_decline:
+            floor_decline = _actionable_floor_decline(uuid, uuid_info, dossier, product,
+                                                      channel, cfg, floor_waiver)
         if floor_decline:
             if _suppressions(dossier):
                 return floor_decline

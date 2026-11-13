@@ -199,7 +199,7 @@ Shape:
   "hunks": [{"node": "<hg node>", "filename": "...", "header": "@@ ... @@", "lines": [], "citations": [{"kind": "diff_line", "node": "<hg node>", "filename": "...", "line": 42, "side": "added", "content": "..."}]}],
   "data_flow": {"summary": "...", "object_name": "...", "operation": "free", "citations": [{"kind": "searchfox", "permalink": "https://searchfox.org/...", "symbol_id": "js::Namespace::method", "repo": "mozilla-central"}]},
   "skeptic": [{"claim_ref": "edge0|mechanism|hunk0|...", "node": "", "status": "pass|fail|unverifiable", "note": "...", "citations": [ ... ]}],
-  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|probable|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "fixes": ["..."], "confirm": "...", "without_check": "...", "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
+  "verdict": {"decision": "strong-evidence|lead|actionable|abstain", "confidence": "low|medium|probable|high", "title": "<= 100 chars: what fails and where, as a bug summary (a shutdown hang: '<work> blocks <pool> shutdown inside <call>')", "mechanism": {"statement": "...", "citations": [ ... ]}, "consistency": {"statement": "...", "citations": [ ... ]}, "fixes": ["..."], "confirm": "...", "without_check": "...", "state_origin": "reachable|unreachable_suspect|unreachable_unknown", "needinfo_draft": "soft text for a human to confirm/send (strong-evidence or lead)", "abstain_reason": "required iff decision=abstain", "abstain_kind": "iff decision=abstain: third_party|not_symbolicated|resource_exhaustion|hardware|pre_existing|no_candidate_explains_it|noise|other"}
 }
 ```
 
@@ -280,7 +280,10 @@ good ones. So make TWO decisions, in order:
    the least unlikely writer. `confirm` then proposes no test that needs the unreachable path;
    a diagnostic that tells the remaining causes apart (record the rejected value, or which half
    of the check failed) is welcome. Decision and confidence do not change, and this is no
-   `hardware` abstain without the report's hardware facts.
+   `hardware` abstain without the report's hardware facts. Set `state_origin`: `reachable` when
+   a path in the code as written produces the state; `unreachable_suspect` when none does but
+   the reports or a cited site single out one other source (a fault-address pattern, a site
+   that frees or writes the object, another process's data); else `unreachable_unknown`.
    Write `mechanism.statement`
    as the
    AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which

@@ -745,10 +745,10 @@ def channels_with_onset(onsets, rule):
 
 
 def recent_onsets(info, recent, rule):
-    """Return counts and rising channels; skip queries if recent installs are below the bar."""
+    """Return (counts, rising channels); counts is ``{}`` for skipped queries, ``None`` on failure."""
     if not rule or not any((row.get("installs") or 0) >= rule["installs"]
                            for row in (recent or {}).values()):
-        return None, []
+        return {}, []
     onsets = fetch_channel_onsets(info, rule["hours"], rule["baseline_days"])
     return onsets, channels_with_onset(onsets, rule)
 

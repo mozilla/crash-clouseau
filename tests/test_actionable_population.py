@@ -645,9 +645,9 @@ class TestTheRiseRule(unittest.TestCase):
         rising = {"release": {"reports": 20, "installs": 18, "busiest_day": 1}}
         with mock.patch.object(report_bug, "fetch_channel_onsets", return_value=rising) as fetch:
             self.assertEqual(report_bug.recent_onsets(
-                info, {"nightly": {"count": 9, "installs": 4}}, _RULE), (None, []))
-            self.assertEqual(report_bug.recent_onsets(info, None, _RULE), (None, []))
-            self.assertEqual(report_bug.recent_onsets(info, _RECENT, None), (None, []))
+                info, {"nightly": {"count": 9, "installs": 4}}, _RULE), ({}, []))
+            self.assertEqual(report_bug.recent_onsets(info, None, _RULE), ({}, []))
+            self.assertEqual(report_bug.recent_onsets(info, _RECENT, None), ({}, []))
             fetch.assert_not_called()
             self.assertEqual(report_bug.recent_onsets(info, _RECENT, _RULE),
                              (rising, ["release"]))

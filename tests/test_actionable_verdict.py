@@ -32,7 +32,9 @@ from crashclouseau.agent.schema import (  # noqa: E402
     Decision,
     Dossier,
     SearchfoxCitation,
+    StateOrigin,
     Verdict,
+    kept_analysis,
     parse_and_validate,
 )
 from tests.test_autofile import _LANDED, _PREVIEW, _Base, _bug  # noqa: E402
@@ -65,12 +67,12 @@ def _handoff(**over):
     return obj
 
 
-def _actionable(confidence=Confidence.probable, node="abc123def456"):
+def _actionable(confidence=Confidence.probable, node="abc123def456", **verdict):
     return Dossier(
         candidate=Candidate(node=node, bug=42, author="Bob Owen") if node else None,
         verdict=Verdict(decision=Decision.actionable, confidence=confidence,
                         mechanism=Claim(statement=_MECH, citations=[_SF]),
-                        consistency=Claim(statement=_FACT, citations=[_SF])),
+                        consistency=Claim(statement=_FACT, citations=[_SF]), **verdict),
     )
 
 
@@ -134,6 +136,28 @@ class TestWhatTheSchemaRequires(unittest.TestCase):
         toks = _quoted_tokens(triage._system_prompt(), "decision")
         self.assertIn("actionable", toks)
         self.assertLessEqual(toks, {d.value for d in Decision})
+
+    def test_the_state_origin_is_read_and_an_unknown_word_is_not_fatal(self):
+        for given, want in (("unreachable_unknown", StateOrigin.unreachable_unknown),
+                            ("Unreachable-Suspect", StateOrigin.unreachable_suspect),
+                            ("impossible", None), (None, None)):
+            with self.subTest(given):
+                handoff = _handoff()
+                handoff["verdict"]["state_origin"] = given
+                d = parse_and_validate(handoff)
+                self.assertEqual(d.verdict.decision, Decision.actionable)
+                self.assertEqual(d.verdict.state_origin, want)
+
+    def test_the_state_origin_survives_a_rebuild_and_a_python_dump(self):
+        v = _actionable(state_origin="unreachable_unknown").verdict
+        rebuilt = Verdict(decision=Decision.abstain, abstain_reason="r", **kept_analysis(v))
+        self.assertEqual(rebuilt.state_origin, StateOrigin.unreachable_unknown)
+        self.assertEqual(Verdict.model_validate(v.model_dump()).state_origin,
+                         StateOrigin.unreachable_unknown)
+
+    def test_the_prompt_offers_exactly_the_schemas_state_origins(self):
+        self.assertEqual(_quoted_tokens(triage._system_prompt(), "state_origin"),
+                         {s.value for s in StateOrigin})
 
     def test_the_origin_is_not_a_last_touch_that_kept_the_behaviour(self):
         prompt = " ".join(triage._system_prompt().split())
@@ -520,6 +544,25 @@ class TestWhatTheFilerChecks(_Base):
         self.assertTrue(res["filed"], res)
         self.assertEqual((res["bug"], res["mode"]), (999, "new_bug"))
         self.assertEqual(len(self.created), 1)
+
+    def test_a_frequency_regression_on_an_old_unreachable_state_still_files(self):
+        self.enterContext(mock.patch.object(report_bug, "fetch_recent_channel_stats",
+                                            return_value={"release": {"installs": 300}}))
+        self.enterContext(mock.patch.object(report_bug, "fetch_channel_onsets", return_value={}))
+        for signal, facts in (
+                ("step", {"version_rates": {"step": {"version": "155.0.1"}}}),
+                ("rate", {"signature_trend": {"signature_trend_ratio": 5,
+                                              "signature_trend_installs": 100}}),
+                ("none", {})):
+            with self.subTest(signal):
+                d = _actionable(state_origin="unreachable_unknown")
+                seed = {**_seed(-10), "buildid": "20261001000000", "version": "155.0.1",
+                        "signature_first_seen_ever": "20160907153016", **facts}
+                orch._apply_signature_age_gate(d, seed)
+                orch._record_signature_age_facts(d, seed)
+                res = self._file("actionable", 70, d.model_dump(mode="json"),
+                                 unreachable_min_age_days=1095, onset=report_bug.config.ONSET_DEFAULT)
+                self.assertEqual(res["filed"], signal != "none", res)
 
     def test_below_the_rung_it_does_not(self):
         res = self._file(verdict="actionable", confidence=50)
