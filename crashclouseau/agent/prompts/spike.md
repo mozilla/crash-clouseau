@@ -453,6 +453,10 @@ Distinguish:
 
 Do not force a defensive fix and root-cause fix when the evidence supports only one.
 
+A fix keeps the contract callers rely on (a returned result, a synchronous outcome, the thread).
+One that breaks it, such as moving the work off the thread or behind a timeout, says what
+callers must change (an async variant).
+
 Mention sibling sites only when they share the same invariant and were actually inspected.
 
 Describe a targeted test strategy only to the level supported by the mechanism. Consider fault

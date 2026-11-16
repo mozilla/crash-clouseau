@@ -183,11 +183,14 @@ a sentence becomes several steps, and if any step is hedged, so is the opening s
 each fact once. No headings, bold or capitals for emphasis. This sets the layout, not the facts.
 
 In a reported verdict, also fill when you can ground them: `fixes`, up to three changes a fix
-could make, as hedged as the mechanism; `confirm`, how to confirm the chain (a test, a reproducer
-or a log); `without_check`, when some official builds lack the failing check (the brief's
-"Builds with this check" line, a `MOZ_DIAGNOSTIC_CRASH` reported as `MOZ_CRASH(...)`, a Rust
-`debug_assert!`), one sentence, read from the code after the check, on what those builds do
-there. Code goes in a fenced block with its language tag (```cpp, ```js, ```rust, ```html).
+could make, as hedged as the mechanism, each keeping the contract callers rely on (a returned
+result, a synchronous outcome, the thread): a fix that breaks it, such as moving the work off the
+thread or behind a timeout, says what callers must change (an async variant); `confirm`, how to
+confirm the chain (a test, a reproducer or a log); `without_check`, when some official builds lack
+the failing check (the brief's "Builds with this check" line, a `MOZ_DIAGNOSTIC_CRASH` reported as
+`MOZ_CRASH(...)`, a Rust `debug_assert!`), one sentence, read from the code after the check, on
+what those builds do there. Code goes in a fenced block with its language tag (```cpp, ```js,
+```rust, ```html).
 
 Shape:
 
