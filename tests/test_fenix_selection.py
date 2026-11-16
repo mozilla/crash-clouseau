@@ -190,7 +190,7 @@ class TestEmptySignaturesAreDeclinedBeforeTheSpikeTest(unittest.TestCase):
     def test_the_row_fits_the_selection_table_and_is_not_a_selection(self):
         numbers = {datetime(2026, 9, 12): {"count": 12, "bids": {NEWEST: 12},
                                            "installs": {NEWEST: 10}}}
-        rec = dict(dc.no_stack_day_records(numbers)[0], signature=EMPTY)
+        rec = dict(dc._day_records(numbers, utils.NO_STACK)[0], signature=EMPTY)
         row = models.Selection._row(rec, "Fenix", "nightly", datetime.now(timezone.utc))
         self.assertEqual((row["outcome"], row["picked"], row["number"], row["ever_selected"]),
                          (utils.NO_STACK, None, 12, False))

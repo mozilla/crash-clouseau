@@ -74,7 +74,7 @@ from types import SimpleNamespace
 
 from crashclouseau import (
     app, bugcomponents, bugzilla_apply, config, db, disclosure, models, net, pushlog, report_bug,
-    samesite, sensitive, sigage, sigtrend, spike_report, spikes, tools, utils, versionstep,
+    samesite, sensitive, sigage, sigfamily, sigtrend, spike_report, spikes, tools, utils, versionstep,
     worker,
 )
 from crashclouseau.logger import logger
@@ -134,6 +134,20 @@ def sweep_real_spikes():
     except Exception:  # pragma: no cover - defensive; the clock must survive
         logger.error("spike: sweep failed", exc_info=True)
         return 0
+
+
+def _decline_symbol_gap(row):
+    """Skip a symbol-gap escalation; preserve any recorded filing."""
+    if not sigfamily.has_windows_symbol_gap(row.signature):
+        return False
+    if not (row.payload or {}).get("filing"):
+        row.merge_payload({"filing": {
+            "filed": False, "skipped": "signature is named by unresolved Windows system frames",
+        }}, commit=False)
+    row.set_status("done")
+    logger.info("spike: escalation %s is %r, a Windows symbol gap; not running", row.id,
+                row.signature)
+    return True
 
 
 def _filing_held(product):
@@ -244,6 +258,9 @@ def _sweep_channel(product, channel, cfg, room):
         # (three for CrashChannel::OpenContentStream on 2026-09-08) sit inside the lookback.
         if any(config.is_ignored_signature(s)
                for s in [signature, family] + list(merged.get("signatures") or [])):
+            continue
+        # Older selection rows may predate the filter.
+        if sigfamily.has_windows_symbol_gap(signature):
             continue
         trend = None
         if merged.get("outcome") == utils.RISING_RATE:
@@ -569,7 +586,7 @@ def _sweep_version_steps(product, channel, cfg, room):
             if room <= 0:
                 break
             signature = fire["signature"]
-            if config.is_ignored_signature(signature):
+            if config.is_ignored_signature(signature) or sigfamily.has_windows_symbol_gap(signature):
                 continue
             if models.SpikeEscalation.for_pair(signature, product, channel, day) is not None:
                 continue
@@ -624,6 +641,8 @@ def _restart(product, channel, cfg, limit):
     for row in rows:
         if started >= limit:
             break
+        if _decline_symbol_gap(row):
+            continue
         previous = row.status
         row.set_status("pending")
         if not _start(row, cfg):
@@ -669,7 +688,7 @@ def _handoff_for_spike(signature, uuid, product, channel, buildid):
     (signature, channel, day), so the brief's seed reuses it."""
     if not config.get_agent_signature_family()["enabled"]:
         return None
-    from crashclouseau import inspector, sigfamily
+    from crashclouseau import inspector
 
     proto = None
     try:
@@ -1043,8 +1062,6 @@ def _minimal_seed(uuid, uuid_info, esc):
         logger.warning("spike: signature history lookup failed for %s: %s", esc.signature, exc)
     if config.get_agent_signature_family()["enabled"]:
         try:
-            from crashclouseau import sigfamily
-
             seed.update(sigfamily.seed_facts(sigfamily.lookup(
                 esc.signature, (raw or {}).get("proto_signature"), esc.product, esc.channel,
                 esc.buildid)))
@@ -1106,8 +1123,6 @@ def build_spike_brief(esc, light=False):
     the parts only the investigator needs -- the window, the other stacks, the ordinary runs --
     for a filing retry."""
     from crashclouseau.agent import orchestrator, triage
-
-    from crashclouseau import sigfamily
 
     uuid = esc.uuid
     payload = esc.payload or {}
@@ -1263,6 +1278,8 @@ def run_spike_escalation(escalation_id):
         return
     if esc.status not in ("pending", "error"):
         logger.info("spike: escalation %s is %s; not running it again", escalation_id, esc.status)
+        return
+    if _decline_symbol_gap(esc):
         return
     esc.attempts = (esc.attempts or 0) + 1
     esc.set_status("running")

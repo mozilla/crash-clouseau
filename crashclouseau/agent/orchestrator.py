@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from rq import Retry
 
-from crashclouseau import app, config, db, mailmap, models, sensitive, utils, worker
+from crashclouseau import app, config, db, mailmap, models, sensitive, sigfamily, utils, worker
 from crashclouseau.agent.errors import MissingHandoffError
 from crashclouseau.agent.experts import area_experts
 from crashclouseau.agent.schema import (
@@ -856,8 +856,6 @@ def build_seed(uuid):
     family_facts = {}
     if config.get_agent_signature_family()["enabled"]:
         try:
-            from crashclouseau import sigfamily
-
             family_facts = sigfamily.seed_facts(sigfamily.lookup(
                 info.get("signature", ""), (raw_crash or {}).get("proto_signature"),
                 info.get("product") or uuid_info.get("product", "") or "Firefox", channel,
@@ -2391,7 +2389,7 @@ def _older_sibling(seed, landed):
     """Return the earliest frame variant or spelling with a first build before *landed*.
 
     Return ``{signature, first_build, first_date}``, or ``None`` if none qualifies."""
-    from crashclouseau import sigage, sigfamily
+    from crashclouseau import sigage
 
     rows = ((seed or {}).get("signature_sibling_reports") or {}).get("rows") or []
     same = set(sigfamily.same_crash_names({"siblings": rows}))
@@ -3218,8 +3216,6 @@ _UNHANDLABLE_OOM = "[unhandlable oom]"
 def _oom_kind(signature):
     """The OOM size class a Socorro name carries (``OOM | <kind> | ...`` -> ``unknown`` /
     ``large`` / ``small``), or ``None`` for every other name."""
-    from crashclouseau import sigfamily
-
     parts = [p.strip() for p in str(signature or "").split("|")]
     if len(parts) >= 2 and parts[0] == "OOM" and parts[1] in sigfamily._OOM_KINDS:
         return parts[1]
@@ -3762,8 +3758,6 @@ def _signature_family_facts(seed):
 
     Keep sibling report diagnostics unfiltered. Return ``{}`` if no lookup was recorded.
     Use literal keys for the corroboration registry scanner."""
-    from crashclouseau import sigfamily
-
     s = seed or {}
     status = s.get("signature_family_lookup")
     if not status:
@@ -3801,8 +3795,6 @@ def _sibling_report_facts(family_facts, raw_crash, product):
 
     Use discovery totals if the report lookup returns no result; set ``same_reason`` to
     ``None`` when reason counts are unavailable."""
-    from crashclouseau import sigfamily
-
     rows = [x for x in (family_facts or {}).get("signature_siblings") or []
             if x.get("signature") and x.get("status") in _LIVE_SIBLING_STATUSES]
     if not rows:
@@ -3850,8 +3842,6 @@ def _fault_address_population(info, uuid_info, raw_crash, family_facts):
         return None
     if not config.get_agent_signature_family()["enabled"]:
         return None
-    from crashclouseau import sigfamily
-
     # Compare the indexed address; retain the stackwalker's address separately if it differs.
     indexed = str(raw.get("address") or "").strip()
     address = sigfamily.parse_address(indexed)
@@ -3894,8 +3884,6 @@ def _poison_population(info, uuid_info, family_facts):
     Runs regardless of this report's reason or the family-discovery switch.
     Returns None on failure, leaving the population check inactive.
     """
-    from crashclouseau import sigfamily
-
     signature = (info or {}).get("signature") or ""
     if not signature:
         return None
@@ -5799,6 +5787,10 @@ def run_evidence_agent(uuid, force=False):
                 logger.info("agent: %s is %r, a signature config.ignored_signatures names; "
                             "not running", uuid, signature)
                 return
+            if sigfamily.has_windows_symbol_gap(signature):
+                logger.info("agent: %s is %r, named by unresolved Windows system frames; "
+                            "not running", uuid, signature)
+                return
         # A retry can arrive before its previous attempt's heartbeat is old enough
         # for skip_triage and claim_running to allow recovery.
         wait = _own_run_wait(uuid, own_job_id)
@@ -6295,7 +6287,8 @@ def enqueue_agent(uuid, channel=None, force=False, product=None):
                         "enqueuing", uuid, product)
             return
         try:
-            if config.is_ignored_signature(models.UUID.get_signature(uuid)):
+            signature = models.UUID.get_signature(uuid)
+            if config.is_ignored_signature(signature) or sigfamily.has_windows_symbol_gap(signature):
                 return
         except Exception:                                  # pragma: no cover - defensive
             pass                                           # run_evidence_agent asks again

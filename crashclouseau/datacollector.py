@@ -12,7 +12,7 @@ from libmozdata.connection import Connection, Query
 import pytz
 import re
 import requests
-from . import config, models, onset, sigtrend, utils
+from . import config, models, onset, sigfamily, sigtrend, utils
 from .logger import logger
 
 
@@ -249,16 +249,6 @@ def _day_records(numbers, outcome):
     ]
 
 
-def ignored_day_records(numbers):
-    """Outcome ``ignored``: a signature ``config.ignored_signatures`` names."""
-    return _day_records(numbers, utils.IGNORED)
-
-
-def no_stack_day_records(numbers):
-    """Outcome ``no_stack``: an ``EMPTY: ...`` signature (``utils.signature_class``)."""
-    return _day_records(numbers, utils.NO_STACK)
-
-
 def get_new_signatures(product, channel, date):
     """Collect the crash signatures worth triaging for a product/channel. A signature is
     kept when its per-day crash count SPIKES -- it clears an absolute floor and jumps well
@@ -338,27 +328,21 @@ def get_new_signatures(product, channel, date):
         params["build_id"] = bid
         socorro.SuperSearch(params=params, handler=hdler, handlerdata=data).wait()
 
-    # Deliberate test crashes (`config.ignored_signatures`) leave the series HERE, before any
-    # test can pick them -- whatever their numbers -- and leave one `ignored` row per build-day
-    # they were reported on, so the selection log still answers "why not". `ignored` is also
-    # handed to the rate path below, which reads its own rollup rather than this series.
+    # Log exclusions and pass them to the rate/onset paths too.
     selection = []
-    ignored = {sgn for sgn in data if config.is_ignored_signature(sgn)}
-    for sgn in sorted(ignored):
-        selection.extend(dict(rec, signature=sgn) for rec in ignored_day_records(data.pop(sgn)))
-        logger.info("Ignoring {} on {}-{}: a signature config.ignored_signatures names".format(
-            sgn, product, channel))
-    # `EMPTY: no frame data available` leaves the series here too, ON EVERY PRODUCT: no native
-    # stack and no Java stack means nothing could ever be scored, so the spike test could only
-    # hand it to a report fetch that comes back empty. Before this it was logged `selected`
-    # (ever_selected, offered to the spike sweep) and `put_crashes` wrote a Stats row with
-    # installs=0 and no uuid -- a Fenix matter at scale (20-40% of its nightly reports, five
-    # signatures, plans/16 §5) and desktop's rare EmptyMinidump spikes did exactly the same.
-    empty = {sgn for sgn in data if utils.signature_class(sgn) == "empty"}
-    for sgn in sorted(empty):
-        selection.extend(dict(rec, signature=sgn) for rec in no_stack_day_records(data.pop(sgn)))
-        logger.info("Declining {} on {}-{}: no stack to score ({})".format(
-            sgn, product, channel, utils.NO_STACK))
+    excluded = set()
+    for sgn in sorted(data):
+        if config.is_ignored_signature(sgn):
+            outcome = utils.IGNORED
+        elif utils.signature_class(sgn) == "empty":
+            outcome = utils.NO_STACK
+        elif sigfamily.has_windows_symbol_gap(sgn):
+            outcome = utils.SYMBOL_GAP
+        else:
+            continue
+        excluded.add(sgn)
+        selection.extend(dict(rec, signature=sgn) for rec in _day_records(data.pop(sgn), outcome))
+        logger.info("Declining %s on %s-%s: %s", sgn, product, channel, outcome)
 
     shift = config.get_ndays() if channel == "nightly" else 1
     threshold = config.get_threshold("installs", product, channel)
@@ -475,11 +459,11 @@ def get_new_signatures(product, channel, date):
 
     rising_data = _rising_picks(
         product, channel, date, declined,
-        set(big_data) | set(small_data) | ignored | empty, threshold, selection,
+        set(big_data) | set(small_data) | excluded, threshold, selection,
     )
     onset_data = _onset_picks(
         product, channel, date, declined,
-        set(big_data) | set(small_data) | set(rising_data) | ignored | empty, selection,
+        set(big_data) | set(small_data) | set(rising_data) | excluded, selection,
     )
     # Rate and onset picks use the same report cap and fetch path.
     extra_data = rising_data | onset_data

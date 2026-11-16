@@ -160,6 +160,7 @@ class TestOutcomeVocabulary(unittest.TestCase):
                     utils.CROSS_CHANNEL_ONSET,
                     utils.IGNORED,
                     utils.NO_STACK,
+                    utils.SYMBOL_GAP,
                     utils.NO_PROTOS,
                 }
             ),
@@ -242,7 +243,7 @@ class TestIgnoredSignatures(unittest.TestCase):
     def test_the_row_fits_the_selection_table(self):
         bid = utils.get_build_date(20260904040000)
         numbers = {datetime(2026, 9, 4): {"count": 40, "bids": {bid: 40}, "installs": {bid: 30}}}
-        rec = dict(dc.ignored_day_records(numbers)[0], signature=_TEST_SIG)
+        rec = dict(dc._day_records(numbers, utils.IGNORED)[0], signature=_TEST_SIG)
         row = models.Selection._row(rec, "Firefox", "nightly", datetime.now(timezone.utc))
         self.assertEqual((row["outcome"], row["picked"], row["number"], row["ever_selected"]),
                          (utils.IGNORED, None, 40, False))

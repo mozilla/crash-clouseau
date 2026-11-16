@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from libmozdata import socorro
 
-from . import config, report_bug, utils
+from . import config, report_bug, sigfamily, utils
 from .logger import logger
 
 _FACETS_SIZE = 10000
@@ -101,7 +101,8 @@ def _find(product, rule, channels, now):
                 shortlist.add(sig)
     found = []
     for sig in sorted(shortlist):
-        if config.is_ignored_signature(sig) or utils.signature_class(sig) == "empty":
+        if (config.is_ignored_signature(sig) or utils.signature_class(sig) == "empty"
+                or sigfamily.has_windows_symbol_gap(sig)):
             continue
         onsets = report_bug.fetch_channel_onsets(
             {"signature": sig, "product": product}, rule["hours"], days, asof=now)

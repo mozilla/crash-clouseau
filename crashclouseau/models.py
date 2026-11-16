@@ -1161,6 +1161,7 @@ SELECTION_OUTCOMES = frozenset(
         utils.CROSS_CHANNEL_ONSET,
         utils.IGNORED,
         utils.NO_STACK,
+        utils.SYMBOL_GAP,
         utils.NO_PROTOS,
     }
 )

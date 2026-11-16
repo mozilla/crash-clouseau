@@ -469,6 +469,8 @@ IGNORED = "ignored"
 # could ever be scored. Declined before the spike test. 20-40% of Fenix nightly reports
 # (Socorro's Android stackwalker fails at scale, plans/16 §5); the odd desktop EmptyMinidump.
 NO_STACK = "no_stack"
+# Unresolved Windows system frames, excluded before spike scoring.
+SYMBOL_GAP = "symbol_gap"
 # A pair the spike test KEPT for which Socorro then yielded no proto-signature cluster and no
 # Java report -- nothing to ingest. Recorded instead of `selected`, which used to claim an
 # analysis that never happened (a Stats row with installs=0 and no uuid).

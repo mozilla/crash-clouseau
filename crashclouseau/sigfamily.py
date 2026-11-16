@@ -266,6 +266,38 @@ def symbol_frames(signature):
     return out
 
 
+_WINDOWS_SYSTEM_MODULES = frozenset({
+    "advapi32", "audioses", "bcrypt", "bcryptprimitives", "cfgmgr32", "combase", "comctl32",
+    "comdlg32", "coremessaging", "coreuicomponents", "crypt32", "cryptbase", "cryptsp", "d2d1",
+    "d3d10warp", "d3d11", "d3d12", "d3d12core", "d3d9", "dbgcore", "dbghelp", "dcomp", "devobj",
+    "dnsapi", "dwmapi", "dwrite", "dxcore", "dxgi", "explorerframe", "gdi32", "gdi32full",
+    "imm32", "iphlpapi", "iertutil", "kernel32", "kernelbase", "mf", "mfplat", "mfreadwrite",
+    "mmdevapi", "msctf", "msvcp_win", "msvcrt", "mswsock", "ncrypt", "netapi32", "nsi", "ntdll",
+    "ntmarta", "ole32", "oleacc", "oleaut32", "powrprof", "profapi", "propsys", "rpcrt4",
+    "sechost", "setupapi", "shcore", "shell32", "shlwapi", "sspicli", "textinputframework",
+    "twinapi.appcore", "ucrtbase", "uiautomationcore", "urlmon", "user32", "userenv", "uxtheme",
+    "version", "win32u", "windows.storage", "windows.ui", "windowscodecs", "winhttp", "wininet",
+    "winmm", "wintrust", "wldp", "ws2_32", "wtsapi32",
+})
+_UNRESOLVED_WINDOWS_FRAME_RE = re.compile(
+    r"^(?:<unknown in )?(?P<name>[\w.+-]+?)\.(?:dll|pdb)(?:@0x[0-9a-fA-F]+)?>?$", re.I)
+
+
+def has_windows_symbol_gap(signature):
+    """Whether the first unresolved module frame names a Windows system module.
+
+    Stop at third-party modules, even if their callers lack Windows symbols.
+    """
+    for frame in frames(signature):
+        match = _UNRESOLVED_WINDOWS_FRAME_RE.match(frame)
+        if match:
+            name = match["name"].lower()
+            return name in _WINDOWS_SYSTEM_MODULES or name.startswith(("api-ms-win-", "ext-ms-win-"))
+        if is_module_frame(frame):
+            return False
+    return False
+
+
 def is_unsymbolicated(signature):
     """True when nothing in *signature* names code: every part is a bare address, a module name,
     a generic crash word or an OS lock/heap primitive. Such a name cannot be searched, blamed or

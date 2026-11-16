@@ -26,11 +26,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 import unittest  # noqa: E402
-from datetime import datetime  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crashclouseau import bugzilla_apply, config, datacollector as dc, models, spikes, utils  # noqa: E402
-from crashclouseau.agent import orchestrator, spike_escalation as se  # noqa: E402
+from crashclouseau import config, spikes, utils  # noqa: E402
+from tests.selection_helpers import (  # noqa: E402
+    AgentHarness, SelectorHarness, SpikeSweepHarness, selection_row,
+)
 
 
 _PKG = "java.lang.ArithmeticException: at org.mozilla.fenix.debugsettings.crashtools."
@@ -146,39 +147,7 @@ class TestThePredicate(unittest.TestCase):
             self.assertFalse(config.is_ignored_signature(LIVE[0]))
 
 
-class TestTheSelector(unittest.TestCase):
-    """`datacollector.get_new_signatures`, the real one, over a fake SuperSearch -- the harness
-    tests/test_selection_log.py drives the exact list with."""
-
-    def _collect(self, population, builds):
-        class FakeSuperSearch:
-            def __init__(self, params=None, handler=None, handlerdata=None):
-                bid = params["build_id"]
-                facets = [
-                    {"term": sgn,
-                     "facets": {"cardinality_install_time": {"value": installs},
-                                "build_id": [{"term": bid, "count": count}]}}
-                    for sgn, (count, installs) in population.get(bid, {}).items()
-                ]
-                handler({"errors": None, "facets": {"signature": facets}}, handlerdata)
-
-            def wait(self):
-                pass
-
-        rising = mock.Mock(return_value={})
-        # The three report fetchers are stubbed (tests/test_fenix_selection.py does the same):
-        # the gate under test sits BEFORE them, and a Java signature Fenix keeps is routed to
-        # `get_uuids_java`, which the fake search above does not serve.
-        with mock.patch.object(dc.socorro, "SuperSearch", FakeSuperSearch), \
-                mock.patch.object(dc, "get_proto_small"), \
-                mock.patch.object(dc, "get_proto_big"), \
-                mock.patch.object(dc, "get_uuids_java"), \
-                mock.patch.object(dc, "_rising_picks", rising), \
-                mock.patch.object(dc, "_onset_picks", return_value={}), \
-                mock.patch.object(dc, "get_builds", return_value=(list(builds), ">=2026-09-11")):
-            data, selection = dc.get_new_signatures("Fenix", "nightly", datetime(2026, 9, 14))
-        return data, selection, rising
-
+class TestTheSelector(SelectorHarness, unittest.TestCase):
     def test_a_spiking_debug_drawer_crash_is_popped_as_ignored(self):
         builds = [20260911212439, 20260912212439, 20260913212439, 20260914212439]
         population = {b: {REAL: (2, 2)} for b in builds[:3]}
@@ -203,19 +172,7 @@ class TestTheSelector(unittest.TestCase):
         self.assertIn(LIVE[1], already)
 
 
-class TestTheAgentGates(unittest.TestCase):
-    def _enqueue(self, signature):
-        queue = mock.Mock()
-        with mock.patch.object(config, "get_agent_enabled", return_value=True), \
-                mock.patch.object(config, "get_agent_channels", return_value=["nightly"]), \
-                mock.patch.object(config, "get_agent_products", return_value=["Firefox", "Fenix"]), \
-                mock.patch.object(orchestrator, "_product_of", return_value="Fenix"), \
-                mock.patch.object(orchestrator, "_proto_already_triaged", return_value=False), \
-                mock.patch.object(models.UUID, "get_signature", return_value=signature), \
-                mock.patch.object(orchestrator.worker, "get_queue", return_value=queue) as gq:
-            orchestrator.enqueue_agent("u-fenix", channel="nightly")
-        return gq, queue
-
+class TestTheAgentGates(AgentHarness, unittest.TestCase):
     def test_enqueue_agent_returns_without_a_job_for_a_pattern_match(self):
         for sig in LIVE:
             gq, queue = self._enqueue(sig)
@@ -229,108 +186,16 @@ class TestTheAgentGates(unittest.TestCase):
         self.assertEqual(queue.enqueue_call.call_args.kwargs["args"], ("u-fenix",))
 
     def test_a_queued_run_on_a_pattern_match_does_not_spend(self):
-        """The job was already in Redis when the pattern landed: `run_evidence_agent` asks
-        again and stops before the dedup, the seed and the claim."""
-        with mock.patch.object(config, "get_agent_channels", return_value=["nightly"]), \
-                mock.patch.object(config, "get_agent_products", return_value=["Firefox", "Fenix"]), \
-                mock.patch.object(orchestrator, "_product_of", return_value="Fenix"), \
-                mock.patch.object(models.UUID, "get_channel", return_value="nightly"), \
-                mock.patch.object(models.UUID, "get_signature", return_value=LIVE[2]), \
-                mock.patch.object(models.Dossier, "skip_triage",
-                                  side_effect=AssertionError("the run went past the gate")), \
-                mock.patch.object(orchestrator, "build_seed",
-                                  side_effect=AssertionError("the run built a seed")):
-            self.assertIsNone(orchestrator.run_evidence_agent("u-fenix"))
+        self._run(LIVE[2]).assert_not_called()
 
     def test_a_queued_run_on_the_real_crash_goes_past_the_gate(self):
-        with mock.patch.object(config, "get_agent_channels", return_value=["nightly"]), \
-                mock.patch.object(config, "get_agent_products", return_value=["Firefox", "Fenix"]), \
-                mock.patch.object(orchestrator, "_product_of", return_value="Fenix"), \
-                mock.patch.object(models.UUID, "get_channel", return_value="nightly"), \
-                mock.patch.object(models.UUID, "get_signature", return_value=REAL), \
-                mock.patch.object(models.Dossier, "skip_triage", return_value=False), \
-                mock.patch.object(orchestrator, "_proto_already_triaged", return_value=False), \
-                mock.patch.object(orchestrator, "build_seed", return_value=None) as seed:
-            self.assertIsNone(orchestrator.run_evidence_agent("u-fenix"))
-        seed.assert_called_once_with("u-fenix")
+        self._run(REAL).assert_called_once_with("u-fenix")
 
 
-def _row(number, baseline, installs, signature, outcome=utils.SELECTED,
-         build_day="2026-09-13", picked="20260913212439"):
-    from datetime import timedelta, timezone
-    first_run = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
-    return {"signature": signature, "product": "Fenix", "channel": "nightly",
-            "build_day": build_day, "outcome": outcome, "number": number, "position": 5,
-            "evaluable": True, "baseline": list(baseline),
-            "bids": {picked: {"count": number, "installs": installs}}, "picked": picked,
-            "run_date": first_run, "ever_selected": True, "first_run_date": first_run}
-
-
-class _FakeEscalation:
-    def __init__(self, **kw):
-        self.__dict__.update(kw)
-
-    def set_status(self, status, error=None, commit=True):
-        self.status = status
-
-    def merge_payload(self, values, commit=True):
-        self.payload = dict(self.payload or {}, **(values or {}))
-
-
-class TestTheSpikeSweep(unittest.TestCase):
-    """`spike_escalation._sweep_channel`, the real one, over tests/test_spike_escalation.py's
-    harness: the debug-drawer crash's old `selected` rows (c46ba2e4, the 2026-09-15 smoke) sit
-    inside the lookback and must never become a spike bug."""
-
-    def setUp(self):
-        self.cfg = config.get_agent_spike_escalation()
-        self.created = []
-        self.enqueued = []
-
-        def create(signature, product, channel, build_day, buildid=None, uuid=None,
-                   kind="build_day", payload=None, commit=True):
-            row = _FakeEscalation(id=len(self.created) + 1, signature=signature, product=product,
-                                  channel=channel, build_day=build_day, buildid=buildid,
-                                  uuid=uuid, kind=kind, payload=payload or {}, status="pending",
-                                  attempts=0)
-            self.created.append(row)
-            return row
-
-        patches = [
-            mock.patch.object(models.SpikeEscalation, "for_pair", return_value=None),
-            mock.patch.object(models.SpikeEscalation, "latest_for_signature", return_value=None),
-            mock.patch.object(models.SpikeEscalation, "count_since", return_value=0),
-            mock.patch.object(models.SpikeEscalation, "deferred", return_value=[]),
-            mock.patch.object(models.SpikeEscalation, "retryable", return_value=[]),
-            mock.patch.object(models.SpikeEscalation, "create", side_effect=create),
-            mock.patch.object(se, "_enqueue", side_effect=lambda i, c: self.enqueued.append(i)),
-            mock.patch.object(se, "classic_runs", return_value=[
-                {"uuid": "u-1", "status": "done", "verdict": "abstain", "filed_bug": None}]),
-            mock.patch.object(se, "representative_uuid", return_value="u-1"),
-            # The family lookup (Socorro + a processed-crash fetch): no other name unless a
-            # test says so.
-            mock.patch.object(se, "_handoff_for_spike", return_value=None),
-            mock.patch.object(se, "_trend", return_value={}),
-            mock.patch.object(spikes, "build_history", return_value=[]),
-            mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[]),
-            mock.patch.object(se, "resolve_venue_below_public", return_value=None),
-            # No hardware decline unless overridden.
-            mock.patch.object(se, "_raptor_lake_before_spending", return_value=None),
-            # The gate must decide, not Socorro: a judged spike that reaches the predicate is
-            # a test failure, and the mock says so by name.
-            mock.patch.object(spikes, "judge_selection", wraps=spikes.judge_selection),
-        ]
-        for p in patches:
-            p.start()
-            self.addCleanup(p.stop)
-
-    def _sweep(self, rows, room=2):
-        with mock.patch.object(models.Selection, "escalation_candidates", return_value=rows):
-            return se._sweep_channel("Fenix", "nightly", self.cfg, room)
-
+class TestTheSpikeSweep(SpikeSweepHarness, unittest.TestCase):
     def test_a_pattern_matched_signature_is_never_escalated(self):
         for sig in LIVE:
-            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature=sig)]), 0, sig)
+            self.assertEqual(self._sweep([selection_row(32, [1, 0, 2], 21, signature=sig)]), 0, sig)
         self.assertEqual(self.created, [])
         self.assertEqual(self.enqueued, [])
         spikes.judge_selection.assert_not_called()
@@ -339,13 +204,13 @@ class TestTheSpikeSweep(unittest.TestCase):
         """Two R8 spellings of the one deliberate crash on one build-day: `utils.lambda_family`
         keys on C++ lambda demanglings and leaves `$$ExternalSyntheticLambdaN` alone, so they
         are two families here, each skipped by the pattern before `judge_selection` is asked."""
-        rows = [_row(32, [1, 0, 2], 21, signature=LIVE[0]), _row(9, [0, 0, 1], 7, signature=LIVE[1])]
+        rows = [selection_row(32, [1, 0, 2], 21, signature=LIVE[0]), selection_row(9, [0, 0, 1], 7, signature=LIVE[1])]
         self.assertEqual(self._sweep(rows), 0)
         self.assertEqual(self.created, [])
         spikes.judge_selection.assert_not_called()
 
     def test_the_real_crash_is_escalated_by_the_same_harness(self):
-        self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, signature=REAL)]), 1)
+        self.assertEqual(self._sweep([selection_row(32, [1, 0, 2], 21, signature=REAL)]), 1)
         self.assertEqual(self.enqueued, [1])
         self.assertEqual(self.created[0].signature, REAL)
         spikes.judge_selection.assert_called_once()
