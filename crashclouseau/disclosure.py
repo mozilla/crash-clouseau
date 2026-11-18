@@ -49,10 +49,13 @@ def bug_refs(text):
 
 
 def node_refs(text, bugs_by_node):
-    """Resolve 7–40 digit hexadecimal tokens through ``{node: bug}``.
+    """Resolve 7–40 digit hexadecimal tokens through a node-to-bug map.
 
-    Either the token or the known node may be a prefix of the other."""
-    known = [(str(n).lower(), int(b)) for n, b in (bugs_by_node or {}).items() if n and b]
+    Each node can map to one bug or a tuple of bugs. Either the token or the
+    known node may be a prefix of the other."""
+    known = [(str(node).lower(), int(bug))
+             for node, bugs in (bugs_by_node or {}).items() if node
+             for bug in (bugs if isinstance(bugs, tuple) else (bugs,)) if bug]
     if not text or not known:
         return set()
     out = set()

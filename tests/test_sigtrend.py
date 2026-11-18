@@ -283,6 +283,25 @@ class TestTheBaselineIsTheSignaturesLifetime(unittest.TestCase):
         self.assertTrue(sigtrend.is_rising(facts))
         self.assertIn("preceding 33 days", sigtrend.describe(facts))
 
+    def test_rate_exposure_uses_the_detection_windows_and_totals(self):
+        first_day = self.ASOF - timedelta(days=39)
+        series = self._series(39, 1, window_per_day=20)
+        exposure = self._exposure()
+        exposure.update(self._exposure(days=7, installs=2000))
+        facts = sigtrend._facts_from_series(series, exposure, self.ASOF, first_day=first_day,
+                                            include_exposure=True)
+        self.assertEqual(facts["rate_exposure"], {
+            "window_start": (self.ASOF - timedelta(days=6)).isoformat(),
+            "window_end": self.ASOF.isoformat(), "baseline_start": first_day.isoformat(),
+            "window_installs": 7 * 2000, "baseline_installs": 33 * 500,
+        })
+
+        del exposure[self.ASOF - timedelta(days=15)]
+        facts = sigtrend._facts_from_series(series, exposure, self.ASOF, first_day=first_day,
+                                            include_exposure=True)
+        self.assertTrue(sigtrend.is_rising(facts))
+        self.assertNotIn("rate_exposure", facts)
+
     def test_a_signature_older_than_the_baseline_keeps_the_nominal_one(self):
         series = self._series(62, 1, window_per_day=5)
         for first in (None, self.ASOF - timedelta(days=62), self.ASOF - timedelta(days=80)):

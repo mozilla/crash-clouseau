@@ -339,7 +339,7 @@ def _window_sums(series, exposure, start, end):
 
 
 def trend_facts(product, channel, signature, asof=None,
-                window=WINDOW_DAYS, baseline=BASELINE_DAYS):
+                window=WINDOW_DAYS, baseline=BASELINE_DAYS, *, include_exposure=False):
     """Exposure-normalised rate change for one signature. ``{}`` when it cannot be computed.
 
     Keys are written out LITERALLY rather than built from a loop. A computed key is invisible to
@@ -363,7 +363,7 @@ def trend_facts(product, channel, signature, asof=None,
     # follows a carrier through `x = call()` / `return x`, and a bare `return call()` would hide
     # every `signature_trend_*` write from it.
     facts = _facts_from_series(series, exposure, asof, window=window, baseline=baseline,
-                               first_day=first_day)
+                               first_day=first_day, include_exposure=include_exposure)
     return facts
 
 
@@ -475,7 +475,7 @@ def _unchanged_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=
 
 
 def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASELINE_DAYS,
-                       first_day=None):
+                       first_day=None, *, include_exposure=False):
     """``trend_facts``' arithmetic over an already-fetched ``{day: (reports, installs)}`` series
     and exposure -- so a scan over every signature reads the channel once, not once per
     signature.
@@ -514,6 +514,14 @@ def _facts_from_series(series, exposure, asof, window=WINDOW_DAYS, baseline=BASE
     facts["signature_trend_baseline_days"] = b_days
     facts["signature_trend_baseline_installs"] = b_ins
     facts["signature_trend_expected_installs"] = round(expected, 2)
+    # A Socorro date range includes every day in it. Export the exposure only when
+    # both ranges are complete, so a later CPU comparison can use the same days.
+    if include_exposure and w_days == window and b_days == (base_end - base_start).days + 1:
+        facts["rate_exposure"] = {
+            "window_start": win_start.isoformat(), "window_end": win_end.isoformat(),
+            "baseline_start": base_start.isoformat(),
+            "window_installs": w_exp, "baseline_installs": b_exp,
+        }
     if expected > 0:
         facts["signature_trend_ratio"] = round(w_ins / expected, 2)
     if score is not None:

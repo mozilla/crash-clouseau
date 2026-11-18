@@ -233,6 +233,10 @@ REGISTRY = {
         "diagnostic", (),
         "The baseline's own install count, kept so the ratio can be re-derived from prod data "
         "without refetching Socorro."),
+    "rate_exposure": (
+        "evidence", ("agent/spike_escalation.py",),
+        "Requested by spike escalation to compare CPU report counts over the same complete "
+        "date windows and reporting-installation exposure used by the rate detector."),
 
     # The next six come out of `sigage.age_facts`, whose keys were COMPUTED
     # (`"signature_first_seen_" + key`) until 2026-08-24 and so were invisible to the registry

@@ -1457,6 +1457,23 @@ class TestTheSweep(unittest.TestCase):
         self.assertEqual((spike["window_start"], spike["window_end"], spike["window_days"]),
                          ((today - timedelta(days=6)).isoformat(), today.isoformat(), 5))
 
+    def test_a_rate_spike_carries_the_exposure_used_by_the_detector(self):
+        exposure = {"window_start": "2026-09-01", "window_end": "2026-09-07",
+                    "baseline_start": "2026-08-01", "window_installs": 4000,
+                    "baseline_installs": 1000}
+        trend = {"signature_trend_installs": 200, "signature_trend_expected_installs": 20,
+                 "signature_trend_ratio": 10, "signature_trend_baseline_days": 31,
+                 "signature_trend_window_days": 7, "rate_exposure": exposure}
+        with mock.patch.object(se, "_trend", return_value=trend):
+            self.assertEqual(self._sweep([_row(32, [1, 0, 2], 21, outcome=utils.RISING_RATE)]), 1)
+        row = self.created[0]
+        spike = row.payload["spike"]
+        self.assertEqual(spike["rate_exposure"], exposure)
+        row.created = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+        (_label, during), (_baseline, before), _end = se._spike_scopes(row, row.signature)
+        self.assertEqual(during["date"], [">=2026-09-01", "<2026-09-07T12:00:00+00:00"])
+        self.assertEqual(before["date"], [">=2026-08-01", "<2026-09-01"])
+
     def test_a_real_spike_the_pipeline_did_not_file_is_escalated(self):
         n = self._sweep([_row(32, [1, 0, 2], 21)])
         self.assertEqual(n, 1)

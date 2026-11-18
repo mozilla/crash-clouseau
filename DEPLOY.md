@@ -886,10 +886,20 @@ stops the scan. Successful scans are cached for the UTC day.
 10).** Spikes meeting both thresholds skip the investigator and signature-wide hardware decline.
 File a bug blocking meta bug 1975808 and resolve it INVALID, with no needinfo or train flags
 (`filing.mode`: `raptor_lake_invalid`). Skip signatures already covered by our Raptor Lake
-filings, meta blockers or open bugs; also skip reports with memory-safety signals. Failed
+filings, meta blockers or open bugs; also skip reports with memory-safety signals, and retry
+while the processed crash needed to check them is unavailable. Failed
 links and closures get up to two retries; closure retries require NEW or UNCONFIRMED status.
 All writes respect the global and product filing switches. Set `raptor_lake_share: null` to
 disable this path.
+
+**Analysed Raptor Lake spikes (`raptor_lake_external_share`, 0.5).** After a grounded run
+assesses the cause as `external` or `environment`, the same path requires Raptor Lake to
+account for at least that share of both the reports and the increase over baseline, as well
+as `raptor_lake_min_reports` total reports. The filing includes the analysis when it can be published
+(`payload.raptor_lake_from`: `analysis`). With memory-safety signals it falls back to the
+ordinary, withheld filing. Rate spikes use the detector's reporting-installation exposure
+over the same date windows. They use ordinary filing if that comparison is unavailable.
+Set `raptor_lake_external_share: null` to disable it.
 
 The investigator uses `agent.spike_escalation.model`; its prompt is
 `crashclouseau/agent/prompts/spike.md`. `fallback_model` is `opus` (Opus 4.8).

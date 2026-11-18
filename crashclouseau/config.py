@@ -1467,6 +1467,10 @@ def get_agent_spike_escalation():
         "raptor_lake_share": (None if o.get("raptor_lake_share", 0.9) is None
                               else float(o.get("raptor_lake_share", 0.9))),
         "raptor_lake_min_reports": int(o.get("raptor_lake_min_reports", 10)),
+        # Share routing a grounded external/environment verdict to that path; ``null`` disables.
+        "raptor_lake_external_share": (
+            None if o.get("raptor_lake_external_share", 0.5) is None
+            else float(o.get("raptor_lake_external_share", 0.5))),
     }
 
 

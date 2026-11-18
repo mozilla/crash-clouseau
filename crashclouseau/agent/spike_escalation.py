@@ -230,7 +230,7 @@ def merge_rows(rows):
 
 def _trend(product, channel, signature):
     try:
-        return sigtrend.trend_facts(product, channel, signature)
+        return sigtrend.trend_facts(product, channel, signature, include_exposure=True)
     except Exception:
         logger.warning("spike: cannot read the rate of %s", signature, exc_info=True)
         return {}
@@ -269,10 +269,15 @@ def _sweep_channel(product, channel, cfg, room):
         if not spike:
             continue
         if spike.get("kind") == "rate":
-            # window_days counts collected days, not the calendar span.
-            today = date.today()
-            spike = dict(spike, window_end=today.isoformat(), window_start=(
-                today - timedelta(days=sigtrend.WINDOW_DAYS - 1)).isoformat())
+            exposure = (trend or {}).get("rate_exposure")
+            if exposure:
+                spike = dict(spike, rate_exposure=exposure, window_start=exposure["window_start"],
+                             window_end=exposure["window_end"])
+            else:
+                # window_days counts collected days, not the calendar span.
+                today = date.today()
+                spike = dict(spike, window_end=today.isoformat(), window_start=(
+                    today - timedelta(days=sigtrend.WINDOW_DAYS - 1)).isoformat())
         day = _parse_day(build_day)
         if day is None:
             continue
@@ -406,10 +411,90 @@ def _raptor_lake_spike(signature, siblings, product, channel, day, spike, cfg):
                             payload={"spike": spike, "siblings": siblings})
     (_label, during), _before, end = _spike_scopes(scope, signature)
     counts = _period_counts(during, product, end)
-    if (not counts or counts["reports"] < cfg["raptor_lake_min_reports"]
-            or counts["raptor_lake"] < share * counts["reports"]):
+    return counts if _meets_raptor_lake_share(counts, share, cfg) else None
+
+
+def _meets_raptor_lake_share(counts, share, cfg):
+    if not counts:
+        return False
+    reports = counts["reports"]
+    return reports >= cfg["raptor_lake_min_reports"] and counts["raptor_lake"] >= share * reports
+
+
+def _raptor_lake_external(esc, findings, grounded, cfg):
+    """Return counts when Raptor Lake supplies enough of both the reports and their increase."""
+    share = cfg.get("raptor_lake_external_share")
+    if share is None or not grounded or getattr(findings, "assessment", None) not in _NOT_OURS:
         return None
-    return counts
+    spike = (esc.payload or {}).get("spike") or {}
+    kind = spike.get("kind") or getattr(esc, "kind", None)
+    exposure = spike.get("rate_exposure")
+    if kind == "rate" and not exposure:
+        return None
+    (_label, during), before, end = _spike_scopes(esc, esc.signature)
+    if before is None:
+        return None
+    counts = _period_counts(during, esc.product, end)
+    if not _meets_raptor_lake_share(counts, share, cfg):
+        return None
+    prior = _period_counts(before[1], esc.product, end)
+    if prior is None:
+        return None
+    if kind == "build_day":
+        # The selector compares against the loudest previous day. Bound how many of its
+        # reports could have been on Raptor Lake using the whole historical CPU count.
+        baseline = spike.get("baseline_max")
+        if baseline is None:
+            return None
+        prior_raptor = min(baseline, prior["raptor_lake"])
+    else:
+        if kind == "version_step":
+            # Use the same reporting-installation exposure as the release comparison.
+            now_size, before_size = spike.get("all_installs"), spike.get("from_all_installs")
+        elif kind == "rate":
+            now_size, before_size = exposure["window_installs"], exposure["baseline_installs"]
+        else:
+            return None
+        if (now_size or 0) <= 0 or (before_size or 0) <= 0:
+            return None
+        scale = now_size / before_size
+        baseline = prior["reports"] * scale
+        prior_raptor = prior["raptor_lake"] * scale
+    raptor_growth = counts["raptor_lake"] - prior_raptor
+    other_growth = (counts["reports"] - counts["raptor_lake"]) - (baseline - prior_raptor)
+    if raptor_growth <= 0 or counts["reports"] <= baseline:
+        return None
+    excess_share = raptor_growth / (raptor_growth + max(0, other_growth))
+    if excess_share < share:
+        return None
+    return dict(counts, raptor_lake_excess_share=excess_share)
+
+
+def _file_raptor_lake(esc, brief, findings, grounded):
+    """File a Raptor Lake row or fall back to ordinary filing for analysed rows."""
+    payload = esc.payload or {}
+    if payload.get("raptor_lake_from") != "analysis":
+        return file_raptor_lake_bug(esc, brief)
+    if findings is None:
+        # The verdict that justified the route is gone; file as before the route existed.
+        return file_spike_bug(esc, brief, findings, grounded=grounded)
+    candidates = dict(brief.get("candidate_nodes") or {})
+    for node, bug in (payload.get("raptor_lake_candidate_bugs") or {}).items():
+        candidates[node] = dict(candidates.get(node) or {}, bug=bug)
+    brief = dict(brief, candidate_nodes=candidates)
+    result = file_raptor_lake_bug(esc, dict(brief), findings=findings)
+    signals = result.get("memory_unsafe_signals") or []
+    # The ordinary filer reads an unreadable crash as clean, so only real signals go there.
+    fallback = (result.get("raptor_lake_increase_unconfirmed")
+                or result.get("raptor_lake_text_restricted")
+                or (signals and "unreadable" not in signals))
+    if not fallback:
+        return result
+    # Older runs without a saved map cannot safely attach their analysis on either route.
+    if "raptor_lake_candidate_bugs" not in payload:
+        findings = None
+    return dict(file_spike_bug(esc, brief, findings, grounded=grounded),
+                raptor_lake_declined=result["skipped"])
 
 
 def _raptor_lake_signatures():
@@ -441,12 +526,17 @@ def _filing_disabled_reason(product):
     return None
 
 
-def file_raptor_lake_bug(esc, brief):
-    """File an untracked Raptor Lake spike blocking the meta, then resolve it INVALID."""
+def file_raptor_lake_bug(esc, brief, findings=None):
+    """File an untracked Raptor Lake spike blocking the meta, then resolve it INVALID.
+
+    ``findings`` is the grounded external verdict that routed an analysed spike here."""
     signature = (esc.signature or "").strip()
     product, channel = esc.product, esc.channel
-    counts = (esc.payload or {}).get("raptor_lake") or {}
+    payload = esc.payload or {}
+    counts = payload.get("raptor_lake") or {}
     brief["raptor_lake"] = counts
+    if findings is not None:
+        brief["raptor_lake_assessment"] = findings.assessment
     result = {"filed": False, "at": datetime.now(timezone.utc).isoformat(),
               "signature": signature, "channel": channel, "buildid": esc.buildid,
               "uuid": esc.uuid, "raptor_lake": counts}
@@ -487,8 +577,12 @@ def file_raptor_lake_bug(esc, brief):
     if hidden:
         return dict(result, **bugzilla_apply._hidden_duplicate_result(hidden))
     raw = brief.get("raw_crash") or {}
+    if not raw:
+        # Without it the memory-safety screen below would pass by default.
+        return dict(result, retry=True,
+                    skipped="processed crash unavailable for memory-safety screening")
     try:
-        signals = sensitive.memory_unsafe_signals(raw) if raw else []
+        signals = sensitive.memory_unsafe_signals(raw)
     except Exception:
         signals = ["unreadable"]
     population = sensitive.population_signal(brief.get("poison_population"))
@@ -497,17 +591,59 @@ def file_raptor_lake_bug(esc, brief):
     if signals:
         return dict(result, memory_unsafe_signals=signals, skipped=(
             "memory-safety signals; a Raptor Lake spike is not filed publicly"))
+    spike = payload.get("spike") or {}
+    kind = spike.get("kind") or getattr(esc, "kind", None)
+    rate_without_exposure = kind == "rate" and not spike.get("rate_exposure")
+    if findings is not None and ("raptor_lake_excess_share" not in counts or rate_without_exposure):
+        # A pending filing may have been classified before we checked the increase.
+        confirmed = _raptor_lake_external(esc, findings, True, config.get_agent_spike_escalation())
+        if confirmed is None:
+            return dict(result, raptor_lake_increase_unconfirmed=True,
+                        skipped="Raptor Lake's contribution to the increase could not be confirmed")
+        brief["raptor_lake"] = result["raptor_lake"] = confirmed
     try:
         details = report_bug.fetch_crash_reason(esc.uuid) if esc.uuid else {}
     except Exception:
         details = {}
     stack = brief.get("stack_frames") or {}
     brief["population_table"] = _population_table(esc, signature)
+    screened = None
+    if findings is not None:
+        # Older rows lack the map needed to screen the original analysis.
+        withhold = "raptor_lake_candidate_bugs" not in payload
+        if not withhold:
+            screened = _screen(brief, findings, True, details, stack, False)
+            if screened is None:
+                return dict(result, retry=True, skipped=(
+                    "could not check whether the bugs the analysis names are public; not risking "
+                    "a disclosure"))
+            withhold = screened["left"] or screened["withdrawn"] or screened["findings_withheld"]
+        if withhold:
+            findings = None
+            brief["raptor_lake_analysis_withheld"] = True
+            result["analysis_withheld"] = True
     bz_product, component, how = resolve_component(None, signature, product, stack,
                                                    raw_crash=raw)
     preview = spike_report.build_spike_preview(
-        brief, None, product=bz_product, component=component, details=details, stack=stack,
-        grounded=False)
+        brief, findings, product=bz_product, component=component, details=details, stack=stack,
+        grounded=findings is not None)
+    if screened is not None or result.get("analysis_withheld"):
+        bugs_by_node = screened["bugs_by_node"] if screened is not None else _candidate_bugs(brief)
+        header = "\n\n".join(preview[k] for k in ("title", "cf_crash_signature"))
+        header_refs = disclosure.refs(header, bugs_by_node)
+        comment_refs = disclosure.refs(preview["comment"], bugs_by_node)
+        hidden = disclosure.nonpublic(header_refs | comment_refs)
+        if hidden is None:
+            return dict(result, retry=True, skipped="could not check the final bug description")
+        if hidden & header_refs:
+            # The ordinary filer screens only the description by changeset, so no fallback.
+            return dict(result, skipped="the final bug title or signature names a nonpublic bug")
+        if hidden:
+            # The ordinary filer withholds a description naming a nonpublic bug.
+            return dict(result, raptor_lake_text_restricted=True,
+                        skipped="the final bug description still names a nonpublic bug")
+    # A hardware bug is not a regression, whatever candidate the analysis kept.
+    preview["keywords"] = ["crash"]
     preview["blocked"].append(sigage.RAPTOR_LAKE_META)
     try:
         payload = bugzilla_apply._create_payload(preview, "", {})
@@ -1283,11 +1419,19 @@ def run_spike_escalation(escalation_id):
         return
     esc.attempts = (esc.attempts or 0) + 1
     esc.set_status("running")
-    raptor = bool((esc.payload or {}).get("raptor_lake"))
+    # An analysed classification survives a restart; reuse its saved findings, not a rerun.
+    analysed = (esc.payload or {}).get("raptor_lake_from") == "analysis"
+    raptor = bool((esc.payload or {}).get("raptor_lake")) and not analysed
     try:
         findings, grounded = None, False
-        brief = build_spike_brief(esc, light=True) if raptor else build_spike_brief(esc)
-        if not raptor:
+        brief = build_spike_brief(esc, light=True) if raptor or analysed else build_spike_brief(esc)
+        if analysed:
+            from crashclouseau.agent.spike_agent import SpikeFindings
+
+            saved = esc.payload.get("findings")
+            findings = SpikeFindings.model_validate(saved) if saved else None
+            grounded = bool(esc.payload.get("grounded"))
+        elif not raptor:
             from crashclouseau.agent import spike_agent  # lazy: pulls the SDK
 
             run = asyncio.run(spike_agent.run_spike_agent(brief))
@@ -1309,12 +1453,20 @@ def run_spike_escalation(escalation_id):
                         "findings=%s)", esc.id, run.num_turns, run.total_cost_usd or 0.0,
                         run.tool_calls, "yes" if findings is not None else "none")
             grounded = run.grounded
+            external = _raptor_lake_external(esc, findings, grounded,
+                                             config.get_agent_spike_escalation())
+            if external is not None:
+                esc.merge_payload({
+                    "raptor_lake": external,
+                    "raptor_lake_from": "analysis",
+                    "raptor_lake_candidate_bugs": _candidate_bugs(brief),
+                })
         # Record the filing before unlocking so `_own_prior_bugs` can find it.
         with bugzilla_apply.filing_lock() as held:
             if not held:
                 filing = _lock_busy_filing(esc)
-            elif raptor:
-                filing = file_raptor_lake_bug(esc, brief)
+            elif (esc.payload or {}).get("raptor_lake"):
+                filing = _file_raptor_lake(esc, brief, findings, grounded)
             else:
                 filing = file_spike_bug(esc, brief, findings, grounded=grounded)
             esc.merge_payload({"filing": filing})
@@ -2223,6 +2375,11 @@ def _bucket_match(esc, brief, findings, details, stack, meta_bugs, title):
             "skipped": bugzilla_apply._tracked_clause(bug, check)}, None
 
 
+def _candidate_bugs(brief):
+    return {node: candidate["bug"] for node, candidate in (brief.get("candidate_nodes") or {}).items()
+            if candidate and candidate.get("bug")}
+
+
 def _screen(brief, findings, grounded, details, stack, link_regressor):
     """Screen the rendered comment and stored findings with a shared visibility lookup.
 
@@ -2230,8 +2387,7 @@ def _screen(brief, findings, grounded, details, stack, link_regressor):
     and ``findings_withheld``. Stored-only references can withhold findings without
     restricting the comment. An unresolved ungrounded culprit also withholds findings.
     Return ``None`` if visibility or a grounded culprit's bug cannot be resolved."""
-    bugs_by_node = {n: (c or {}).get("bug")
-                    for n, c in (brief.get("candidate_nodes") or {}).items()}
+    bugs_by_node = _candidate_bugs(brief)
     culprit = findings.culprit if findings is not None else None
     culprit_bug, unresolved = None, False
     if culprit is not None and culprit.node:
@@ -2243,7 +2399,7 @@ def _screen(brief, findings, grounded, details, stack, link_regressor):
                 return None
             unresolved = True
         if culprit_bug:
-            bugs_by_node[culprit.node] = culprit_bug
+            bugs_by_node[culprit.node] = (bugs_by_node.get(culprit.node), culprit_bug)
     published = culprit_bug if grounded else None
     draft = spike_report.build_spike_comment(
         brief, findings, details=details, stack=stack, link_regressor=link_regressor,
@@ -2372,9 +2528,17 @@ def _spike_scopes(esc, signature):
                                   date=[">=" + prev_first.isoformat(), "<" + first.isoformat()]))
         return (("{} {} ({} to {})".format(esc.product, spike["major"], first, last), during),
                 before, end)
-    days = int(spike.get("baseline_days") or sigtrend.BASELINE_DAYS)
-    before = dict(base, date=[">=" + (first - timedelta(days=days)).isoformat(),
-                              "<" + first.isoformat()])
+    exposure = spike.get("rate_exposure") or {}
+    baseline_start = _parse_day(exposure.get("baseline_start"))
+    if baseline_start is None:
+        days = int(spike.get("baseline_days") or sigtrend.BASELINE_DAYS)
+        baseline_start = first - timedelta(days=days)
+    else:
+        days = (first - baseline_start).days
+        if last == end.date():
+            # Keep later reports on the partial selection day out of retry queries.
+            during["date"][1] = "<" + end.isoformat()
+    before = dict(base, date=[">=" + baseline_start.isoformat(), "<" + first.isoformat()])
     return (("{} to {}".format(first, last), during),
             ("The {} days before".format(days), before), end)
 
@@ -2569,9 +2733,10 @@ def _retry_filings(cfg):
                             if payload.get("findings") else None)
                 brief = build_spike_brief(esc, light=True)
                 brief["culprit_in_window"] = bool(payload.get("culprit_in_window"))
-                result = (file_raptor_lake_bug(esc, brief) if payload.get("raptor_lake")
-                          else file_spike_bug(esc, brief, findings,
-                                              grounded=bool(payload.get("grounded"))))
+                grounded = bool(payload.get("grounded"))
+                result = (_file_raptor_lake(esc, brief, findings, grounded)
+                          if payload.get("raptor_lake")
+                          else file_spike_bug(esc, brief, findings, grounded=grounded))
             except Exception as exc:
                 logger.error("spike: filing retry failed for escalation %s", esc.id,
                              exc_info=True)

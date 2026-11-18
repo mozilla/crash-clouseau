@@ -82,10 +82,15 @@ def raptor_lake_note(brief):
     if not reports:
         return None
     raptor = counts.get("raptor_lake") or 0
+    assessment = brief.get("raptor_lake_assessment")
+    where = ("Clouseau's analysis (not attached)" if brief.get("raptor_lake_analysis_withheld")
+             else "the analysis below")
+    verdict = (", and {} finds an {} cause rather than a Firefox defect. Together these "
+               "meet".format(where, assessment) if assessment else ". This meets")
     return ("**Raptor Lake hardware classification.** {:,} of the spike's {:,} reports ({:.0%}) "
-            "have CPU family 6 model 183 stepping 1. This meets Clouseau's threshold for filing "
+            "have CPU family 6 model 183 stepping 1{} Clouseau's threshold for filing "
             "as INVALID under meta bug {}. Reopen if evidence points to a Firefox defect."
-            .format(raptor, reports, raptor / reports, sigage.RAPTOR_LAKE_META))
+            .format(raptor, reports, raptor / reports, verdict, sigage.RAPTOR_LAKE_META))
 
 
 def population_table(brief):
@@ -383,6 +388,14 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
     what the bug is about."""
     uuid = brief.get("uuid", "")
     channel = brief.get("channel")
+    raptor_note = raptor_lake_note(brief)
+    # Counts-only Raptor Lake filings have no analysis; analysed ones keep theirs unless the
+    # disclosure screen withheld it.
+    counts_only = bool(brief.get("raptor_lake")) and not brief.get("raptor_lake_assessment")
+    no_analysis = counts_only or bool(brief.get("raptor_lake_analysis_withheld"))
+    analysis = None if raptor_note and no_analysis else analysis_section(
+        findings, brief, author_display=author_display, link_regressor=link_regressor,
+        grounded=grounded)
     sections = [
         bucket_opener,
         "Crash report: https://crash-stats.mozilla.org/report/index/{}".format(uuid),
@@ -392,16 +405,15 @@ def build_spike_comment(brief, findings, *, details=None, stack=None, person=Non
         _awaited_block(brief),
         spike_paragraph(brief),
         population_table(brief),
-        raptor_lake_note(brief) or analysis_section(
-            findings, brief, author_display=author_display, link_regressor=link_regressor,
-            grounded=grounded),
+        raptor_note,
+        analysis,
         None if as_comment else venue_note(
             related_bugs, other_app_bugs, meta_bugs, predating_bugs=predating_bugs,
             landing_unresolved=landing_unresolved,
             node=getattr(getattr(findings, "culprit", None), "node", None),
             different_defect=different_defect),
         report_bug._needinfo_line(person) if person else None,
-        _RAPTOR_LAKE_PROVENANCE if brief.get("raptor_lake") else (
+        _RAPTOR_LAKE_PROVENANCE if counts_only else (
             report_bug._comment_provenance(channel) if as_comment
             else report_bug._provenance(channel)),
     ]

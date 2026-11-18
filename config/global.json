@@ -449,7 +449,8 @@
             "max_stacks": 3,
             "comment_on_existing": "comment",
             "raptor_lake_share": 0.9,
-            "raptor_lake_min_reports": 10
+            "raptor_lake_min_reports": 10,
+            "raptor_lake_external_share": 0.5
         },
         "version_step":
         {
