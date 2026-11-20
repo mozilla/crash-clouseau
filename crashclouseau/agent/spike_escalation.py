@@ -1276,7 +1276,7 @@ def build_spike_brief(esc, light=False):
     # this one and the spellings still live beside it join `siblings`, so the runs, the stacks,
     # our prior bugs and the venue are all looked up under every name of the crash.
     family = sigfamily.family_from_seed(seed)
-    siblings = sorted(set(siblings) | set(sigfamily.spellings(family)))
+    siblings = sorted(set(siblings) | set(sigfamily.spellings(family, esc.signature)))
     build_day = esc.build_day.isoformat() if esc.build_day else None
     brief = {
         "escalation_id": esc.id,

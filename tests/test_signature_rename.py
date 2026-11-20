@@ -30,6 +30,7 @@ from crashclouseau.agent import orchestrator as orch, spike_escalation as se, tr
 from crashclouseau.agent.schema import (  # noqa: E402
     AbstainKind, Candidate, Claim, Confidence, Decision, Dossier, SearchfoxCitation, Verdict,
 )
+from tests.ipc_signatures import IDB_ANNOTATION, IDB_SIGNATURE, LS_MESSAGE, LS_SIGNATURE  # noqa: E402
 from tests.test_autofile import _PREVIEW, _Base as _AutofileBase, _bug  # noqa: E402
 from tests.test_spike_escalation import _FakeEscalation, _FilerBase, _esc, _row  # noqa: E402
 
@@ -285,6 +286,60 @@ class TestTheBugText(unittest.TestCase):
         c = _corroborations(signature_predecessors=[], signature_handoff_build=None)
         self.assertNotIn("new NAME", report_bug.build_signature_age_note(c, CRASH_BUILD))
         self.assertNotIn("under the signature", report_bug.build_signature_since_note(c, CRASH_BUILD))
+
+
+class TestSavedIpcFamily(unittest.TestCase):
+    def _saved(self, **over):
+        facts = _corroborations(signature=IDB_SIGNATURE,
+                                signature_predecessors=[dict(PRED, signature=LS_SIGNATURE)],
+                                signature_siblings=[{"signature": LS_SIGNATURE, "relation": "frame-variant",
+                                                     "status": "coexisting"}])
+        return dict(facts, **over)
+
+    def test_the_facts_about_the_other_message_are_dropped(self):
+        c = self._saved(signature_novelty_unreliable="module_frames,predecessor_handoff",
+                        stale_signature=True, stale_signature_family_clock=LS_SIGNATURE,
+                        candidate_landed_after_first_seen_days=40.0)
+        saved = c.copy()
+        out = sigfamily.drop_foreign_ipc_facts(c, IDB_SIGNATURE)
+        for k in ("signature_predecessor", "signature_predecessors", "signature_handoff_build",
+                  "signature_family_first_seen_ever", "signature_siblings_live",
+                  "stale_signature", "stale_signature_family_clock"):
+            self.assertNotIn(k, out, k)
+        self.assertEqual(out["signature_novelty_unreliable"], "module_frames")
+        self.assertEqual(c, saved)
+        same = _corroborations()
+        self.assertIs(sigfamily.drop_foreign_ipc_facts(same, CHECK), same)
+
+    def test_filtering_a_mixed_handoff_recounts_spellings_and_drops_the_family_age(self):
+        predecessor = f"mozilla::ipc::MessageChannel::Send | {IDB_ANNOTATION}"
+        variant = f"mozilla::ipc::MessageChannel::Send<T> | {IDB_ANNOTATION}"
+        c = self._saved(signature_predecessor=predecessor,
+                        signature_predecessors=[predecessor, variant, LS_SIGNATURE],
+                        signature_fan_in=2)
+        out = sigfamily.drop_foreign_ipc_facts(c, IDB_SIGNATURE)
+        self.assertEqual(out["signature_predecessor"], predecessor)
+        self.assertEqual(out["signature_predecessors"], [predecessor, variant])
+        self.assertEqual(out["signature_fan_in"], 1)
+        self.assertNotIn("signature_family_first_seen_ever", out)
+        self.assertNotIn("absorbed", report_bug.build_signature_age_note(out, CRASH_BUILD))
+
+    def test_the_bug_neither_calls_it_a_rename_nor_counts_the_other_message(self):
+        uuid_info = {"uuid": "u-1", "signature": IDB_SIGNATURE, "channel": "nightly",
+                     "product": "Firefox", "version": "155.0.1", "buildid": CRASH_BUILD}
+        dossier = {"verdict": {"decision": "lead"}, "candidate": {"node": "n", "bug": 1, "author": "A"},
+                   "corroborations": self._saved()}
+        with mock.patch.object(report_bug, "fetch_signature_stats",
+                               return_value=(True, {})) as stats, \
+                mock.patch.object(report_bug, "fetch_crash_reason", return_value={}), \
+                mock.patch.object(report_bug, "resolve_product_component",
+                                  return_value=("Core", "Storage: IndexedDB")), \
+                mock.patch.object(report_bug, "_needinfo_person", return_value={}):
+            p = report_bug.build_bug_preview(uuid_info, {"frames": []}, dossier)
+        self.assertNotIn(LS_MESSAGE, p["comment"])
+        self.assertNotIn("new NAME", p["comment"])
+        self.assertEqual(stats.call_args.kwargs["siblings"], ())
+        self.assertEqual(dossier["corroborations"]["signature_predecessor"], LS_SIGNATURE)
 
 
 class _FakeStatsSearch:
@@ -574,6 +629,13 @@ class TestTheVenueSearch(unittest.TestCase):
                          bugzilla_apply._MAX_FAMILY_SPELLINGS)
         self.assertEqual(bugzilla_apply._family_spelling_map(CHECK, None), {})
         self.assertEqual(bugzilla_apply._family_spellings(CHECK, FAMILY), [CHECK, PATCH])
+
+    def test_saved_family_names_with_another_ipc_message_are_not_venues(self):
+        for key in ("predecessors", "siblings"):
+            with self.subTest(key=key):
+                family = {key: [LS_SIGNATURE]}
+                self.assertEqual(bugzilla_apply._family_spelling_map(IDB_SIGNATURE, family), {})
+                self.assertEqual(bugzilla_apply._family_spellings(IDB_SIGNATURE, family), [IDB_SIGNATURE])
 
     def test_unsymbolicated_covers_module_only_names(self):
         for sig in ("libxul.so (deleted) | libxul.so (deleted) | libnspr4.so (deleted)",

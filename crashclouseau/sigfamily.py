@@ -48,6 +48,7 @@ ONE DETERMINISTIC LOOKUP, AT SEED TIME, from data we already hold -- the signatu
    non-hang and vice versa: that prefix is a crash KIND. An ``AsyncShutdownTimeout`` signature
    has no family at all -- its "frames" are blocker names, and variants are different hangs
    (bug 2067456, the one-blocker/two-blocker venue over-match).
+   IPC message annotations must match or be absent from both signatures.
 3. **Classification** (``classify``), BY BUILD, ON THE CRASH'S CHANNEL, against S's first build
    there. Old builds keep reporting the old name for days after a rename lands (on 2071620,
    every date-keyed "after" report of the old name was an old build), so a date-keyed test
@@ -358,6 +359,23 @@ def _kind(signature):
     return ""
 
 
+_IPC_MESSAGE_PREFIX = "IPC_Message_Name="
+
+
+def ipc_message_annotation(parts):
+    """Return the last IPC annotation in the signature parts, if present."""
+    for part in reversed(parts):
+        if part.startswith(_IPC_MESSAGE_PREFIX):
+            return part
+    return None
+
+
+def ipc_message_name(signature):
+    """Return the annotated IPC message name, or ``None``."""
+    annotation = ipc_message_annotation(frames(signature))
+    return annotation.removeprefix(_IPC_MESSAGE_PREFIX) if annotation is not None else None
+
+
 def family_eligible(signature):
     """May *signature* have a family at all? Not an ``AsyncShutdownTimeout`` (blocker names are
     not frames), and not an empty name."""
@@ -416,7 +434,7 @@ def relate(signature, candidate, proto=None):
     cand = (candidate or "").strip()
     if not sig or not cand or sig == cand or not family_eligible(sig) or not family_eligible(cand):
         return None
-    if _kind(sig) != _kind(cand):
+    if _kind(sig) != _kind(cand) or ipc_message_name(sig) != ipc_message_name(cand):
         return None
     if cand in generated_spellings(sig):
         return "spelling"
@@ -691,18 +709,18 @@ def classify(signature, candidates, product, channel, since, until, proto=None):
     return s_first_build, at_wall, rows
 
 
-def _fan_in(predecessors):
+def _fan_in(signatures):
     """How many DISTINCT predecessors handed off to S: predecessors sharing a specific frame are
     spellings of one, so the four `WaitOnAddress` names of 2070554 count once."""
     groups = []
-    for p in predecessors:
-        spec = {normalize_frame(f) for f in specific_frames(p["signature"])}
+    for signature in signatures:
+        spec = {normalize_frame(f) for f in specific_frames(signature)}
         for g in groups:
             if g & spec:
                 g |= spec
                 break
         else:
-            groups.append(set(spec))
+            groups.append(spec)
     return len(groups)
 
 
@@ -836,7 +854,7 @@ def _lookup(sig, proto, product, channel, cfg, until):
         "family_first_seen_ever": family_first,
         "family_first_seen_ever_date": family_first_date,
         "alignment": top["alignment"] if top else None,
-        "fan_in": _fan_in(predecessors),
+        "fan_in": _fan_in(p["signature"] for p in predecessors),
         "changed_frames": top["changed_frames"] if top else None,
     }
 
@@ -1115,19 +1133,81 @@ def is_filing_sibling(row):
     return row.get("status") == "undecided"
 
 
-def spellings(family):
-    """Return unique eligible predecessor and sibling names, predecessors first."""
-    out = []
+def filing_spellings(family, signature=None):
+    """Yield eligible (name, relation) pairs, with handoffs first.
+
+    If given, *signature* limits results to names with the same IPC annotation.
+    """
     fam = family or {}
-    for row in fam.get("predecessors") or []:
-        s = row.get("signature") if isinstance(row, dict) else row
-        if s and s not in out and is_filing_name(s):
-            out.append(s)
-    for row in fam.get("siblings") or []:
-        s = row.get("signature") if isinstance(row, dict) else row
-        if s and s not in out and is_filing_sibling(row):
-            out.append(s)
-    return out
+    message = ipc_message_name(signature)
+    for key, relation in (("predecessors", "handoff"), ("siblings", "sibling")):
+        seen = set()
+        for row in fam.get(key) or []:
+            name = row.get("signature") if isinstance(row, dict) else row
+            if not name or name in seen:
+                continue
+            if signature is not None and ipc_message_name(name) != message:
+                continue
+            eligible = is_filing_name(name) if relation == "handoff" else is_filing_sibling(row)
+            if eligible:
+                seen.add(name)
+                yield name, relation
+
+
+def spellings(family, signature=None):
+    """Return unique filing names in handoff-first order."""
+    return list(dict.fromkeys(name for name, _ in filing_spellings(family, signature)))
+
+
+_HANDOFF_FACT_KEYS = (
+    "signature_predecessor", "signature_predecessors", "signature_predecessor_before",
+    "signature_predecessor_after", "signature_predecessor_change",
+    "signature_predecessor_first_seen_ever", "signature_handoff_build",
+    "signature_handoff_alignment", "signature_fan_in", "signature_family_first_seen_ever",
+)
+_STALE_FAMILY_KEYS = ("stale_signature", "stale_signature_family_clock",
+                      "candidate_landed_after_first_seen_days")
+
+
+def drop_foreign_ipc_facts(corroborations, signature):
+    """Drop saved family facts derived from signatures with a different IPC annotation."""
+    c = corroborations
+    if not signature or not c or not isinstance(c, dict):
+        return c
+    out = dict(c)
+    message = ipc_message_name(signature)
+
+    def foreign(name):
+        return isinstance(name, str) and ipc_message_name(name) != message
+
+    if foreign(c.get("signature_predecessor")):
+        for k in _HANDOFF_FACT_KEYS:
+            out.pop(k, None)
+        reasons = [r for r in str(c.get("signature_novelty_unreliable") or "").split(",")
+                   if r and r != "predecessor_handoff"]
+        if reasons:
+            out["signature_novelty_unreliable"] = ",".join(reasons)
+        else:
+            out.pop("signature_novelty_unreliable", None)
+    else:
+        predecessors = c.get("signature_predecessors") or []
+        matching = [name for name in predecessors if not foreign(name)]
+        if len(matching) != len(predecessors):
+            out["signature_predecessors"] = matching
+            out["signature_fan_in"] = _fan_in(matching)
+            # The oldest date may come from a discarded predecessor.
+            out.pop("signature_family_first_seen_ever", None)
+    siblings = c.get("signature_siblings_live") or []
+    matching = [name for name in siblings if not foreign(name)]
+    if len(matching) != len(siblings):
+        if matching:
+            out["signature_siblings_live"] = matching
+        else:
+            out.pop("signature_siblings_live")
+    if foreign(c.get("stale_signature_family_clock")):
+        for k in _STALE_FAMILY_KEYS:
+            out.pop(k, None)
+    return c if out == c else out
 
 
 def seed_facts(family):

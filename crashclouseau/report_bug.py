@@ -3191,9 +3191,10 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     For actionable stale-bug comments, ``stale`` supplies ``since``, ``person``, ``bug``
     and optional ``role`` (default ``triage owner``).
     """
+    from crashclouseau import sigfamily
+
     dossier = dossier or {}
     candidate = dossier.get("candidate")
-    corro = dossier.get("corroborations") or {}
     has_candidate = bool(candidate and candidate.get("node"))
     # A CANDIDATE IS NO LONGER THE ONLY REASON TO FILE. ``incomplete_fix``
     # (``bugzilla_apply._incomplete_fix_bug``) is a bug whose fix is already in this build on a
@@ -3203,6 +3204,10 @@ def build_bug_preview(uuid_info, stack, dossier, related_bugs=None, other_app_bu
     # existing-signature crash bugs (47%) named no regressor at all.
     if not has_candidate and not incomplete_fix:
         return None
+    saved_facts = dossier.get("corroborations") or {}
+    corro = sigfamily.drop_foreign_ipc_facts(saved_facts, uuid_info.get("signature"))
+    if corro is not saved_facts:
+        dossier = dict(dossier, corroborations=corro)
     channel = uuid_info.get("channel")
     uuid = uuid_info.get("uuid", "")
     author_unaskable = False

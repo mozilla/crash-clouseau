@@ -13,6 +13,9 @@ import unittest  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import bugzilla_apply  # noqa: E402
+from tests.ipc_signatures import (  # noqa: E402
+    IDB_ANNOTATION, IDB_MESSAGE, IDB_SIGNATURE, IPC_SEND, LS_ANNOTATION, LS_MESSAGE, LS_SIGNATURE,
+)
 
 VARIANT = "mozilla::Variant<T>::as"
 SETCOLOR = "mozilla::layers::AnimatedValue::SetColor"
@@ -72,6 +75,64 @@ class TestTruncations(unittest.TestCase):
         t = bugzilla_apply._signature_truncations(sig)
         self.assertEqual(len(t), bugzilla_apply._MAX_TRUNCATIONS)
         self.assertEqual(max(t, key=len), sig.rsplit(" | ", 1)[0])
+
+
+IPC_CALLER = "DecryptingInputStream::Read"
+IPC_FRAME = f"mozilla::dom::quota::{IPC_CALLER}"
+BARE_IPC = f"{IPC_SEND} | {IPC_FRAME}"
+IDB_LONG = f"{BARE_IPC} | {IDB_ANNOTATION}"
+LS_LONG = f"{BARE_IPC} | {LS_ANNOTATION}"
+
+
+class TestIpcMessageTruncations(unittest.TestCase):
+    def test_truncating_keeps_the_message_and_requires_a_code_frame(self):
+        self.assertEqual(bugzilla_apply._signature_truncations(IDB_LONG), {IDB_SIGNATURE: IPC_FRAME})
+        self.assertEqual(bugzilla_apply._signature_truncations(IDB_SIGNATURE), {})
+        module = f"xul.dll | {IPC_FRAME} | {IDB_ANNOTATION}"
+        self.assertEqual(bugzilla_apply._signature_truncations(module), {})
+
+    def test_the_bare_prefix_is_not_searched_for_an_annotated_crash(self):
+        bug = _bug(1, f"Crash in [@ {LS_LONG}]", f"[@ {IPC_SEND}]\n[@ {LS_LONG}]")
+        rows, params = _search([bug], signature=IDB_LONG)
+        self.assertEqual(rows, [])
+        self.assertNotIn(IPC_SEND, {v for k, v in params.items() if k.startswith("v")})
+
+    def test_an_unannotated_crash_needs_unannotated_frame_evidence(self):
+        prefix = f"[@ {IPC_SEND}]"
+        cases = (
+            (f"Crash in [@ {LS_LONG}]", prefix, False),
+            ("Crash", f"{prefix}\n[@ {LS_LONG}]", False),
+            (f"Crash with {LS_ANNOTATION} via {IPC_CALLER}", prefix, False),
+            (f"Crash sending {LS_MESSAGE} from {IPC_CALLER}", prefix, False),
+            (f"Crash in {prefix} via {IPC_CALLER}", prefix, True),
+            ("Crash", f"{prefix}\n[@ {BARE_IPC} | Other::Caller]", True),
+        )
+        for title, signatures, matches in cases:
+            with self.subTest(title=title, signatures=signatures):
+                rows, _ = _search([_bug(1, title, signatures)], signature=BARE_IPC)
+                self.assertEqual([row["via_relation"] for row in rows], ["truncation"] if matches else [])
+
+    def test_the_frame_and_message_must_come_from_the_same_signature(self):
+        prefix = f"[@ {IDB_SIGNATURE}]"
+        cases = (
+            (f"Crash in {prefix} and [@ {LS_LONG}]", False),
+            (f"Crash in {prefix} and [@ {LS_SIGNATURE}] via {IPC_CALLER}", False),
+            (f"Crash in [@ {IDB_LONG} | Other::Caller] and [@ {LS_LONG}]", True),
+            (f"Crash in {prefix} via {IPC_CALLER} [Windows]", True),
+            (f"Crash sending {IDB_MESSAGE} from {IPC_CALLER}", True),
+        )
+        for title, matches in cases:
+            with self.subTest(title=title):
+                rows, _ = _search([_bug(1, title, prefix)], signature=IDB_LONG)
+                evidence = [(row["via_relation"], row["via_signature"], row["via_frame"]) for row in rows]
+                self.assertEqual(evidence, [("truncation", IDB_SIGNATURE, IPC_FRAME)] if matches else [])
+
+    def test_summary_parts_keep_nested_brackets(self):
+        signature = "mozilla::Array<T>::operator[] | <[T] as core::Foo>::bar"
+        signatures, prose = bugzilla_apply._summary_parts(
+            f"Crash in [@ {signature}] via Baz::Qux [Windows] and [@ X::y]")
+        self.assertEqual(signatures, [signature, "X::y"])
+        self.assertEqual(prose.split(), "Crash in via Baz::Qux [Windows] and".split())
 
 
 class TestNamesFrame(unittest.TestCase):

@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 from unittest import mock  # noqa: E402
 
 from crashclouseau import config, sigage, sigfamily as sf  # noqa: E402
+from tests.ipc_signatures import IDB_ANNOTATION, IDB_MESSAGE, IDB_SIGNATURE, IPC_SEND, LS_SIGNATURE  # noqa: E402
 
 
 def _dt(day, hour=12):
@@ -280,6 +281,15 @@ class TestRelate(unittest.TestCase):
         self.assertIsNone(sf.relate(CHECK, CHECK, CHECK_PROTO))
         # A candidate with no specific frame of its own relates to nothing.
         self.assertIsNone(sf.relate(HANG, "shutdownhang | ntdll.dll | kernelbase.dll", HANG_PROTO))
+
+    def test_another_ipc_message_is_another_crash(self):
+        self.assertEqual(sf.ipc_message_name(IDB_SIGNATURE), IDB_MESSAGE)
+        self.assertIsNone(sf.ipc_message_name(IPC_SEND))
+        self.assertIsNone(sf.relate(IDB_SIGNATURE, LS_SIGNATURE))
+        self.assertIsNone(sf.relate(IDB_SIGNATURE, IPC_SEND))
+        self.assertIsNone(sf.relate(IPC_SEND, IDB_SIGNATURE))
+        variant = f"mozilla::ipc::MessageChannel::Send | {IDB_ANNOTATION}"
+        self.assertEqual(sf.relate(IDB_SIGNATURE, variant), "frame-variant")
 
     def test_changed_frames_and_their_sentence(self):
         self.assertEqual(sf.changed_frames(CHECK, PATCH), {"added": [CHECK], "removed": [PATCH]})

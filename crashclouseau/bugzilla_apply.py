@@ -37,6 +37,7 @@ import os
 import re
 import threading
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 
 from . import net
 
@@ -832,9 +833,8 @@ def _family_spelling_map(signature, family):
         dt_ = sigage._buildid_to_dt(build)
         since = dt_.isoformat() if dt_ else None
     out = {}
-    names = [(p, "handoff") for p in sigfamily.spellings({"predecessors": fam.get("predecessors")})]
-    names += [(s, "sibling") for s in sigfamily.spellings({"siblings": fam.get("siblings")})]
-    for name, relation in names[:_MAX_FAMILY_SPELLINGS]:
+    names = sigfamily.filing_spellings(fam, signature)
+    for name, relation in islice(names, _MAX_FAMILY_SPELLINGS):
         for spelling in utils.lambda_siblings(name):
             if spelling.lower() in own or spelling in out:
                 continue
@@ -872,12 +872,16 @@ def _signature_truncations(signature):
 
     Prefer the first specific omitted frame, falling back to the first symbol.
     Exclude thread entries, keys already in the prefix and AsyncShutdownTimeout signatures.
+    Keep the IPC annotation on each prefix and choose the omitted frame from the stack.
     """
     from crashclouseau import sigfamily
 
     if not sigfamily.family_eligible(signature):
         return {}
-    frames = sigfamily.frames(signature)
+    parts = sigfamily.frames(signature)
+    annotation = sigfamily.ipc_message_annotation(parts)
+    frames = [part for part in parts if part != annotation]
+    suffix = [annotation] if annotation else []
     truncations = {}
     for boundary in range(len(frames) - 1, 0, -1):
         kept = {_frame_key(f) for f in frames[:boundary]}
@@ -885,11 +889,11 @@ def _signature_truncations(signature):
                    if not _THREAD_ENTRY_RE.match(f) and _frame_key(f) not in kept]
         cut = next((f for f in omitted if sigfamily.specific_frame(f)), None) \
             or next((f for f in omitted if sigfamily.symbol_frames(f)), None)
-        short = " | ".join(frames[:boundary])
+        prefix = frames[:boundary]
         if cut is None or len(_frame_key(cut)) < _MIN_FRAME_KEY \
-                or not sigfamily.symbol_frames(short):
+                or not sigfamily.symbol_frames(" | ".join(prefix)):
             continue
-        truncations[short] = cut
+        truncations[" | ".join(prefix + suffix)] = cut
         if len(truncations) >= _MAX_TRUNCATIONS:
             break
     return truncations
@@ -909,24 +913,53 @@ def _frame_key(frame):
     return "::".join(p.strip() for p in parts[-width:])
 
 
-def _names_frame(bug, frame):
-    """Check whether the bug's summary or a frame of its crash signatures names *frame*."""
-    from crashclouseau import sigfamily
+def _summary_parts(summary):
+    """Split a summary into bracketed signatures and surrounding prose.
 
-    key = _frame_key(frame)
-    if len(key) < _MIN_FRAME_KEY:
-        return False
-    summary = _fold_frames(bug.get("summary") or "")
-    if re.search(r"(?<!\w){}(?!\w)".format(re.escape(key)), summary):
-        return True
-    return any(_frame_key(f) == key
-               for entry in _signature_field_entries(bug.get("cf_crash_signature"))
-               for f in sigfamily.frames(entry))
+    Balance brackets to keep ``operator[]`` in the signature and trailing tags in prose.
+    """
+    first, *pieces = re.split(r"\[@\s*", summary or "")
+    signatures, prose = [], [first]
+    for piece in pieces:
+        depth, end = 1, len(piece)
+        for bracket in re.finditer(r"[\[\]]", piece):
+            depth += 1 if bracket[0] == "[" else -1
+            if depth == 0:
+                end = bracket.start()
+                break
+        signatures.append(piece[:end].strip())
+        prose.append(piece[end + 1:])
+    return signatures, " ".join(prose)
+
+
+_PROSE_IPC_MESSAGE_RE = re.compile(r"IPC_Message_Name=([^\s|\[\],;()]+)"
+                                   r"|\b(P[A-Z]\w*::(?:Msg|Reply)_\w+)")
 
 
 def _truncation_venue(bug, short, cut):
-    """Accept a bug carrying *short* exactly only if it also names *cut*."""
-    return _cf_is_about(bug, short) and _names_frame(bug, cut)
+    """Require the shorter signature and same-message evidence of the omitted frame."""
+    from crashclouseau import sigfamily
+
+    key = _frame_key(cut)
+    if len(key) < _MIN_FRAME_KEY or not _cf_is_about(bug, short):
+        return False
+    message = sigfamily.ipc_message_name(short)
+    pattern = re.compile(r"(?<!\w){}(?!\w)".format(re.escape(key)))
+    signatures, prose = _summary_parts(bug.get("summary"))
+    summary_messages = {annotation or name for annotation, name in _PROSE_IPC_MESSAGE_RE.findall(prose)}
+    for signature in signatures:
+        summary_message = sigfamily.ipc_message_name(signature)
+        summary_messages.add(summary_message)
+        if summary_message == message and any(pattern.search(_fold_frames(frame))
+                                              for frame in sigfamily.frames(signature)):
+            return True
+    # Prose can describe any message in the summary.
+    if summary_messages <= {message} and pattern.search(_fold_frames(prose)):
+        return True
+    return any(_frame_key(f) == key
+               for entry in _signature_field_entries(bug.get("cf_crash_signature"))
+               if sigfamily.ipc_message_name(entry) == message
+               for f in sigfamily.frames(entry))
 
 
 def _open_bugs_for_signature(signature, timeout=_HTTP_TIMEOUT, family=None, product=None,
@@ -2069,7 +2102,7 @@ def _family_spellings(signature, family):
     from crashclouseau import sigfamily
 
     out = sorted(utils.lambda_siblings((signature or "").strip()))
-    for name in sigfamily.spellings(family):
+    for name in sigfamily.spellings(family, signature):
         for spelling in sorted(utils.lambda_siblings(name)):
             if spelling not in out:
                 out.append(spelling)
