@@ -2217,15 +2217,19 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     email = ""
     try:
         if venue is not None:
-            text = spike_report.build_spike_comment(
-                brief, findings, details=details, stack=stack, person=person,
-                author_display=report_bug._person_display(person) if person else None,
-                link_regressor=link_regressor, grounded=grounded, as_comment=True)
-            text = _without_withdrawn(text, withdrawn, screened)
+            author_display = report_bug._person_display(person)
             # Explain alternate-name matches; attachment depends on the match type.
             via_note = bugzilla_apply._venue_via_signature_note(signature, venue, family)
-            if via_note:
-                text += "\n\n" + via_note
+
+            def render_comment(requestee=None):
+                text = spike_report.build_spike_comment(
+                    brief, findings, details=details, stack=stack, person=requestee,
+                    author_display=author_display, link_regressor=link_regressor,
+                    grounded=grounded, as_comment=True)
+                text = _without_withdrawn(text, withdrawn, screened)
+                return text + "\n\n" + via_note if via_note else text
+
+            text = render_comment()
             # Anonymous reads cannot check restricted comments for novelty.
             if venue.get("public", True):
                 from crashclouseau.agent import comment_novelty
@@ -2240,6 +2244,14 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                     return dict(result, bug=venue["id"], venue_kind=venue_kind,
                                 skipped="the comment adds nothing to bug {}: {}".format(
                                     venue["id"], novelty["reason"].rstrip(".")))
+            # Read late to catch changes during the novelty check.
+            if person:
+                hold = bugzilla_apply._needinfo_hold(venue["id"], token, cfg["needinfo_quiet_days"])
+                if hold:
+                    result["needinfo_withheld"] = hold
+                else:
+                    text = render_comment(person)
+                    email = person.get("account") or ""
             bugzilla_apply._post_comment(venue["id"], text, False, token)
             if via_note:
                 result["venue_via_signature"] = venue.get("via_signature")
@@ -2247,7 +2259,6 @@ def file_spike_bug(esc, brief, findings, grounded=True):
                 if bugzilla_apply._attaches_signature(venue, signature):
                     result["signature_attached"] = bugzilla_apply._attach_signature(
                         venue["id"], signature, token)
-            email = (person or {}).get("account") or ""
             outcome = bugzilla_apply._set_needinfo(venue["id"], email, token) if email else None
             result.update({"filed": True, "bug": venue["id"], "mode": "spike_comment",
                            "venue_kind": venue_kind, "venue_for_spike": bool(for_spike),

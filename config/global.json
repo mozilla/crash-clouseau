@@ -448,6 +448,7 @@
             "breaker_runs_per_day": 20,
             "max_stacks": 3,
             "comment_on_existing": "comment",
+            "needinfo_quiet_days": 15,
             "raptor_lake_share": 0.9,
             "raptor_lake_min_reports": 10,
             "raptor_lake_external_share": 0.5

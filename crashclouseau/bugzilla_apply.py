@@ -2816,6 +2816,46 @@ def _bug_activity(bug_id, timeout=_HTTP_TIMEOUT):
             "discussion": discussion}
 
 
+_PATCH_TYPES = frozenset({"text/x-phabricator-request", "text/x-github-pull-request",
+                          "text/x-review-board-request"})
+# Bugzilla omits collapsed comments by default.
+_HOLD_FIELDS = ",".join(("id", "attachments.id", "attachments.is_obsolete", "attachments.is_patch",
+                         "attachments.content_type", "comments.creator", "comments.creation_time",
+                         "history.who", "history.when", "_collapsed_comments"))
+
+
+def _needinfo_hold(bug_id, token, days, timeout=_HTTP_TIMEOUT):
+    """Return a needinfo hold reason, or ``None``.
+
+    Hold on a failed read, a visible non-obsolete patch, or visible comments or
+    field changes within *days* days by accounts outside the bot filter.
+    """
+    from crashclouseau import sigage
+    from crashclouseau.agent.experts import _is_bot
+
+    try:
+        r = net.get("{}/{}".format(_bz_rest(), bug_id), headers=_auth(token), timeout=timeout,
+                    params={"include_fields": _HOLD_FIELDS})
+        r.raise_for_status()
+        bug = ((r.json() or {}).get("bugs") or [None])[0]
+    except Exception as exc:
+        logger.warning("autofile: activity read failed for bug %s: %s", bug_id, exc)
+        bug = None
+    if not bug:
+        return "could not read bug {}".format(bug_id)
+    for a in bug.get("attachments") or []:
+        if not a.get("is_obsolete") and (a.get("is_patch") or a.get("content_type") in _PATCH_TYPES):
+            return "bug {} has a patch (attachment {})".format(bug_id, a.get("id"))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    events = [(c.get("creator"), c.get("creation_time")) for c in bug.get("comments") or []]
+    events += [(h.get("who"), h.get("when")) for h in bug.get("history") or []]
+    for who, when in events:
+        at = sigage.to_datetime(when)
+        if at is not None and at >= since and not _is_bot(who or ""):
+            return "bug {} has human activity from {}".format(bug_id, at.date().isoformat())
+    return None
+
+
 def _our_duplicates(bug_id, timeout=_HTTP_TIMEOUT):
     """Return public duplicate IDs with ``clouseau`` in the creator login.
 

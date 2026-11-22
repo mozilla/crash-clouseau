@@ -636,6 +636,7 @@ class _FilerBase(unittest.TestCase):
             # field remains.
             mock.patch("crashclouseau.sigage.affected_trains", return_value=None),
             mock.patch.object(bugzilla_apply, "_set_needinfo", return_value=None),
+            mock.patch.object(bugzilla_apply, "_needinfo_hold", return_value=None),
             mock.patch.object(report_bug, "fetch_crash_reason",
                               return_value={"moz_crash_reason": "MOZ_CRASH(oops)"}),
             mock.patch.object(report_bug, "security_group", return_value="core-security"),
@@ -759,6 +760,22 @@ class TestFiling(_FilerBase):
         # The footer must not ask readers to resolve the existing bug.
         self.assertIn("_Posted automatically by", self.comments[0][1])
         self.assertNotIn("resolve THIS bug", self.comments[0][1])
+
+    def test_a_quiet_open_bug_gets_the_needinfo(self):
+        with mock.patch.object(bugzilla_apply, "_open_bugs_for_signature", return_value=[
+                {"id": 55, "creation_time": "2026-08-20T00:00:00Z", "product": "Core",
+                 "keywords": [], "regressed_by": []}]):
+            res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual(res["needinfo"], "dev@moz.example")
+        self.assertNotIn("needinfo_withheld", res)
+        self.assertIn(":dev, can you have a look please?", self.comments[0][1])
+        bugzilla_apply._needinfo_hold.assert_called_once_with(55, "tok", 15)
+        bugzilla_apply._set_needinfo.assert_called_once_with(55, "dev@moz.example", "tok")
+
+    def test_a_new_bug_does_not_read_the_activity(self):
+        res = se.file_spike_bug(_esc(), self.brief, self.findings, grounded=True)
+        self.assertEqual(res["mode"], "spike_new_bug")
+        bugzilla_apply._needinfo_hold.assert_not_called()
 
     def test_without_a_culprit_the_oldest_open_bug_gets_the_comment(self):
         findings = self.findings.model_copy(update={"culprit": None})
@@ -1147,7 +1164,25 @@ class TestTheNoveltyCheck(_FilerBase):
         res, check = self._file()
         self.assertEqual((res["filed"], res["bug"], res["mode"]), (True, 55, "spike_comment"))
         self.assertTrue(res["novelty"]["new_information"])
-        check.assert_called_once_with(55, self.comments[0][1], spike=True)
+        draft = self.comments[0][1].replace("\n\n:dev, can you have a look please?", "", 1)
+        check.assert_called_once_with(55, draft, spike=True)
+
+    def test_activity_during_the_novelty_check_withholds_the_needinfo(self):
+        reason = "bug 55 has a patch (attachment 9)"
+
+        def patch_arrives(*args, **kwargs):
+            bugzilla_apply._needinfo_hold.return_value = reason
+            return {"new_information": True, "reason": "new crash evidence"}
+
+        with mock.patch("crashclouseau.agent.comment_novelty.check", side_effect=patch_arrives):
+            res, _ = self._file()
+        self.assertEqual(res["needinfo_withheld"], reason)
+        self.assertIsNone(res["needinfo"])
+        [(bug_id, text)] = self.comments
+        self.assertEqual(bug_id, 55)
+        self.assertIn("by :dev", text)
+        self.assertNotIn("can you have a look please?", text)
+        bugzilla_apply._set_needinfo.assert_not_called()
 
     def test_a_comment_with_nothing_new_is_not_posted(self):
         res, _ = self._file({"new_information": False, "cost_usd": 0.03,
@@ -1157,6 +1192,7 @@ class TestTheNoveltyCheck(_FilerBase):
                                          "names bug 2074047 as the cause")
         self.assertNotIn("retry", res)
         self.assertEqual(self.comments, [])
+        bugzilla_apply._needinfo_hold.assert_not_called()
         bugzilla_apply._set_needinfo.assert_not_called()
 
     def test_an_unanswered_check_is_retried_later(self):
@@ -1164,6 +1200,7 @@ class TestTheNoveltyCheck(_FilerBase):
         self.assertEqual((res["filed"], res["retry"]), (False, True))
         self.assertEqual(res["skipped"], "could not check whether the comment adds to bug 55")
         self.assertEqual(self.comments, [])
+        bugzilla_apply._needinfo_hold.assert_not_called()
 
     def test_a_restricted_venue_is_posted_unchecked(self):
         res, check = self._file(below={"id": 91, "kind": "own_restricted", "assigned_to": ""})
@@ -2092,3 +2129,74 @@ class TestABackedOutCulprit(_FilerBase):
                 self.assertIsNone(se._culprit_backout(
                     findings, grounded, "nightly", self.brief["buildid"]))
         self.lookup.assert_not_called()
+
+
+class TestTheNeedinfoHold(unittest.TestCase):
+    def setUp(self):
+        self.get = self.enterContext(mock.patch.object(bugzilla_apply.net, "get"))
+
+    def _hold(self, bug, days=15):
+        self.get.return_value.json.return_value = {"bugs": [{"id": 55, **bug}]}
+        return bugzilla_apply._needinfo_hold(55, "tok", days)
+
+    def _ago(self, days):
+        return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def test_non_obsolete_patches_hold(self):
+        for is_patch, content_type in (
+            (1, "text/plain"),
+            (0, "text/x-github-pull-request"),
+            (0, "text/x-phabricator-request"),
+            (0, "text/x-review-board-request"),
+        ):
+            with self.subTest(content_type=content_type):
+                attachment = {"id": 9, "is_patch": is_patch, "is_obsolete": 0,
+                              "content_type": content_type}
+                self.assertEqual(self._hold({"attachments": [attachment]}),
+                                 "bug 55 has a patch (attachment 9)")
+
+    def test_obsolete_patches_and_other_attachments_do_not_hold(self):
+        self.assertIsNone(self._hold({"attachments": [
+            {"id": 9, "is_patch": 0, "is_obsolete": 1, "content_type": "text/x-phabricator-request"},
+            {"id": 10, "is_patch": 0, "is_obsolete": 0, "content_type": "text/plain"}]}))
+
+    def test_a_recent_human_comment_holds(self):
+        out = self._hold({"comments": [{"creator": "dev@moz.example", "creation_time": self._ago(3)}]})
+        self.assertTrue(out.startswith("bug 55 has human activity from "))
+
+    def test_a_recent_human_field_change_holds(self):
+        out = self._hold({"history": [{"who": "dev@moz.example", "when": self._ago(3)}]})
+        self.assertTrue(out.startswith("bug 55 has human activity from "))
+
+    def test_automation_and_old_activity_do_not_hold(self):
+        self.assertIsNone(self._hold({
+            "comments": [{"creator": "clouseau-bot@mozilla.tld", "creation_time": self._ago(1)},
+                         {"creator": "dev@moz.example", "creation_time": self._ago(40)}],
+            "history": [{"who": "release-mgmt-account-bot@mozilla.tld", "when": self._ago(1)},
+                        {"who": "dev@moz.example", "when": self._ago(16)}]}))
+
+    def test_mozilla_bugs_automation_does_not_hold(self):
+        self.assertIsNone(self._hold({
+            "comments": [{"creator": "wptsync@mozilla.bugs", "creation_time": self._ago(1)}]}))
+
+    def test_the_request_limits_fields_and_includes_collapsed_comments(self):
+        self._hold({})
+        request = self.get.call_args.kwargs
+        self.assertEqual(request["headers"], {"X-Bugzilla-API-Key": "tok"})
+        self.assertEqual(set(request["params"]["include_fields"].split(",")), {
+            "id", "attachments.id", "attachments.is_obsolete", "attachments.is_patch",
+            "attachments.content_type", "comments.creator", "comments.creation_time",
+            "history.who", "history.when", "_collapsed_comments"})
+
+    def test_the_window_is_the_configured_days(self):
+        bug = {"comments": [{"creator": "dev@moz.example", "creation_time": self._ago(20)}]}
+        self.assertIsNone(self._hold(bug, days=15))
+        self.assertIsNotNone(self._hold(bug, days=30))
+
+    def test_a_failed_request_holds(self):
+        self.get.side_effect = RuntimeError("503")
+        self.assertEqual(bugzilla_apply._needinfo_hold(55, "tok", 15), "could not read bug 55")
+
+    def test_a_missing_bug_holds(self):
+        self.get.return_value.json.return_value = {"bugs": []}
+        self.assertEqual(bugzilla_apply._needinfo_hold(55, "tok", 15), "could not read bug 55")
