@@ -685,9 +685,9 @@ class TestConfirmBeforePublishing(unittest.TestCase):
 
         self.floor_waivers = []
 
-        def _filer(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False,
-                   floor_waiver=None):
-            self.assertTrue(dry_run, "only the dry run may reach the filer here")
+        def _filer(uuid, uuid_info, stack, dossier, verdict, confidence, *,
+                   floor_waiver=None, planning=False):
+            self.assertTrue(planning, "confirmation planning must say so")
             self.dry_runs.append((verdict, confidence))
             self.floor_waivers.append(floor_waiver)
             if self.during_dry_run:

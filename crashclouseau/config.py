@@ -1219,8 +1219,13 @@ def get_agent_autofile(channel=None, product=None):
         "fresh_origin_days": a.get("fresh_origin_days", 14),
         # Recent-report window for the alternative population check. 0/null disables it.
         "population_days": a.get("population_days", 30),
-        # Minimum signature age in days for the unreachable-state gate; 0/null disables it.
+        # Minimum signature age in days for the age-based decline. 0/null disables that check.
         "unreachable_min_age_days": a.get("unreachable_min_age_days", 1095),
+        # Raptor Lake share across all channels over 182 days. 0/null disables this check.
+        # The 2026-11-23 snapshot put useful unreachable filings at or below 0.119.
+        # The minimum of 20 reports matches bugbot's volume threshold.
+        "unreachable_broken_cpu_rate": a.get("unreachable_broken_cpu_rate", 0.2),
+        "unreachable_broken_cpu_min_reports": a.get("unreachable_broken_cpu_min_reports", 20),
         # A channel-wide rise can also pass the floor; null disables this rule.
         "onset": _onset_rule(a.get("onset", ONSET_DEFAULT)),
         # Minimum confidence eligible for confirmation below the filing threshold; null disables.

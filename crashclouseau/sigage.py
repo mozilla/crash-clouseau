@@ -976,7 +976,8 @@ def _shared_address_flips(rows, flips):
     return min(shared, flips)
 
 
-def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS):
+def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WINDOW_DAYS,
+                   *, include_bit_flips=True):
     """Measure flip, broken-CPU and CPU-concentration statistics for a signature.
 
     Exclude flips on page-aligned addresses and those meeting ``shared_address_floor``.
@@ -984,18 +985,20 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
     Empty flip and CPU facets mean zero and unknown, respectively.
 
     Initial lookup failures return ``NO_HARDWARE_NOISE``. Missing split facets leave the
-    corresponding exclusions unapplied.
+    corresponding exclusions unapplied. Set ``include_bit_flips=False`` for CPU statistics
+    alone, with bit-flip fields returned as unknown.
     """
     empty = dict(NO_HARDWARE_NOISE)
     if not signature:
         return empty
     days = max(1, min(int(days or MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    flip_facet = "possible_bit_flips_max_confidence"
     params = {
         "signature": "=" + signature,
         "product": product or "Firefox",
         "date": ">=" + since,
-        "_facets": ["possible_bit_flips_max_confidence", "cpu_info"],
+        "_facets": [flip_facet, "cpu_info"] if include_bit_flips else ["cpu_info"],
         # `possible_bit_flips_max_confidence` takes 17 distinct values across the entire corpus,
         # so summing its facet is exact. `cpu_info` has a long tail, but truncation is SAFE here
         # for a reason worth stating: facets come back COUNT-ORDERED, so a model holding a
@@ -1039,58 +1042,45 @@ def hardware_noise(signature, product="Firefox", channel="nightly", days=MAX_WIN
         return empty
     facets = result.get("facets") or {}
 
-    def _sum(field, keep=None, if_empty=0):
-        # `if_empty` is the None-vs-0.0 distinction and it differs per facet, which is why it is
-        # a parameter and not a constant: an empty flip facet is a measured ZERO (Socorro only
-        # sets the field when the stackwalker found a candidate), an empty `cpu_info` facet is
-        # an UNKNOWN (the field is simply absent on those reports).
-        rows = facets.get(field)
-        if not isinstance(rows, list):
-            return None
-        if not rows:
-            return if_empty
-        return sum(r.get("count") or 0 for r in rows
-                   if isinstance(r, dict) and (keep is None or keep(r.get("term"))))
+    def flip_count(facets):
+        rows = facets.get(flip_facet)
+        if isinstance(rows, list):
+            return sum(row.get("count") or 0 for row in rows if isinstance(row, dict))
+        return None
 
-    flips = _sum("possible_bit_flips_max_confidence")
+    flips = flip_count(facets) if include_bit_flips else None
     aligned = shared = 0
     # Apply exclusions to the numerator only; keep all reports in the denominator.
-    informative = {}
-    try:
-        socorro.SuperSearch(
-            params={**params, "address": "!$000",
-                    "_facets": ["possible_bit_flips_max_confidence", "address"],
-                    "_aggs.address": ["possible_bit_flips_max_confidence",
-                                      "_cardinality.install_time"]},
-            handler=handler, handlerdata=informative).wait()
-    except Exception as exc:  # pragma: no cover - network; never break a seed
-        logger.warning("sigage: page-aligned split failed for %r: %s", signature, exc)
-    rest = informative.get("result") or {}
-    rows = (rest.get("facets") or {}).get("possible_bit_flips_max_confidence")
-    if flips is not None and isinstance(rest.get("total"), int) and isinstance(rows, list):
-        kept = sum(r.get("count") or 0 for r in rows if isinstance(r, dict))
-        aligned = max(0, flips - kept)
-        flips = flips - aligned
-        shared = _shared_address_flips((rest.get("facets") or {}).get("address"), flips)
-        flips = flips - shared
-    broken = _sum("cpu_info", keep=lambda t: cpu_model(t) in BROKEN_CPU_MODELS, if_empty=None)
-    # The rows the Raptor Lake sum throws away. Already paid for, and they answer the question
-    # `broken_cpu_rate` cannot: WHICH processor, and how many different ones.
-    #
-    # Grouped by `cpu_model` for the same reason the sum above is: otherwise one signature with
-    # reports from both build architectures would have `broken_cpu_rate` treating them as ONE
-    # processor while `cpu_terms` counted TWO and `top_cpu_share` split its own denominator.
+    if flips:
+        informative = {}
+        try:
+            socorro.SuperSearch(
+                params={**params, "address": "!$000",
+                        "_facets": [flip_facet, "address"],
+                        "_aggs.address": [flip_facet, "_cardinality.install_time"]},
+                handler=handler, handlerdata=informative).wait()
+        except Exception as exc:  # pragma: no cover - network; never break a seed
+            logger.warning("sigage: page-aligned split failed for %r: %s", signature, exc)
+        rest = informative.get("result") or {}
+        split_facets = rest.get("facets") or {}
+        kept = flip_count(split_facets) if isinstance(rest.get("total"), int) else None
+        if kept is not None:
+            aligned = max(0, flips - kept)
+            flips -= aligned
+            shared = _shared_address_flips(split_facets.get("address"), flips)
+            flips -= shared
+    # Group CPU strings by model so different architecture spellings count together.
+    cpu_rows = facets.get("cpu_info")
+    if not isinstance(cpu_rows, list):
+        cpu_rows = []
     grouped = {}
-    for row in (facets.get("cpu_info") or []):
-        if isinstance(row, dict):
-            model = cpu_model(row.get("term"))
-            # Socorro's placeholder is not a processor: `unknown` on 6,489 of 16,368 Fenix
-            # nightly reports (2026-09-08..15) against 10 of a week's desktop reports. Counted,
-            # it would be "one CPU model at 40%" -- a false fact handed to the prompt and to
-            # `signature_top_cpu_term`. Same rule as `machine._known_cpu`.
-            if not model or str(model).strip().lower() in ("", "unknown"):
-                continue
+    for row in cpu_rows:
+        if not isinstance(row, dict):
+            continue
+        model = cpu_model(row.get("term"))
+        if model.lower() not in ("", "unknown"):
             grouped[model] = grouped.get(model, 0) + (row.get("count") or 0)
+    broken = sum(grouped.get(model, 0) for model in BROKEN_CPU_MODELS) if cpu_rows else None
     cpu_reports = sum(grouped.values())
     top = max(grouped.items(), key=lambda kv: kv[1], default=None)
     return {

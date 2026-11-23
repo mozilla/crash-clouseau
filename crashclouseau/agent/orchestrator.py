@@ -5627,7 +5627,7 @@ def _confirm_before_publishing(uuid, seed, result, llm_cfg, tools_cfg, started=N
     try:
         stack, uuid_info = models.CrashStack.get_by_uuid(uuid)
         plan = bugzilla_apply.autofile_bug(uuid, uuid_info or {}, stack, dossier,
-                                           row["verdict"], planned, dry_run=True,
+                                           row["verdict"], planned, planning=True,
                                            floor_waiver="pending" if waivable else None)
     except BaseTimeoutException as exc:
         return result, _withhold(uuid, confirmation, exc)

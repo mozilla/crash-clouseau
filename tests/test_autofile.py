@@ -466,66 +466,114 @@ class TestDryRun(_Base):
         self.assertTrue(self.writes)
 
 
-class TestUnreachableStateOnAnOldSignature(_Base):
+class TestUnreachableState(_Base):
     def setUp(self):
         super().setUp()
+        self.cfg = _cfg(
+            unreachable_min_age_days=1095, unreachable_broken_cpu_rate=0.2,
+            unreachable_broken_cpu_min_reports=20, onset=cconfig.ONSET_DEFAULT)
         for name, value in (("fetch_signature_stats", (True, {"count": 50, "installs": 50})),
-                            ("fetch_recent_channel_stats", {"release": {"installs": 300}}),
+                            ("fetch_recent_channel_stats", {"release": {"installs": 50}}),
                             ("fetch_channel_onsets", {})):
             self.enterContext(mock.patch.object(report_bug, name, return_value=value))
+        self.noise = self.enterContext(mock.patch.object(
+            sigage, "hardware_noise", return_value=sigage.NO_HARDWARE_NOISE))
 
-    def _dossier(self, origin="unreachable_unknown", age=3719.0):
+    @staticmethod
+    def _dossier(origin="unreachable_unknown", age=1095, **corro):
         return {"candidate": {"node": "n"}, "verdict": {"state_origin": origin},
-                "corroborations": {"signature_age_days_ever": age}}
+                "corroborations": {"signature_age_days_ever": age, **corro}}
 
-    def _actionable(self, dossier=None, **cfg_over):
-        cfg_over.setdefault("unreachable_min_age_days", 1095)
-        cfg_over.setdefault("onset", cconfig.ONSET_DEFAULT)
-        return self._file("actionable", 70, dossier or self._dossier(), **cfg_over)
+    def _actionable(self, dossier, *, dry_run=False, planning=False, **overrides):
+        bugzilla_apply.config.get_agent_autofile.return_value = self.cfg | overrides
+        return bugzilla_apply.autofile_bug("u-1", _INFO, {}, dossier, "actionable", 70,
+                                           dry_run=dry_run, planning=planning)
 
-    def test_it_is_declined_whatever_the_volume(self):
-        res = self._actionable()
-        self.assertFalse(res["filed"])
-        self.assertIn("no path in correct code", res["skipped"])
-        self.assertIn("3719 days", res["skipped"])
+    def test_an_old_signature_without_a_suspect_declines(self):
+        result = self._actionable(self._dossier())
+        self.assertFalse(result["filed"])
+        self.assertIn("1095 days ago", result["skipped"])
         self.assertEqual(self.created, [])
+        self.noise.assert_not_called()
 
-    def test_it_files_as_before_otherwise(self):
-        for name, dossier, cfg in (
-                ("reachable", self._dossier("reachable"), {}),
-                ("suspect named", self._dossier("unreachable_suspect"), {}),
-                ("not stated", self._dossier(None), {}),
-                ("young signature", self._dossier(age=992.0), {}),
-                ("age unknown", self._dossier(age=None), {}),
-                ("disabled", self._dossier(), {"unreachable_min_age_days": None})):
-            with self.subTest(name):
-                self.created.clear()
-                res = self._actionable(dossier, **cfg)
-                self.assertTrue(res["filed"], res)
-                self.assertEqual(len(self.created), 1)
+    def test_cpu_share_can_decline_either_unreachable_verdict(self):
+        self.noise.return_value = {"reports": 20, "broken_cpu_rate": 0.2}
+        for origin, age in (("unreachable_unknown", 30), ("unreachable_suspect", None)):
+            with self.subTest(origin=origin):
+                result = self._actionable(self._dossier(origin, age))
+                self.assertFalse(result["filed"])
+                self.assertIn("20% of the signature's 20 reports", result["skipped"])
+                self.assertIn("all channels", result["skipped"])
+        self.assertEqual(self.created, [])
+        self.noise.assert_called_with(_INFO["signature"], product=_INFO["product"],
+                                      channel=None, days=182, include_bit_flips=False)
 
-    def test_a_rising_channel_or_unread_counts_file_as_before(self):
+    def test_age_alone_requires_an_old_signature_and_no_suspect(self):
+        for origin, age in (("unreachable_unknown", 1094), ("unreachable_unknown", None),
+                            ("unreachable_suspect", 1095)):
+            with self.subTest(origin=origin, age=age):
+                self.assertTrue(self._actionable(self._dossier(origin, age))["filed"])
+
+    def test_cpu_evidence_requires_both_the_share_and_the_report_floor(self):
+        for reports, share in ((19, 0.5), (500, 0.198), (None, None)):
+            with self.subTest(reports=reports, share=share):
+                self.noise.return_value = {"reports": reports, "broken_cpu_rate": share}
+                result = self._actionable(self._dossier(age=30))
+                self.assertTrue(result["filed"], result)
+
+    def test_ineligible_verdicts_and_disabled_rules_skip_the_lookup(self):
+        for origin, overrides in (
+                ("reachable", {}), (None, {}),
+                ("unreachable_unknown", {"unreachable_min_age_days": None,
+                                         "unreachable_broken_cpu_rate": None})):
+            with self.subTest(origin=origin):
+                result = self._actionable(self._dossier(origin), **overrides)
+                self.assertTrue(result["filed"], result)
+        self.noise.assert_not_called()
+
+    def test_regression_evidence_spares_either_arm(self):
+        for age in (1095, 30):
+            for corro in ({"frequency_regression": True},
+                          {"actionable_origin_age": {"days_before_build": 3,
+                                                     "predates_signature": True}}):
+                with self.subTest(age=age, corroborations=corro):
+                    result = self._actionable(self._dossier(age=age, **corro))
+                    self.assertTrue(result["filed"], result)
+        self.noise.assert_not_called()
+
+    def test_a_rise_or_unknown_population_spares_either_arm(self):
+        self.noise.return_value = {"reports": 40, "broken_cpu_rate": 0.25}
         rising = {"beta": {"reports": 20, "installs": 10, "busiest_day": 1}}
-        for name, target, value in (("rising", "fetch_channel_onsets", rising),
-                                    ("unread counts", "fetch_recent_channel_stats", None),
-                                    ("unread onsets", "fetch_channel_onsets", None)):
-            with self.subTest(name), mock.patch.object(report_bug, target, return_value=value):
-                self.created.clear()
-                self.assertTrue(self._actionable()["filed"])
+        for name, value in (("fetch_channel_onsets", rising),
+                            ("fetch_channel_onsets", None),
+                            ("fetch_recent_channel_stats", None)):
+            with mock.patch.object(report_bug, name, return_value=value):
+                for age in (1095, 30):
+                    with self.subTest(age=age, lookup=name, result=value):
+                        result = self._actionable(self._dossier(age=age))
+                        self.assertTrue(result["filed"], result)
 
-    def test_counts_below_the_onset_threshold_still_decline(self):
+    def test_counts_below_the_onset_threshold_skip_the_onset_lookup(self):
         with mock.patch.object(report_bug, "fetch_recent_channel_stats",
                                return_value={"release": {"installs": 4}}):
-            self.assertFalse(self._actionable()["filed"])
+            self.assertFalse(self._actionable(self._dossier())["filed"])
         report_bug.fetch_channel_onsets.assert_not_called()
 
-    def test_a_dry_run_leaves_it_to_the_confirming_pass(self):
-        bugzilla_apply.config.get_agent_autofile.return_value = _cfg(
-            unreachable_min_age_days=1095)
-        res = bugzilla_apply.autofile_bug("u-1", _INFO, {}, self._dossier(), "actionable", 70,
-                                          dry_run=True)
-        self.assertNotIn("no path in correct code", res.get("skipped") or "")
-        self.assertEqual(len(self.created), 1)
+    def test_confirmation_can_revisit_a_decline_and_final_dry_run_matches_filing(self):
+        self.noise.return_value = {"reports": 40, "broken_cpu_rate": 0.25}
+        for age in (1095, 30):
+            with self.subTest(age=age):
+                dossier = self._dossier(age=age)
+                with mock.patch.object(
+                        bugzilla_apply, "_create_bug",
+                        side_effect=lambda *_: bugzilla_apply._stop_if_dry_run("new_bug")):
+                    plan = self._actionable(dossier, planning=True)
+                    self.assertEqual(plan.get("would_publish"), "new_bug", plan)
+                result = self._actionable(dossier)
+                self.assertFalse(result["filed"])
+                final = self._actionable(dossier, dry_run=True)
+                self.assertEqual(final, dict(result, dry_run=True))
+        self.assertEqual(self.created, [])
 
 
 class TestDuplicates(_Base):

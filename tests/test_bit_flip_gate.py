@@ -983,19 +983,19 @@ class TestTheBriefCarriesTheHardware(unittest.TestCase):
 
 
 class TestHardwareNoiseLookup(unittest.TestCase):
-    """`sigage.hardware_noise` -- one SuperSearch, both shares."""
+    """Measure hardware-noise shares with Socorro facets."""
 
-    def _run(self, payload):
-        with mock.patch.object(sigage.socorro, "SuperSearch") as ss:
-            def ctor(params=None, handler=None, handlerdata=None, **kw):
-                handler(payload, handlerdata)
-                return mock.Mock(wait=mock.Mock())
-            ss.side_effect = ctor
-            out = sigage.hardware_noise("S")
-            return out, ss.call_args.kwargs["params"]
+    def _run(self, payload, **options):
+        def respond(*, handler, handlerdata, **_):
+            handler(payload, handlerdata)
+            return mock.Mock()
+
+        with mock.patch.object(sigage.socorro, "SuperSearch", side_effect=respond) as search:
+            out = sigage.hardware_noise("S", **options)
+            return out, [call.kwargs["params"] for call in search.call_args_list]
 
     def test_it_sums_both_facets(self):
-        out, params = self._run({
+        out, _ = self._run({
             "total": 100,
             "facets": {"possible_bit_flips_max_confidence": [{"term": 25, "count": 20},
                                                              {"term": 62, "count": 10}],
@@ -1011,11 +1011,24 @@ class TestHardwareNoiseLookup(unittest.TestCase):
         # Not a detail: the same thresholds on an all-products/all-channels rate suppress bug
         # 2062219, which was FIXED. Release carries years of failing consumer hardware on a hot
         # signature and it says nothing about whether a nightly crash is real.
-        _, params = self._run({"total": 1, "facets": {}})
+        _, (params,) = self._run({"total": 1, "facets": {}})
         self.assertEqual(params["product"], "Firefox")
         self.assertEqual(params["release_channel"], "nightly")
         self.assertEqual(params["signature"], "=S")
         self.assertEqual(params["date"][:2], ">=")
+
+    def test_cpu_only_uses_one_query_and_counts_all_reports(self):
+        out, (params,) = self._run({
+            "total": 40,
+            "facets": {"cpu_info": [
+                {"term": "family 6 model 183 stepping 1", "count": 6},
+                {"term": "GenuineIntel family 6 model 183 stepping 1", "count": 4},
+            ]}}, channel=None, include_bit_flips=False)
+        self.assertEqual(params["_facets"], ["cpu_info"])
+        self.assertNotIn("release_channel", params)
+        self.assertEqual(out["broken_cpu_rate"], 0.25)
+        self.assertEqual(out["cpu_terms"], 1)
+        self.assertIsNone(out["bit_flip_rate"])
 
     def test_zero_rows_is_unknown_not_clean(self):
         # An empty response is equally what a malformed or throttled query returns, and this
@@ -1101,16 +1114,10 @@ class TestHardwareNoiseLookup(unittest.TestCase):
         # Socorro files a third of beta under `aurora`: a raw "beta" returns 154,768 of the
         # 264,278 Firefox beta+aurora reports in a 364-day window (2026-08-21), so the rate is
         # computed on 59% of the channel. A no-op on nightly, which is all that runs today.
-        with mock.patch.object(sigage.socorro, "SuperSearch") as ss:
-            def ctor(params=None, handler=None, handlerdata=None, **kw):
-                handler({"total": 1, "facets": {}}, handlerdata)
-                return mock.Mock(wait=mock.Mock())
-            ss.side_effect = ctor
-            sigage.hardware_noise("S", channel="beta")
-            self.assertEqual(ss.call_args.kwargs["params"]["release_channel"],
-                             ["beta", "aurora"])
-            sigage.hardware_noise("S", channel="nightly")
-            self.assertEqual(ss.call_args.kwargs["params"]["release_channel"], "nightly")
+        for channel, expected in (("beta", ["beta", "aurora"]), ("nightly", "nightly")):
+            with self.subTest(channel=channel):
+                _, (params,) = self._run({"total": 1, "facets": {}}, channel=channel)
+                self.assertEqual(params["release_channel"], expected)
 
 
 class TestCpuConcentrationIsReportedNeverGated(unittest.TestCase):

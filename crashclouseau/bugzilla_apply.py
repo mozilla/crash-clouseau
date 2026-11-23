@@ -3190,32 +3190,53 @@ def _suppressions(dossier):
     return sorted(k for k in corroborations.suppressions() if flags.get(k))
 
 
+# All-channel window for the Raptor Lake arm, the one the 2026-11-23 replay measured.
+UNREACHABLE_CPU_DAYS = 182
+
+
 def _unreachable_state_decline(uuid, uuid_info, dossier, cfg):
-    """Decline old signatures with an unexplained unreachable state."""
-    from crashclouseau import report_bug
-    min_age = cfg.get("unreachable_min_age_days")
-    verdict = (dossier or {}).get("verdict") or {}
-    if not min_age or _DRY_RUN.get() or verdict.get("state_origin") != "unreachable_unknown":
+    """Check the signature's age or Raptor Lake share and the shared filing exceptions."""
+    from crashclouseau import report_bug, sigage
+    dossier = dossier or {}
+    origin = (dossier.get("verdict") or {}).get("state_origin")
+    if origin not in ("unreachable_unknown", "unreachable_suspect"):
         return None
-    corro = (dossier or {}).get("corroborations") or {}
+    corro = dossier.get("corroborations") or {}
+    min_age = cfg.get("unreachable_min_age_days")
     age = corro.get("signature_age_days_ever")
-    if age is None or age < min_age:
+    old = origin == "unreachable_unknown" and min_age and age is not None and age >= min_age
+    rate = cfg.get("unreachable_broken_cpu_rate")
+    if not (old or rate) or corro.get("frequency_regression"):
         return None
     if report_bug.fresh_origin_days(corro, cfg.get("fresh_origin_days")) is not None:
         return None
-    if corro.get("frequency_regression"):
-        return None
+
+    if old:
+        reason = f"The signature was first seen {age:.0f} days ago and no suspect is named."
+    else:
+        signature = uuid_info.get("signature")
+        if not signature:
+            return None
+        noise = sigage.hardware_noise(signature, product=uuid_info.get("product"),
+                                      channel=None, days=UNREACHABLE_CPU_DAYS,
+                                      include_bit_flips=False)
+        share, reports = noise["broken_cpu_rate"], noise["reports"]
+        floor = cfg.get("unreachable_broken_cpu_min_reports") or 0
+        if share is None or share < rate or not reports or reports < floor:
+            return None
+        reason = (f"{share:.0%} of the signature's {reports} reports over {UNREACHABLE_CPU_DAYS} "
+                  f"days (all channels) came from the affected Raptor Lake CPU model "
+                  f"(meta bug {sigage.RAPTOR_LAKE_META}).")
+
     recent = report_bug.fetch_recent_channel_stats(uuid_info, cfg.get("population_days") or 30)
     if recent is None:
         return None
     onsets, rising = report_bug.recent_onsets(uuid_info, recent, cfg.get("onset"))
     if onsets is None or rising:
         return None
-    logger.info("autofile: %s -- unreachable state, no suspect, signature %.0f days old",
-                uuid, age)
-    return {"filed": False, "skipped": (
-        "no path in correct code reaches the failing state and no suspect is named, on a "
-        "signature first seen {:.0f} days ago with no channel rising").format(age)}
+    skipped = f"no path in correct code reaches the failing state and no channel is rising. {reason}"
+    logger.info("autofile: %s -- %s", uuid, skipped)
+    return {"filed": False, "skipped": skipped}
 
 
 def _actionable_floor_decline(uuid, uuid_info, dossier, product, channel, cfg, floor_waiver):
@@ -3382,7 +3403,7 @@ def filing_lock(wait=None):
             logger.warning("autofile: could not release the filing lock (%s)", exc)
 
 
-def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floor_waiver=None):
+def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, *, floor_waiver, planning):
     """Run filing checks until a decline or the first screened Bugzilla write.
 
     Return the decline or a ``would_publish`` action (``new_bug``, ``comment``, ``update``),
@@ -3390,7 +3411,7 @@ def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floo
     token = _DRY_RUN.set(True)
     try:
         res = _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
-                            floor_waiver=floor_waiver)
+                            floor_waiver=floor_waiver, planning=planning)
     except _WouldPublish as stop:
         return {"filed": False, "dry_run": True, "would_publish": stop.action, "bug": stop.bug}
     finally:
@@ -3399,7 +3420,7 @@ def _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence, floo
 
 
 def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=False,
-                 floor_waiver=None, lock_wait=None):
+                 floor_waiver=None, lock_wait=None, planning=False):
     """File a crash analysis under the configured policy and return filing or decline details.
 
     Check product/channel policy, run options, verdict eligibility, prior filings and the
@@ -3416,10 +3437,13 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
     when population is known. ``"pending"`` does so only during a dry run.
 
     ``lock_wait`` overrides the default lock acquisition wait.
+
+    ``planning`` is a dry run made before the confirming pass: gates on fields that pass may
+    revise (``state_origin``) are left to the final verdict.
     """
-    if dry_run:
+    if dry_run or planning:
         return _autofile_dry_run(uuid, uuid_info, stack, dossier, verdict, confidence,
-                                 floor_waiver=floor_waiver)
+                                 floor_waiver=floor_waiver, planning=planning)
     if _DRY_RUN.get():
         # Dry runs do not need the filing lock.
         return _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence,
@@ -3431,7 +3455,8 @@ def autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, dry_run=F
                              floor_waiver=floor_waiver)
 
 
-def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_waiver=None):
+def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_waiver=None,
+                  *, planning=False):
     """Run filing checks and writes, subject to the dry-run context."""
     channel = uuid_info.get("channel")
     product = uuid_info.get("product")
@@ -3567,7 +3592,8 @@ def _autofile_bug(uuid, uuid_info, stack, dossier, verdict, confidence, floor_wa
     actionable = fileable and verdict == "actionable"
     floor_decline = None
     if actionable:
-        floor_decline = _unreachable_state_decline(uuid, uuid_info, dossier, cfg)
+        if not planning:
+            floor_decline = _unreachable_state_decline(uuid, uuid_info, dossier, cfg)
         if not floor_decline:
             floor_decline = _actionable_floor_decline(uuid, uuid_info, dossier, product,
                                                       channel, cfg, floor_waiver)

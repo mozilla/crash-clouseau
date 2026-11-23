@@ -349,6 +349,8 @@
             "wake_stale_days": 15,
             "population_days": 30,
             "unreachable_min_age_days": 1095,
+            "unreachable_broken_cpu_rate": 0.2,
+            "unreachable_broken_cpu_min_reports": 20,
             "onset": {"hours": 24, "baseline_days": 28, "reports": 5, "installs": 5, "ratio": 5},
             "author_active_days": 365,
             "author_fixed_days": 182,
