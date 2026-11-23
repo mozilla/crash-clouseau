@@ -283,10 +283,19 @@ good ones. So make TWO decisions, in order:
    the least unlikely writer. `confirm` then proposes no test that needs the unreachable path;
    a diagnostic that tells the remaining causes apart (record the rejected value, or which half
    of the check failed) is welcome. Decision and confidence do not change, and this is no
-   `hardware` abstain without the report's hardware facts. Set `state_origin`: `reachable` when
-   a path in the code as written produces the state; `unreachable_suspect` when none does but
-   the reports or a cited site single out one other source (a fault-address pattern, a site
-   that frees or writes the object, another process's data); else `unreachable_unknown`.
+   `hardware` abstain without the report's hardware facts. One fact read from source changes
+   how the address reads: when the rejected value AS STORED is one bit from a value the code
+   commonly stores in that slot (its encoding cited; a tag bit cleared on an inline value,
+   reading as a null box), the one-bit hypothesis is consistent with that fault address, and a
+   repeated address does not argue against it. Say so in `consistency.statement`; the mechanism
+   argues neither way and names a flipped bit only among what remains. It is `abstain` /
+   `hardware` only when the report's or the signature's hardware facts corroborate it: a zero
+   matches freed-and-reused or zeroed memory just as well. The stackwalker tests the fault
+   address and registers, never the stored word, so its score misses this. Set `state_origin`:
+   `reachable` when a path in the code as written produces the state; `unreachable_suspect`
+   when none does but the reports or a cited site single out one other source (a fault-address
+   pattern, a site that frees or writes the object, another process's data); else
+   `unreachable_unknown`.
    Write `mechanism.statement`
    as the
    AFFIRMATIVE fact the bug will publish, whole and unedited — what fails, where, under which

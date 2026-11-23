@@ -209,7 +209,12 @@ _MEASURED = {
     # +230 characters on 2026-11-16 (also beta/java): a fix keeps the caller's contract or says
     # what callers must change (bug 2093074 c5: "run it off the main thread" broke
     # `nsLocalFile::Launch()`'s synchronous result).
-    "system.md": (29076, 400),
+    # +761 characters on 2026-11-23 (also beta/java): a rejected stored value one bit from a
+    # cited legal encoding makes a repeated fault address no evidence against hardware (bug
+    # 2096277: `top: 0` is the word 0x1, bit 0 cleared reads as a null calc box, fault 0x8 on
+    # every report), argued in `consistency`, not the published mechanism; abstain only with
+    # corroborating hardware facts.
+    "system.md": (29837, 400),
     "crash facts, plain deref": (219, 60),
     "user prompt, plain deref": (1097, 120),
     # 2026-09-23: add up to six census rows on watchdog crashes.
@@ -227,7 +232,7 @@ _MEASURED = {
     # BETA. system.md is +540 over nightly's, all of it the revision-drift rewrite: the beta
     # branch and trunk have diverged, so "a small line delta is expected drift" needed the
     # sentence saying which tree the tools read and that trunk code is not what shipped.
-    "system.md, beta": (29616, 400),
+    "system.md, beta": (30377, 400),
     # +0 crash-facts bytes and -3 user-prompt bytes for the channel alone ("beta" is shorter
     # than "nightly"): the channel is a switch, not a paragraph. This row exists to keep it that
     # way -- if it grows, a beta-only sentence has been added to the per-crash surface.
@@ -246,7 +251,7 @@ _MEASURED = {
     # user prompt is the R8 block (`_java_lines`, three sentences shared with the second
     # opinion), the Java facts (exception chain + device, +106 bytes over the plain deref) and the
     # long Java signature / paths; it carries no line numbers on its frames.
-    "system.md, java": (30239, 400),
+    "system.md, java": (31000, 400),
     "crash facts, fenix java": (325, 60),
     "user prompt, fenix java": (3349, 300),
 }
