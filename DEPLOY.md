@@ -918,7 +918,7 @@ re-enqueues it, and the whole run starts over at roughly $3 a time. Three deploy
 one hour on 2026-07-28 produced 11 re-enqueues.
 
 ```sh
-uv run python bin/predeploy.py && git push heroku augmented:main
+uv run python bin/predeploy.py && git push heroku master:main
 uv run python bin/predeploy.py --wait   # ...or block until the queue drains (40min max)
 ```
 

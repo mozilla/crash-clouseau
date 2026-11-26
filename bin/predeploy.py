@@ -12,7 +12,7 @@ inside an hour produced 11 re-enqueues.
 
 Nothing here can stop Heroku killing a job, so the mitigation is simply to look first:
 
-    uv run python bin/predeploy.py && git push heroku augmented:main
+    uv run python bin/predeploy.py && git push heroku master:main
     uv run python bin/predeploy.py --wait        # ...or block until the queue drains
 
 Exit 0 = nothing would be lost. Exit 1 = runs in flight (listed, with the spend that would
