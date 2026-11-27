@@ -1301,6 +1301,38 @@ class TestFilingsForRegressor(unittest.TestCase):
                                     "filename": "ipc/ipdl/PContentParent.cpp"}]})
         self.assertEqual(models.CrashStack.top_frames([], 2), {})
 
+    def test_every_filing_on_a_signature_with_its_bucket(self):
+        from datetime import date
+        from crashclouseau import db, models
+
+        models.create()
+        self.addCleanup(db.session.rollback)
+        signature = "Every::Filing"
+        expected = [
+            dict(bug=11, signature=signature, bucket="", bucket_title=""),
+            dict(bug=12, signature=signature, bucket="stack-key", bucket_title="Cause"),
+        ]
+        filings = [
+            dict(bug=11, signature=signature, filed=True),
+            dict(expected[1], filed=True),
+            dict(bug=13, signature=signature, filed=False),
+            dict(bug=14, signature="Other::Filing", filed=True),
+        ]
+        for day, filing in enumerate(filings, 1):
+            crash = models.UUID("ef-{}".format(day), None, None, None)
+            db.session.add(crash)
+            db.session.flush()
+            db.session.add_all([
+                models.Dossier(uuidid=crash.id, payload={"filed_bug": filing}),
+                models.SpikeEscalation(filing["signature"], "Firefox", "nightly",
+                                       date(2026, 9, day), payload={"filing": filing}),
+            ])
+
+        for model in (models.Dossier, models.SpikeEscalation):
+            with self.subTest(model=model.__name__):
+                self.assertEqual(model.filings_on([signature]), expected)
+                self.assertEqual(model.filings_on([]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

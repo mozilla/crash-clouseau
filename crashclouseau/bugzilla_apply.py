@@ -1137,8 +1137,6 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
     sig = (signature or "").strip()
     if not sig:
         return []
-    from crashclouseau import sigage
-
     # Search own lambda variants and any family spellings supplied by the caller.
     spellings = sorted(set(spellings or ()) | utils.lambda_siblings(sig))
     params = _signature_search_params(
@@ -1153,6 +1151,26 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
         return []
 
     relations = relations or {}
+    sources = []
+    for bug in dups:
+        if not bug.get("id") or not bug.get("dupe_of"):
+            continue
+        matched = [s for s in spellings if _row_is_about(bug, s)]
+        if not matched:
+            continue
+        rels = {relations.get(s) for s in matched}
+        if any(s in frames for s in matched):
+            rels.add("outline")
+        sources.append((bug["id"], bug["dupe_of"], bug.get("cf_last_resolved"), rels))
+    return _follow_duplicate_venues(sources, timeout=timeout)
+
+
+def _follow_duplicate_venues(sources, timeout=_HTTP_TIMEOUT):
+    """Find open public targets for (duplicate ID, target ID, resolution date, relations) tuples.
+
+    Skip missing rows and return an empty list on request failure.
+    """
+    from crashclouseau import sigage
 
     def tie(into, target, since, via, rels):
         cur = into.setdefault(target, {"since": None, "via": [], "rels": set()})
@@ -1165,17 +1183,8 @@ def _duplicate_targets_for_signature(signature, timeout=_HTTP_TIMEOUT, spellings
         return max((x for x in (a, b) if x is not None), default=None)
 
     pending = {}
-    for d in dups:
-        if not d.get("id") or not d.get("dupe_of"):
-            continue
-        matched = [s for s in spellings if _row_is_about(d, s)]
-        if not matched:
-            continue
-        rels = {relations.get(s) for s in matched}
-        if any(s in frames for s in matched):
-            rels.add("outline")
-        tie(pending, d["dupe_of"], sigage.to_datetime(d.get("cf_last_resolved")), [d["id"]],
-            rels)
+    for source, target, resolved, relations in sources:
+        tie(pending, target, sigage.to_datetime(resolved), [source], relations)
     out = {}
     out_rels = {}
     hops = {}

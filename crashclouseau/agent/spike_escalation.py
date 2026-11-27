@@ -1798,13 +1798,11 @@ def _pick_venue(existing, build_day):
 
 
 def _bug_state(bug_id, token):
-    """One bug's status, read WITH the filing token: ``{status, resolution, resolved,
-    assigned_to}`` or ``None``. Authenticated because the whole point is a bug the public lookup
-    could not see -- one a human restricted -- and BMO hides those from anonymous readers."""
+    """Read one bug with the token: it may be restricted, unlike in the anonymous venue lookup."""
     try:
         r = net.get("{}/{}".format(bugzilla_apply._bz_rest(), bug_id),
                     headers={"X-Bugzilla-API-Key": token},
-                    params={"include_fields": "id,status,resolution,cf_last_resolved,assigned_to"},
+                    params={"include_fields": "resolution,dupe_of,cf_last_resolved,assigned_to"},
                     timeout=30)
         r.raise_for_status()
         bugs = (r.json() or {}).get("bugs") or []
@@ -1814,10 +1812,55 @@ def _bug_state(bug_id, token):
     if not bugs:
         return None
     b = bugs[0]
-    return {"id": b.get("id"), "status": b.get("status") or "",
-            "resolution": (b.get("resolution") or "").upper(),
+    return {"resolution": (b.get("resolution") or "").upper(),
             "resolved": sigage.to_datetime(b.get("cf_last_resolved")),
+            "dupe_of": b.get("dupe_of"),
             "assigned_to": b.get("assigned_to") or ""}
+
+
+def _own_filings(signatures):
+    out = {}
+    for rows in (models.Dossier.filings_on(signatures),
+                 models.SpikeEscalation.filings_on(signatures)):
+        for record in rows or []:
+            kept = out.setdefault(record["bug"], {
+                "signatures": set(), "bucket": "", "bucket_title": "",
+            })
+            kept["signatures"].add(record["signature"])
+            # A comment can omit the original bucket.
+            if not (kept["bucket"] or kept["bucket_title"]):
+                kept.update(bucket=record["bucket"], bucket_title=record["bucket_title"])
+    return out
+
+
+def _matches_bucket(record, bucket, bucket_title):
+    """Match the current bucket by key, or by title if it has no key."""
+    if bucket:
+        return str(record.get("bucket") or "") == bucket
+    return bool(bucket_title) and str(record.get("bucket_title") or "") == bucket_title
+
+
+def _own_duplicate_targets(signature, family, signatures, token, *, bucket="", bucket_title=""):
+    """Read prior bugs with the token, then follow duplicate links anonymously."""
+    own = {s.lower() for s in utils.lambda_siblings(signature)}
+    relations = {
+        name: match["relation"]
+        for name, match in bugzilla_apply._family_spelling_map(signature, family).items()
+    }
+    sources = []
+    for bug, record in _own_filings(signatures).items():
+        if (record["bucket"] or record["bucket_title"]) and not _matches_bucket(
+                record, bucket, bucket_title):
+            continue
+        state = _bug_state(bug, token)
+        if not state or state["resolution"] != "DUPLICATE" or not state.get("dupe_of"):
+            continue
+        matches = {
+            None if name.lower() in own else relations.get(name, "sibling")
+            for name in record["signatures"]
+        }
+        sources.append((bug, state["dupe_of"], state["resolved"], matches))
+    return bugzilla_apply._follow_duplicate_venues(sources)
 
 
 def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
@@ -1832,11 +1875,6 @@ def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
     bucket_title = str(bucket_title or "")
     scoped = bool(bucket or bucket_title)
 
-    def exact(record):
-        if bucket:
-            return str(record.get("bucket") or "") == bucket
-        return bool(bucket_title) and str(record.get("bucket_title") or "") == bucket_title
-
     out = []
     try:
         prior = (models.SpikeEscalation.prior_bug_for(
@@ -1845,7 +1883,8 @@ def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
         if isinstance(prior, int):
             prior = {"bug": prior}
         if prior and prior.get("bug"):
-            out.append({"bug": int(prior["bug"]), "bucket_match": scoped and exact(prior)})
+            out.append({"bug": int(prior["bug"]),
+                        "bucket_match": _matches_bucket(prior, bucket, bucket_title)})
     except Exception:  # pragma: no cover - defensive
         pass
     for sig in signatures:
@@ -1858,7 +1897,8 @@ def _own_prior_bugs(signatures, bucket=None, bucket_title=None):
         bug = filed.get("bug") if isinstance(filed, dict) else None
         if bug:
             try:
-                out.append({"bug": int(bug), "bucket_match": scoped and exact(filed)})
+                out.append({"bug": int(bug),
+                            "bucket_match": _matches_bucket(filed, bucket, bucket_title)})
             except (TypeError, ValueError):
                 continue
     seen = []
@@ -2045,6 +2085,7 @@ def file_spike_bug(esc, brief, findings, grounded=True):
             "disclosure"))
     # Search family names and the internal caller of an R8 helper.
     family = brief.get("signature_family") or {}
+    siblings = brief.get("siblings") or [signature]
     outline = utils.outline_signature(signature, stack.get("frames"))
     existing = bugzilla_apply._open_bugs_for_signature(
         signature, family=family, product=product, extra=(outline,) if outline else ())
@@ -2060,6 +2101,15 @@ def file_spike_bug(esc, brief, findings, grounded=True):
         bucket_title = spike_report.spike_bucket_title(brief, findings)
         if bucket_title:
             bucket_key = spike_report.spike_bucket_key(brief)
+    targets = _own_duplicate_targets(signature, family, siblings, token,
+                                     bucket=bucket_key, bucket_title=bucket_title)
+    targets, _ = bugzilla_apply._split_by_application(targets, product)
+    targets, _ = bugzilla_apply._split_out_metas(targets)
+    if targets:
+        # An exact-signature tracker can rule out a sibling target.
+        merged = bugzilla_apply._merge_duplicate_targets(existing, targets)
+        preferred = bugzilla_apply._prefer_own_signature(merged + meta_bugs, product)
+        existing, _ = bugzilla_apply._split_out_metas(preferred)
     # Include the counts in drafts used for venue and novelty checks.
     brief["population_table"] = _population_table(esc, signature)
     if brief["population_table"]:
@@ -2118,7 +2168,6 @@ def file_spike_bug(esc, brief, findings, grounded=True):
     # Fixed declines write nothing; skip mode also declines other fallback venues.
     venue_kind = "open" if venue is not None else None
     if venue is None:
-        siblings = brief.get("siblings") or [signature]
         below = resolve_venue_below_public(
             siblings, product, esc.buildid, token,
             bucket=bucket_key or None, bucket_title=bucket_title or None)

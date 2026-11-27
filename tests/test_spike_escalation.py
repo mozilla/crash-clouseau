@@ -646,6 +646,8 @@ class _FilerBase(unittest.TestCase):
             # ours, no bug fixed after the build.
             mock.patch.object(models.Dossier, "already_filed_for_signature", return_value=None),
             mock.patch.object(models.SpikeEscalation, "prior_bug_for", return_value=None),
+            mock.patch.object(models.Dossier, "filings_on", return_value=[]),
+            mock.patch.object(models.SpikeEscalation, "filings_on", return_value=[]),
             # No prior filings unless overridden.
             mock.patch.object(models.SpikeEscalation, "filings_on_bug", return_value=[]),
             mock.patch.object(bugzilla_apply, "_fixed_bugs_about", return_value=[]),
@@ -1142,6 +1144,99 @@ class TestTheVenueBelowThePublicBugs(_FilerBase):
             self.assertEqual((res["filed"], res["bug"], res["skipped"]),
                              (False, 71, "open bug 71 exists"))
         self.assertEqual(self.comments, [])
+
+
+class TestOurRestrictedDuplicate(_FilerBase):
+    _SIBLING = "mozilla::Foo::Bar | Baz"
+
+    def setUp(self):
+        super().setUp()
+        self.target = {"id": 80, "creation_time": "2025-03-03T15:41:09Z", "product": "Core",
+                       "resolution": ""}
+        self.duplicate = {"resolution": "DUPLICATE", "dupe_of": 80,
+                          "resolved": datetime(2026, 9, 3, 8, tzinfo=timezone.utc)}
+        self.brief["culprit_in_window"] = True
+        models.Dossier.filings_on.return_value = [self._filing(71)]
+        se._bug_state.return_value = self.duplicate
+        bugzilla_apply._bugs_by_id.return_value = [self.target]
+        bugzilla_apply._open_bugs_for_signature.return_value = [self.target]
+
+    def _filing(self, bug, signature=None, bucket="", bucket_title=""):
+        return {"bug": bug, "signature": signature or self.brief["signature"],
+                "bucket": bucket, "bucket_title": bucket_title}
+
+    def _file(self):
+        return se.file_spike_bug(_esc(), self.brief, self.findings)
+
+    def _record_sibling_filing(self):
+        self.brief["siblings"] = [self.brief["signature"], self._SIBLING]
+        models.Dossier.filings_on.return_value = [self._filing(71, self._SIBLING)]
+
+    def test_a_recent_duplicate_dates_an_old_venue(self):
+        result = self._file()
+        self.assertEqual((result["mode"], result["bug"]), ("spike_comment", 80))
+
+    def test_an_old_duplicate_does_not_make_its_target_current(self):
+        self.duplicate["resolved"] = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        result = self._file()
+        self.assertEqual(result["mode"], "spike_new_bug")
+        self.assertEqual(result["predating_bugs"], [80])
+
+    def test_an_anonymously_unreadable_target_is_not_a_venue(self):
+        bugzilla_apply._open_bugs_for_signature.return_value = []
+        bugzilla_apply._bugs_by_id.return_value = []
+        self.assertEqual(self._file()["mode"], "spike_new_bug")
+        self.assertEqual(self.comments, [])
+
+    def test_older_spike_filings_are_also_checked(self):
+        models.Dossier.filings_on.return_value = []
+        models.SpikeEscalation.filings_on.return_value = [self._filing(71), self._filing(90)]
+        states = {71: self.duplicate, 90: {"resolution": ""}}
+        se._bug_state.side_effect = lambda bug, token: states[bug]
+        result = self._file()
+        self.assertEqual((result["mode"], result["bug"]), ("spike_comment", 80))
+
+    def test_duplicates_of_one_target_are_followed_together(self):
+        models.Dossier.filings_on.return_value = [self._filing(71), self._filing(72)]
+        later = dict(self.duplicate, resolved=datetime(2026, 9, 4, tzinfo=timezone.utc))
+        se._bug_state.side_effect = lambda bug, token: {71: self.duplicate, 72: later}[bug]
+        signature = self.brief["signature"]
+        targets = se._own_duplicate_targets(signature, {}, [signature], "tok")
+        self.assertEqual([(t["id"], t["via_duplicates"], t["venue_since"]) for t in targets],
+                         [(80, [71, 72], "2026-09-04T00:00:00+00:00")])
+        bugzilla_apply._bugs_by_id.assert_called_once()
+
+    def test_bucket_metadata_survives_a_bucketless_comment(self):
+        models.SpikeEscalation.filings_on.return_value = [
+            self._filing(71, bucket="stack-key", bucket_title="Cause")]
+        signature = self.brief["signature"]
+        for current, expected in (("stack-key", [80]), ("other-key", []), ("", [])):
+            with self.subTest(bucket=current):
+                targets = se._own_duplicate_targets(
+                    signature, {}, [signature], "tok", bucket=current)
+                self.assertEqual([target["id"] for target in targets], expected)
+
+    def test_an_exact_filing_takes_precedence_over_a_sibling_comment(self):
+        self._record_sibling_filing()
+        models.SpikeEscalation.filings_on.return_value = [self._filing(71)]
+        stale = dict(self.target, id=95)
+        bugzilla_apply._open_bugs_for_signature.return_value = [stale]
+
+        result = self._file()
+        self.assertEqual((result["mode"], result["bug"]), ("spike_comment", 80))
+        se._bug_state.assert_called_once_with(71, "tok")
+
+    def test_a_sibling_target_yields_to_exact_signature_venues_and_trackers(self):
+        self._record_sibling_filing()
+        exact = dict(self.target, id=95, creation_time="2026-09-02T00:00:00Z")
+        bugzilla_apply._open_bugs_for_signature.return_value = [exact]
+        result = self._file()
+        self.assertEqual((result["mode"], result["bug"]), ("spike_comment", 95))
+
+        exact["keywords"] = ["meta"]
+        result = self._file()
+        self.assertEqual(result["mode"], "spike_new_bug")
+        self.assertEqual(result["meta_bugs"], [95])
 
 
 class TestTheNoveltyCheck(_FilerBase):

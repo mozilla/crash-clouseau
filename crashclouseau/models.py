@@ -2561,6 +2561,29 @@ def _candidate_run(uuid, signature, filed, bug, mode, source):
     return row
 
 
+def _filings_on_signatures(signatures, filing, signature_column, order_by, signature_limit=None):
+    """Read successful filings by signature or lambda variant. Return None on query failure."""
+    names = sorted({name[:signature_limit] for signature in signatures or ()
+                    for name in utils.lambda_siblings(signature)})
+    if not names:
+        return []
+    try:
+        rows = (
+            db.session.query(filing["bug"].astext, signature_column,
+                             filing["bucket"].astext, filing["bucket_title"].astext)
+            .filter(filing["filed"].astext == "true", signature_column.in_(names))
+            .order_by(order_by)
+            .all()
+        )
+    except Exception:
+        logger.error("Cannot read filings on %s", names, exc_info=True)
+        db.session.rollback()
+        return None
+    return [{"bug": int(bug), "signature": signature or "", "bucket": bucket or "",
+             "bucket_title": title or ""}
+            for bug, signature, bucket, title in rows if str(bug or "").isdigit()]
+
+
 class Dossier(db.Model):
     __tablename__ = "dossiers"
 
@@ -3595,6 +3618,11 @@ class Dossier(db.Model):
             return None
         return [{"uuid": u, "bug": int(b), "signature": s or "", "mode": m or "", "at": a or ""}
                 for u, b, s, m, a in rows if str(b or "").isdigit()]
+
+    @staticmethod
+    def filings_on(signatures):
+        filing = Dossier.payload["filed_bug"]
+        return _filings_on_signatures(signatures, filing, filing["signature"].astext, Dossier.id)
 
     @staticmethod
     def runs_for_candidate(node):
@@ -5236,6 +5264,12 @@ class SpikeEscalation(db.Model):
         return [{"uuid": u or "", "bug": int(b), "signature": s or "", "mode": m or "",
                  "at": a or "", "escalation": i}
                 for i, u, s, b, m, a in rows if str(b or "").isdigit()]
+
+    @staticmethod
+    def filings_on(signatures):
+        return _filings_on_signatures(signatures, SpikeEscalation.payload["filing"],
+                                      SpikeEscalation.signature, SpikeEscalation.id,
+                                      signature_limit=512)
 
     def to_dict(self):
         payload = self.payload or {}
