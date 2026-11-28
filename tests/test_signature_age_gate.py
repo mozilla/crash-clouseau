@@ -403,19 +403,18 @@ class TestPushdateForNode(unittest.TestCase):
 
 
 class TestResolveCandidateGitCommit(unittest.TestCase):
-    """orchestrator._resolve_candidate_git_commit: the candidate's git sha AND author email
-    are resolved ONCE in the worker from a single json-rev and stored, so no page render pays
-    hg's 8-13s cost for the (gh) link or the needinfo."""
+    FOOTER = "Differential Revision: https://phabricator.services.mozilla.com/D307544"
+    REV = {"git_commit": "9d7faea5127c", "user": "Jon Coppeard <jcoppeard@mozilla.com>",
+           "desc": f"Bug 2047626 - Extract starting summarization\n\n{FOOTER}\n"}
 
-    REV = {"git_commit": "9d7faea5127c", "user": "Jon Coppeard <jcoppeard@mozilla.com>"}
-
-    def test_stores_the_sha_and_the_author_email(self):
+    def test_stores_changeset_metadata(self):
         d = _lead()
         with mock.patch.object(sigage, "json_rev", return_value=self.REV) as g:
             orch._resolve_candidate_git_commit(d, _SEED)
         g.assert_called_once_with("abc123def456", "nightly")
         self.assertEqual(d.candidate.git_commit, "9d7faea5127c")
         self.assertEqual(d.candidate.author_email, "jcoppeard@mozilla.com")
+        self.assertEqual(d.candidate.phab_revision, "D307544")
 
     def test_a_cached_sha_still_resolves_a_missing_email(self):
         # The email was added later, so dossiers carry a sha and no address; one must not
@@ -428,10 +427,10 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
         self.assertEqual(d.candidate.git_commit, "cached1")       # not overwritten
         self.assertEqual(d.candidate.author_email, "jcoppeard@mozilla.com")
 
-    def test_no_op_when_both_known_or_candidate_absent(self):
+    def test_no_lookup_when_metadata_is_complete_or_candidate_absent(self):
         d = _lead()
         d.candidate = d.candidate.model_copy(
-            update={"git_commit": "cached1", "author_email": "a@b.c"})
+            update={"git_commit": "cached1", "author_email": "a@b.c", "phab_revision": "D1"})
         with mock.patch.object(sigage, "json_rev") as g:
             orch._resolve_candidate_git_commit(d, _SEED)
             orch._resolve_candidate_git_commit(None, _SEED)
@@ -440,6 +439,22 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
                                                         abstain_reason="none")), _SEED)
         g.assert_not_called()
         self.assertEqual(d.candidate.git_commit, "cached1")
+
+    def test_resolves_a_missing_revision_without_overwriting_other_fields(self):
+        d = _lead()
+        d.candidate = d.candidate.model_copy(update={"git_commit": "cached1", "author_email": "a@b.c"})
+        with mock.patch.object(sigage, "json_rev", return_value=self.REV):
+            orch._resolve_candidate_git_commit(d, _SEED)
+        self.assertEqual(d.candidate.phab_revision, "D307544")
+        self.assertEqual(d.candidate.git_commit, "cached1")
+        self.assertEqual(d.candidate.author_email, "a@b.c")
+
+    def test_a_revision_mentioned_mid_line_is_not_taken(self):
+        d = _lead()
+        rev = {"desc": f"Bug 1 - see {self.FOOTER}"}
+        with mock.patch.object(sigage, "json_rev", return_value=rev):
+            orch._resolve_candidate_git_commit(d, _SEED)
+        self.assertEqual(d.candidate.phab_revision, "")
 
     def test_unresolved_and_failure_leave_it_empty(self):
         d = _lead()
@@ -590,10 +605,12 @@ class TestResolveCandidateGitCommit(unittest.TestCase):
     def test_the_model_cannot_choose_who_gets_pinged(self):
         from crashclouseau.agent.schema import parse_and_validate
         d = parse_and_validate({
-            "candidate": {"node": "abc123def456", "author_email": "attacker@example.com"},
+            "candidate": {"node": "abc123def456", "author_email": "attacker@example.com",
+                          "phab_revision": "D1"},
             "verdict": {"decision": "abstain", "abstain_reason": "x"},
         })
         self.assertEqual(d.candidate.author_email, "")
+        self.assertEqual(d.candidate.phab_revision, "")
 
     def test_gates_do_not_resolve_it(self):
         # It must stay OUT of apply_deterministic_gates: that is shared with the offline eval

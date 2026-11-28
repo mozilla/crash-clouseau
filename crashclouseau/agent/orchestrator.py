@@ -5140,25 +5140,10 @@ def apply_deterministic_gates(result, seed, second_opinion=None, second_opinion_
 
 
 def _resolve_candidate_git_commit(dossier, seed):
-    """Store the chosen candidate's GIT sha and AUTHOR EMAIL on the dossier — the first for
-    the filed bug's ``(gh)`` link, the second for its needinfo.
-
-    Done HERE, once per run, rather than when the bug comment is rendered: hg's ``json-rev``
-    takes 8-13s, which is fine inside a ~20-minute analysis and unacceptable on a page view
-    (it made a cold crashstack render take 15s). The stale-signature gate has usually just
-    fetched the same URL for this same node, so this is normally a cache hit and costs nothing.
-
-    The author email has to come from hg. The model supplies ``candidate.author`` as a bare
-    display name ("Jon Coppeard", "stransky") and the local ``Node.authors_for`` record is
-    empty for most candidates, so a dry run over 12 recent rung-70 leads resolved an email
-    for only 3 — the other 9 would have filed a bug with NO needinfo, which is most of the
-    point. hg's ``user`` field ("Jon Coppeard <jcoppeard@mozilla.com>") is authoritative and
-    already in the response this function fetches.
-
-    Best-effort and additive — an unresolved sha omits the gh link, an unresolved email omits
-    the needinfo. Never raises."""
+    """Store the candidate's Git SHA, author email and Phabricator revision from hg."""
     cand = dossier.candidate if dossier is not None else None
-    if cand is None or not cand.node or (cand.git_commit and cand.author_email):
+    if cand is None or not cand.node or (
+            cand.git_commit and cand.author_email and cand.phab_revision):
         return
     try:
         from crashclouseau import sigage
@@ -5168,14 +5153,18 @@ def _resolve_candidate_git_commit(dossier, seed):
         logger.warning("agent: json-rev lookup failed for %s", cand.node, exc_info=True)
         return
     update = {}
-    if not cand.git_commit and rev.get("git_commit"):
-        update["git_commit"] = rev["git_commit"]
-    if not cand.author_email:
-        email = _email_from_hg_user(rev.get("user"))
-        if email:
-            update["author_email"] = email
+    if not cand.git_commit and (commit := rev.get("git_commit")):
+        update["git_commit"] = commit
+    if not cand.author_email and (email := _email_from_hg_user(rev.get("user"))):
+        update["author_email"] = email
+    if not cand.phab_revision and (match := _PHAB_REVISION.search(rev.get("desc") or "")):
+        update["phab_revision"] = match.group(1)
     if update:
         dossier.candidate = cand.model_copy(update=update)
+
+
+_PHAB_REVISION = re.compile(
+    r"^Differential Revision: https://phabricator\.services\.mozilla\.com/(D\d+)\s*$", re.M)
 
 
 def _record_file_components(dossier, seed):

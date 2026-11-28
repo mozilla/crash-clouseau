@@ -488,6 +488,8 @@ class Candidate(BaseModel):
     # so a model that could set it could point a ping at anyone. "" = unresolved, and the
     # filed bug then simply carries no needinfo.
     author_email: str = ""
+    # Phabricator ID from the hg changeset's ``Differential Revision`` line.
+    phab_revision: str = ""
     # MODEL-SUPPLIED and ambiguous: the handoff shape no longer asks for it, but old dossiers
     # carry it and the model may still volunteer one. Two different predicates have been written
     # here — "this changeset IS a backout commit" (what the seed means, from
@@ -1548,6 +1550,7 @@ def parse_and_validate(result: str | dict, *, candidate_bugs: dict | None = None
             # model-supplied value would let the handoff aim an unattended Bugzilla ping at
             # an arbitrary address.
             obj["candidate"].pop("author_email", None)
+            obj["candidate"].pop("phab_revision", None)
     # Fix unambiguous citation spelling variants BEFORE validating so a "stack-frame"/
     # "removed" citation can't force a false abstain via salvage. Mutates ``obj`` in
     # place, so the ``_salvage`` fallback below sees the normalized citations too.

@@ -2860,12 +2860,47 @@ def _drop_account(people, email):
     return [p for p in people or [] if (p.get("email") or "").strip().casefold() != key]
 
 
+_PHAB_UPLOADER_CACHE: dict = {}
+
+
+def _phabricator_uploader(bug, revision):
+    """Find the unique creator of matching attachments via an anonymous Bugzilla read."""
+    if not re.fullmatch(r"D\d+", revision or ""):
+        return ""
+    key = (bug, revision)
+    if key in _PHAB_UPLOADER_CACHE:
+        return _PHAB_UPLOADER_CACHE[key]
+    from crashclouseau.bugzilla_apply import _bz_rest
+
+    try:
+        r = net.get("{}/{}/attachment".format(_bz_rest(), bug),
+                    params={"include_fields": "file_name,content_type,creator"},
+                    timeout=net.SERVICE_TIMEOUT)
+        if r.status_code == 401:
+            return ""
+        r.raise_for_status()
+        attachments = r.json().get("bugs", {}).get(str(bug), [])
+        expected = ("phabricator-{}-url.txt".format(revision), "text/x-phabricator-request")
+        uploaders = {(a.get("creator") or "").strip() for a in attachments
+                     if (a.get("file_name"), a.get("content_type")) == expected}
+    except Exception as exc:
+        logger.info("bug preview: attachment read failed for bug %s: %s", bug, exc)
+        return ""
+    uploaders.discard("")
+    if len(uploaders) != 1:
+        return ""
+    login = uploaders.pop()
+    _PHAB_UPLOADER_CACHE[key] = login
+    return login
+
+
 def _needinfo_account(candidate, channel, email, name):
     """Resolve a needinfo account as ``{email, nick, real}``.
 
-    Try the hg address, the candidate bug, then the author's recent bugs.
-    Bug accounts require ``_match_author``, except on the candidate bug when the hg
-    account is absent: allow ``_sole_bug_person`` or ``_assignee_by_name`` there.
+    Try the hg login, the candidate bug, then exact matches on the author's recent bugs.
+    On the candidate bug, an exact match takes priority because an attachment can retain
+    its original uploader after a revision changes hands (bug 513421, comment 53).
+    With no exact match, try the uploader, then assignee heuristics if the hg account is absent.
 
     Prefer a replacement for a moved account; fall back to an askable moved account
     or an hg address whose lookup failed. Otherwise return ``{"unaskable": True}``
@@ -2893,6 +2928,15 @@ def _needinfo_account(candidate, channel, email, name):
         if moved:
             people = _drop_account(people, email)
         hit = _match_author(people, name, email)
+        if not hit and (revision := c.get("phab_revision")):
+            login = _phabricator_uploader(bug, revision)
+            if login and not (moved and login.casefold() == email.casefold()):
+                phab_user = _bugzilla_user(login)
+                nick, real = phab_user.get("nick", ""), phab_user.get("real", "")
+                if not _askable(phab_user):
+                    unaskable = unaskable or bool(phab_user.get("exists"))
+                elif phab_user.get("exists") is not False and not _is_bot(login, real, nick):
+                    return {"email": login, "nick": nick, "real": real}
         if not hit and user.get("exists") is False:
             hit = _sole_bug_person(people) or _assignee_by_name(people, name, email)
         if hit and _askable(_bugzilla_user(hit["email"])):
