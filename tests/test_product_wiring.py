@@ -2200,14 +2200,12 @@ class TestBugPreview(unittest.TestCase):
         fc = {"stack": ["Core", "Layout: Tables"], "changeset": ["Core", "Layout: Tables"]}
         self.assertEqual(self._author_fallback(cand, fc)[0], ("Core", "Layout: Tables"))
 
-    def _resolve_with_components(self, regressor_pc, file_components, components):
+    def _resolve_with_components(self, regressor_pc, file_components, components, **hints):
         with mock.patch.object(report_bug, "_product_components", side_effect=components.get), \
                 mock.patch.object(report_bug, "_bugs_product_component",
-                                  return_value={123: regressor_pc}), \
-                mock.patch("crashclouseau.models.Node.authors_for", return_value={}):
+                                  return_value={123: regressor_pc}):
             return report_bug.resolve_product_component(
-                {"bug": 123, "node": "n", "author": ""}, "beta", "Fenix",
-                file_components=file_components)
+                {"bug": 123}, "beta", "Fenix", file_components=file_components, **hints)
 
     def test_resolve_pc_leaves_a_closed_regressor_product_for_the_changesets_component(self):
         fc = {"changeset": ["Core", "Audio/Video"], "stack": ["GeckoView", "General"]}
@@ -2302,6 +2300,52 @@ class TestBugPreview(unittest.TestCase):
                 {"bug": 123, "node": "n", "author": ""}, "nightly", "Fenix",
                 history_components={"Firefox for Android": "Downloads"})
         self.assertEqual(pc, ("Firefox for Android", "Downloads"))
+
+    def test_resolve_pc_general_is_the_last_choice_across_products(self):
+        # Bug 2098909 fell back to the changeset's component.
+        regressor = ("Core Graveyard", "Widget: Android")
+        general = ("Firefox for Android", "General")
+        ime = ("GeckoView", "IME")
+        downloads = ("Firefox for Android", "Downloads")
+        files = {"stack": ("GeckoView", "General"), "changeset": general}
+        active = {"Core Graveyard": set(), "GeckoView": {"General", "IME"},
+                  "Firefox for Android": {"General", "Downloads"}}
+        cases = (
+            ("history", files, {"history_components": {"GeckoView": "IME"}}, ime),
+            ("frame", files, {"significant_frame": {"component": ime}}, ime),
+            ("stack", dict(files, stack=ime), {}, ime),
+            ("retired history", files, {"history_components": {"GeckoView": "Retired"}}, general),
+            ("same-product history first", files,
+             {"history_components": {"GeckoView": "IME", "Firefox for Android": "Downloads"}},
+             downloads),
+        )
+        for source, file_components, hints, want in cases:
+            with self.subTest(source=source):
+                self.assertEqual(self._resolve_with_components(
+                    regressor, file_components, active, **hints), want)
+
+    def test_resolve_pc_skips_ineligible_and_unconfirmed_hints(self):
+        general = ("Firefox for Android", "General")
+        toolkit = ("Toolkit", "Startup and Profile System")
+        # Simulate an unread GeckoView list and an excluded Firefox hint.
+        active = {"Firefox for Android": {"General"}, "Firefox": {"Tabbed Browser"},
+                  "Toolkit": {"Startup and Profile System"}}
+        base_calls = [mock.call("Firefox for Android"), mock.call("GeckoView")]
+        cases = (({}, general, base_calls),
+                 ({"stack": toolkit}, toolkit, [*base_calls, mock.call("Toolkit")]))
+        with mock.patch.object(report_bug, "_bugs_product_component",
+                               return_value={123: general}), \
+                mock.patch.object(report_bug, "_product_components",
+                                  side_effect=active.get) as components:
+            for files, want, calls in cases:
+                with self.subTest(files=files):
+                    components.reset_mock()
+                    pc = report_bug.resolve_product_component(
+                        {"bug": 123}, "nightly", "Fenix", file_components=files,
+                        history_components={"Firefox": "Tabbed Browser", "GeckoView": "IME"},
+                        significant_frame={"component": ("Core", "General")})
+                    self.assertEqual(pc, want)
+                    self.assertEqual(components.call_args_list, calls)
 
     def test_resolve_pc_the_codes_component_is_never_another_applications(self):
         with mock.patch.object(report_bug, "_bugs_product_component", return_value={}), \

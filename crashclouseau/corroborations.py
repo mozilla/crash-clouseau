@@ -599,11 +599,12 @@ REGISTRY = {
     "history_components": (
         "evidence", ("report_bug.py",),
         "`{product: component}` inferred by `bugcomponents.history_component`. "
-        "Replaces General within the same product."),
+        "Refines General with same-product history before cross-product history."),
     "significant_frame": (
         "evidence", ("report_bug.py",),
         "`{function, file, component}` from `bugcomponents.jvm_significant`. "
-        "Replaces General within the same product, before `history_components`."),
+        "Refines General before history in the same product. A cross-product frame follows "
+        "same-product history."),
 }
 
 

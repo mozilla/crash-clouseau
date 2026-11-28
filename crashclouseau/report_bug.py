@@ -2206,27 +2206,47 @@ def _code_component(file_components, foreign, accepts):
 
 def resolve_product_component(candidate, channel, product=None, file_components=None,
                               history_components=None, significant_frame=None):
-    """Resolve a filing pair; refine General using the JVM frame, then file history."""
+    """Resolve a filing pair and refine General when possible.
+
+    Try the JVM frame and file history in the selected product, then in other products,
+    then moz.build estimates. Switching products requires a confirmed active component.
+    """
     # Cache unknown results too; retry them on the next resolution.
     components = functools.cache(_product_components)
 
-    def accepts(pc):
+    def accepts(pc, *, allow_unknown=True):
         names = components(pc[0])
-        return names is None or pc[1] in names
+        return allow_unknown if names is None else pc[1] in names
 
     pc = _resolve_product_component(candidate, channel, product, file_components, accepts)
     if pc[1] != "General":
         return pc
+    filing_product = pc[0]
     frame = (significant_frame or {}).get("component") or ()
-    if len(frame) == 2 and frame[0] == pc[0] and frame[1] != "General" \
-            and accepts(frame):
-        logger.info("bug preview: filing in %s :: %s, from %s", frame[0], frame[1],
-                    significant_frame.get("function"))
-        return tuple(frame)
-    refined = (history_components or {}).get(pc[0])
-    if refined:
-        logger.info("bug preview: filing in %s :: %s, from the file history", pc[0], refined)
-        return pc[0], refined
+    frame = frame if len(frame) == 2 else ()
+    history = history_components or {}
+    files = file_components or {}
+    code = [pair for key in ("overlap", "stack", "changeset") if (pair := files.get(key))]
+
+    hints = [((filing_product, history.get(filing_product)), "the file history")]
+    if frame:
+        position = 0 if frame[0] == filing_product else 1
+        hints.insert(position, (frame, "the significant frame"))
+
+    # Order history by frame, moz.build, then remaining products.
+    products = dict.fromkeys([pair[0] for pair in (frame, *code) if pair] + list(history))
+    hints.extend(((name, history[name]), "the file history")
+                 for name in products if name != filing_product and name in history)
+    hints.extend((pair, "the moz.build components") for pair in code)
+
+    foreign = config.get_other_app_products(product)
+    for pair, source in hints:
+        hint_product, component = pair
+        if not component or component == "General" or hint_product in foreign:
+            continue
+        if accepts(pair, allow_unknown=hint_product == filing_product):
+            logger.info("bug preview: filing in %s :: %s, from %s", hint_product, component, source)
+            return hint_product, component
     return pc
 
 
